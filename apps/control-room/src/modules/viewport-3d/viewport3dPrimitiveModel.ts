@@ -7,8 +7,8 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
 
-export type Viewport3DPrimitiveKind = "box" | "cylinder" | "sphere" | "unsupported";
-export type Viewport3DPrimitiveMeshState =
+type Viewport3DPrimitiveKind = "box" | "cylinder" | "sphere" | "unsupported";
+type Viewport3DPrimitiveMeshState =
   | "primitive-only"
   | "mesh-stale"
   | "mesh-failed";

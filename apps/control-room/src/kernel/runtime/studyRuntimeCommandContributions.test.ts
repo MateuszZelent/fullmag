@@ -4,6 +4,8 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_SCALARS_PATH,
+  DIAGNOSTICS_ENGINE_LOG_PATH,
+  DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -49,6 +51,7 @@ function runtimeResourceData({
   runtimeState = "idle",
   runtimeControls = null,
   sceneRevision = 3,
+  solverProfile = null,
   stageRevision = 7,
 }: {
   activeStageIndex?: number | null;
@@ -73,9 +76,11 @@ function runtimeResourceData({
     reason?: string | null;
   }> | null;
   sceneRevision?: number | null;
+  solverProfile?: unknown;
   stageRevision?: number;
 } = {}): Record<string, unknown> {
   return {
+    [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile,
     [MESHING_BUILDS_CURRENT_PATH]: { status: meshBuildStatus },
     [MESHING_SHARED_DOMAIN_MANIFEST_PATH]:
       meshRevision > 0
@@ -146,6 +151,127 @@ function runtimeResourceData({
 }
 
 describe("study runtime command contributions", () => {
+  it("enables solver profiling through the runtime command queue and diagnostics resources", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-profile-on",
+      error: null,
+    }));
+    const profileListener = vi.fn();
+    const engineLogListener = vi.fn();
+    resources.subscribe(DIAGNOSTICS_SOLVER_PROFILE_PATH, profileListener);
+    resources.subscribe(DIAGNOSTICS_ENGINE_LOG_PATH, engineLogListener);
+
+    const result = await registry.execute("diagnostics.toggle-solver-profiler", {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData({
+        solverProfile: {
+          config: {
+            emit_engine_log: false,
+            enabled: false,
+            max_samples: 128,
+            persist_artifact: false,
+            sample_every: 1,
+          },
+          state: "disabled",
+        },
+      }),
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Solver profiler enabled.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith({
+      client_intent_id: expect.stringMatching(/^diagnostics:solver-profiler:/),
+      kind: "set_solver_profile",
+      profile: {
+        emit_engine_log: true,
+        enabled: true,
+        max_samples: 4096,
+        persist_artifact: true,
+        sample_every: 1,
+      },
+      reason: "enable_solver_profile",
+      requested_at_unix_ms: expect.any(Number),
+      target: { kind: "study" },
+    });
+    expect(resources.getRevision(DIAGNOSTICS_SOLVER_PROFILE_PATH)).toBe(
+      "cmd-profile-on",
+    );
+    expect(resources.getRevision(DIAGNOSTICS_ENGINE_LOG_PATH)).toBe(
+      "cmd-profile-on",
+    );
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
+      "cmd-profile-on",
+    );
+    expect(profileListener).toHaveBeenCalledWith("cmd-profile-on");
+    expect(engineLogListener).toHaveBeenCalledWith("cmd-profile-on");
+  });
+
+  it("marks the solver profiler command active and can disable it explicitly", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-profile-off",
+      error: null,
+    }));
+    const context = {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData({
+        solverProfile: {
+          config: {
+            emit_engine_log: true,
+            enabled: true,
+            max_samples: 4096,
+            persist_artifact: true,
+            sample_every: 1,
+          },
+          state: "active",
+        },
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isActive("diagnostics.toggle-solver-profiler", context)).toBe(
+      true,
+    );
+
+    const result = await registry.execute(
+      "diagnostics.toggle-solver-profiler",
+      context,
+      false,
+    );
+
+    expect(result).toEqual({
+      message: "Solver profiler disabled.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "set_solver_profile",
+        profile: expect.objectContaining({
+          emit_engine_log: false,
+          enabled: false,
+          max_samples: 4096,
+          persist_artifact: false,
+          sample_every: 1,
+        }),
+        reason: "disable_solver_profile",
+        target: { kind: "study" },
+      }),
+    );
+  });
+
   it("submits compute fields without a run command and invalidates field resources", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

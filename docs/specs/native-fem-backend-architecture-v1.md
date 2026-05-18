@@ -10,6 +10,8 @@
   - `docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md`
   - `docs/physics/0817-native-fem-cpu-demag-hot-path-profile.md`
   - `docs/physics/0870-fem-bem-demag-open-boundary.md`
+- Related patch specs:
+  - `docs/specs/native-fem-magnetoelastic-patch-v1.md`
 - Related reports:
   - `docs/reports/16.05.2026/fullmag_fem_cpu_audit.md`
   - `docs/reports/16.05.2026/fullmag_fem_cpu_refactor_architecture.md`
@@ -179,6 +181,32 @@ The target state split is:
 New cross-cutting fields should not be added directly to `Context`. If a
 temporary compatibility field is unavoidable, it must have a documented target
 owner and removal condition.
+
+Current migration note: explicit RK storage and tableau metadata have started
+moving toward the `StepperSubsystem` target. `ExplicitTableau` is owned by
+`cpu/mfem/integrators/rk_tableau.hpp`, and `StepperWorkspace` is owned by
+`cpu/mfem/integrators/rk_stepper_workspace.hpp`; `Context` may temporarily hold
+an instance for ABI compatibility, but it should not define RK storage or
+tableau types.
+
+Mesh migration has started with the topology helpers that do not require a new
+state layout. Static periodic node-class reduction, per-periodic-class scalar
+material validation, and P1 nodal dual-volume accumulation are owned by
+`native/backends/fem/core/fem_mesh.hpp/.cpp`; `Context` still stores the
+compatibility fields but no longer defines those helpers locally.
+
+Material-field migration has started with plan import and validation helpers.
+Optional per-node material arrays (`Ms`, `A_ex`, `alpha`, anisotropy, DMI, and
+cubic anisotropy fields) plus scalar material sanity checks are owned by
+`native/backends/fem/core/fem_material_fields.hpp/.cpp`; `Context` still stores
+the compatibility vectors until the full `FemMaterialFields` state owner lands.
+
+Field-buffer migration has started with nodal AOS-3 buffer sizing and
+zero-initialization. `H_ex`, `H_demag`, local-interaction field buffers,
+magnetoelastic field storage, and the initial `H_eff` external-field seed are
+owned by `native/backends/fem/core/fem_field_buffers.hpp/.cpp`; `Context` still
+stores the compatibility vectors until the full `FemFieldBuffers` state owner
+lands.
 
 ## 5. Target Native Layout
 

@@ -6,7 +6,7 @@ import type {
 
 export type FooterDirectionFilter = "all" | TransportDirection;
 export type FooterChannelFilter = "all" | TransportChannel;
-export type FooterLogSortDirection = "asc" | "desc";
+type FooterLogSortDirection = "asc" | "desc";
 export type FooterLogSortKey =
   | "channel"
   | "direction"

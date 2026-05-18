@@ -10,7 +10,7 @@ export interface RibbonTabDef {
   label: string;
 }
 
-export interface RibbonAction {
+interface RibbonAction {
   id: string;
   icon: ReactNode;
   label: string;

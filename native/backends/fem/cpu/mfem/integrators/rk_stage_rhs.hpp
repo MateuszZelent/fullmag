@@ -16,6 +16,9 @@ struct StepperWorkspace;
  * stage-local effective-field assembly, LLG RHS conversion, direct STT RHS
  * addition, non-magnetic node masking, optional max-RHS output, optional
  * exchange/demag energy outputs, and RHS phase timing accumulation.
+ *
+ * It does not define RK tableau coefficients, allocate stepper workspace,
+ * accept/reject adaptive steps, or publish final step metrics.
  */
 #if FULLMAG_HAS_MFEM_STACK
 bool evaluate_rk_stage_rhs(

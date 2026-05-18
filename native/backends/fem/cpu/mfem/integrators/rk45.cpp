@@ -1,3 +1,10 @@
+/*
+ * RK45 tableau source contract.
+ *
+ * This source owns the Dormand-Prince 5(4) tableau metadata and FSAL/error
+ * estimator declaration for native FEM LLG integration. It does not allocate workspace, evaluate stages, perform steps, or run adaptive control.
+ */
+
 #include "cpu/mfem/integrators/tableaus.hpp"
 
 #include "context.hpp"

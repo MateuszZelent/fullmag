@@ -1,7 +1,7 @@
 # LLG Conventions
 
 - Status: release-gate convention document for native FEM CPU
-- Last updated: 2026-05-16
+- Last updated: 2026-05-18
 - Implementation: `native/backends/fem/cpu/mfem/integrators/llg_rhs.hpp/.cpp`,
   `native/backends/fem/src/mfem_bridge.cpp`, and interaction modules under
   `native/backends/fem/cpu/mfem/interactions/`
@@ -22,7 +22,10 @@ dm/dt =
 `H_eff` is in `A/m`. Direct torques are already `dm/dt` terms in `1/s` and are
 not reinterpreted as fields. The field-to-RHS conversion, AOS magnetization
 normalization, and magnetic-node RHS masking live in the extracted
-`cpu/mfem/integrators/llg_rhs.*` module.
+`cpu/mfem/integrators/llg_rhs.*` module. The `llg_rhs.cpp` source-level
+contract pins that this module consumes an already composed `H_eff`: it does
+not own effective-field composition, interaction field evaluation, time
+advancement, or step metrics.
 
 ## Field Path
 
@@ -67,8 +70,12 @@ interaction explicitly documents that behavior.
 ## Validation Status
 
 Current local contracts cover module-level sign/unit behavior for extracted
-interactions. Full active MFEM-stack validation is still blocked in the local
-environment by the missing runtime include directory:
+interactions and source-level ownership boundaries for the native FEM
+integrator modules: adaptive timestep policy, Heun/RK tableau definitions,
+explicit RK workspace allocation, stage RHS evaluation, fixed-step Heun,
+complete explicit RK stepping, and LLG RHS helpers. Full active MFEM-stack
+validation is still blocked in the local environment by the missing runtime
+include directory:
 
 ```text
 .fullmag/runtimes/fem-gpu-host/include

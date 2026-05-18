@@ -1,6 +1,6 @@
 use crate::{
-    CurrentModuleIR, CurrentTransportModelIR, DynamicsIR, EnergyTermIR, ProblemIR,
-    SpinTorqueModuleIR,
+    CurrentModuleIR, CurrentTransportModelIR, DynamicsIR, EnergyTermIR, MechanicalLoadIR,
+    MechanicsIR, ProblemIR, SpinTorqueModuleIR,
 };
 use std::collections::BTreeSet;
 
@@ -442,6 +442,220 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     .to_string(),
             );
         }
+    }
+}
+
+pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<String>) {
+    validate_unique_names(
+        problem
+            .elastic_materials
+            .iter()
+            .map(|material| material.name.as_str()),
+        "elastic_materials",
+        errors,
+    );
+    validate_unique_names(
+        problem.elastic_bodies.iter().map(|body| body.name.as_str()),
+        "elastic_bodies",
+        errors,
+    );
+    validate_unique_names(
+        problem.magnetostriction_laws.iter().map(|law| law.name()),
+        "magnetostriction_laws",
+        errors,
+    );
+
+    for (index, material) in problem.elastic_materials.iter().enumerate() {
+        if material.name.trim().is_empty() {
+            errors.push(format!("elastic_materials[{index}].name must not be empty"));
+        }
+        if !(material.c11.is_finite() && material.c11 > 0.0) {
+            errors.push(format!(
+                "elastic_materials[{index}].c11 must be finite and > 0"
+            ));
+        }
+        if !material.c12.is_finite() {
+            errors.push(format!("elastic_materials[{index}].c12 must be finite"));
+        }
+        if !(material.c44.is_finite() && material.c44 > 0.0) {
+            errors.push(format!(
+                "elastic_materials[{index}].c44 must be finite and > 0"
+            ));
+        }
+        if !(material.density.is_finite() && material.density > 0.0) {
+            errors.push(format!(
+                "elastic_materials[{index}].density must be finite and > 0"
+            ));
+        }
+        if material
+            .mechanical_damping
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+        {
+            errors.push(format!(
+                "elastic_materials[{index}].mechanical_damping must be finite and >= 0 when provided"
+            ));
+        }
+    }
+
+    let geometry_names: BTreeSet<&str> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| entry.name())
+        .collect();
+    let elastic_material_names: BTreeSet<&str> = problem
+        .elastic_materials
+        .iter()
+        .map(|material| material.name.as_str())
+        .collect();
+    for (index, body) in problem.elastic_bodies.iter().enumerate() {
+        if body.name.trim().is_empty() {
+            errors.push(format!("elastic_bodies[{index}].name must not be empty"));
+        }
+        if !geometry_names.contains(body.geometry.as_str()) {
+            errors.push(format!(
+                "elastic_bodies[{index}] references unknown geometry '{}'",
+                body.geometry
+            ));
+        }
+        if !elastic_material_names.contains(body.elastic_material.as_str()) {
+            errors.push(format!(
+                "elastic_bodies[{index}] references unknown elastic material '{}'",
+                body.elastic_material
+            ));
+        }
+    }
+
+    for (index, law) in problem.magnetostriction_laws.iter().enumerate() {
+        if law.name().trim().is_empty() {
+            errors.push(format!(
+                "magnetostriction_laws[{index}].name must not be empty"
+            ));
+        }
+        match law {
+            crate::MagnetostrictionLawIR::Cubic { b1, b2, .. } => {
+                if !b1.is_finite() {
+                    errors.push(format!("magnetostriction_laws[{index}].b1 must be finite"));
+                }
+                if !b2.is_finite() {
+                    errors.push(format!("magnetostriction_laws[{index}].b2 must be finite"));
+                }
+            }
+            crate::MagnetostrictionLawIR::Isotropic { lambda_s, .. } => {
+                if !lambda_s.is_finite() {
+                    errors.push(format!(
+                        "magnetostriction_laws[{index}].lambda_s must be finite"
+                    ));
+                }
+            }
+        }
+    }
+
+    for (index, load) in problem.mechanical_loads.iter().enumerate() {
+        match load {
+            MechanicalLoadIR::BodyForce { f } => {
+                if !vector3_is_finite(f) {
+                    errors.push(format!(
+                        "mechanical_loads[{index}].f must contain finite values"
+                    ));
+                }
+            }
+            MechanicalLoadIR::PrescribedStrain { strain } => {
+                if strain.iter().any(|value| !value.is_finite()) {
+                    errors.push(format!(
+                        "mechanical_loads[{index}].strain must contain finite values"
+                    ));
+                }
+            }
+            MechanicalLoadIR::PrescribedStress { stress } => {
+                if stress.iter().any(|value| !value.is_finite()) {
+                    errors.push(format!(
+                        "mechanical_loads[{index}].stress must contain finite values"
+                    ));
+                }
+            }
+        }
+    }
+
+    let magnet_names: BTreeSet<&str> = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.name.as_str())
+        .collect();
+    let body_names: BTreeSet<&str> = problem
+        .elastic_bodies
+        .iter()
+        .map(|body| body.name.as_str())
+        .collect();
+    let law_names: BTreeSet<&str> = problem
+        .magnetostriction_laws
+        .iter()
+        .map(|law| law.name())
+        .collect();
+    let has_magnetoelastic = problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::Magnetoelastic { .. }));
+
+    for (index, term) in problem.energy_terms.iter().enumerate() {
+        if let EnergyTermIR::Magnetoelastic { magnet, body, law } = term {
+            if !magnet_names.contains(magnet.as_str()) {
+                errors.push(format!(
+                    "energy_terms[{index}] magnetoelastic references unknown magnet '{}'",
+                    magnet
+                ));
+            }
+            if !body_names.contains(body.as_str()) {
+                errors.push(format!(
+                    "energy_terms[{index}] magnetoelastic references unknown elastic body '{}'",
+                    body
+                ));
+            }
+            if !law_names.contains(law.as_str()) {
+                errors.push(format!(
+                    "energy_terms[{index}] magnetoelastic references unknown magnetostriction law '{}'",
+                    law
+                ));
+            }
+        }
+    }
+
+    let mechanics = match &problem.study {
+        crate::StudyIR::TimeEvolution { dynamics, .. }
+        | crate::StudyIR::Relaxation { dynamics, .. }
+        | crate::StudyIR::Eigenmodes { dynamics, .. } => match dynamics {
+            DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
+        },
+    };
+    if mechanics.is_some() && !has_magnetoelastic {
+        errors.push("llg.mechanics requires a Magnetoelastic energy term".to_string());
+    }
+    match mechanics {
+        Some(MechanicsIR::QuasistaticElasticity {
+            max_picard_iterations,
+            picard_tolerance,
+        }) => {
+            if *max_picard_iterations == 0 {
+                errors.push(
+                    "llg.mechanics.max_picard_iterations must be > 0 for quasistatic_elasticity"
+                        .to_string(),
+                );
+            }
+            if !picard_tolerance.is_finite() || *picard_tolerance <= 0.0 {
+                errors.push(
+                    "llg.mechanics.picard_tolerance must be finite and > 0 for quasistatic_elasticity"
+                        .to_string(),
+                );
+            }
+        }
+        Some(MechanicsIR::Elastodynamics { mechanical_dt }) => {
+            if mechanical_dt.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                errors.push(
+                    "llg.mechanics.mechanical_dt must be finite and > 0 when provided".to_string(),
+                );
+            }
+        }
+        Some(MechanicsIR::PrescribedStrain) | None => {}
     }
 }
 

@@ -127,13 +127,12 @@ pub(crate) fn validate_executable_outputs(
     enable_demag: bool,
     enable_zeeman: bool,
     enable_oersted: bool,
+    enable_magnetoelastic: bool,
     enable_antenna_field: bool,
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
-        "m", "H_ex", "H_demag", "H_ext", "H_eff", "H_ani", "H_dmi",
-        // Magnetoelastic (semantic-only)
-        "H_mel", "u", "u_dot", "eps", "sigma",
+        "m", "H_ex", "H_demag", "H_ext", "H_eff", "H_ani", "H_dmi", "H_mel",
     ];
     let allowed_scalars = [
         "E_ex",
@@ -150,8 +149,10 @@ pub(crate) fn validate_executable_outputs(
         "mz",
         "max_dm_dt",
         "max_h_eff",
-        // Magnetoelastic (semantic-only)
         "E_mel",
+    ];
+    let mechanical_fields = ["u", "u_dot", "eps", "sigma"];
+    let mechanical_scalars = [
         "E_el",
         "E_kin_el",
         "max_u",
@@ -164,11 +165,12 @@ pub(crate) fn validate_executable_outputs(
         match output {
             OutputIR::Field { name, .. } => {
                 if !allowed_fields.contains(&name.as_str())
+                    && !mechanical_fields.contains(&name.as_str())
                     && !(enable_oersted && name == "H_OE")
                     && !(enable_antenna_field && name == "H_ant")
                 {
                     errors.push(format!(
-                        "field output '{}' is not executable in the current FDM path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, and H_eff",
+                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_mel, and H_eff",
                         name
                     ));
                 } else if name == "H_ex" && !enable_exchange {
@@ -182,11 +184,17 @@ pub(crate) fn validate_executable_outputs(
                         "field output 'H_OE' requires OerstedCylinder() or OerstedField(...)"
                             .to_string(),
                     );
+                } else if name == "H_mel" && !enable_magnetoelastic {
+                    errors.push("field output 'H_mel' requires Magnetoelastic(...)".to_string());
                 } else if name == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "field output 'H_ant' requires at least one antenna current module"
                             .to_string(),
                     );
+                } else if mechanical_fields.contains(&name.as_str()) {
+                    errors.push(format!(
+                        "field output '{name}' requires the quasistatic/elastodynamic mechanics solver, which is not executable yet"
+                    ));
                 }
                 if !seen.insert(format!("field:{name}")) {
                     errors.push(format!(
@@ -196,9 +204,11 @@ pub(crate) fn validate_executable_outputs(
                 }
             }
             OutputIR::Scalar { name, .. } => {
-                if !allowed_scalars.contains(&name.as_str()) {
+                if !allowed_scalars.contains(&name.as_str())
+                    && !mechanical_scalars.contains(&name.as_str())
+                {
                     errors.push(format!(
-                        "scalar output '{}' is not executable in the current FDM path; allowed scalars are E_ex, E_demag, E_ext, E_total, time, step, solver_dt, mx, my, mz, max_dm_dt, and max_h_eff",
+                        "scalar output '{}' is not executable in the current executable path; allowed scalars are E_ex, E_demag, E_ext, E_ani, E_dmi, E_mel, E_total, time, step, solver_dt, mx, my, mz, max_dm_dt, and max_h_eff",
                         name
                     ));
                 } else if name == "E_ex" && !enable_exchange {
@@ -207,6 +217,12 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("scalar output 'E_demag' requires Demag()".to_string());
                 } else if name == "E_ext" && !enable_zeeman {
                     errors.push("scalar output 'E_ext' requires Zeeman(...)".to_string());
+                } else if name == "E_mel" && !enable_magnetoelastic {
+                    errors.push("scalar output 'E_mel' requires Magnetoelastic(...)".to_string());
+                } else if mechanical_scalars.contains(&name.as_str()) {
+                    errors.push(format!(
+                        "scalar output '{name}' requires the quasistatic/elastodynamic mechanics solver, which is not executable yet"
+                    ));
                 }
                 if !seen.insert(format!("scalar:{name}")) {
                     errors.push(format!(
@@ -219,6 +235,7 @@ pub(crate) fn validate_executable_outputs(
                 field, component, ..
             } => {
                 if !allowed_fields.contains(&field.as_str())
+                    && !mechanical_fields.contains(&field.as_str())
                     && !(enable_oersted && field == "H_OE")
                     && !(enable_antenna_field && field == "H_ant")
                 {
@@ -237,11 +254,17 @@ pub(crate) fn validate_executable_outputs(
                         "snapshot field 'H_OE' requires OerstedCylinder() or OerstedField(...)"
                             .to_string(),
                     );
+                } else if field == "H_mel" && !enable_magnetoelastic {
+                    errors.push("snapshot field 'H_mel' requires Magnetoelastic(...)".to_string());
                 } else if field == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "snapshot field 'H_ant' requires at least one antenna current module"
                             .to_string(),
                     );
+                } else if mechanical_fields.contains(&field.as_str()) {
+                    errors.push(format!(
+                        "snapshot field '{field}' requires the quasistatic/elastodynamic mechanics solver, which is not executable yet"
+                    ));
                 }
                 let key = if component == "3D" {
                     format!("snapshot:{field}")

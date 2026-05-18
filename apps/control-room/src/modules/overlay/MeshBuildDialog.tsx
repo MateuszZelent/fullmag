@@ -8,6 +8,8 @@ import {
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useEngineLogResource } from "@/kernel/resources/studyRuntimeResources";
+import type { EngineLogResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import {
   normalizeMeshPipelineStatus,
@@ -54,8 +56,99 @@ function phaseIsComplete(phase: MeshPipelinePhase): boolean {
 
 function pipelineProgressPercent(phases: readonly MeshPipelinePhase[]): number | null {
   if (phases.length === 0) return null;
+  const publishedProgress = phases.find(
+    (phase) => phase.progressPercent !== null,
+  )?.progressPercent;
+  if (publishedProgress !== undefined && publishedProgress !== null) {
+    return publishedProgress;
+  }
   const completeCount = phases.filter(phaseIsComplete).length;
   return Math.round((completeCount / phases.length) * 100);
+}
+
+function formatDurationMs(value: number | null): string | null {
+  if (value === null) return null;
+  if (value < 1000) return `${value} ms`;
+  const seconds = value / 1000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds).toString()} s`;
+}
+
+type EngineLogEntry = EngineLogResource["entries"][number];
+type MeshDiagnosticNavigation = {
+  readonly bus: {
+    emit: (
+      event: "footer:tab-requested",
+      payload: { reason?: string; tab: "engine" | "logs" | "telemetry" },
+    ) => void;
+  };
+  readonly layout: Pick<KernelApi["layout"], "setFocusedSlot" | "setPanelVisible">;
+};
+
+export function openMeshBuildDiagnostics(kernel: MeshDiagnosticNavigation) {
+  kernel.layout.setPanelVisible("bottom", true);
+  kernel.layout.setFocusedSlot("panel-bottom");
+  kernel.bus.emit("footer:tab-requested", {
+    reason: "mesh-build",
+    tab: "engine",
+  });
+}
+
+function isMeshBuildLogEntry(entry: EngineLogEntry): boolean {
+  const message = entry.message.toLowerCase();
+  return (
+    message.includes("gmsh") ||
+    message.includes("mesh build") ||
+    message.includes("meshing") ||
+    message.includes("remesh")
+  );
+}
+
+function formatLogTime(timestampUnixMs: number): string {
+  return new Date(timestampUnixMs).toISOString().slice(11, 19);
+}
+
+export function MeshBuildLogView({
+  entries,
+  status,
+  total,
+}: {
+  entries: readonly EngineLogEntry[];
+  status: string;
+  total: number;
+}) {
+  const meshEntries = entries.filter(isMeshBuildLogEntry).slice(-8).reverse();
+
+  return (
+    <section className="fm-dialog__mesh-log" aria-label="Mesh build console">
+      <div className="fm-dialog__mesh-log-header">
+        <h3 className="fm-dialog__mesh-log-title">Build console</h3>
+        <span className="fm-dialog__mesh-log-meta">
+          {meshEntries.length} / {total} entries
+        </span>
+      </div>
+      {meshEntries.length > 0 ? (
+        <div className="fm-dialog__mesh-log-list" role="table">
+          {meshEntries.map((entry) => (
+            <div
+              className="fm-dialog__mesh-log-row"
+              role="row"
+              key={`${entry.timestamp_unix_ms}:${entry.level}:${entry.message}`}
+            >
+              <time role="cell">{formatLogTime(entry.timestamp_unix_ms)}</time>
+              <span role="cell" data-level={entry.level}>
+                {entry.level}
+              </span>
+              <span role="cell">{entry.message}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="fm-dialog__mesh-log-empty">
+          {status === "ready" ? "No mesh build log entries." : "Loading mesh build logs."}
+        </p>
+      )}
+    </section>
+  );
 }
 
 export function MeshBuildPipelineView({
@@ -74,6 +167,8 @@ export function MeshBuildPipelineView({
     "unknown",
   );
   const progressPercent = pipelineProgressPercent(phases);
+  const progressPhase = phases.find((phase) => phase.progressPercent !== null);
+  const progressLabel = progressPhase?.progressLabel ?? "Phase progress";
 
   return (
     <section className="fm-dialog__mesh-pipeline" aria-label="Mesh build pipeline">
@@ -90,21 +185,33 @@ export function MeshBuildPipelineView({
             } as CSSProperties
           }
         >
-          <span>Phase progress</span>
+          <span>{progressLabel}</span>
           <strong>{progressPercent}%</strong>
         </div>
       ) : null}
       {phases.length > 0 ? (
         <ol className="fm-dialog__mesh-phase-list">
-          {phases.map((phase) => (
-            <li className="fm-dialog__mesh-phase" key={phase.id}>
-              <span className="fm-dialog__mesh-phase-label">{phase.label}</span>
-              <span className="fm-dialog__mesh-phase-status">{phase.status}</span>
-              {phase.detail.length > 0 ? (
-                <span className="fm-dialog__mesh-phase-detail">{phase.detail}</span>
-              ) : null}
-            </li>
-          ))}
+          {phases.map((phase) => {
+            const duration = formatDurationMs(phase.durationMs);
+            const progressText =
+              phase.progressPercent !== null
+                ? `${phase.progressLabel ?? "Gmsh progress"} - ${phase.progressPercent}%`
+                : null;
+            const timingText = duration ? `duration ${duration}` : null;
+            const progressDetail = [progressText, timingText].filter(Boolean).join(" / ");
+            return (
+              <li className="fm-dialog__mesh-phase" key={phase.id}>
+                <span className="fm-dialog__mesh-phase-label">{phase.label}</span>
+                <span className="fm-dialog__mesh-phase-status">{phase.status}</span>
+                {progressDetail.length > 0 ? (
+                  <span className="fm-dialog__mesh-phase-progress">{progressDetail}</span>
+                ) : null}
+                {phase.detail.length > 0 ? (
+                  <span className="fm-dialog__mesh-phase-detail">{phase.detail}</span>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
       ) : (
         <p className="fm-dialog__mesh-pipeline-empty">
@@ -166,6 +273,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const latestBuild = useMeshBuildLatestSuccessful();
   const summary = useMeshSummaryResource();
   const manifest = useMeshSharedDomainManifestResource();
+  const engineLog = useEngineLogResource({ enabled: state.open });
   const activeRecord = asRecord(activeBuild.data?.active_build);
   const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
   const lastSummary = asRecord(
@@ -248,8 +356,21 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             lastSummary={lastSummary}
             phases={pipelinePhases}
           />
+          <MeshBuildLogView
+            entries={engineLog.data?.entries ?? []}
+            status={engineLog.status}
+            total={engineLog.data?.total ?? 0}
+          />
         </div>
         <DialogFooter>
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => openMeshBuildDiagnostics(kernel)}
+          >
+            Open diagnostics
+          </Button>
           <Button
             size="sm"
             type="button"

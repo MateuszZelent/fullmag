@@ -445,6 +445,7 @@ impl ProblemIR {
         validate_oersted_energy_terms(self, &mut errors);
         validate_legacy_spin_torque_fields(self, &mut errors);
         validate_spin_torque_modules(self, &mut errors);
+        validate_magnetoelastic(self, &mut errors);
         if self.regions.is_empty() {
             errors.push("at least one region is required".to_string());
         }

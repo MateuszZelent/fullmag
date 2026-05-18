@@ -23,11 +23,3 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     label: "Vortex",
   },
 ] as const;
-
-export function texturePresetById(
-  id: string | null | undefined,
-): MagnetizationTexturePreset | null {
-  return (
-    MAGNETIZATION_TEXTURE_PRESETS.find((preset) => preset.id === id) ?? null
-  );
-}

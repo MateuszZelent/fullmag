@@ -707,6 +707,7 @@ def _configure_mesh_size_fields(
         "sizeminnormal", "sizemintangent",
         "sizemaxnormal", "sizemaxtangent",
     }
+    _METADATA_PARAMS = {"Source"}
 
     field_ids = []
 
@@ -849,6 +850,8 @@ def _configure_mesh_size_fields(
             continue
         fid = gmsh.model.mesh.field.add(kind)
         for key, value in params.items():
+            if key in _METADATA_PARAMS:
+                continue
             if isinstance(value, str):
                 gmsh.model.mesh.field.setString(fid, key, value)
             elif isinstance(value, list):

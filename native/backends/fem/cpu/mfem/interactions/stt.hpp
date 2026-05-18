@@ -1,5 +1,11 @@
 #pragma once
 
+#include "cpu/mfem/interactions/stt_slonczewski.hpp"
+#include "cpu/mfem/interactions/stt_zhang_li.hpp"
+#include "fullmag_fem.h"
+
+#include <cstddef>
+#include <string>
 #include <vector>
 
 namespace fullmag::fem {
@@ -7,30 +13,42 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Add Slonczewski CPP spin-transfer torque directly to the LLG RHS.
+ * Aggregated include and dispatch surface for executable STT families.
  *
- * The contribution is a dm/dt term, not an H_eff field. It uses the configured
- * current-density magnitude, spin-polarization direction, free-layer thickness,
- * polarization degree, Lambda asymmetry, field-like epsilon-prime, current sign,
- * and per-node Ms overrides when available.
+ * This compatibility umbrella owns plan import, family dispatch, and reusable
+ * workspace routing for the RHS hot path. It does not define Slonczewski CPP
+ * torque, Zhang-Li CIP torque, CPP thickness/current physics, or CIP gradient
+ * projection. Those responsibilities stay in the dedicated owner modules:
+ * stt_slonczewski.* and stt_zhang_li.*.
  */
-void add_slonczewski_stt_rhs_aos(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &rhs_xyz);
 
 /*
- * Add Zhang-Li CIP spin-transfer torque directly to the LLG RHS.
+ * Reusable scratch for aggregate STT RHS assembly.
  *
- * The module estimates the tetrahedral gradient of reduced magnetization,
- * projects the element contribution back to nodes with P1 lumped weights, and
- * applies the configured current-density vector, polarization degree, beta, and
- * per-node Ms overrides.
+ * Slonczewski is local and writes directly to the RHS. Zhang-Li needs a
+ * projected nodal torque and weight buffer so the aggregate can add it to an
+ * already-computed LLG RHS without allocating or scaling the existing RHS.
  */
-void add_zhang_li_stt_rhs_aos(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &rhs_xyz);
+struct SttWorkspace {
+    ZhangLiSttWorkspace zhang_li;
+};
+
+void prepare_stt_workspace(
+    SttWorkspace &workspace,
+    std::size_t dof_len,
+    std::size_t n_nodes);
+
+/*
+ * Initialize executable STT plan fields.
+ *
+ * Copies Slonczewski CPP and Zhang-Li CIP plan parameters into Context
+ * compatibility storage, enforces that only one executable STT family is
+ * active, and normalizes the Slonczewski spin-polarization vector.
+ */
+bool initialize_stt_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
 
 /*
  * Add all enabled executable STT families and refresh max_rhs when the RHS
@@ -41,5 +59,12 @@ void add_stt_rhs_aos(
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
     double &max_rhs);
+
+void add_stt_rhs_aos(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &rhs_xyz,
+    double &max_rhs,
+    SttWorkspace &workspace);
 
 } // namespace fullmag::fem

@@ -588,6 +588,66 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(per_domain[0].n_elements, 1)
         self.assertEqual(per_domain[1].n_elements, 1)
 
+    def test_mesh_statistics_publish_metric_ranked_worst_elements(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3], [1, 4, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1, 1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros(0, dtype=np.int32),
+            quality=MeshQualityReport(
+                n_elements=2,
+                sicn_min=0.05,
+                sicn_max=0.8,
+                sicn_mean=0.425,
+                sicn_p5=0.0875,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.04,
+                gamma_mean=0.47,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0,
+                volume_max=2.0,
+                volume_mean=1.5,
+                volume_std=0.5,
+                avg_quality=0.425,
+                element_sicn=[0.8, 0.05],
+                element_gamma=[0.04, 0.9],
+                element_volume=[1.0, 2.0],
+                element_tags=[1, 2],
+            ),
+        )
+
+        payload = mesh.to_ir("ranked")["mesh_statistics"]
+
+        self.assertEqual(payload["worst_elements"][0]["element_index"], 0)
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["gamma"][0]["element_index"],
+            0,
+        )
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["sicn"][0]["element_index"],
+            1,
+        )
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["sicn"][0]["rank_metric"],
+            "sicn",
+        )
+        self.assertEqual(payload["global"]["gamma"]["threshold"], 0.08)
+        self.assertEqual(payload["global"]["gamma"]["below_threshold_count"], 1)
+        self.assertEqual(payload["global"]["gamma"]["below_threshold_fraction"], 0.5)
+        self.assertEqual(payload["global"]["sicn"]["threshold"], 0.1)
+        self.assertEqual(payload["global"]["sicn"]["below_threshold_count"], 1)
+        self.assertEqual(payload["global"]["sicn"]["below_threshold_fraction"], 0.5)
+
     def test_remesh_cli_payload_carries_build_truth_and_mesh_statistics(self) -> None:
         mesh = self._unit_tet_mesh()
         report = SharedDomainBuildReport(
@@ -657,6 +717,60 @@ class MeshScaffoldTests(unittest.TestCase):
             payload["mesh_provenance"]["thin_film_diagnostics"][0]["actual_method"],
             "free_tetrahedral",
         )
+
+    def test_remesh_cli_payload_writes_per_element_quality_artifact(self) -> None:
+        unit = self._unit_tet_mesh()
+        mesh = MeshData(
+            nodes=unit.nodes,
+            elements=unit.elements,
+            element_markers=unit.element_markers,
+            boundary_faces=unit.boundary_faces,
+            boundary_markers=unit.boundary_markers,
+            quality=MeshQualityReport(
+                n_elements=1,
+                sicn_min=0.5,
+                sicn_max=0.5,
+                sicn_mean=0.5,
+                sicn_p5=0.5,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.25,
+                gamma_mean=0.25,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=1.0 / 6.0,
+                volume_mean=1.0 / 6.0,
+                volume_std=0.0,
+                avg_quality=0.5,
+                element_sicn=[0.5],
+                element_gamma=[0.25],
+                element_volume=[1.0 / 6.0],
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            payload = _mesh_result_payload(
+                mesh,
+                mesh_name="shared-domain",
+                generation_mode="shared_domain_manual_remesh",
+                mesh_provenance={},
+                topology_artifact_dir=tmp_dir,
+            )
+
+            artifact = payload["quality_data_artifact"]
+            artifact_path = Path(artifact["path"])
+            data = artifact_path.read_bytes()
+
+        self.assertEqual(artifact["kind"], "fmmq.v1")
+        self.assertEqual(artifact["element_count"], 1)
+        self.assertEqual(artifact["metrics"], ["sicn", "gamma", "volume"])
+        self.assertEqual(data[:4], b"FMMQ")
+        self.assertEqual(data[4], 1)
+        self.assertEqual(data[5], 1)
+        self.assertEqual(struct.unpack_from("<I", data, 8)[0], 1)
+        self.assertEqual(struct.unpack_from("<I", data, 12)[0], 0b111)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 32)[0], 0.5)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 40)[0], 0.25)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 48)[0], 1.0 / 6.0)
 
     def test_shared_domain_report_includes_truth_first_operation_statuses(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=9e-9, name="free_layer")
@@ -804,6 +918,35 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(payload["generation_mode"], "adaptive_size_field")
         self.assertEqual(payload["mesh_provenance"]["geometry_kind"], "box")
         self.assertEqual(payload["size_field_stats"]["n_nodes"], 4)
+
+    def test_remesh_cli_payload_spills_large_topology_to_artifact(self) -> None:
+        mesh = self._unit_tet_mesh()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            payload = _mesh_result_payload(
+                mesh,
+                mesh_name="large_mesh",
+                generation_mode="manual_remesh",
+                mesh_provenance={"geometry_kind": "box", "order": 1, "hmax": 0.1},
+                topology_artifact_dir=Path(tmp_dir),
+                inline_topology_max_bytes=1,
+            )
+
+            artifact = payload.get("topology_artifact")
+            self.assertIsInstance(artifact, dict)
+            artifact_path = Path(artifact["path"])
+            self.assertTrue(artifact_path.is_file())
+            self.assertEqual(payload["nodes"], [])
+            self.assertEqual(payload["elements"], [])
+            self.assertEqual(payload["boundary_faces"], [])
+
+            artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact_payload["mesh_name"], "large_mesh")
+            self.assertEqual(artifact_payload["nodes"], mesh.nodes.tolist())
+            self.assertEqual(artifact_payload["elements"], mesh.elements.tolist())
+            self.assertEqual(artifact_payload["element_markers"], mesh.element_markers.tolist())
+            self.assertEqual(artifact_payload["boundary_faces"], mesh.boundary_faces.tolist())
+            self.assertEqual(artifact_payload["boundary_markers"], mesh.boundary_markers.tolist())
 
     def test_remesh_cli_payload_preserves_shared_domain_region_markers(self) -> None:
         mesh = self._unit_tet_mesh()
@@ -1119,6 +1262,7 @@ class MeshScaffoldTests(unittest.TestCase):
             def __init__(self) -> None:
                 self._next_id = 1
                 self.background: int | None = None
+                self.strings: dict[tuple[int, str], str] = {}
 
             def add(self, _kind: str) -> int:
                 field_id = self._next_id
@@ -1131,7 +1275,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def setNumbers(self, _field_id: int, _key: str, _values: object) -> None:
                 return None
 
-            def setString(self, _field_id: int, _key: str, _value: str) -> None:
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
                 return None
 
             def setAsBackgroundMesh(self, field_id: int) -> None:
@@ -1169,6 +1314,7 @@ class MeshScaffoldTests(unittest.TestCase):
                             "YMax": 1.0,
                             "ZMin": -1.0,
                             "ZMax": 1.0,
+                            "Source": "test_metadata",
                         },
                     }
                 ],
@@ -1177,6 +1323,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(fake_gmsh.option.values["Mesh.Algorithm3D"], float(ALGO_3D_HXT))
         self.assertIsNotNone(fake_field_api.background)
+        self.assertNotIn((1, "Source"), fake_field_api.strings)
 
     def test_geometry_from_ir_preserves_imported_geometry_name(self) -> None:
         geometry = _geometry_from_ir(

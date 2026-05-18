@@ -1,8 +1,15 @@
 # FEM Demag Poisson
 
 - Status: partial native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`
+- Last updated: 2026-05-18
+- Implementation:
+  `native/backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`,
+  `demag_poisson_ready.hpp/.cpp`, `demag_poisson_lifecycle.hpp/.cpp`,
+  `demag_poisson_solve.hpp/.cpp`, `demag_poisson_rhs.hpp/.cpp`,
+  `demag_poisson_boundary.hpp/.cpp`, `demag_poisson_periodic.hpp/.cpp`,
+  `demag_poisson_hypre.hpp/.cpp`, `demag_poisson_recovery.hpp/.cpp`,
+  `demag_poisson_field.hpp/.cpp`, `demag_poisson_cache.hpp/.cpp`,
+  `demag_poisson_energy.hpp/.cpp`, and `demag_poisson_telemetry.hpp/.cpp`
 - Test: `native/backends/fem/tests/demag_poisson_contract.cpp`
 
 ## Energia
@@ -59,15 +66,18 @@ add optional Robin boundary correction
 ```
 
 The energy contract, RHS workspace/assembly, Robin/Dirichlet boundary operator
-policy, periodic reduced Poisson operator/solve, non-periodic Hypre solve, and
-`H_demag` recovery have been moved into `demag_poisson.*`. The module also owns
-the frozen-field cache helpers and cached-energy helper used when a demag
-refresh interval reuses a previous Poisson solution. The shared demag dispatcher
-and update execution wrapper live in `demag.*`, so cached reuse, fresh Poisson,
-and fresh FEM/BEM execution are selected outside `mfem_bridge.cpp`.
-Demag-specific solver statistics and visualization H_eff reconstruction are
-filled by the demag modules; non-demag timing aggregation is still in
-`mfem_bridge.cpp`.
+policy, periodic reduced Poisson operator/solve, non-periodic Hypre solve,
+`H_demag` recovery, field/visual postprocessing, frozen-field cache policy,
+readiness gate, lifecycle, compute wrapper, and telemetry have been moved into
+separate `demag_poisson_*.*` modules. `demag_poisson_ready.*` owns the fresh
+solve readiness predicate, `demag_poisson_lifecycle.*` owns native init/destroy,
+and `demag_poisson_solve.*` owns the one-call assemble/solve/recover wrapper.
+`demag_poisson.*` is now only the aggregate include/translation-unit surface.
+The shared demag dispatcher and update execution wrapper live in `demag.*`, so
+cached reuse, fresh Poisson, and fresh FEM/BEM execution are selected outside
+`mfem_bridge.cpp`. Demag-specific solver statistics and visualization H_eff
+reconstruction are filled by the demag modules; non-demag timing aggregation is
+still in `mfem_bridge.cpp`.
 
 ## Ograniczenia capability
 
@@ -92,7 +102,12 @@ filled by the demag modules; non-demag timing aggregation is still in
   frozen consistently with the cached potential.
 - Fresh Poisson solves are gated by
   `demag_poisson_operator_ready_for_fresh_solve(...)`, which accepts only airbox
-  Dirichlet/Robin demag and requires an initialized Poisson operator.
+  Dirichlet/Robin demag and requires an initialized Poisson operator. The gate
+  is owned by `demag_poisson_ready.*`.
+- Native Poisson-demag lifecycle allocation and teardown are owned by
+  `demag_poisson_lifecycle.*`.
+- One-shot Poisson-demag compute orchestration is owned by
+  `demag_poisson_solve.*`.
 - Demag solver telemetry is filled by `fill_demag_poisson_solver_stats(...)`.
   Stable runtime log labels for demag solver/preconditioner choices are owned by
   `demag_poisson_linear_solver_name(...)` and
@@ -116,7 +131,11 @@ Current gate:
   nodal lumped weights, per-node `Ms`, nonmagnetic-node masking, frozen-field
   refresh policy, cached Robin boundary energy, and demag solver stats reset in
   local non-MFEM builds. It also checks the full-domain visualization H_eff
-  reconstruction helper.
+  reconstruction helper, telemetry-header docstring, top-level source-contract
+  docstrings for the aggregate, ready, lifecycle, solve, RHS, boundary,
+  periodic, Hypre, recovery, field, cache, energy, and telemetry modules, and
+  source ownership for the ready/lifecycle/solve modules so runtime wrapper
+  definitions do not return to `demag_poisson.cpp` or `mfem_bridge.cpp`.
 - Local non-MFEM builds compile the public energy contract. The MFEM RHS,
   boundary-policy, periodic-reduction, Hypre-solve, and recovery code are
   guarded by `FULLMAG_HAS_MFEM_STACK`.

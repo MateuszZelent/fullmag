@@ -28,7 +28,6 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   asRecord,
   formatCount,
-  formatValue,
   JsonResourceSection,
   MeshResourceFields,
   recordField,
@@ -181,31 +180,80 @@ function ObjectMeshInterfaceTransitionSection({
 }
 
 function ObjectMeshBackendParametersSection({
-  configRecord,
+  draft,
+  updateDraft,
   sizeFieldKinds,
   sizeFieldsLength,
 }: {
-  configRecord: Record<string, unknown> | null;
+  draft: ObjectMeshPolicyDraft;
+  updateDraft: UpdateObjectMeshPolicyDraft;
   sizeFieldKinds: string[];
   sizeFieldsLength: number;
 }) {
   return (
-    <InspectorSection value="backend" title="Backend Mesh Parameters" badge="backend truth">
+    <InspectorSection value="backend" title="Backend Mesh Parameters" badge="structured">
+      <FormField disabled={!draft.present} label="Gmsh 2D algorithm" type="number" value={draft.algorithm2d} onChange={(event) => updateDraft({ algorithm2d: event.target.value })} />
+      <FormField disabled={!draft.present} label="Gmsh 3D algorithm" type="number" value={draft.algorithm3d} onChange={(event) => updateDraft({ algorithm3d: event.target.value })} />
+      <FormField disabled={!draft.present} label="Smoothing steps" type="number" value={draft.smoothingSteps} onChange={(event) => updateDraft({ smoothingSteps: event.target.value })} />
+      <FormField disabled={!draft.present} label="Optimizer" type="select" value={draft.optimize} onChange={(event) => updateDraft({ optimize: event.target.value })}>
+        <option value="">Inherited</option>
+        <option value="Netgen">Netgen</option>
+        <option value="HighOrder">High order</option>
+        <option value="Relocate3D">Relocate 3D</option>
+      </FormField>
+      <FormField disabled={!draft.present} label="Optimizer iterations" type="number" value={draft.optimizeIterations} onChange={(event) => updateDraft({ optimizeIterations: event.target.value })} />
+      <FormField disabled={!draft.present} label="Compute quality" type="select" value={draft.computeQuality} onChange={(event) => updateDraft({ computeQuality: event.target.value })}>
+        <option value="">Inherited</option>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </FormField>
+      <FormField disabled={!draft.present} label="Per-element quality" type="select" value={draft.perElementQuality} onChange={(event) => updateDraft({ perElementQuality: event.target.value })}>
+        <option value="">Inherited</option>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </FormField>
+      <FormField disabled={!draft.present} label="Boundary-layer count" type="number" value={draft.boundaryLayerCount} onChange={(event) => updateDraft({ boundaryLayerCount: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer thickness" type="number" unit="m" value={draft.boundaryLayerThickness} onChange={(event) => updateDraft({ boundaryLayerThickness: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer stretching" type="number" value={draft.boundaryLayerStretching} onChange={(event) => updateDraft({ boundaryLayerStretching: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer surface tags" type="text" value={draft.boundaryLayerTargetSurfaceTags} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceTags: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer curve tags" type="text" value={draft.boundaryLayerTargetCurveTags} onChange={(event) => updateDraft({ boundaryLayerTargetCurveTags: event.target.value })} />
       <MeshResourceFields
         fields={[
-          { label: "Gmsh 2D algorithm", value: formatValue(recordField(configRecord, "algorithm_2d")) },
-          { label: "Gmsh 3D algorithm", value: formatValue(recordField(configRecord, "algorithm_3d")) },
-          { label: "Size from curvature", value: formatValue(recordField(configRecord, "size_from_curvature")) },
-          { label: "Narrow regions", value: formatValue(recordField(configRecord, "narrow_regions")) },
-          { label: "Smoothing steps", value: formatValue(recordField(configRecord, "smoothing_steps")) },
-          { label: "Optimizer", value: formatValue(recordField(configRecord, "optimize")) },
-          { label: "Optimizer iterations", value: formatValue(recordField(configRecord, "optimize_iterations")) },
-          { label: "Compute quality", value: formatValue(recordField(configRecord, "compute_quality")) },
-          { label: "Per-element quality", value: formatValue(recordField(configRecord, "per_element_quality")) },
           { label: "Size-field count", value: String(sizeFieldsLength) },
           { label: "Size-field kinds", value: sizeFieldKinds.length ? sizeFieldKinds.join(", ") : "none" },
         ]}
       />
+    </InspectorSection>
+  );
+}
+
+function ObjectMeshManualSizeFieldSection({
+  draft,
+  updateDraft,
+}: {
+  draft: ObjectMeshPolicyDraft;
+  updateDraft: UpdateObjectMeshPolicyDraft;
+}) {
+  const disabled = !draft.present || !draft.manualBoxSizeFieldEnabled;
+  return (
+    <InspectorSection value="manual-size-field" title="Manual Size Field" badge="Box">
+      <FormField
+        checked={draft.manualBoxSizeFieldEnabled}
+        disabled={!draft.present}
+        label="Use Box size field"
+        type="checkbox"
+        onChange={(event) =>
+          updateDraft({ manualBoxSizeFieldEnabled: event.target.checked })
+        }
+      />
+      <FormField disabled={disabled} label="Box VIn" type="number" unit="m" value={draft.manualBoxSizeFieldVIn} onChange={(event) => updateDraft({ manualBoxSizeFieldVIn: event.target.value })} />
+      <FormField disabled={disabled} label="Box VOut" type="number" unit="m" value={draft.manualBoxSizeFieldVOut} onChange={(event) => updateDraft({ manualBoxSizeFieldVOut: event.target.value })} />
+      <FormField disabled={disabled} label="Box X min" type="number" unit="m" value={draft.manualBoxSizeFieldXMin} onChange={(event) => updateDraft({ manualBoxSizeFieldXMin: event.target.value })} />
+      <FormField disabled={disabled} label="Box X max" type="number" unit="m" value={draft.manualBoxSizeFieldXMax} onChange={(event) => updateDraft({ manualBoxSizeFieldXMax: event.target.value })} />
+      <FormField disabled={disabled} label="Box Y min" type="number" unit="m" value={draft.manualBoxSizeFieldYMin} onChange={(event) => updateDraft({ manualBoxSizeFieldYMin: event.target.value })} />
+      <FormField disabled={disabled} label="Box Y max" type="number" unit="m" value={draft.manualBoxSizeFieldYMax} onChange={(event) => updateDraft({ manualBoxSizeFieldYMax: event.target.value })} />
+      <FormField disabled={disabled} label="Box Z min" type="number" unit="m" value={draft.manualBoxSizeFieldZMin} onChange={(event) => updateDraft({ manualBoxSizeFieldZMin: event.target.value })} />
+      <FormField disabled={disabled} label="Box Z max" type="number" unit="m" value={draft.manualBoxSizeFieldZMax} onChange={(event) => updateDraft({ manualBoxSizeFieldZMax: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -346,7 +394,6 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const reportRecord = asRecord(report.data?.report);
   const effectiveTarget = asRecord(recordField(reportRecord, "effective_target"));
-  const configRecord = asRecord(resource.config);
   const sizeFieldRecord = asRecord(sizeField.data?.size_field);
   const sizeFields = Array.isArray(recordField(sizeFieldRecord, "size_fields"))
     ? (recordField(sizeFieldRecord, "size_fields") as unknown[])
@@ -411,7 +458,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "override", "semantics", "backend", "target", "topology", "transactions"]}
+      defaultValue={["summary", "override", "semantics", "backend", "manual-size-field", "target", "topology", "transactions"]}
     >
       <ObjectMeshPolicySummarySection
         hasConfig={Boolean(resource.config)}
@@ -426,10 +473,12 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       <ObjectMeshSweepStrategySection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshBackendParametersSection
-        configRecord={configRecord}
+        draft={draft}
+        updateDraft={updateDraft}
         sizeFieldKinds={sizeFieldKinds}
         sizeFieldsLength={sizeFields.length}
       />
+      <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshEffectiveTargetSection
         effectiveTarget={effectiveTarget}

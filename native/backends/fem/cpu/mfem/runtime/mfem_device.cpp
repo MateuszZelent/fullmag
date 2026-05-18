@@ -1,9 +1,21 @@
+/*
+ * MFEM device runtime source contract.
+ *
+ * This source owns MFEM device-string plan import, CPU/GPU classification,
+ * device-info snapshots, and runtime MFEM device configuration. It does not allocate Context resources, bootstrap GPU state, execute steps, or own availability policy.
+ */
+
 #include "cpu/mfem/runtime/mfem_device.hpp"
 
 #include "context.hpp"
 
 #include <cstdlib>
 #include <cstring>
+#include <string>
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
 
 namespace fullmag::fem {
 
@@ -24,6 +36,17 @@ namespace fullmag::fem {
  * GPU are separate realizations of the same physical model.
  */
 
+void initialize_mfem_device_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan)
+{
+    ctx.mfem_device.gpu_device_index = plan.gpu_device_index;
+    ctx.mfem_device.device_string_override.clear();
+    if (plan.mfem_device_string != nullptr && plan.mfem_device_string[0] != '\0') {
+        ctx.mfem_device.device_string_override = plan.mfem_device_string;
+    }
+}
+
 const char *configured_mfem_device_string() {
     const char *raw = std::getenv("FULLMAG_FEM_MFEM_DEVICE");
     if (raw != nullptr && *raw != '\0') {
@@ -33,8 +56,8 @@ const char *configured_mfem_device_string() {
 }
 
 const char *configured_mfem_device_string(const Context &ctx) {
-    if (!ctx.mfem_device_string_override.empty()) {
-        return ctx.mfem_device_string_override.c_str();
+    if (!ctx.mfem_device.device_string_override.empty()) {
+        return ctx.mfem_device.device_string_override.c_str();
     }
     return configured_mfem_device_string();
 }
@@ -71,6 +94,71 @@ bool mfem_device_requests_gpu() {
 
 bool mfem_device_requests_gpu(const Context &ctx) {
     return is_gpu_device_string(configured_mfem_device_string(ctx));
+}
+
+void context_populate_device_info(Context &ctx) {
+    std::memset(&ctx.mfem_device.device_info_cache, 0, sizeof(ctx.mfem_device.device_info_cache));
+#if FULLMAG_HAS_MFEM_STACK
+    // FND-007: backend name reflects the actual demag realization in use.
+    // Phase-0D fix: use device-aware prefix instead of hard-coding "cuda".
+    const char *mfem_dev = configured_mfem_device_string(ctx);
+    const bool on_gpu = is_gpu_device_string(mfem_dev);
+    const char *dev_tag = on_gpu ? "gpu" : "cpu";
+
+    std::string backend_name;
+    if (ctx.exchange.mfem.ready) {
+        if (!ctx.enable_demag) {
+            backend_name = std::string("mfem_") + dev_tag + "_exchange_ready";
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET) {
+            backend_name = std::string("mfem_") + dev_tag + "_native_poisson_dirichlet_demag";
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
+            backend_name = std::string("mfem_") + dev_tag + "_native_poisson_robin_demag";
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+            backend_name = std::string("mfem_") + dev_tag + "_native_fem_bem_demag";
+        } else {
+            backend_name = std::string("mfem_") + dev_tag + "_unknown_demag_realization";
+        }
+    } else if (ctx.mfem_ready) {
+        backend_name = std::string("mfem_") + dev_tag + "_mesh_ready";
+    } else {
+        backend_name = "mfem_stack_uninitialized";
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.mfem_context.selected_device_index >= 0) {
+        cudaDeviceProp props{};
+        int driver_version = 0;
+        int runtime_version = 0;
+        if (cudaGetDeviceProperties(&props, ctx.mfem_context.selected_device_index) == cudaSuccess) {
+            backend_name = std::string(props.name);
+            ctx.mfem_device.device_info_cache.compute_capability_major = props.major;
+            ctx.mfem_device.device_info_cache.compute_capability_minor = props.minor;
+        }
+        if (cudaDriverGetVersion(&driver_version) == cudaSuccess) {
+            ctx.mfem_device.device_info_cache.driver_version = driver_version;
+        }
+        if (cudaRuntimeGetVersion(&runtime_version) == cudaSuccess) {
+            ctx.mfem_device.device_info_cache.runtime_version = runtime_version;
+        }
+    }
+#endif
+    std::strncpy(
+        ctx.mfem_device.device_info_cache.name,
+        backend_name.c_str(),
+        sizeof(ctx.mfem_device.device_info_cache.name) - 1);
+    ctx.mfem_device.device_info_cache.is_gpu_enabled = on_gpu ? 1 : 0;
+#else
+    std::strncpy(
+        ctx.mfem_device.device_info_cache.name,
+        "native_fem_scaffold",
+        sizeof(ctx.mfem_device.device_info_cache.name) - 1);
+    ctx.mfem_device.device_info_cache.is_gpu_enabled = 0;
+#endif
+    ctx.mfem_device.device_info_valid = true;
+}
+
+fullmag_fem_device_info device_info_snapshot(const Context &ctx)
+{
+    return ctx.mfem_device.device_info_cache;
 }
 
 } // namespace fullmag::fem

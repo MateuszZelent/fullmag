@@ -135,12 +135,18 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
             .temperature
             .is_some_and(|temperature| temperature > 0.0),
         QuantityId::HAnt
+        | QuantityId::U
+        | QuantityId::Eps
+        | QuantityId::Sigma
         | QuantityId::EEx
         | QuantityId::EDemag
         | QuantityId::EExt
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::EEl
+        | QuantityId::EKinEl
         | QuantityId::ETotal
+        | QuantityId::ElasticResidualNorm
         | QuantityId::ModeAmplitude
         | QuantityId::ModeReal
         | QuantityId::ModeImag
@@ -211,11 +217,17 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
             .temperature
             .is_some_and(|temperature| temperature > 0.0),
         QuantityId::EEx
+        | QuantityId::U
+        | QuantityId::Eps
+        | QuantityId::Sigma
         | QuantityId::EDemag
         | QuantityId::EExt
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::EEl
+        | QuantityId::EKinEl
         | QuantityId::ETotal
+        | QuantityId::ElasticResidualNorm
         | QuantityId::ModeAmplitude
         | QuantityId::ModeReal
         | QuantityId::ModeImag
@@ -360,6 +372,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,

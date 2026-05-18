@@ -1068,6 +1068,7 @@ mod tests {
                 oersted_time_dep_t_on: 0.0,
                 oersted_time_dep_t_off: 0.0,
                 magnetoelastic: None,
+                mechanics: None,
                 demag_solver_policy: None,
                 thermal_seed_config: None,
                 oersted_realization: None,

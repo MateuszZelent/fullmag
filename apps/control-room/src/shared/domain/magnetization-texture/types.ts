@@ -1,7 +1,6 @@
 import type {
   JsonObject,
   JsonValue,
-  MagnetizationAssetPatchRequest,
   ObjectPatchRequest,
   RegionPatchRequest,
 } from "@/kernel/api/apiTypes";
@@ -17,7 +16,7 @@ export interface MagnetizationTextureTargetInput {
   regionId?: string | null;
 }
 
-export type MagnetizationTextureAssignment =
+type MagnetizationTextureAssignment =
   | "missing"
   | "object"
   | "object-inherited"
@@ -49,5 +48,3 @@ export interface MagnetizationTextureModel {
 export type MagnetizationAssignmentPatch =
   | { path: "object"; payload: ObjectPatchRequest }
   | { path: "region"; payload: RegionPatchRequest };
-
-export type { MagnetizationAssetPatchRequest };

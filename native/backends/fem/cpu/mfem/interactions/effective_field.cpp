@@ -1,54 +1,30 @@
+/*
+ * Effective-field composition source contract.
+ *
+ * This source owns the field/direct-torque enablement gate, eager initial
+ * effective-field refresh policy, top-level H_eff composition, periodic
+ * projection of composed local fields, and last-energy bookkeeping for local
+ * interaction modules. It does not assemble exchange operators, implement demag solvers, define individual interaction physics, own state I/O, or publish step metrics.
+ */
+
 #include "cpu/mfem/interactions/effective_field.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/anisotropy.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/exchange_runtime.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
-
-#include <chrono>
-
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start)
-{
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-class ScopedPhaseTimer {
-public:
-    explicit ScopedPhaseTimer(uint64_t *accumulator)
-        : accumulator_(accumulator)
-    {
-        if (accumulator_ != nullptr) {
-            start_ = SteadyClock::now();
-        }
-    }
-
-    ~ScopedPhaseTimer()
-    {
-        if (accumulator_ != nullptr) {
-            *accumulator_ += elapsed_ns(start_);
-        }
-    }
-
-private:
-    uint64_t *accumulator_ = nullptr;
-    SteadyClock::time_point start_{};
-};
-
-} // namespace
+#include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/phase_timings.hpp"
+#include "fem_common.hpp"
 
 namespace fullmag::fem {
 
@@ -70,6 +46,20 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
 }
 
 #if FULLMAG_HAS_MFEM_STACK
+bool refresh_initial_effective_field_from_plan(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
+{
+    if (plan.eager_initial_effective_field == 0) {
+        return true;
+    }
+    if (!ctx.enable_exchange && !ctx.enable_demag) {
+        return true;
+    }
+    return context_refresh_exchange_field_mfem(ctx, error);
+}
+
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
@@ -130,57 +120,63 @@ bool compute_effective_fields_for_magnetization(
         double anisotropy_energy = 0.0;
         if (ctx.enable_anisotropy) {
             compute_uniaxial_anisotropy_field(
-                ctx, m_xyz, ctx.h_ani_xyz,
+                ctx, m_xyz, ctx.anisotropy.h_uniaxial_xyz,
                 &anisotropy_energy);
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_ani_xyz);
+            if (!ctx.mesh.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.anisotropy.h_uniaxial_xyz);
             }
         } else {
-            ctx.h_ani_xyz.assign(m_xyz.size(), 0.0);
+            ctx.anisotropy.h_uniaxial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double dmi = 0.0;
         if (ctx.enable_dmi) {
             if (!compute_interfacial_dmi_field(
-                    ctx, m_xyz, ctx.h_dmi_xyz, &dmi, error)) {
+                    ctx, m_xyz, ctx.dmi.h_interfacial_xyz, &dmi, error)) {
                 return false;
             }
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_dmi_xyz);
+            if (!ctx.mesh.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.dmi.h_interfacial_xyz);
             }
+        } else {
+            ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         if (ctx.enable_cubic_anisotropy) {
             double cubic_energy = 0.0;
             compute_cubic_anisotropy_field(
-                ctx, m_xyz, ctx.h_cubic_ani_xyz, &cubic_energy);
+                ctx, m_xyz, ctx.anisotropy.h_cubic_xyz, &cubic_energy);
             anisotropy_energy += cubic_energy;
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_cubic_ani_xyz);
+            if (!ctx.mesh.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.anisotropy.h_cubic_xyz);
             }
+        } else {
+            ctx.anisotropy.h_cubic_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double bulk_dmi = 0.0;
         if (ctx.enable_bulk_dmi) {
             if (!compute_bulk_dmi_field(
-                    ctx, m_xyz, ctx.h_bulk_dmi_xyz, &bulk_dmi, error)) {
+                    ctx, m_xyz, ctx.dmi.h_bulk_xyz, &bulk_dmi, error)) {
                 return false;
             }
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_bulk_dmi_xyz);
+            if (!ctx.mesh.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.dmi.h_bulk_xyz);
             }
+        } else {
+            ctx.dmi.h_bulk_xyz.assign(m_xyz.size(), 0.0);
         }
 
         for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
             h_eff_xyz[i] = h_ex_xyz[i] + h_demag_xyz[i] +
-                           ctx.h_ani_xyz[i] + ctx.h_dmi_xyz[i] +
-                           ctx.h_cubic_ani_xyz[i];
+                           ctx.anisotropy.h_uniaxial_xyz[i] + ctx.dmi.h_interfacial_xyz[i] +
+                           ctx.anisotropy.h_cubic_xyz[i];
         }
         add_zeeman_field(ctx, h_eff_xyz);
 
-        if (ctx.enable_bulk_dmi && !ctx.h_bulk_dmi_xyz.empty()) {
+        if (ctx.enable_bulk_dmi && !ctx.dmi.h_bulk_xyz.empty()) {
             for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-                h_eff_xyz[i] += ctx.h_bulk_dmi_xyz[i];
+                h_eff_xyz[i] += ctx.dmi.h_bulk_xyz[i];
             }
         }
 
@@ -191,21 +187,20 @@ bool compute_effective_fields_for_magnetization(
             add_thermal_brown_field(ctx, h_eff_xyz);
         }
 
-        double magnetoelastic_energy = 0.0;
         if (ctx.enable_magnetoelastic) {
             compute_magnetoelastic_field(ctx, m_xyz);
-            magnetoelastic_energy = ctx.mel_energy;
             add_magnetoelastic_field(ctx, h_eff_xyz);
+        } else {
+            ctx.magnetoelastic.energy_joules = 0.0;
         }
-        if (!ctx.periodic_reduced_node.empty()) {
+        if (!ctx.mesh.periodic_reduced_node.empty()) {
             project_static_periodic_aos(ctx, h_eff_xyz);
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;
         }
-        ctx.last_anisotropy_energy_joules = anisotropy_energy;
-        ctx.last_dmi_energy_joules = dmi + bulk_dmi;
-        ctx.last_magnetoelastic_energy_joules = magnetoelastic_energy;
+        ctx.anisotropy.energy_joules = anisotropy_energy;
+        ctx.dmi.energy_joules = dmi + bulk_dmi;
     }
 
     update_demag_poisson_visual_effective_field(ctx, h_eff_xyz, h_demag_xyz);

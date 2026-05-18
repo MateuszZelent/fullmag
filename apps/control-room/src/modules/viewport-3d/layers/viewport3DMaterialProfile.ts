@@ -1,10 +1,6 @@
 import type { MeshStandardMaterialParameters } from "three";
 
-import {
-  getViewport3DVisualProfile,
-  type Viewport3DVisualProfile,
-  type Viewport3DVisualProfileId,
-} from "../viewport3dVisualProfile";
+import type { Viewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 export interface Viewport3DMaterialProfile {
   airSurface: Pick<
@@ -101,10 +97,4 @@ export function resolveViewport3DMaterialProfile(
       opacity: visualProfile.lighting === "figure" ? 0.82 : 0.72,
     },
   };
-}
-
-export function resolveViewport3DMaterialProfileForId(
-  profileId: Viewport3DVisualProfileId,
-): Viewport3DMaterialProfile {
-  return resolveViewport3DMaterialProfile(getViewport3DVisualProfile(profileId));
 }

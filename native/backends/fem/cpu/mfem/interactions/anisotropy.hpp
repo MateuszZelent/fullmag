@@ -1,5 +1,10 @@
 #pragma once
 
+#include "cpu/mfem/interactions/anisotropy_cubic.hpp"
+#include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
+#include "fullmag_fem.h"
+
+#include <string>
 #include <vector>
 
 namespace fullmag::fem {
@@ -7,41 +12,34 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Compute the uniaxial anisotropy effective field for the native FEM CPU path.
+ * Runtime output owned by the anisotropy aggregate.
  *
- * The implementation uses the easy-axis energy convention
- *
- *   E_ani = integral_Omega [-Ku1 (m.u)^2 - Ku2 (m.u)^4] dV,
- *
- * and returns the corresponding H_ani in A/m:
- *
- *   H_ani = [2 Ku1/(mu0 Ms) (m.u) + 4 Ku2/(mu0 Ms) (m.u)^3] u.
- *
- * The returned energy is integrated with the current nodal lumped-mass
- * weights and is reported in joules. Nonmagnetic nodes are left at zero.
+ * Plan-level uniaxial/cubic parameters stay in Context compatibility storage,
+ * while this state owns the computed AoS-3 field buffers and combined
+ * anisotropy energy from the last effective-field assembly.
  */
-void compute_uniaxial_anisotropy_field(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ani_xyz,
-    double *anisotropy_energy);
+struct AnisotropyRuntimeState {
+    std::vector<double> h_uniaxial_xyz;
+    std::vector<double> h_cubic_xyz;
+    double energy_joules = 0.0;
+};
 
 /*
- * Compute the cubic anisotropy effective field for the native FEM CPU path.
+ * Aggregated include surface for local anisotropy families.
  *
- * Crystal axes c1 and c2 are read from the context and c3 is computed as
- * c1 x c2. The energy density convention is
+ * Initialize native FEM anisotropy plan fields before validation and runtime
+ * field modules consume the Context compatibility storage.
  *
- *   e_cub = K1 sigma + K2 m1^2 m2^2 m3^2 + K3 sigma^2,
- *   sigma = m1^2 m2^2 + m2^2 m3^2 + m1^2 m3^2,
- *
- * where mi = m.ci. The field is H_cub = -(1/(mu0 Ms)) de_cub/dm,
- * returned in A/m. The global energy is integrated with nodal lumped mass.
+ * This compatibility umbrella owns plan-field import and axis normalization
+ * only. It does not compute uniaxial or cubic H_eff/energy. Those
+ * responsibilities stay in anisotropy_uniaxial.* and anisotropy_cubic.*.
  */
-void compute_cubic_anisotropy_field(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_cub_xyz,
-    double *cubic_energy);
+void initialize_anisotropy_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+/*
+ * Validate and normalize anisotropy axes from the native FEM plan before local
+ * uniaxial/cubic field modules consume the Context compatibility storage.
+ */
+bool normalize_anisotropy_axes(Context &ctx, std::string &error);
 
 } // namespace fullmag::fem

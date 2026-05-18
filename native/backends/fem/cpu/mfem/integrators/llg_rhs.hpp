@@ -40,6 +40,9 @@ void llg_rhs_aos(
  *
  * Empty masks are treated as fully magnetic. The helper is shared by Heun/RK
  * staging so direct torques and LLG RHS terms never advance nonmagnetic nodes.
+ *
+ * It does not compose H_eff, evaluate interaction fields, advance time, or own
+ * step metrics.
  */
 void zero_non_magnetic_nodes_aos(
     std::vector<double> &field_xyz,

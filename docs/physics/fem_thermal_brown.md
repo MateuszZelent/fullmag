@@ -1,8 +1,11 @@
 # FEM Brown Thermal Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`
+- Last updated: 2026-05-18
+- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp/.cpp`
 - Test: `native/backends/fem/tests/thermal_brown_contract.cpp`
 
 ## Pole
@@ -15,13 +18,25 @@ For node `i`, the standard deviation is:
 
 ```text
 sigma_i = sqrt(2 alpha_i kB T / (gamma0_i mu0 Ms_i V_i dt))
-gamma0_i = gamma_red * (1 + alpha_i^2)
+gamma0_i = gamma_mu0 * (1 + alpha_i^2)
 ```
 
 where `V_i` is the local dual volume. The executable module uses per-node
 `alpha_i`, `Ms_i`, and `V_i` when available and falls back to scalar material
 values plus the legacy average magnetic-node volume only when node volumes are
 missing.
+
+The `gyromagnetic_ratio` input is the bare gamma_mu0 convention used by the
+LLG RHS, not gamma_bar = gamma_mu0 / (1 + alpha_i^2). Passing gamma_bar would
+divide the Brown variance by the wrong damping-dependent factor.
+
+Source ownership: `thermal_brown_sigma.hpp/.cpp` owns the Brown sigma formula,
+`thermal_brown_sampler.hpp/.cpp` owns buffer initialization, RNG seed handling,
+node-volume fallback, nonmagnetic-node zeroing, and same-time/dt cache reuse,
+and `thermal_brown_field.hpp/.cpp` owns additive `H_eff` composition. The
+`thermal_brown.hpp/.cpp` surface owns plan import only and is otherwise a
+compatibility aggregate; it does not define sigma, sampling/cache, or `H_eff`
+addition.
 
 ## Energia
 
@@ -34,7 +49,7 @@ does not report a standalone energy term. It contributes only to `H_eff`.
 |---|---:|---:|
 | temperature | `T` | `K` |
 | damping | `alpha` | `1` |
-| reduced gyromagnetic ratio | `gamma_red` | `m/(A s)` |
+| bare gyromagnetic ratio | `gamma_mu0` | `m/(A s)` |
 | saturation magnetization | `Ms` | `A/m` |
 | node dual volume | `V_i` | `m^3` |
 | timestep | `dt` | `s` |
@@ -77,8 +92,10 @@ Current gate:
 
 - `fem_thermal_brown_contract` checks the Brown sigma formula, invalid-input
   zero behavior, buffer initialization, per-node sigma diagnostics,
-  nonmagnetic-node zeroing, same-time/dt refresh caching, and additive `H_eff`
-  semantics.
+  nonmagnetic-node zeroing, same-time/dt refresh caching, source-module
+  ownership, aggregate-header non-ownership documentation, top-level
+  source-contract docstrings for the aggregate/sigma/sampler/field-add sources,
+  and additive `H_eff` semantics.
 
 Required before production qualification:
 

@@ -45,6 +45,7 @@ import {
   viewport3dStore,
   useViewport3DCommandState,
 } from "./viewport3dStore";
+import type { MeshQualityColorMetric } from "./viewport3dQualityMapping";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 import {
   configureViewport3DRenderer,
@@ -54,6 +55,25 @@ import {
 } from "./viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+
+interface MeshQualityRange {
+  max: number;
+  min: number;
+}
+
+function formatLegendValue(value: number): string {
+  return Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : "unknown";
+}
+
+export function resolveViewport3DMeshQualityLegend(
+  visible: boolean,
+  metric: MeshQualityColorMetric,
+  range: MeshQualityRange | null,
+): string | null {
+  if (!visible || !range) return null;
+  const metricLabel = metric === "sicn" ? "SICN" : metric;
+  return `Mesh quality ${metricLabel} ${formatLegendValue(range.min)} to ${formatLegendValue(range.max)}`;
+}
 
 interface Viewport3DFrameProps
   extends Omit<
@@ -70,6 +90,8 @@ interface Viewport3DFrameProps
   domainSummary: string;
   effectAntialias: boolean;
   kernel: ModuleProps["kernel"];
+  meshQualityMetric: MeshQualityColorMetric;
+  meshQualityRange: MeshQualityRange | null;
   onCameraPatch: (
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
@@ -221,6 +243,8 @@ function Viewport3DFrame({
   domainSummary,
   effectAntialias,
   kernel,
+  meshQualityMetric,
+  meshQualityRange,
   onCameraPatch,
   onClearSelection,
   quantityId,
@@ -255,6 +279,11 @@ function Viewport3DFrame({
     : sceneProps.femDomain.magneticParts.length > 0
       ? "FEM"
       : null;
+  const meshQualityLegend = resolveViewport3DMeshQualityLegend(
+    sceneProps.meshQualityOverlayVisible,
+    meshQualityMetric,
+    meshQualityRange,
+  );
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,
@@ -312,6 +341,7 @@ function Viewport3DFrame({
         <span>{quantityId}</span>
         <span>{selectedLabel}</span>
         <span>{domainSummary}</span>
+        {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
         <span>{status}</span>
         <span>{diagnostics}</span>
       </div>

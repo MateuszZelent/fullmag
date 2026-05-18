@@ -1,28 +1,30 @@
 #pragma once
 
-#include <vector>
+#include "cpu/mfem/interactions/magnetoelastic_field.hpp"
+#include "cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp"
+#include "fullmag_fem.h"
 
 namespace fullmag::fem {
 
 struct Context;
 
 /*
- * Compute prescribed-strain magnetoelastic effective field and energy.
+ * Initialize prescribed-strain magnetoelastic plan fields.
  *
- * The strain buffer uses Voigt engineering-shear order
- * `[e11, e22, e33, 2e23, 2e13, 2e12]`. The field contribution is returned in
- * A/m and stored in `ctx.h_mel_xyz`; the conservative coupling energy is stored
- * in `ctx.mel_energy` in joules when lumped masses are available.
+ * Copies the ABI plan flags, magnetoelastic coupling constants, uniform-strain
+ * mode, and optional Voigt strain buffer into Context compatibility storage.
+ * Field and energy evaluation stay in magnetoelastic_prescribed_strain.*.
  */
-void compute_magnetoelastic_field(
+void initialize_magnetoelastic_plan_fields(
     Context &ctx,
-    const std::vector<double> &m_xyz);
+    const fullmag_fem_plan_desc &plan);
 
 /*
- * Add the current magnetoelastic H field to an effective-field buffer.
+ * Aggregated include surface for prescribed-strain magnetoelastic
+ * responsibilities.
  *
- * This is an H_eff contribution, not a direct RHS torque.
+ * This compatibility umbrella owns ABI plan import only. It does not compute B1/B2 H_mel/energy or add H_mel to H_eff. Those responsibilities stay in
+ * magnetoelastic_prescribed_strain.* and magnetoelastic_field.*.
  */
-void add_magnetoelastic_field(const Context &ctx, std::vector<double> &h_eff_xyz);
 
 } // namespace fullmag::fem

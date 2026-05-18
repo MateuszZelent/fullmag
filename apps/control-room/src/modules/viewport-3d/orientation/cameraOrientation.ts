@@ -2,8 +2,6 @@ import type { Viewport3DCameraState } from "../viewport3dStore";
 
 export type Direction3 = [number, number, number];
 
-export const VIEWPORT_3D_SYSTEM_CENTER: Direction3 = [0, 0, 0];
-
 export function snapCameraToDirection(
   current: Viewport3DCameraState,
   direction: Direction3,

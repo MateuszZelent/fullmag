@@ -15,13 +15,13 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
     execute_nonlinear_cg, execute_projected_gradient_bb, llg_overdamped_uses_pure_damping,
-    relaxation_converged,
+    relaxation_converged, RelaxationEnergyPlateauWindow,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
@@ -546,7 +546,7 @@ pub(crate) fn execute_reference_fdm(
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
     let mut integrator_bufs = problem.create_integrator_buffers();
-    let mut previous_total_energy = Some(observe_state(&problem, &state)?.total_energy);
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
 
@@ -763,18 +763,18 @@ pub(crate) fn execute_reference_fdm(
                 break;
             }
 
+            let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 step_count >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &latest_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(latest_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -1002,7 +1002,10 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(
+        &observables.magnetization,
+        &observables.effective_field,
+    );
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1028,7 +1031,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
 }
@@ -1470,7 +1473,7 @@ mod tests {
 
     #[test]
     fn helper_max_vector_norm_handles_empty_input() {
-        assert_eq!(max_vector_norm(&[]), 0.0);
+        assert_eq!(crate::derived_fields::max_vector_norm(&[]), 0.0);
     }
 
     #[test]

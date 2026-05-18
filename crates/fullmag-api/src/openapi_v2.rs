@@ -59,6 +59,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::meshing::mesh::replace_mesh_shared_domain_config,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_report,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_quality,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_quality_data,
         crate::router_v2::handlers::meshing::mesh::get_mesh_realized_size_fields,
         crate::router_v2::handlers::meshing::mesh::get_mesh_quality_gates,
         crate::router_v2::handlers::meshing::mesh::get_mesh_periodic_pairs,

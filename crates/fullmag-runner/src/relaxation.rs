@@ -17,22 +17,74 @@ use crate::types::{ExecutionProvenance, RunStatus, StepStats};
 // Convergence check (shared by all algorithms)
 // ---------------------------------------------------------------------------
 
+pub(crate) const RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS: usize = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct EnergyPlateauRangeJ {
+    pub(crate) value: f64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RelaxationEnergyPlateauWindow {
+    samples: [f64; RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS],
+    count: usize,
+    next: usize,
+}
+
+impl Default for RelaxationEnergyPlateauWindow {
+    fn default() -> Self {
+        Self {
+            samples: [0.0; RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS],
+            count: 0,
+            next: 0,
+        }
+    }
+}
+
+impl RelaxationEnergyPlateauWindow {
+    pub(crate) fn record(&mut self, total_energy_j: f64) -> Option<EnergyPlateauRangeJ> {
+        if !total_energy_j.is_finite() {
+            *self = Self::default();
+            return None;
+        }
+
+        self.samples[self.next] = total_energy_j;
+        self.next = (self.next + 1) % RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS;
+        self.count = (self.count + 1).min(RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS);
+        self.range()
+    }
+
+    pub(crate) fn range(&self) -> Option<EnergyPlateauRangeJ> {
+        if self.count < RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS {
+            return None;
+        }
+
+        let mut min_energy = self.samples[0];
+        let mut max_energy = self.samples[0];
+        for energy in self.samples.iter().take(self.count).skip(1) {
+            min_energy = min_energy.min(*energy);
+            max_energy = max_energy.max(*energy);
+        }
+        let value = max_energy - min_energy;
+        value.is_finite().then_some(EnergyPlateauRangeJ { value })
+    }
+}
+
 pub(crate) fn relaxation_converged(
     control: &RelaxationControlIR,
     stats: &StepStats,
-    previous_total_energy: Option<f64>,
+    energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
     gyromagnetic_ratio: f64,
     damping: f64,
     pure_damping_rhs: bool,
 ) -> bool {
     let max_torque = effective_max_torque_apm(stats, gyromagnetic_ratio, damping, pure_damping_rhs);
-    let energy_delta = previous_total_energy.map(|previous| (previous - stats.e_total).abs());
-    relaxation_stop_criteria_satisfied(control, energy_delta, max_torque)
+    relaxation_stop_criteria_satisfied(control, energy_plateau_range_j, max_torque)
 }
 
 pub(crate) fn relaxation_stop_criteria_satisfied(
     control: &RelaxationControlIR,
-    energy_delta_j: Option<f64>,
+    energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
     max_torque_apm: f64,
 ) -> bool {
     let has_torque = control.stop.torque_tolerance_apm.is_some();
@@ -46,8 +98,8 @@ pub(crate) fn relaxation_stop_criteria_satisfied(
         .stop
         .torque_tolerance_apm
         .is_none_or(|threshold| max_torque_apm <= threshold);
-    let energy_ok = match (control.stop.energy_tolerance_j, energy_delta_j) {
-        (Some(threshold), Some(delta)) => delta <= threshold,
+    let energy_ok = match (control.stop.energy_tolerance_j, energy_plateau_range_j) {
+        (Some(threshold), Some(range)) => range.value <= threshold,
         (Some(_), None) => false,
         (None, _) => true,
     };
@@ -61,6 +113,8 @@ pub(crate) fn approximate_max_torque(
     damping: f64,
     pure_damping_rhs: bool,
 ) -> f64 {
+    // `gyromagnetic_ratio` is the reduced gamma_mu0 in m/(A s), so
+    // (1/s) / gamma_mu0 reconstructs an A/m torque residual.
     if gyromagnetic_ratio <= 0.0 {
         return f64::INFINITY;
     }
@@ -145,20 +199,32 @@ pub(crate) fn infer_stage_completion(
     };
 
     let max_torque = effective_max_torque_apm(last, gyromagnetic_ratio, damping, pure_damping_rhs);
-    let previous_total_energy = steps.iter().rev().nth(1).map(|step| step.e_total);
-    let energy_delta = previous_total_energy.map(|previous| (previous - last.e_total).abs());
+    let energy_plateau_range = if steps.len() >= RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS {
+        let mut window = RelaxationEnergyPlateauWindow::default();
+        for step in steps
+            .iter()
+            .skip(steps.len() - RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS)
+        {
+            window.record(step.e_total);
+        }
+        window.range()
+    } else {
+        None
+    };
 
-    if let (Some(threshold), Some(metric_value)) = (control.stop.energy_tolerance_j, energy_delta) {
+    if let (Some(threshold), Some(metric_value)) =
+        (control.stop.energy_tolerance_j, energy_plateau_range)
+    {
         let torque_ok = control
             .stop
             .torque_tolerance_apm
             .is_none_or(|torque_threshold| max_torque <= torque_threshold);
-        if torque_ok && metric_value <= threshold {
+        if torque_ok && metric_value.value <= threshold {
             return StageCompletionIR {
                 status: status_label,
                 reason: Some(StageStopReason::Energy),
-                metric_name: Some("energy_delta_j".to_string()),
-                metric_value: Some(metric_value),
+                metric_name: Some("total_energy_plateau_range_J".to_string()),
+                metric_value: Some(metric_value.value),
                 threshold: Some(threshold),
             };
         }
@@ -336,6 +402,7 @@ pub(crate) fn execute_projected_gradient_bb(
 
     let mut steps: u64 = 0;
     let mut converged = false;
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -436,16 +503,15 @@ pub(crate) fn execute_projected_gradient_bb(
         use_bb1 = !use_bb1;
 
         // Accept step
-        let prev_energy = energy;
         m = m_trial;
         h_eff = h_eff_new;
         g = g_new;
         energy = e_trial;
         steps += 1;
 
-        let energy_delta = (prev_energy - energy).abs();
+        let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, Some(energy_delta), max_torque) {
+        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
@@ -498,6 +564,7 @@ pub(crate) fn execute_nonlinear_cg(
 
     let mut steps: u64 = 0;
     let mut converged = false;
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         // Check convergence
@@ -592,7 +659,6 @@ pub(crate) fn execute_nonlinear_cg(
         }
 
         // Accept step
-        let prev_energy = energy;
         m = m_new;
         h_eff = h_eff_new;
         g = g_new;
@@ -601,9 +667,9 @@ pub(crate) fn execute_nonlinear_cg(
         energy = e_new;
         steps += 1;
 
-        let energy_delta = (prev_energy - energy).abs();
+        let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, Some(energy_delta), max_torque) {
+        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
@@ -702,7 +768,7 @@ mod tests {
     #[test]
     fn relaxation_convergence_supports_energy_only_stop() {
         let control = control(None, Some(1e-18));
-        let previous_total_energy = Some(1.0);
+        let energy_plateau_range = Some(EnergyPlateauRangeJ { value: 5e-19 });
         let stats = StepStats {
             e_total: 1.0 - 5e-19,
             max_torque_Apm: 1e9,
@@ -712,7 +778,7 @@ mod tests {
         assert!(relaxation_converged(
             &control,
             &stats,
-            previous_total_energy,
+            energy_plateau_range,
             2.211e5,
             1.0,
             true,
@@ -722,7 +788,7 @@ mod tests {
     #[test]
     fn relaxation_convergence_requires_both_torque_and_energy_when_both_are_set() {
         let control = control(Some(1e-3), Some(1e-18));
-        let previous_total_energy = Some(1.0);
+        let energy_plateau_range = Some(EnergyPlateauRangeJ { value: 5e-19 });
         let stats = StepStats {
             e_total: 1.0 - 5e-19,
             max_torque_Apm: 1e-2,
@@ -732,11 +798,39 @@ mod tests {
         assert!(!relaxation_converged(
             &control,
             &stats,
-            previous_total_energy,
+            energy_plateau_range,
             2.211e5,
             1.0,
             true,
         ));
+    }
+
+    #[test]
+    fn relaxation_energy_plateau_needs_50_samples() {
+        let mut window = RelaxationEnergyPlateauWindow::default();
+
+        for _ in 0..RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS - 1 {
+            assert!(window.record(1.0).is_none());
+        }
+
+        let range = window
+            .record(1.0 + 5e-19)
+            .expect("50th sample yields range");
+        assert!(range.value <= 1e-18);
+    }
+
+    #[test]
+    fn relaxation_energy_plateau_uses_unsigned_range_for_negative_energy() {
+        let mut window = RelaxationEnergyPlateauWindow::default();
+
+        for i in 0..RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS {
+            let energy = -3.0 + 1e-20 * (i % 4) as f64;
+            window.record(energy);
+        }
+
+        let range = window.range().expect("full plateau window");
+        assert!(range.value >= 0.0);
+        assert!(range.value <= 4e-20);
     }
 
     #[test]
@@ -755,7 +849,7 @@ mod tests {
         assert!(!relaxation_converged(
             &control,
             &StepStats::default(),
-            Some(1.0),
+            Some(EnergyPlateauRangeJ { value: 0.0 }),
             2.211e5,
             1.0,
             true,
@@ -787,7 +881,7 @@ mod tests {
         assert!(relaxation_converged(
             &control,
             &stats,
-            Some(1.0),
+            None,
             gyromagnetic_ratio,
             damping,
             true,

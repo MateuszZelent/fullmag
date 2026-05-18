@@ -18,6 +18,7 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
@@ -33,6 +34,8 @@ export function TopologyMeshLayer({
   getPartSettings,
   materialProfile,
   magnetizationTexturePreviews,
+  meshQualityColors,
+  meshQualityOverlayVisible,
   onSelectDomain,
   onSelectPart,
   tracker,
@@ -48,6 +51,8 @@ export function TopologyMeshLayer({
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   materialProfile: Viewport3DMaterialProfile;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
+  meshQualityColors: ScalarColorBuffer | null;
+  meshQualityOverlayVisible: boolean;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
@@ -74,6 +79,7 @@ export function TopologyMeshLayer({
                   : null
               }
               materialProfile={materialProfile}
+              meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={
@@ -103,6 +109,7 @@ export function TopologyMeshLayer({
       femDomain={femDomain}
       fieldModel={resolvedFieldModel}
       materialProfile={materialProfile}
+      meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
       onSelectDomain={onSelectDomain}
       onSelectPart={onSelectPart}
       topologyModel={topologyModel}

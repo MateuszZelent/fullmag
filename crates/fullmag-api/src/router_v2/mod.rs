@@ -210,6 +210,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_shared_domain_quality),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+            get(handlers::meshing::get_mesh_shared_domain_quality_data),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
             get(handlers::meshing::get_mesh_realized_size_fields),
         )

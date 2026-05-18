@@ -1,3 +1,11 @@
+/*
+ * GPU exchange facade source contract.
+ *
+ * This source owns GPU exchange path readiness planning: checking CUDA/MFEM
+ * support, legacy sparse exchange metadata, mass upload, runtime coefficients,
+ * and device CSR dimensions before enabling device-resident exchange stages. It does not own Context construction, MFEM exchange assembly, CPU fallback exchange, integrator execution, or C ABI entrypoints.
+ */
+
 #include "gpu_exchange.hpp"
 
 #include "context.hpp"
@@ -16,23 +24,23 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
     reason = "stage H_ex device-resident exchange requires MFEM stack support";
     return plan;
 #else
-    if (ctx.use_consistent_mass) {
+    if (ctx.exchange.mfem.use_consistent_mass) {
         reason =
             "stage H_ex device-resident exchange supports only lumped-mass "
             "legacy sparse exchange; consistent-mass projection is still host/MFEM";
         return plan;
     }
-    if (!ctx.periodic_reduced_node.empty()) {
+    if (!ctx.mesh.periodic_reduced_node.empty()) {
         reason =
             "stage H_ex device-resident exchange does not support periodic "
             "reduced-node exchange yet";
         return plan;
     }
-    if (!ctx.gpu_exchange_legacy_sparse_metadata_ready) {
+    if (!ctx.gpu_exchange.legacy_sparse_metadata_ready) {
         reason = "stage H_ex device-resident exchange requires captured legacy sparse exchange metadata";
         return plan;
     }
-    if (!ctx.gpu_exchange_lumped_mass_ready) {
+    if (!ctx.gpu_exchange.lumped_mass_ready) {
         reason = "stage H_ex device-resident exchange requires captured lumped mass metadata";
         return plan;
     }

@@ -92,17 +92,24 @@ interpreted cellwise / nodewise according to the chosen DOF layout.
 Use physically meaningful stopping criteria:
 
 - max torque norm,
-- energy decrease,
+- total-energy plateau range over a sufficiently long accepted-step window,
 - norm defect,
 - optionally projected residual norm.
 
-Do **not** stop on energy stagnation alone.
+Do **not** treat one small step-to-step energy delta as relaxation. The native
+FEM energy stop uses the shared 50 accepted-step plateau rule from
+`0530-shared-relaxation-stop-and-field-refresh-semantics.md`: stop with
+`reason=energy` only when `max(E)-min(E)` across the last 50 accepted relax
+steps is below `energy_tolerance_j`, and when any configured torque tolerance is
+also satisfied.
 
 For shared product semantics with the current FDM runner, the public
 `torque_tolerance` control is expressed in `A/m` as
 `max |m × H_eff|`. A derived `max_torque_T = μ0 * max_torque_Apm` observable may
 still be surfaced for mumax-style comparability, but it is auxiliary and must
 not replace the canonical stop threshold.
+The fallback `dm/dt` → torque reconstruction uses the reduced `gamma_mu0` in
+`m/(A s)`, so the expected scale is about `2.211e5`, not `1.76e11`.
 
 ### 2.3 Symbols and SI units
 

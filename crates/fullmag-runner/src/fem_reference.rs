@@ -23,14 +23,16 @@ use crate::antenna_fields::{
     combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, flatten_vectors, mesh_quantity_active_mask,
     select_observables,
 };
 use crate::quantities::normalized_quantity_name;
-use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::relaxation::{
+    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+};
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
     set_object_average_m, single_object_scalars, weighted_object_scalars,
@@ -303,6 +305,11 @@ pub(crate) fn build_problem_and_state(
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
     }
+    // Wire user-configurable CG solver parameters from the plan.
+    if let Some(ref policy) = plan.demag_solver_policy {
+        problem.sparse_cg_tol = Some(policy.rtol);
+        problem.sparse_cg_max_iter = Some(policy.max_iterations as usize);
+    }
     problem
         .validate_reference_semantics()
         .map_err(|e| RunError {
@@ -446,10 +453,7 @@ fn execute_reference_fem_impl(
         )?;
     }
 
-    let mut previous_total_energy = {
-        let ant = antenna_field_at(&problem, state.magnetization().len());
-        Some(observe_state(&problem, &state, &ant)?.total_energy)
-    };
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -736,12 +740,13 @@ fn execute_reference_fem_impl(
             break;
         }
 
+        let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             let max_steps_hit = step_count >= control.stop.max_steps.unwrap_or(u64::MAX);
             let converged = relaxation_converged(
                 control,
                 &latest_stats,
-                previous_total_energy,
+                energy_plateau_range,
                 plan.gyromagnetic_ratio,
                 plan.material.damping,
                 pure_damping_relax,
@@ -774,7 +779,6 @@ fn execute_reference_fem_impl(
             }
             max_steps_hit || converged
         });
-        previous_total_energy = Some(latest_stats.e_total);
         if stop_for_relaxation {
             break;
         }
@@ -1034,7 +1038,10 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(
+        &observables.magnetization,
+        &observables.effective_field,
+    );
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1060,7 +1067,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
 }
@@ -1277,6 +1284,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -1447,6 +1455,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -1633,6 +1642,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,

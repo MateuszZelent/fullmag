@@ -900,6 +900,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
         parameters: {
             query?: never;
@@ -2940,8 +2956,13 @@ export interface components {
         };
         MeshBuildPipelinePhaseResource: {
             detail?: string | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
             id?: string | null;
             label?: string | null;
+            progress_label?: string | null;
+            /** Format: int32 */
+            progress_percent?: number | null;
             status?: string | null;
         };
         MeshCapabilitiesResource: {
@@ -6762,6 +6783,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MeshQualityGatesResource"];
                 };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous per-element quality response */
+                "If-None-Match"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary per-element shared-domain mesh quality data (FMMQ) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No per-element quality data artifact available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Per-element mesh quality data not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description No active workspace */
             404: {

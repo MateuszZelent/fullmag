@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/integrators/rk_tableau.hpp"
 #include "fullmag_fem.h"
 
 #include <cstdint>
@@ -8,7 +9,6 @@
 namespace fullmag::fem {
 
 struct Context;
-struct ExplicitTableau;
 
 struct GpuRkPlan {
     bool enabled = false;

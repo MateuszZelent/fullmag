@@ -6,7 +6,7 @@ import {
   Gauge,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { ModuleProps } from "@/kernel/types";
@@ -22,10 +22,19 @@ import { TransportLogTable } from "./TransportLogTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
 
+type FooterTabId = "engine" | "logs" | "telemetry";
+
 export default function FooterModule({ kernel }: ModuleProps) {
   const entries = useTransportDiagnostics(kernel);
   const [direction, setDirection] = useState<FooterDirectionFilter>("all");
   const [channel, setChannel] = useState<FooterChannelFilter>("all");
+  const [activeTab, setActiveTab] = useState<FooterTabId>("telemetry");
+
+  useEffect(() => {
+    return kernel.bus.on("footer:tab-requested", ({ tab }) => {
+      setActiveTab(tab);
+    });
+  }, [kernel.bus]);
 
   const filteredEntries = useMemo(
     () =>
@@ -39,7 +48,11 @@ export default function FooterModule({ kernel }: ModuleProps) {
   const txCount = entries.filter((entry) => entry.direction === "tx").length;
 
   return (
-    <Tabs defaultValue="telemetry" className="fm-footer">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => setActiveTab(value as FooterTabId)}
+      className="fm-footer"
+    >
       <div className="fm-footer__bar">
         <TabsList className="fm-footer__tabs" aria-label="Bottom diagnostics">
           <TabsTrigger value="logs" className="fm-footer__tab">

@@ -11,30 +11,88 @@ set(FEM_PUBLIC_HEADERS
 )
 
 set(FEM_SOURCES
+    core/fem_field_buffers.cpp
+    core/fem_material_fields.cpp
+    core/fem_mesh.cpp
+    core/fem_plan_fields.cpp
+    core/fem_state.cpp
     cpu/mfem/interactions/anisotropy.cpp
+    cpu/mfem/interactions/anisotropy_cubic.cpp
+    cpu/mfem/interactions/anisotropy_uniaxial.cpp
     cpu/mfem/interactions/demag.cpp
     cpu/mfem/interactions/demag_fem_bem.cpp
+    cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp
+    cpu/mfem/interactions/demag_fem_bem_energy.cpp
+    cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp
+    cpu/mfem/interactions/demag_fem_bem_operator.cpp
+    cpu/mfem/interactions/demag_fem_bem_potential.cpp
+    cpu/mfem/interactions/demag_fem_bem_rhs.cpp
+    cpu/mfem/interactions/demag_fem_bem_solve.cpp
+    cpu/mfem/interactions/demag_fem_bem_surface.cpp
+    cpu/mfem/interactions/demag_fem_bem_telemetry.cpp
+    cpu/mfem/interactions/demag_fem_bem_workspace.cpp
     cpu/mfem/interactions/demag_poisson.cpp
+    cpu/mfem/interactions/demag_poisson_boundary.cpp
+    cpu/mfem/interactions/demag_poisson_cache.cpp
+    cpu/mfem/interactions/demag_poisson_energy.cpp
+    cpu/mfem/interactions/demag_poisson_field.cpp
+    cpu/mfem/interactions/demag_poisson_hypre.cpp
+    cpu/mfem/interactions/demag_poisson_lifecycle.cpp
+    cpu/mfem/interactions/demag_poisson_periodic.cpp
+    cpu/mfem/interactions/demag_poisson_ready.cpp
+    cpu/mfem/interactions/demag_poisson_recovery.cpp
+    cpu/mfem/interactions/demag_poisson_rhs.cpp
+    cpu/mfem/interactions/demag_poisson_solve.cpp
+    cpu/mfem/interactions/demag_poisson_telemetry.cpp
     cpu/mfem/interactions/dmi.cpp
+    cpu/mfem/interactions/dmi_bulk.cpp
+    cpu/mfem/interactions/dmi_interfacial.cpp
+    cpu/mfem/interactions/dmi_workspace.cpp
     cpu/mfem/interactions/effective_field.cpp
     cpu/mfem/interactions/exchange.cpp
+    cpu/mfem/interactions/exchange_fallback.cpp
+    cpu/mfem/interactions/exchange_field.cpp
+    cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp
+    cpu/mfem/interactions/exchange_mass_projection.cpp
+    cpu/mfem/interactions/exchange_operator.cpp
+    cpu/mfem/interactions/exchange_runtime.cpp
     cpu/mfem/interactions/magnetoelastic.cpp
+    cpu/mfem/interactions/magnetoelastic_field.cpp
+    cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp
     cpu/mfem/interactions/oersted.cpp
+    cpu/mfem/interactions/oersted_cylinder.cpp
+    cpu/mfem/interactions/oersted_explicit.cpp
     cpu/mfem/interactions/stt.cpp
+    cpu/mfem/interactions/stt_slonczewski.cpp
+    cpu/mfem/interactions/stt_zhang_li.cpp
     cpu/mfem/interactions/thermal_brown.cpp
+    cpu/mfem/interactions/thermal_brown_field.cpp
+    cpu/mfem/interactions/thermal_brown_sampler.cpp
+    cpu/mfem/interactions/thermal_brown_sigma.cpp
     cpu/mfem/interactions/zeeman.cpp
+    cpu/mfem/interactions/zeeman_energy.cpp
+    cpu/mfem/interactions/zeeman_field.cpp
+    cpu/mfem/interactions/zeeman_uniform_field.cpp
     cpu/mfem/integrators/adaptive_dt.cpp
     cpu/mfem/integrators/heun.cpp
     cpu/mfem/integrators/llg_rhs.cpp
     cpu/mfem/integrators/rk_explicit.cpp
+    cpu/mfem/integrators/rk_explicit_step.cpp
     cpu/mfem/integrators/rk_stage_rhs.cpp
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
+    cpu/mfem/runtime/availability.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/field_refresh.cpp
+    cpu/mfem/runtime/gpu_state_runtime.cpp
+    cpu/mfem/runtime/interrupt.cpp
+    cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
+    cpu/mfem/runtime/snapshot.cpp
     cpu/mfem/runtime/stage_completion.cpp
+    cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
     src/api.cpp
     src/context.cpp
@@ -106,13 +164,24 @@ add_test(NAME fem_gpu_state_info COMMAND fem_gpu_state_info)
 
 add_executable(fem_gpu_rk_plan tests/gpu_rk_plan.cpp)
 target_link_libraries(fem_gpu_rk_plan PRIVATE fullmag_fem)
-target_include_directories(fem_gpu_rk_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(fem_gpu_rk_plan PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
 
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
 target_include_directories(fem_transfer_audit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
+
+add_executable(fem_source_facade_contract tests/source_facade_contract.cpp)
+target_link_libraries(fem_source_facade_contract PRIVATE fullmag_fem)
+target_include_directories(fem_source_facade_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_source_facade_contract COMMAND fem_source_facade_contract)
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)
 target_link_libraries(fem_dmi_weak_residual PRIVATE fullmag_fem)
@@ -215,6 +284,14 @@ target_include_directories(fem_rk_explicit_contract PRIVATE
 )
 add_test(NAME fem_rk_explicit_contract COMMAND fem_rk_explicit_contract)
 
+add_executable(fem_heun_step_contract tests/heun_step_contract.cpp)
+target_link_libraries(fem_heun_step_contract PRIVATE fullmag_fem)
+target_include_directories(fem_heun_step_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_heun_step_contract COMMAND fem_heun_step_contract)
+
 add_executable(fem_cpu_threads_contract tests/cpu_threads_contract.cpp)
 target_link_libraries(fem_cpu_threads_contract PRIVATE fullmag_fem)
 target_include_directories(fem_cpu_threads_contract PRIVATE
@@ -222,6 +299,62 @@ target_include_directories(fem_cpu_threads_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cpu_threads_contract COMMAND fem_cpu_threads_contract)
+
+add_executable(fem_availability_contract tests/availability_contract.cpp)
+target_link_libraries(fem_availability_contract PRIVATE fullmag_fem)
+target_include_directories(fem_availability_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_availability_contract COMMAND fem_availability_contract)
+
+add_executable(fem_interrupt_contract tests/interrupt_contract.cpp)
+target_link_libraries(fem_interrupt_contract PRIVATE fullmag_fem)
+target_include_directories(fem_interrupt_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_interrupt_contract COMMAND fem_interrupt_contract)
+
+add_executable(fem_mfem_device_contract tests/mfem_device_contract.cpp)
+target_link_libraries(fem_mfem_device_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mfem_device_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mfem_device_contract COMMAND fem_mfem_device_contract)
+
+add_executable(fem_gpu_state_runtime_contract tests/gpu_state_runtime_contract.cpp)
+target_link_libraries(fem_gpu_state_runtime_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_state_runtime_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_gpu_state_runtime_contract COMMAND fem_gpu_state_runtime_contract)
+
+add_executable(fem_state_io_contract tests/state_io_contract.cpp)
+target_link_libraries(fem_state_io_contract PRIVATE fullmag_fem)
+target_include_directories(fem_state_io_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_state_io_contract COMMAND fem_state_io_contract)
+
+add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
+target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)
+target_include_directories(fem_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_snapshot_contract COMMAND fem_snapshot_contract)
+
+add_executable(fem_mfem_context_contract tests/mfem_context_contract.cpp)
+target_link_libraries(fem_mfem_context_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mfem_context_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mfem_context_contract COMMAND fem_mfem_context_contract)
 
 add_executable(fem_step_metrics_contract tests/step_metrics_contract.cpp)
 target_link_libraries(fem_step_metrics_contract PRIVATE fullmag_fem)
@@ -239,6 +372,14 @@ target_include_directories(fem_stage_completion_contract PRIVATE
 )
 add_test(NAME fem_stage_completion_contract COMMAND fem_stage_completion_contract)
 
+add_executable(fem_field_refresh_contract tests/field_refresh_contract.cpp)
+target_link_libraries(fem_field_refresh_contract PRIVATE fullmag_fem)
+target_include_directories(fem_field_refresh_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_field_refresh_contract COMMAND fem_field_refresh_contract)
+
 add_executable(fem_aos_field_contract tests/aos_field_contract.cpp)
 target_link_libraries(fem_aos_field_contract PRIVATE fullmag_fem)
 target_include_directories(fem_aos_field_contract PRIVATE
@@ -246,6 +387,46 @@ target_include_directories(fem_aos_field_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_aos_field_contract COMMAND fem_aos_field_contract)
+
+add_executable(fem_mesh_contract tests/fem_mesh_contract.cpp)
+target_link_libraries(fem_mesh_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mesh_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mesh_contract COMMAND fem_mesh_contract)
+
+add_executable(fem_plan_fields_contract tests/fem_plan_fields_contract.cpp)
+target_link_libraries(fem_plan_fields_contract PRIVATE fullmag_fem)
+target_include_directories(fem_plan_fields_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_plan_fields_contract COMMAND fem_plan_fields_contract)
+
+add_executable(fem_state_contract tests/fem_state_contract.cpp)
+target_link_libraries(fem_state_contract PRIVATE fullmag_fem)
+target_include_directories(fem_state_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_state_contract COMMAND fem_state_contract)
+
+add_executable(fem_material_fields_contract tests/fem_material_fields_contract.cpp)
+target_link_libraries(fem_material_fields_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_fields_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_fields_contract COMMAND fem_material_fields_contract)
+
+add_executable(fem_field_buffers_contract tests/fem_field_buffers_contract.cpp)
+target_link_libraries(fem_field_buffers_contract PRIVATE fullmag_fem)
+target_include_directories(fem_field_buffers_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_field_buffers_contract COMMAND fem_field_buffers_contract)
 
 add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)

@@ -2,7 +2,7 @@ import type { VisualizationTargetSettings } from "./ObjectVisualizationControlle
 
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
 
-export interface VisualizationRenderDegradation {
+interface VisualizationRenderDegradation {
   code: "topology-provenance-stale" | "topology-provenance-unknown";
   message: string;
 }

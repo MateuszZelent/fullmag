@@ -54,4 +54,16 @@ describe("app menu command model", () => {
     expect(SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"))
       .toBe(false);
   });
+
+  it("exposes the solver profiler toggle from the Tools menu", () => {
+    const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
+    const profilerItem = toolsMenu?.children?.find(
+      (item) => item.id === "diagnostics.toggle-solver-profiler",
+    );
+
+    expect(profilerItem).toMatchObject({
+      checkable: true,
+      label: "Solver Profiler",
+    });
+  });
 });

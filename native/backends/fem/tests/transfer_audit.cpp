@@ -2,6 +2,10 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 static void check(bool condition, const char *msg)
 {
@@ -11,8 +15,91 @@ static void check(bool condition, const char *msg)
     }
 }
 
+static std::string read_text_file(const std::filesystem::path &path)
+{
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+static std::filesystem::path fem_source_root()
+{
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
 int main()
 {
+    const std::filesystem::path root = fem_source_root();
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string transfer_header = read_text_file(root / "include" / "transfer_audit.hpp");
+    const std::string transfer_impl = read_text_file(root / "src" / "transfer_audit.cpp");
+    check(
+        api.find("env_flag(\"FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC\")") ==
+            std::string::npos,
+        "C ABI API must not parse transfer-audit host-sync env gate");
+    check(
+        api.find("env_flag(\"FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC\")") ==
+            std::string::npos,
+        "C ABI API must not parse transfer-audit compute-sync env gate");
+    check(
+        api.find("*out_audit = handle->context.transfer_audit.counters;") ==
+            std::string::npos,
+        "C ABI API must not read transfer-audit counters directly");
+    check(
+        api.find("fullmag::fem::transfer_audit_snapshot(") != std::string::npos,
+        "C ABI API must use transfer-audit snapshot helper");
+    check(
+        transfer_header.find("Configure transfer-audit assertion gates from environment") !=
+            std::string::npos,
+        "transfer audit header must document env gate ownership");
+    check(
+        transfer_header.find("void configure_transfer_audit_from_env(TransferAudit &audit);") !=
+            std::string::npos,
+        "transfer audit header must declare env gate import");
+    check(
+        transfer_impl.find("void configure_transfer_audit_from_env(TransferAudit &audit)") !=
+            std::string::npos,
+        "transfer audit implementation must own env gate import");
+    check(
+        transfer_header.find("Return the current transfer-audit public counters") !=
+            std::string::npos,
+        "transfer audit header must document snapshot ownership");
+    check(
+        transfer_header.find("fullmag_fem_transfer_audit transfer_audit_snapshot(") !=
+            std::string::npos,
+        "transfer audit header must declare snapshot helper");
+
+    unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
+    unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");
+    fullmag::fem::TransferAudit env_audit;
+    fullmag::fem::configure_transfer_audit_from_env(env_audit);
+    check(
+        !env_audit.assert_no_hot_loop_host_sync,
+        "unset host-sync transfer-audit env gate stays disabled");
+    check(
+        !env_audit.assert_no_hot_loop_compute_sync,
+        "unset compute-sync transfer-audit env gate stays disabled");
+    setenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC", "yes", 1);
+    setenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", "1", 1);
+    fullmag::fem::configure_transfer_audit_from_env(env_audit);
+    check(
+        env_audit.assert_no_hot_loop_host_sync,
+        "host-sync transfer-audit env gate imports truthy value");
+    check(
+        env_audit.assert_no_hot_loop_compute_sync,
+        "compute-sync transfer-audit env gate imports truthy value");
+    unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
+    unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");
+
     fullmag::fem::TransferAudit audit;
 
     {
@@ -42,6 +129,13 @@ int main()
 
     fullmag::fem::record_mfem_host_read(64);
     check(audit.counters.hot_loop_host_sync_count == 4, "host access outside scope counted as hot-loop");
+    const fullmag_fem_transfer_audit snapshot =
+        fullmag::fem::transfer_audit_snapshot(audit);
+    check(snapshot.d2h_bytes == audit.counters.d2h_bytes, "snapshot d2h bytes");
+    check(snapshot.h2d_bytes == audit.counters.h2d_bytes, "snapshot h2d bytes");
+    check(
+        snapshot.hot_loop_host_sync_count == audit.counters.hot_loop_host_sync_count,
+        "snapshot hot-loop sync count");
 
     fullmag::fem::TransferAudit compute_gate_audit;
     compute_gate_audit.assert_no_hot_loop_compute_sync = true;

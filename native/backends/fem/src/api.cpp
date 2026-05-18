@@ -1,15 +1,29 @@
+/*
+ * FEM C ABI facade source contract.
+ *
+ * This source owns the exported fullmag_fem_* ABI entrypoints, handle/global
+ * error propagation, high-level backend lifetime calls, step/observe/state C
+ * wrappers, and ABI-level unavailable-path errors. It does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy.
+ */
+
 #include "fullmag_fem.h"
 
 #include "context.hpp"
+#include "cpu/mfem/integrators/rk_explicit.hpp"
+#include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/runtime/availability.hpp"
+#include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/snapshot.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu_rk.hpp"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
+#include "../cpu/mfem/interactions/magnetoelastic.hpp"
 
-#include <cctype>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
-#include <optional>
 #include <string>
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -26,228 +40,12 @@ namespace {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
-std::optional<int> selected_cuda_device_from_env() {
-    const char *specific = std::getenv("FULLMAG_FEM_GPU_INDEX");
-    const char *generic = std::getenv("FULLMAG_CUDA_DEVICE_INDEX");
-    const char *raw = specific != nullptr ? specific : generic;
-    if (raw == nullptr || *raw == '\0') {
-        return std::nullopt;
-    }
-    char *end = nullptr;
-    const long parsed = std::strtol(raw, &end, 10);
-    if (end == raw || *end != '\0' || parsed < 0) {
-        const char *var_name = (specific != nullptr) ? "FULLMAG_FEM_GPU_INDEX" : "FULLMAG_CUDA_DEVICE_INDEX";
-        std::fprintf(stderr,
-            "warning: ignoring invalid %s='%s' (expected non-negative integer)\n",
-            var_name, raw);
-        return std::nullopt;
-    }
-    return static_cast<int>(parsed);
-}
-
-bool env_flag(const char *name) {
-    const char *raw = std::getenv(name);
-    if (raw == nullptr) {
-        return false;
-    }
-    std::string value(raw);
-    for (char &ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value == "1" || value == "on" || value == "true" || value == "yes";
-}
-
-void set_reason(fullmag_fem_availability_info &info, const std::string &message) {
-    std::snprintf(info.reason, sizeof(info.reason), "%s", message.c_str());
-}
-
-void set_cpu_reason(fullmag_fem_availability_info &info, const std::string &message) {
-    std::snprintf(info.reason_cpu, sizeof(info.reason_cpu), "%s", message.c_str());
-}
-
-void set_gpu_reason(fullmag_fem_availability_info &info, const std::string &message) {
-    std::snprintf(info.reason_gpu, sizeof(info.reason_gpu), "%s", message.c_str());
-}
-
-void finalize_availability(fullmag_fem_availability_info &info) {
-    info.available_cpu = info.native_fem_cpu_available;
-    info.available_gpu = info.native_fem_gpu_available;
-    info.available_any = (info.available_cpu != 0 || info.available_gpu != 0) ? 1 : 0;
-    info.available = info.available_any;
-
-    if (info.available_cpu != 0 && info.available_gpu != 0) {
-        set_reason(info, "native FEM CPU and GPU backends are available");
-    } else if (info.available_cpu != 0) {
-        std::string message = "native FEM CPU backend is available";
-        if (info.reason_gpu[0] != '\0') {
-            message += "; native FEM GPU backend is unavailable: ";
-            message += info.reason_gpu;
-        }
-        set_reason(info, message);
-    } else if (info.available_gpu != 0) {
-        std::string message = "native FEM GPU backend is available";
-        if (info.reason_cpu[0] != '\0') {
-            message += "; native FEM CPU backend is unavailable: ";
-            message += info.reason_cpu;
-        }
-        set_reason(info, message);
-    } else if (info.reason_cpu[0] != '\0' && info.reason_gpu[0] != '\0') {
-        std::string message = "native FEM CPU backend is unavailable: ";
-        message += info.reason_cpu;
-        message += "; native FEM GPU backend is unavailable: ";
-        message += info.reason_gpu;
-        set_reason(info, message);
-    } else if (info.reason_gpu[0] != '\0') {
-        set_reason(info, info.reason_gpu);
-    } else if (info.reason_cpu[0] != '\0') {
-        set_reason(info, info.reason_cpu);
-    }
-}
-
-void set_stage_completion_reason(
-    fullmag::fem::Context &ctx,
-    fullmag_fem_stage_stop_reason reason,
-    const char *metric_name = nullptr,
-    double metric_value = 0.0,
-    double threshold = 0.0)
-{
-    if (ctx.stage_completion.has_reason != 0) {
-        return;
-    }
-    ctx.stage_completion = {};
-    ctx.stage_completion.has_reason = 1;
-    ctx.stage_completion.reason = reason;
-    if (metric_name != nullptr && metric_name[0] != '\0') {
-        ctx.stage_completion.has_metric_name = 1;
-        std::snprintf(
-            ctx.stage_completion.metric_name,
-            sizeof(ctx.stage_completion.metric_name),
-            "%s",
-            metric_name);
-    }
-    ctx.stage_completion.metric_value = metric_value;
-    ctx.stage_completion.threshold = threshold;
-}
-
-bool mfem_device_request_needs_ceed() {
-    const char *raw = std::getenv("FULLMAG_FEM_MFEM_DEVICE");
-    return raw != nullptr && std::strncmp(raw, "ceed-", 5) == 0;
-}
-
-fullmag_fem_availability_info query_availability() {
-    fullmag_fem_availability_info info{};
-    info.available = 0;
-    info.requested_gpu_index = -1;
-    info.resolved_gpu_index = -1;
-
-#if FULLMAG_HAS_MFEM_STACK
-    info.built_with_mfem_stack = 1;
-    info.native_fem_cpu_available = 1;
-    set_cpu_reason(info, "native FEM CPU backend is available (MFEM/hypre stack)");
-#else
-    set_cpu_reason(info, kUnavailableMessage);
-    set_gpu_reason(info, kUnavailableMessage);
-    finalize_availability(info);
-    return info;
-#endif
-
-#if FULLMAG_HAS_CUDA_RUNTIME
-    info.built_with_cuda_runtime = 1;
-#else
-    set_gpu_reason(
-        info,
-        "fullmag_fem was built without CUDA runtime support");
-    finalize_availability(info);
-    return info;
-#endif
-
-#ifdef MFEM_USE_CEED
-    info.built_with_ceed = 1;
-#endif
-    info.libceed_used_hot_path = 0;
-
-#ifdef MFEM_USE_CUDA
-    info.mfem_cuda_available = 1;
-#endif
-
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
-    info.hypre_gpu_available = 1;
-#endif
-
-    if (!info.mfem_cuda_available) {
-        set_gpu_reason(
-            info,
-            "native FEM GPU backend requires an MFEM build with CUDA device support");
-        finalize_availability(info);
-        return info;
-    }
-
-    if (mfem_device_request_needs_ceed() && !info.built_with_ceed) {
-        set_gpu_reason(
-            info,
-            "FULLMAG_FEM_MFEM_DEVICE requests a CEED backend, but MFEM was built without libCEED support");
-        finalize_availability(info);
-        return info;
-    }
-
-    int device_count = 0;
-#if FULLMAG_HAS_CUDA_RUNTIME
-    const cudaError_t device_count_rc = cudaGetDeviceCount(&device_count);
-    if (device_count_rc != cudaSuccess) {
-        set_gpu_reason(
-            info,
-            std::string("cudaGetDeviceCount failed for fullmag_fem: ") + cudaGetErrorString(device_count_rc));
-        finalize_availability(info);
-        return info;
-    }
-
-    info.visible_cuda_device_count = device_count;
-    if (device_count <= 0) {
-        set_gpu_reason(info, "no CUDA devices are visible to the native FEM backend");
-        finalize_availability(info);
-        return info;
-    }
-
-    const auto selected = selected_cuda_device_from_env();
-    if (selected.has_value()) {
-        info.requested_gpu_index = *selected;
-    }
-
-    const int resolved_index = selected.value_or(0);
-    if (resolved_index < 0 || resolved_index >= device_count) {
-        set_gpu_reason(
-            info,
-            "requested FEM GPU device index is out of range for the visible CUDA device set");
-        finalize_availability(info);
-        return info;
-    }
-    info.resolved_gpu_index = resolved_index;
-#endif
-
-    if (env_flag("FULLMAG_FEM_REQUIRE_CEED") && !info.built_with_ceed) {
-        set_gpu_reason(
-            info,
-            "FULLMAG_FEM_REQUIRE_CEED=1 requested a libCEED-enabled FEM runtime, but the detected MFEM stack has no libCEED support");
-        finalize_availability(info);
-        return info;
-    }
-
-    info.native_fem_gpu_available = 1;
-    if (info.built_with_ceed) {
-        set_gpu_reason(info, "native FEM GPU backend is available (MFEM + CUDA + libCEED)");
-    } else {
-        set_gpu_reason(info, "native FEM GPU backend is available in bootstrap mode (MFEM + CUDA, without libCEED)");
-    }
-    finalize_availability(info);
-    return info;
-}
-
 } // namespace
 
 extern "C" {
 
 int fullmag_fem_is_available(void) {
-    const auto info = query_availability();
+    const auto info = fullmag::fem::query_availability();
     return (info.native_fem_cpu_available != 0 || info.native_fem_gpu_available != 0) ? 1 : 0;
 }
 
@@ -257,7 +55,7 @@ int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info) {
             "fullmag_fem_get_availability_info received null out_info");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    *out_info = query_availability();
+    *out_info = fullmag::fem::query_availability();
     return FULLMAG_FEM_OK;
 }
 
@@ -280,10 +78,7 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
         delete handle;
         return nullptr;
     }
-    handle->context.transfer_audit.assert_no_hot_loop_host_sync =
-        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
-    handle->context.transfer_audit.assert_no_hot_loop_compute_sync =
-        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");
+    fullmag::fem::configure_transfer_audit_from_env(handle->context.transfer_audit);
 
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
@@ -317,40 +112,55 @@ int fullmag_fem_backend_step(
             ctx, tab, dt_seconds, *out_stats, handle->last_error);
     }
     if (ctx.transfer_audit.hot_loop_violation) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(
             handle,
             ctx.transfer_audit.hot_loop_violation_message);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!ok) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (!fullmag::fem::gpu_rk_finalize_step_stats(ctx, *out_stats, handle->last_error)) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (ctx.step_interrupted) {
         if (!fullmag::fem::context_snapshot_stats_mfem(
                 ctx, *out_stats, handle->last_error)) {
-            set_stage_completion_reason(
+            fullmag::fem::set_stage_completion(
                 ctx,
-                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
             fullmag_fem_set_handle_error(handle, handle->last_error);
             return FULLMAG_FEM_ERR_UNAVAILABLE;
         }
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED);
+            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
+            nullptr,
+            0.0,
+            0.0);
         out_stats->dt_seconds = 0.0;
         return FULLMAG_FEM_ERR_INTERRUPTED;
     }
@@ -462,7 +272,7 @@ int fullmag_fem_backend_stage_completion(
         fullmag_fem_set_global_error("fullmag_fem_backend_stage_completion received null handle");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    *out_completion = handle->context.stage_completion;
+    *out_completion = fullmag::fem::stage_completion_snapshot(handle->context);
     return FULLMAG_FEM_OK;
 }
 
@@ -479,7 +289,7 @@ int fullmag_fem_backend_get_device_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     handle->last_error.clear();
-    *out_info = handle->context.device_info_cache;
+    *out_info = fullmag::fem::device_info_snapshot(handle->context);
     return FULLMAG_FEM_OK;
 }
 
@@ -497,7 +307,7 @@ int fullmag_fem_backend_get_transfer_audit(
         fullmag_fem_set_global_error("fullmag_fem_backend_get_transfer_audit received null handle");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    *out_audit = handle->context.transfer_audit.counters;
+    *out_audit = fullmag::fem::transfer_audit_snapshot(handle->context.transfer_audit);
     return FULLMAG_FEM_OK;
 }
 
@@ -605,7 +415,7 @@ int fullmag_fem_backend_upload_strain(
     // Recompute H_mel with new strain
     if (ctx.enable_magnetoelastic) {
 #if FULLMAG_HAS_MFEM_STACK
-        fullmag::fem::compute_magnetoelastic_field(ctx, ctx.m_xyz);
+        fullmag::fem::compute_magnetoelastic_field(ctx, ctx.state.m_xyz);
 #endif
     }
     return FULLMAG_FEM_OK;

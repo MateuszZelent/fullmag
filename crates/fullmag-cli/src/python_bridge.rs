@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -73,6 +73,17 @@ pub(crate) struct RemeshQualitySummary {
     pub avg_quality: f64,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RemeshQualityDataArtifactRef {
+    pub kind: String,
+    pub schema_version: u32,
+    pub path: PathBuf,
+    pub byte_size: u64,
+    pub element_count: u32,
+    #[serde(default)]
+    pub metrics: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct RemeshCliResponse {
     pub mesh_name: String,
@@ -99,9 +110,58 @@ pub(crate) struct RemeshCliResponse {
     /// Per-domain element quality, keyed by domain marker string (from Python).
     #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
+    #[serde(default)]
+    pub quality_data_artifact: Option<RemeshQualityDataArtifactRef>,
+    #[serde(default)]
+    topology_artifact: Option<RemeshTopologyArtifactRef>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemeshTopologyArtifactRef {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemeshTopologyArtifactPayload {
+    nodes: Vec<[f64; 3]>,
+    elements: Vec<[u32; 4]>,
+    element_markers: Vec<u32>,
+    boundary_faces: Vec<[u32; 3]>,
+    boundary_markers: Vec<u32>,
+    #[serde(default)]
+    periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
+    #[serde(default)]
+    periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
 }
 
 impl RemeshCliResponse {
+    fn hydrate_topology_artifact(mut self) -> Result<Self> {
+        let Some(artifact) = self.topology_artifact.as_ref() else {
+            return Ok(self);
+        };
+        let text = std::fs::read_to_string(&artifact.path).with_context(|| {
+            format!(
+                "failed to read remesh topology artifact {}",
+                artifact.path.display()
+            )
+        })?;
+        let topology: RemeshTopologyArtifactPayload =
+            serde_json::from_str(&text).with_context(|| {
+                format!(
+                    "failed to parse remesh topology artifact {}",
+                    artifact.path.display()
+                )
+            })?;
+        self.nodes = topology.nodes;
+        self.elements = topology.elements;
+        self.element_markers = topology.element_markers;
+        self.boundary_faces = topology.boundary_faces;
+        self.boundary_markers = topology.boundary_markers;
+        self.periodic_boundary_pairs = topology.periodic_boundary_pairs;
+        self.periodic_node_pairs = topology.periodic_node_pairs;
+        Ok(self)
+    }
+
     pub(crate) fn into_mesh_ir(self) -> fullmag_ir::MeshIR {
         let per_domain_quality = self
             .per_domain_quality
@@ -389,6 +449,18 @@ fn filter_non_progress_stderr(stderr_text: &str) -> String {
         .join("\n")
         .trim()
         .to_string()
+}
+
+fn parse_remesh_cli_response(stdout: &[u8], output_label: &str) -> Result<RemeshCliResponse> {
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let mesh: RemeshCliResponse = serde_json::from_slice(stdout).with_context(|| {
+        format!(
+            "failed to parse {output_label} ({} bytes):\n{}",
+            stdout.len(),
+            &stdout_text[..stdout_text.len().min(2000)]
+        )
+    })?;
+    mesh.hydrate_topology_artifact()
 }
 
 pub(crate) fn run_python_helper(args: &[String]) -> Result<std::process::Output> {
@@ -839,15 +911,7 @@ pub(crate) fn invoke_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let mesh: RemeshCliResponse = serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })?;
-    Ok(mesh)
+    parse_remesh_cli_response(&output.stdout, "remesh output")
 }
 
 pub(crate) fn invoke_shared_domain_remesh_full(
@@ -890,15 +954,7 @@ pub(crate) fn invoke_shared_domain_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let mesh: RemeshCliResponse = serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse shared-domain remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })?;
-    Ok(mesh)
+    parse_remesh_cli_response(&output.stdout, "shared-domain remesh output")
 }
 
 pub(crate) fn invoke_adaptive_remesh_full(
@@ -937,14 +993,7 @@ pub(crate) fn invoke_adaptive_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse adaptive remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })
+    parse_remesh_cli_response(&output.stdout, "adaptive remesh output")
 }
 
 #[cfg(test)]
@@ -1058,5 +1107,85 @@ mod tests {
     fn filter_non_progress_stderr_strips_progress_lines() {
         let stderr = "[fullmag-progress] Remesh: accepted\nplain error\n[fullmag-progress] Gmsh: mesh ready\n";
         assert_eq!(filter_non_progress_stderr(stderr), "plain error");
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_loads_topology_artifact() {
+        let artifact_path = std::env::temp_dir().join(format!(
+            "fullmag-remesh-topology-artifact-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "mesh_name": "large_mesh",
+                "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "elements": [[0, 1, 2, 3]],
+                "element_markers": [7],
+                "boundary_faces": [[0, 1, 2]],
+                "boundary_markers": [11],
+                "periodic_boundary_pairs": [],
+                "periodic_node_pairs": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stdout = serde_json::json!({
+            "mesh_name": "large_mesh",
+            "nodes": [],
+            "elements": [],
+            "element_markers": [],
+            "boundary_faces": [],
+            "boundary_markers": [],
+            "topology_artifact": {
+                "path": artifact_path
+            },
+            "quality": null
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+
+        assert_eq!(parsed.nodes.len(), 4);
+        assert_eq!(parsed.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(parsed.element_markers, vec![7]);
+        assert_eq!(parsed.boundary_faces, vec![[0, 1, 2]]);
+        assert_eq!(parsed.boundary_markers, vec![11]);
+        let _ = std::fs::remove_file(artifact_path);
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_preserves_quality_data_artifact() {
+        let stdout = serde_json::json!({
+            "mesh_name": "quality_mesh",
+            "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "elements": [[0, 1, 2, 3]],
+            "element_markers": [1],
+            "boundary_faces": [[0, 1, 2]],
+            "boundary_markers": [7],
+            "quality": null,
+            "quality_data_artifact": {
+                "kind": "fmmq.v1",
+                "schema_version": 1,
+                "path": "/tmp/fullmag-quality.fmmq",
+                "byte_size": 56,
+                "element_count": 1,
+                "metrics": ["sicn", "gamma", "volume"]
+            }
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+        let artifact = parsed
+            .quality_data_artifact
+            .expect("quality data artifact metadata should survive parsing");
+
+        assert_eq!(artifact.kind, "fmmq.v1");
+        assert_eq!(artifact.element_count, 1);
+        assert_eq!(artifact.metrics, vec!["sicn", "gamma", "volume"]);
     }
 }

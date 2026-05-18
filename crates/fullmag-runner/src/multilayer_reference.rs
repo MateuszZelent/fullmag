@@ -16,8 +16,11 @@ use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
-use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::max_torque_residual_apm_from_field;
+use crate::relaxation::{
+    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -169,7 +172,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         &mut artifacts,
     )?;
 
-    let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
@@ -226,18 +229,18 @@ pub(crate) fn execute_reference_fdm_multilayer(
             break;
         }
 
+        let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
-                    previous_total_energy,
+                    energy_plateau_range,
                     plan.gyromagnetic_ratio,
                     average_damping(&contexts),
                     pure_damping_relax,
                 )
         });
-        previous_total_energy = Some(latest_stats.e_total);
         if stop_for_relaxation {
             break;
         }
@@ -607,7 +610,7 @@ fn observe_multilayer(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization,
@@ -633,7 +636,7 @@ fn observe_multilayer(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars,
     })
 }

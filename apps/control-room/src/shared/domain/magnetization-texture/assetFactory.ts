@@ -21,7 +21,7 @@ export function magnetizationTextureAssetId(
     : `mag:${target.objectId}:${presetKind}`;
 }
 
-export function defaultTextureMapping(): JsonObject {
+function defaultTextureMapping(): JsonObject {
   return {
     clamp_mode: "none",
     projection: "object_local",
@@ -29,7 +29,7 @@ export function defaultTextureMapping(): JsonObject {
   };
 }
 
-export function defaultTextureTransform(): JsonObject {
+function defaultTextureTransform(): JsonObject {
   return {
     pivot: [0, 0, 0],
     rotation_quat: [0, 0, 0, 1],

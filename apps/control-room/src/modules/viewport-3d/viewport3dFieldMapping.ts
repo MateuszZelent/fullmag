@@ -136,7 +136,7 @@ export async function buildVertexScalarColorsChunked(
  * chunks.  Prevents the synchronous O(N) range scan from blocking the UI
  * for large meshes (> 50K points).
  */
-export async function resolveScalarRangeChunked(
+async function resolveScalarRangeChunked(
   fieldVector: DecodedFieldVector,
   colorMode: string,
   chunkSize: number,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fullmag_fem.h"
+#include "cpu/mfem/runtime/phase_timings.hpp"
 
 #include <array>
 #include <vector>
@@ -8,7 +9,6 @@
 namespace fullmag::fem {
 
 struct Context;
-struct PhaseTimings;
 
 /*
  * Return the average reduced magnetization over active magnetic nodes.

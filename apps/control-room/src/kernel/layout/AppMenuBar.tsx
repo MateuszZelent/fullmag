@@ -30,6 +30,7 @@ import {
 import { ThemeSwitcher } from "@/shared/ui/ThemeSwitcher";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -178,13 +179,15 @@ export function resolveApiConnectionErrorDetails({
 }
 
 function MenuNode({
+  isCommandActive,
   isCommandDisabled,
   node,
   onCommand,
 }: {
+  isCommandActive: (commandId: string) => boolean;
   isCommandDisabled: (commandId: string) => boolean;
   node: AppMenuNode;
-  onCommand: (commandId: string) => void;
+  onCommand: (commandId: string, input?: unknown) => void;
 }) {
   const disabled = node.disabled || isCommandDisabled(node.id);
   if (node.children?.length) {
@@ -198,6 +201,7 @@ function MenuNode({
           {node.children.map((child) => (
             <MenuNode
               key={child.id}
+              isCommandActive={isCommandActive}
               isCommandDisabled={isCommandDisabled}
               node={child}
               onCommand={onCommand}
@@ -205,6 +209,22 @@ function MenuNode({
           ))}
         </DropdownMenuSubContent>
       </DropdownMenuSub>
+    );
+  }
+
+  if (node.checkable) {
+    return (
+      <DropdownMenuCheckboxItem
+        checked={isCommandActive(node.id)}
+        disabled={disabled}
+        onCheckedChange={(checked) => onCommand(node.id, Boolean(checked))}
+      >
+        {node.icon}
+        <span>{node.label}</span>
+        {node.shortcut ? (
+          <span className="fm-dropdown-shortcut">{node.shortcut}</span>
+        ) : null}
+      </DropdownMenuCheckboxItem>
     );
   }
 
@@ -223,13 +243,15 @@ function MenuNode({
 }
 
 function HeaderDropdown({
+  isCommandActive,
   isCommandDisabled,
   menu,
   onCommand,
 }: {
+  isCommandActive: (commandId: string) => boolean;
   isCommandDisabled: (commandId: string) => boolean;
   menu: AppMenuNode;
-  onCommand: (commandId: string) => void;
+  onCommand: (commandId: string, input?: unknown) => void;
 }) {
   return (
     <DropdownMenu>
@@ -249,6 +271,7 @@ function HeaderDropdown({
         {menu.children?.map((node) => (
           <MenuNode
             key={node.id}
+            isCommandActive={isCommandActive}
             isCommandDisabled={isCommandDisabled}
             node={node}
             onCommand={onCommand}
@@ -266,7 +289,7 @@ function QuickActionButton({
 }: {
   action: HeaderQuickAction;
   disabled: boolean;
-  onCommand: (commandId: string) => void;
+  onCommand: (commandId: string, input?: unknown) => void;
 }) {
   return (
     <Button
@@ -416,19 +439,21 @@ export function AppMenuBar() {
   const commandContext = createCommandContext("menu", kernel, {
     resourceData: runtimeResourceData,
   });
-  const runCommand = (commandId: string) => {
+  const runCommand = (commandId: string, input?: unknown) => {
     if (commandId === "tools.registry-inspector") {
       setRegistryOpen(true);
       return;
     }
     if (kernel.commands.get(commandId)) {
-      void kernel.commands.execute(commandId, commandContext);
+      void kernel.commands.execute(commandId, commandContext, input);
     }
   };
   const isCommandDisabled = (commandId: string): boolean => {
     const command = kernel.commands.get(commandId);
     return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
   };
+  const isCommandActive = (commandId: string): boolean =>
+    kernel.commands.isActive(commandId, commandContext);
 
   return (
     <header className="fm-header">
@@ -458,6 +483,7 @@ export function AppMenuBar() {
           {APP_DROPDOWN_ITEMS.map((node) => (
             <MenuNode
               key={node.id}
+              isCommandActive={isCommandActive}
               isCommandDisabled={isCommandDisabled}
               node={node}
               onCommand={runCommand}
@@ -470,6 +496,7 @@ export function AppMenuBar() {
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
             key={menu.id}
+            isCommandActive={isCommandActive}
             isCommandDisabled={isCommandDisabled}
             menu={menu}
             onCommand={runCommand}

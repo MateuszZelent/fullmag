@@ -187,7 +187,11 @@ run-arch-waveguide-interactive-v2 fem_execution="cpu":
         exit 1; \
       fi; \
       echo "v2 frontend ready on ${web_url}/workspace - launching simulation ..." >&2; \
-      FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" auto 3100'
+      physical_cores=$(lscpu -p=CORE 2>/dev/null | grep "^[0-9]" | sort -u | wc -l || echo ""); \
+      cpu_threads="${physical_cores:-auto}"; \
+      if [ -z "$cpu_threads" ] || [ "$cpu_threads" = "0" ]; then cpu_threads="auto"; fi; \
+      echo "cpu_threads=$cpu_threads (physical cores)" >&2; \
+      FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" "$cpu_threads" 3100'
 
 
 
@@ -210,7 +214,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine packages/fullmag-py/src native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine packages/fullmag-py/src native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_bin}}' 2>/dev/null | { IFS= read -r line; echo "$line"; } )"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \

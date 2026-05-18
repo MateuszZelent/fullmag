@@ -1,3 +1,11 @@
+/*
+ * GPU RK facade source contract.
+ *
+ * This source owns GPU RK planning helpers, exchange-only device-resident
+ * readiness checks, STT thickness fallback geometry, and GPU-side plan
+ * metadata for stage execution. It does not own Context construction, CPU explicit RK stages, MFEM runtime lifecycle, interaction physics, or C ABI entrypoints.
+ */
+
 #include "gpu_rk.hpp"
 
 #include "context.hpp"
@@ -29,7 +37,7 @@ double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
     const double j_norm = std::sqrt(jx * jx + jy * jy + jz * jz);
     const size_t expected_coord_len = static_cast<size_t>(ctx.n_nodes) * 3u;
     if (!(j_norm > 0.0) || !std::isfinite(j_norm) ||
-        ctx.nodes_xyz.size() != expected_coord_len) {
+        ctx.mesh.nodes_xyz.size() != expected_coord_len) {
         return 0.0;
     }
 
@@ -40,14 +48,14 @@ double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
     double max_proj = -std::numeric_limits<double>::infinity();
     bool any = false;
     for (size_t node = 0; node < static_cast<size_t>(ctx.n_nodes); ++node) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;
         }
         const size_t base = node * 3u;
         const double proj =
-            ctx.nodes_xyz[base + 0u] * ax +
-            ctx.nodes_xyz[base + 1u] * ay +
-            ctx.nodes_xyz[base + 2u] * az;
+            ctx.mesh.nodes_xyz[base + 0u] * ax +
+            ctx.mesh.nodes_xyz[base + 1u] * ay +
+            ctx.mesh.nodes_xyz[base + 2u] * az;
         if (!std::isfinite(proj)) {
             return 0.0;
         }
@@ -110,7 +118,7 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
             return plan;
         }
     }
-    if ((ctx.has_oersted_cylinder || ctx.has_oersted_field) && ctx.h_oe_xyz.empty()) {
+    if ((ctx.has_oersted_cylinder || ctx.has_oersted_field) && ctx.oersted.h_xyz.empty()) {
         reason = "GPU RK exchange-only path requires precomputed Oersted field data";
         return plan;
     }

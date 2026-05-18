@@ -28,7 +28,7 @@ type Viewport3DListener = () => void;
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
 
-export interface Viewport3DWidgetState {
+interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
   cameraProjection: Viewport3DCameraProjection;
   effectAmbientOcclusion: boolean;
@@ -295,7 +295,7 @@ function sameVector(
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-export function sameViewport3DCameraState(
+function sameViewport3DCameraState(
   left: Viewport3DCameraState,
   right: Viewport3DCameraState,
 ): boolean {

@@ -10,21 +10,35 @@ import {
 describe("mesh build pipeline model", () => {
   it("normalizes runtime pipeline arrays into display phases", () => {
     const phases = normalizeMeshPipelineStatus([
-      { id: "import", label: "Import", status: "done" },
+      { duration_ms: 12, id: "import", label: "Import", status: "done" },
       {
         detail: "Gmsh: generating 3D tetrahedral mesh",
+        duration_ms: 420,
         id: "generate",
         label: "Generate",
+        progress_label: "generating 3D mesh",
+        progress_percent: 75,
         status: "running",
       },
     ]);
 
     expect(phases).toEqual([
-      { detail: "", id: "import", label: "Import", status: "done" },
+      {
+        detail: "",
+        durationMs: 12,
+        id: "import",
+        label: "Import",
+        progressLabel: null,
+        progressPercent: null,
+        status: "done",
+      },
       {
         detail: "Gmsh: generating 3D tetrahedral mesh",
+        durationMs: 420,
         id: "generate",
         label: "Generate",
+        progressLabel: "generating 3D mesh",
+        progressPercent: 75,
         status: "running",
       },
     ]);
@@ -43,8 +57,11 @@ describe("mesh build pipeline model", () => {
     ).toEqual([
       {
         detail: "Queued by mesh command",
+        durationMs: null,
         id: "queue",
         label: "Queue",
+        progressLabel: null,
+        progressPercent: null,
         status: "queued",
       },
     ]);

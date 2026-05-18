@@ -18,6 +18,18 @@ struct CpuThreadRequest {
 };
 
 /*
+ * Runtime-published CPU/OpenMP thread telemetry.
+ *
+ * This state is stored on Context for ABI snapshots and demag/recovery loops,
+ * but cpu_threads.* owns how it is resolved from env/plan policy.
+ */
+struct CpuThreadRuntimeState {
+    bool auto_requested = false;
+    int requested_omp_threads = 1;
+    int effective_omp_threads = 1;
+};
+
+/*
  * Resolve CPU thread intent from environment variables.
  *
  * `FULLMAG_CPU_THREADS=auto` owns auto mode and overrides manual OMP settings.
@@ -40,6 +52,9 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads);
  * The context fields become the source of truth for telemetry and downstream
  * demag recovery loops; when OpenMP is compiled in, the runtime thread count is
  * also pushed into `omp_set_num_threads`.
+ *
+ * It does not choose MFEM devices, manage contexts, execute steps, or publish
+ * solver metrics.
  */
 void configure_cpu_openmp_runtime(Context &ctx);
 

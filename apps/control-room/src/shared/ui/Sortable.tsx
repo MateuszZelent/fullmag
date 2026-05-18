@@ -22,7 +22,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 type SortableListeners = ReturnType<typeof useSortable>["listeners"];
 
-export interface SortableItemRenderProps {
+interface SortableItemRenderProps {
   attributes: DraggableAttributes;
   isDragging: boolean;
   listeners: SortableListeners;

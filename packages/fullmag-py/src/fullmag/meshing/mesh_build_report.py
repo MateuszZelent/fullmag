@@ -117,7 +117,10 @@ def _realized_size_field_report(size_fields: list[dict[str, object]]) -> list[di
                 "kind": kind,
                 "target": str(target) if target is not None else None,
                 "status": str(field_desc.get("_gmsh_status", "requested")),
-                "source": str(params.get("Source", "scene_config")),
+                "source": str(
+                    field_desc.get("source")
+                    or params.get("Source", "scene_config")
+                ),
                 "reason": (
                     str(field_desc.get("_gmsh_reason"))
                     if field_desc.get("_gmsh_reason") is not None

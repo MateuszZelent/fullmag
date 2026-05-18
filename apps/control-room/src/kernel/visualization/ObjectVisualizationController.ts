@@ -245,7 +245,7 @@ export class ObjectVisualizationController {
   }
 }
 
-export function defaultVisualizationSettings(
+function defaultVisualizationSettings(
   kind: VisualizationTargetKind,
 ): VisualizationTargetSettings {
   if (kind === "airbox") return DEFAULT_AIRBOX_VISUALIZATION;
@@ -379,7 +379,7 @@ export function resolveTargetVisualization({
   };
 }
 
-export function resolveVisualizationStateTargetOverride(
+function resolveVisualizationStateTargetOverride(
   state: VisualizationStateResource | null | undefined,
   target: VisualizationTargetRef,
 ): VisualizationTargetPatch | null {
@@ -684,7 +684,7 @@ function mergeOptionalRecord<T extends object>(
   } as T;
 }
 
-export function resolveVisualizationBaseSettings(
+function resolveVisualizationBaseSettings(
   kind: VisualizationTargetKind,
   state: VisualizationStateResource | null | undefined,
 ): VisualizationTargetSettings {
@@ -1046,7 +1046,7 @@ function normalizeColorMode(value: unknown): VisualizationColorMode | undefined 
     : undefined;
 }
 
-export function normalizeSurfaceColorSource(
+function normalizeSurfaceColorSource(
   value: unknown,
 ): SurfaceColorSource | undefined {
   return value === "solid" ||
@@ -1060,7 +1060,7 @@ export function normalizeSurfaceColorSource(
     : undefined;
 }
 
-export function surfaceColorSourceFromColorMode(
+function surfaceColorSourceFromColorMode(
   value: VisualizationColorMode | undefined,
 ): SurfaceColorSource | undefined {
   if (value === "monochrome") return "solid";

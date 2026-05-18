@@ -72,6 +72,12 @@ pub struct MeshBuildPipelinePhaseResource {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

@@ -60,6 +60,9 @@ std::filesystem::path fem_source_root() {
 void step_metrics_are_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string phase_timings_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "phase_timings.hpp");
     const std::string metrics =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "step_metrics.cpp");
 
@@ -78,44 +81,54 @@ void step_metrics_are_owned_by_runtime_module() {
             metrics.find(symbol) != std::string::npos,
             "step metric helper must be defined in step_metrics.cpp");
     }
+    check(
+        context_header.find("struct PhaseTimings {") == std::string::npos,
+        "PhaseTimings definition must not live in context.hpp");
+    check(
+        phase_timings_header.find("struct PhaseTimings {") != std::string::npos,
+        "PhaseTimings definition must live in runtime/phase_timings.hpp");
+    check(
+        phase_timings_header.find("Native FEM per-phase wall-clock timings") !=
+            std::string::npos,
+        "PhaseTimings header must document phase telemetry ownership");
 }
 
 void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 3;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.Ms_field = {800e3, 1.0e6, 500e3};
-    ctx.mfem_lumped_mass = {1.0e-27, 2.0e-27, 3.0e-27};
-    ctx.magnetic_node_mask = {1u, 1u, 0u};
+    ctx.material_fields.Ms_field = {800e3, 1.0e6, 500e3};
+    ctx.integration_weights.mfem_lumped_mass = {1.0e-27, 2.0e-27, 3.0e-27};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
 #if FULLMAG_HAS_MFEM_STACK
-    ctx.requested_omp_threads = 7;
-    ctx.effective_omp_threads = 3;
+    ctx.cpu_threads.requested_omp_threads = 7;
+    ctx.cpu_threads.effective_omp_threads = 3;
 #endif
 
     ctx.has_external_field = true;
-    ctx.h_ext_xyz = {
+    ctx.zeeman.h_ext_xyz = {
         10.0, 0.0, 0.0,
         0.0, 20.0, 0.0,
         0.0, 0.0, 30.0,
     };
-    ctx.m_xyz = {
+    ctx.state.m_xyz = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         0.0, 0.0, 0.0,
     };
-    ctx.h_eff_xyz = {
+    ctx.effective_field.h_xyz = {
         0.0, 2.0, 0.0,
         0.0, 0.0, 3.0,
         0.0, 0.0, 0.0,
     };
-    ctx.h_demag_xyz = {
+    ctx.demag.h_xyz = {
         4.0, 0.0, 0.0,
         0.0, 5.0, 0.0,
         0.0, 0.0, 0.0,
     };
-    ctx.last_anisotropy_energy_joules = 1.0;
-    ctx.last_dmi_energy_joules = 2.0;
-    ctx.last_magnetoelastic_energy_joules = 3.0;
+    ctx.anisotropy.energy_joules = 1.0;
+    ctx.dmi.energy_joules = 2.0;
+    ctx.magnetoelastic.energy_joules = 3.0;
 
     fullmag_fem_step_stats stats{};
     stats.exchange_energy_joules = 4.0;

@@ -1,63 +1,82 @@
 #pragma once
 
-#include <string>
+#include "cpu/mfem/interactions/exchange_fallback.hpp"
+#include "cpu/mfem/interactions/exchange_field.hpp"
+#include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
+#include "cpu/mfem/interactions/exchange_operator.hpp"
+#include "cpu/mfem/interactions/exchange_runtime.hpp"
+#include "fullmag_fem.h"
+
 #include <vector>
 
 namespace mfem {
-class FiniteElementSpace;
-class GridFunctionCoefficient;
-class Mesh;
-class SparseMatrix;
-} // namespace mfem
+class BilinearForm;
+class Vector;
+}
 
 namespace fullmag::fem {
 
 struct Context;
 
 /*
- * Initialize the native FEM exchange operator.
+ * MFEM runtime workspace for native FEM exchange.
  *
- * The assembled operator represents
- *
- *   E_ex = integral_Omega A_ex |grad m|^2 dV,
- *
- * on magnetic elements with natural exchange boundary conditions. The module
- * stores the MFEM stiffness, mass/lumped-mass workspaces, component grid
- * functions, and GPU upload metadata behind Context's transitional handles.
+ * Owns the exchange/mass bilinear forms, reusable mass and operator vectors,
+ * host component buffers for H_ex, the consistent-mass projection policy, and
+ * the readiness flag published after a refresh. It does not own MFEM mesh,
+ * finite-element spaces, magnetization GridFunctions, material coefficients,
+ * demag state, or GPU exchange metadata.
  */
-bool initialize_exchange_operator_mfem(
-    Context &ctx,
-    mfem::Mesh &mesh,
-    mfem::FiniteElementSpace &fes,
-    mfem::GridFunctionCoefficient &a_coeff,
-    std::string &error);
+struct ExchangeMfemRuntimeState {
+    bool use_consistent_mass = false;
+    std::vector<double> h_x;
+    std::vector<double> h_y;
+    std::vector<double> h_z;
+    std::vector<double> component_tmp;
+    mfem::BilinearForm *exchange_form = nullptr;
+    mfem::BilinearForm *mass_form = nullptr;
+    mfem::Vector *mass_ones = nullptr;
+    mfem::Vector *mass_lumped = nullptr;
+    mfem::Vector *inv_lumped_mass = nullptr;
+    mfem::Vector *tmp_vec = nullptr;
+    mfem::Vector *out_vec = nullptr;
+    bool ready = false;
+};
 
 /*
- * Upload the assembled exchange operator to the legacy sparse GPU state.
+ * Runtime products emitted by the native FEM exchange modules.
  *
- * This is a compatibility bridge for the current GPU exchange-only path; the
- * physical exchange contract remains owned by this module.
+ * The exchange field buffer is stored in AOS-3 order as H_ex in A/m and is
+ * consumed by effective-field composition, observable state I/O, snapshots,
+ * and GPU runtime bootstrap. MFEM-specific exchange workspace is grouped
+ * under mfem so the compatibility Context does not own exchange operator
+ * internals directly.
  */
-bool upload_legacy_sparse_exchange_to_gpu_state(
-    Context &ctx,
-    mfem::SparseMatrix &exchange_spmat,
-    std::string &error);
+struct ExchangeRuntimeState {
+    std::vector<double> h_xyz;
+    ExchangeMfemRuntimeState mfem{};
+};
 
 /*
- * Compute the exchange field for a magnetization state.
+ * Initialize native FEM exchange plan fields.
  *
- * The returned `h_ex_xyz` is H_ex in A/m and the optional energy is in joules.
- * The module does not apply gamma, damping, or direct-torque scaling. When the
- * MFEM stack is unavailable, disabled exchange returns a zero field and active
- * exchange reports an explicit environment error.
+ * Copies the ABI plan's exchange enable flag and, when the MFEM stack is
+ * active, the consistent-mass exchange projection policy into the Exchange
+ * runtime state. Operator assembly, mass projection, field computation, and
+ * runtime refresh remain in the dedicated Exchange modules included here.
  */
-bool compute_exchange_for_magnetization(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ex_xyz,
-    std::vector<double> *h_eff_xyz,
-    double *exchange_energy,
-    bool allow_interrupt,
-    std::string &error);
+void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+/*
+ * Aggregated include surface for native FEM exchange responsibilities.
+ *
+ * This compatibility umbrella owns plan-field import, runtime output storage,
+ * and MFEM exchange workspace storage. It does not assemble operators, compute
+ * H_ex, refresh runtime fields, handle fallback, project mass, or upload GPU
+ * state. Those responsibilities stay in the dedicated owner modules:
+ * exchange_operator.*, exchange_field.*, exchange_runtime.*,
+ * exchange_fallback.*, exchange_mass_projection.*, and
+ * exchange_legacy_gpu_upload.*.
+ */
 
 } // namespace fullmag::fem

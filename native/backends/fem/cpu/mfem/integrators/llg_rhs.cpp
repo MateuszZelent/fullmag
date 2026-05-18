@@ -1,25 +1,17 @@
+/*
+ * LLG RHS source contract.
+ *
+ * This source owns AoS normalization, nonmagnetic-node zeroing, and nodewise
+ * Gilbert-form LLG RHS evaluation from an already composed effective field. It does not compose H_eff, evaluate interaction fields, advance time, or own step metrics.
+ */
+
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 
+#include "fem_common.hpp"
+
 #include <algorithm>
-#include <cmath>
 
 namespace fullmag::fem {
-namespace {
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
-}
-
-double vector_norm3(double x, double y, double z)
-{
-    return std::sqrt(x * x + y * y + z * z);
-}
-
-} // namespace
 
 void normalize_aos_field(std::vector<double> &m_xyz)
 {

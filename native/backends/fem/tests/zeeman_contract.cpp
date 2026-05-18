@@ -12,6 +12,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -24,6 +28,184 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void zeeman_responsibilities_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.hpp");
+    const std::string uniform =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.cpp");
+    const std::string uniform_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.hpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_field.cpp");
+    const std::string field_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_field.hpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.cpp");
+    const std::string energy_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.hpp");
+    const std::string context_cpp = read_text_file(root / "src" / "context.cpp");
+
+    const char *plan_symbol = "void initialize_zeeman_plan_fields(";
+    const char *broadcast_symbol = "void initialize_uniform_zeeman_field(";
+    const char *add_symbol = "void add_zeeman_field(";
+    const char *energy_symbol = "double zeeman_energy_from_field(";
+
+    check(
+        aggregate.find(broadcast_symbol) == std::string::npos,
+        "Zeeman broadcast must not be defined in zeeman.cpp");
+    check(
+        aggregate.find(add_symbol) == std::string::npos,
+        "Zeeman H_eff addition must not be defined in zeeman.cpp");
+    check(
+        aggregate.find(energy_symbol) == std::string::npos,
+        "Zeeman energy must not be defined in zeeman.cpp");
+    check(
+        uniform.find(broadcast_symbol) != std::string::npos,
+        "Zeeman broadcast must be defined in zeeman_uniform_field.cpp");
+    check(
+        field.find(add_symbol) != std::string::npos,
+        "Zeeman H_eff addition must be defined in zeeman_field.cpp");
+    check(
+        energy.find(energy_symbol) != std::string::npos,
+        "Zeeman energy must be defined in zeeman_energy.cpp");
+    check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "Zeeman plan import must be defined in zeeman.cpp");
+    check(
+        aggregate_header.find("Initialize native FEM Zeeman plan fields") !=
+            std::string::npos,
+        "Zeeman aggregate header must document plan import ownership");
+    check(
+        aggregate_header.find("does not broadcast H_ext, add H_eff, or integrate energy") !=
+            std::string::npos,
+        "Zeeman aggregate header must document its non-owning field/energy boundary");
+    check(
+        aggregate_header.find("runtime output") != std::string::npos &&
+            aggregate_header.find("storage only") != std::string::npos,
+        "Zeeman aggregate header must document runtime-output ownership");
+    check(
+        aggregate_header.find("zeeman_uniform_field.*") != std::string::npos,
+        "Zeeman aggregate header must name the uniform-field owner");
+    check(
+        aggregate_header.find("zeeman_field.*") != std::string::npos,
+        "Zeeman aggregate header must name the field-add owner");
+    check(
+        aggregate_header.find("zeeman_energy.*") != std::string::npos,
+        "Zeeman aggregate header must name the energy owner");
+    check(
+        uniform_header.find("Initialize the native FEM Zeeman field buffer") !=
+            std::string::npos,
+        "Zeeman uniform-field header must document its physical contract");
+    check(
+        uniform_header.find("does not add H_ext to H_eff or integrate Zeeman energy") !=
+            std::string::npos,
+        "Zeeman uniform-field header must document its non-owning add/energy boundary");
+    check(
+        field_header.find("Add the Zeeman field contribution") != std::string::npos,
+        "Zeeman field-add header must document its physical contract");
+    check(
+        field_header.find("does not broadcast uniform fields or integrate Zeeman energy") !=
+            std::string::npos,
+        "Zeeman field-add header must document its non-owning broadcast/energy boundary");
+    check(
+        energy_header.find("Compute Zeeman energy") != std::string::npos,
+        "Zeeman energy header must document its physical contract");
+    check(
+        energy_header.find("does not broadcast H_ext or add H_ext to H_eff") !=
+            std::string::npos,
+        "Zeeman energy header must document its non-owning field boundary");
+    check(
+        context_cpp.find("ctx.has_external_field = plan.has_external_field != 0;") ==
+            std::string::npos,
+        "context_from_plan must delegate Zeeman enable import to zeeman.cpp");
+    check(
+        context_cpp.find("ctx.external_field_am = {\n        plan.external_field_am[0]") ==
+            std::string::npos,
+        "context_from_plan must delegate Zeeman field import to zeeman.cpp");
+}
+
+void zeeman_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.cpp");
+    const std::string uniform =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.cpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_field.cpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.cpp");
+
+    check(
+        aggregate.find("Zeeman aggregate source contract") != std::string::npos,
+        "Zeeman aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not broadcast H_ext, add H_eff, or integrate energy") !=
+            std::string::npos,
+        "Zeeman aggregate source file must document its non-owning field/energy boundary");
+    check(
+        uniform.find("Zeeman uniform-field source contract") != std::string::npos,
+        "Zeeman uniform-field source file must document its source contract");
+    check(
+        uniform.find("does not add H_ext to H_eff or integrate Zeeman energy") !=
+            std::string::npos,
+        "Zeeman uniform-field source file must document its non-owning add/energy boundary");
+    check(
+        field.find("Zeeman field-add source contract") != std::string::npos,
+        "Zeeman field-add source file must document its source contract");
+    check(
+        field.find("does not broadcast uniform fields or integrate Zeeman energy") !=
+            std::string::npos,
+        "Zeeman field-add source file must document its non-owning broadcast/energy boundary");
+    check(
+        energy.find("Zeeman energy source contract") != std::string::npos,
+        "Zeeman energy source file must document its source contract");
+    check(
+        energy.find("does not broadcast H_ext or add H_ext to H_eff") != std::string::npos,
+        "Zeeman energy source file must document its non-owning field boundary");
+}
+
+void zeeman_runtime_state_is_owned_by_aggregate_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string zeeman_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.hpp");
+
+    check(
+        zeeman_header.find("struct ZeemanRuntimeState") != std::string::npos,
+        "Zeeman runtime state must be declared by zeeman.hpp");
+    check(
+        zeeman_header.find("std::vector<double> h_ext_xyz") != std::string::npos,
+        "Zeeman runtime state must own the nodal H_ext field buffer");
+    check(
+        context_header.find("ZeemanRuntimeState zeeman") != std::string::npos,
+        "Context must store Zeeman runtime output through the Zeeman owner");
+    check(
+        context_header.find("std::vector<double> h_ext_xyz") == std::string::npos,
+        "Context must not own a flat Zeeman field buffer");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -42,9 +224,40 @@ fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 2;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.Ms_field = {800e3, 1.0e6};
-    ctx.mfem_lumped_mass = {2.0e-27, 3.0e-27};
+    ctx.material_fields.Ms_field = {800e3, 1.0e6};
+    ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27};
     return ctx;
+}
+
+void plan_fields_are_imported_by_zeeman_module() {
+    fullmag::fem::Context ctx;
+    ctx.has_external_field = false;
+    ctx.external_field_am = {-1.0, -2.0, -3.0};
+
+    fullmag_fem_plan_desc plan{};
+    plan.has_external_field = 1;
+    plan.external_field_am[0] = 11.0;
+    plan.external_field_am[1] = 22.0;
+    plan.external_field_am[2] = 33.0;
+
+    fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
+
+    check(ctx.has_external_field, "Zeeman plan import enables external field");
+    check_near(ctx.external_field_am[0], 11.0, 0.0, "Zeeman plan Hx import");
+    check_near(ctx.external_field_am[1], 22.0, 0.0, "Zeeman plan Hy import");
+    check_near(ctx.external_field_am[2], 33.0, 0.0, "Zeeman plan Hz import");
+
+    plan.has_external_field = 0;
+    plan.external_field_am[0] = 44.0;
+    plan.external_field_am[1] = 55.0;
+    plan.external_field_am[2] = 66.0;
+
+    fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
+
+    check(!ctx.has_external_field, "Zeeman plan import disables external field");
+    check_near(ctx.external_field_am[0], 44.0, 0.0, "disabled Zeeman plan still imports Hx");
+    check_near(ctx.external_field_am[1], 55.0, 0.0, "disabled Zeeman plan still imports Hy");
+    check_near(ctx.external_field_am[2], 66.0, 0.0, "disabled Zeeman plan still imports Hz");
 }
 
 void disabled_zeeman_is_zero() {
@@ -54,8 +267,8 @@ void disabled_zeeman_is_zero() {
 
     fullmag::fem::initialize_uniform_zeeman_field(ctx);
 
-    check(ctx.h_ext_xyz.size() == 6u, "disabled Zeeman h_ext size");
-    for (double value : ctx.h_ext_xyz) {
+    check(ctx.zeeman.h_ext_xyz.size() == 6u, "disabled Zeeman h_ext size");
+    for (double value : ctx.zeeman.h_ext_xyz) {
         check_near(value, 0.0, 0.0, "disabled Zeeman field component");
     }
 
@@ -87,7 +300,7 @@ void uniform_field_is_broadcast_added_and_integrated() {
         100.0, 200.0, 300.0,
         100.0, 200.0, 300.0,
     };
-    check(ctx.h_ext_xyz == expected_h, "Zeeman field broadcast");
+    check(ctx.zeeman.h_ext_xyz == expected_h, "Zeeman field broadcast");
 
     std::vector<double> h_eff = {
         1.0, 2.0, 3.0,
@@ -117,6 +330,10 @@ void uniform_field_is_broadcast_added_and_integrated() {
 } // namespace
 
 int main() {
+    zeeman_responsibilities_are_owned_by_separate_modules();
+    zeeman_source_files_document_module_boundaries();
+    zeeman_runtime_state_is_owned_by_aggregate_module();
+    plan_fields_are_imported_by_zeeman_module();
     disabled_zeeman_is_zero();
     uniform_field_is_broadcast_added_and_integrated();
     return 0;

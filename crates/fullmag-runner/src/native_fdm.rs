@@ -12,9 +12,7 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
-use crate::derived_fields::{
-    compute_torque_field, max_torque_apm_from_torque_t, max_torque_t_from_field,
-};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 #[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
@@ -1019,12 +1017,7 @@ impl NativeFdmBackend {
         let torque_apm = if stats.max_torque_Apm > 0.0 {
             stats.max_torque_Apm
         } else {
-            max_torque_apm_from_torque_t(max_torque_t_from_field(
-                &magnetization,
-                &effective_field,
-                self.damping,
-                self.precession_enabled,
-            ))
+            max_torque_residual_apm_from_field(&magnetization, &effective_field)
         };
         let mut step_stats = StepStats {
             step: stats.step,

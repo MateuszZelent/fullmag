@@ -6,7 +6,7 @@ export interface RealtimeWebSocketLike {
   removeEventListener(type: string, listener: (event: MessageEventLike) => void): void;
 }
 
-export const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
+const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
 
 interface MessageEventLike {
   data: string;

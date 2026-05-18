@@ -195,7 +195,7 @@ function physicsInteractionMenu(): RibbonMenuNode[] {
   ];
 }
 
-export const homeTab: RibbonTabContent = {
+const homeTab: RibbonTabContent = {
   tabId: "home",
   groups: [
     {
@@ -323,7 +323,7 @@ type VectorLayerDomainPatch = NonNullable<
   >["domain"]
 >;
 
-export const viewTab: RibbonTabContent = {
+const viewTab: RibbonTabContent = {
   tabId: "view",
   groups: [
     // ── Group 1: Global Display (3D render defaults) ───────────────────────
@@ -1078,7 +1078,7 @@ export const viewTab: RibbonTabContent = {
   ],
 };
 
-export const definitionsTab: RibbonTabContent = {
+const definitionsTab: RibbonTabContent = {
   tabId: "definitions",
   groups: [
     {
@@ -1094,7 +1094,7 @@ export const definitionsTab: RibbonTabContent = {
   ],
 };
 
-export const geometryTab: RibbonTabContent = {
+const geometryTab: RibbonTabContent = {
   tabId: "geometry",
   groups: [
     // ── Create Object / Shape ─────────────────────────────────────────────
@@ -1185,7 +1185,7 @@ export const geometryTab: RibbonTabContent = {
   ],
 };
 
-export const materialsTab: RibbonTabContent = {
+const materialsTab: RibbonTabContent = {
   tabId: "materials",
   groups: [
     {
@@ -1262,7 +1262,7 @@ export const materialsTab: RibbonTabContent = {
   ],
 };
 
-export const physicsTab: RibbonTabContent = {
+const physicsTab: RibbonTabContent = {
   tabId: "physics",
   groups: [
     {
@@ -1308,7 +1308,7 @@ export const physicsTab: RibbonTabContent = {
   ],
 };
 
-export const meshTab: RibbonTabContent = {
+const meshTab: RibbonTabContent = {
   tabId: "mesh",
   groups: [
     {
@@ -1356,7 +1356,7 @@ export const meshTab: RibbonTabContent = {
   ],
 };
 
-export const studyTab: RibbonTabContent = {
+const studyTab: RibbonTabContent = {
   tabId: "study",
   groups: [
     {
@@ -1437,7 +1437,7 @@ export const studyTab: RibbonTabContent = {
   ],
 };
 
-export const resultsTab: RibbonTabContent = {
+const resultsTab: RibbonTabContent = {
   tabId: "results",
   groups: [
     {
@@ -1510,7 +1510,7 @@ export const resultsTab: RibbonTabContent = {
   ],
 };
 
-export const automationTab: RibbonTabContent = {
+const automationTab: RibbonTabContent = {
   tabId: "automation",
   groups: [
     {

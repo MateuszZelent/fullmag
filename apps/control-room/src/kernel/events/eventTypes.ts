@@ -19,6 +19,10 @@ export interface KernelEventMap {
   "workspace:focus-changed": {
     state: LayoutState;
   };
+  "footer:tab-requested": {
+    reason?: string;
+    tab: "engine" | "logs" | "telemetry";
+  };
   "command:submitted": {
     commandId: string;
   };

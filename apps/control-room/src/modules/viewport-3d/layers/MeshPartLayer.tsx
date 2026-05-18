@@ -23,6 +23,7 @@ import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import type {
   Viewport3DFieldRenderModel,
@@ -53,6 +54,7 @@ export function MeshPartLayer({
   onSelectPart,
   partModel,
   magnetizationTexturePreview,
+  meshQualityColors,
   settings,
   topologyModel,
   tracker,
@@ -65,6 +67,7 @@ export function MeshPartLayer({
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
+  meshQualityColors: ScalarColorBuffer | null;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
   tracker: Viewport3DResourceTracker;
@@ -92,12 +95,18 @@ export function MeshPartLayer({
     );
     if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
-    next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
+    next.setAttribute(
+      "position",
+      new BufferAttribute(topologyModel.positions, 3),
+    );
     next.setIndex(new BufferAttribute(edgeIndices, 1));
     return tracker.track("geometry", next);
   }, [partModel, settings.geometryScope, topologyModel, tracker]);
 
-  useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", geometry),
+    [geometry, tracker],
+  );
   useEffect(
     () => () => tracker.release("geometry", edgeGeometry),
     [edgeGeometry, tracker],
@@ -107,24 +116,37 @@ export function MeshPartLayer({
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
     : null;
+  const effectiveScalarColors = meshQualityColors ?? scalarColors;
+  const vertexColorsEnabled =
+    Boolean(meshQualityColors) || shaderUsesVertexColors(settings);
   useEffect(() => {
     if (!geometry || !topologyModel) return;
     applyVertexScalarColorBuffer(
       geometry,
-      shaderUsesVertexColors(settings) ? scalarColors : null,
+      vertexColorsEnabled ? effectiveScalarColors : null,
       topologyModel.nodeCount,
     );
-    tracker.recordDirtyFrame("field-colors");
+    tracker.recordDirtyFrame(
+      meshQualityColors ? "mesh-quality-colors" : "field-colors",
+    );
     invalidate();
-  }, [geometry, invalidate, scalarColors, settings, topologyModel, tracker]);
+  }, [
+    effectiveScalarColors,
+    geometry,
+    invalidate,
+    meshQualityColors,
+    topologyModel,
+    tracker,
+    vertexColorsEnabled,
+  ]);
 
   if (!geometry || !settings.visible) return null;
 
   const part = partModel.part;
   const hasScalarColors =
-    shaderUsesVertexColors(settings) &&
+    vertexColorsEnabled &&
     canApplyVertexScalarColorBuffer(
-      scalarColors,
+      effectiveScalarColors,
       topologyModel?.nodeCount ?? 0,
     );
   const meshColor = shaderColorFromSettings(

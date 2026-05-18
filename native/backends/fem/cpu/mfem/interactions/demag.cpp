@@ -1,12 +1,35 @@
+/*
+ * Demag dispatcher source contract.
+ *
+ * This source owns demag plan-field import, cached/fresh field-update decision
+ * policy, and the dispatch wrapper that chooses cached field reuse, fresh
+ * Poisson demag, or fresh Fredkin-Koehler FEM/BEM demag. It does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/demag_poisson_solve.hpp"
 
 #include "fullmag_fem.h"
 
 namespace fullmag::fem {
+
+void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
+{
+    ctx.enable_demag = plan.enable_demag != 0;
+    ctx.demag_solver = plan.demag_solver;
+
+#if FULLMAG_HAS_MFEM_STACK
+    ctx.demag_realization = static_cast<int>(plan.demag_realization);
+    ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
+    ctx.robin_beta_mode = plan.robin_beta_mode;
+    ctx.robin_beta_factor = plan.robin_beta_factor;
+#endif
+}
 
 bool plan_demag_field_update(
     const DemagFieldUpdateInputs &inputs,
@@ -93,7 +116,7 @@ bool compute_demag_field_for_magnetization(
                     ctx,
                     m_xyz,
                     h_demag_xyz,
-                    ctx.effective_omp_threads);
+                    ctx.cpu_threads.effective_omp_threads);
             }
             break;
     }

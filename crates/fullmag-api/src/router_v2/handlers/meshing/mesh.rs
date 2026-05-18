@@ -514,6 +514,66 @@ pub async fn get_mesh_shared_domain_quality(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous per-element quality response")
+    ),
+    responses(
+        (status = 200, description = "Binary per-element shared-domain mesh quality data (FMMQ)", content_type = "application/octet-stream"),
+        (status = 304, description = "Per-element mesh quality data not modified for the supplied ETag"),
+        (status = 204, description = "No per-element quality data artifact available"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_shared_domain_quality_data(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let Some(artifact) = first_workspace_value(
+        mesh_workspace,
+        &[
+            &["quality_data_artifact"],
+            &["mesh_quality_data_artifact"],
+            &["last_build_summary", "quality_data_artifact"],
+        ],
+    ) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let Some(path) = artifact.get("path").and_then(Value::as_str) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let bytes = fs::read(path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read mesh quality data artifact {path}: {error}"
+        ))
+    })?;
+    if !bytes.starts_with(b"FMMQ") {
+        return Err(ApiError::internal(format!(
+            "mesh quality data artifact {path} is not an FMMQ payload"
+        )));
+    }
+    let byte_size = artifact
+        .get("byte_size")
+        .and_then(Value::as_u64)
+        .unwrap_or(bytes.len() as u64);
+    let element_count = artifact
+        .get("element_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-shared-domain-quality-data:{}:{path}:{byte_size}:{element_count}",
+        snapshot.mesh_revision
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(
+        &headers, &etag, bytes,
+    ))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
     responses(
         (status = 200, description = "Shared-domain realized mesh size fields", body = MeshRealizedSizeFieldsResource),

@@ -1,9 +1,7 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
-  DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetRef,
-  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
@@ -17,9 +15,6 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
 };
-
-export const FALLBACK_OBJECT_VISUALIZATION: VisualizationTargetSettings =
-  DEFAULT_OBJECT_VISUALIZATION;
 
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
@@ -47,6 +42,7 @@ export function resolveViewport3DSelectionBounds(
   if (!selection.kind) return null;
 
   return (
+    resolveMeshQualityElementBounds(selection, fallbackBounds) ??
     resolveMeshPartBounds(
       selection.nodeId ? domain.partsById.get(selection.nodeId) : null,
     ) ??
@@ -56,6 +52,22 @@ export function resolveViewport3DSelectionBounds(
       ? resolveAirboxBounds(domain)
       : fallbackBounds)
   );
+}
+
+function resolveMeshQualityElementBounds(
+  selection: Selection,
+  fallbackBounds: Viewport3DBounds | null,
+): Viewport3DBounds | null {
+  if (selection.ref?.type !== "mesh-quality-element" || !selection.ref.centroid) {
+    return null;
+  }
+  const radius = Math.max((fallbackBounds?.radius ?? 1e-9) * 0.03, 1e-12);
+  const size = radius * 2;
+  return {
+    center: selection.ref.centroid,
+    radius,
+    size: [size, size, size],
+  };
 }
 
 function resolveAirboxBounds(

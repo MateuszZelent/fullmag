@@ -26,7 +26,11 @@ import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
-import type { Viewport3DFieldRenderModel, Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
+import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import type {
+  Viewport3DFieldRenderModel,
+  Viewport3DTopologyRenderModel,
+} from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -49,6 +53,7 @@ export function FallbackTopologyMeshLayer({
   femDomain,
   fieldModel,
   materialProfile,
+  meshQualityColors,
   onSelectDomain,
   onSelectPart,
   topologyModel,
@@ -61,6 +66,7 @@ export function FallbackTopologyMeshLayer({
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
+  meshQualityColors: ScalarColorBuffer | null;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   topologyModel: Viewport3DTopologyRenderModel | null;
@@ -75,27 +81,29 @@ export function FallbackTopologyMeshLayer({
       "position",
       new BufferAttribute(topologyModel.positions, 3),
     );
-    next.setIndex(
-      new BufferAttribute(topologyModel.fallbackSurfaceIndices, 1),
-    );
+    next.setIndex(new BufferAttribute(topologyModel.fallbackSurfaceIndices, 1));
     next.computeVertexNormals();
     return next;
   }, [topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
     if (!topologyModel) return null;
-    const next = fallbackSettings.geometryScope === "full"
-      ? buildLineIndexGeometry(
-          topologyModel.positions,
-          topologyModel.fallbackVolumeEdgeIndices,
-        )
-      : buildSurfaceEdgeGeometry(
-          topologyModel.positions,
-          topologyModel.fallbackSurfaceIndices,
-        );
+    const next =
+      fallbackSettings.geometryScope === "full"
+        ? buildLineIndexGeometry(
+            topologyModel.positions,
+            topologyModel.fallbackVolumeEdgeIndices,
+          )
+        : buildSurfaceEdgeGeometry(
+            topologyModel.positions,
+            topologyModel.fallbackSurfaceIndices,
+          );
     return next ? tracker.track("geometry", next) : null;
   }, [fallbackSettings.geometryScope, topologyModel, tracker]);
 
-  useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", geometry),
+    [geometry, tracker],
+  );
   useEffect(
     () => () => tracker.release("geometry", edgeGeometry),
     [edgeGeometry, tracker],
@@ -105,16 +113,29 @@ export function FallbackTopologyMeshLayer({
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
     : null;
+  const effectiveScalarColors = meshQualityColors ?? scalarColors;
+  const vertexColorsEnabled =
+    Boolean(meshQualityColors) || shaderUsesVertexColors(fallbackSettings);
   useEffect(() => {
     if (!geometry || !topologyModel) return;
     applyVertexScalarColorBuffer(
       geometry,
-      shaderUsesVertexColors(fallbackSettings) ? scalarColors : null,
+      vertexColorsEnabled ? effectiveScalarColors : null,
       topologyModel.nodeCount,
     );
-    tracker.recordDirtyFrame("field-colors");
+    tracker.recordDirtyFrame(
+      meshQualityColors ? "mesh-quality-colors" : "field-colors",
+    );
     invalidate();
-  }, [fallbackSettings, geometry, invalidate, scalarColors, topologyModel, tracker]);
+  }, [
+    effectiveScalarColors,
+    geometry,
+    invalidate,
+    meshQualityColors,
+    topologyModel,
+    tracker,
+    vertexColorsEnabled,
+  ]);
 
   if (!geometry) return null;
   if (
@@ -154,9 +175,9 @@ export function FallbackTopologyMeshLayer({
             opacity={opacityFromSettings(fallbackSettings)}
             {...materialProfile.magneticSurface}
             vertexColors={
-              shaderUsesVertexColors(fallbackSettings) &&
+              vertexColorsEnabled &&
               canApplyVertexScalarColorBuffer(
-                scalarColors,
+                effectiveScalarColors,
                 topologyModel?.nodeCount ?? 0,
               )
             }

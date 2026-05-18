@@ -11,6 +11,38 @@ struct Context;
 struct PhaseTimings;
 
 /*
+ * Runtime products and frozen-field cache emitted by native FEM demag modules.
+ *
+ * `h_xyz` is the magnetic-domain H_demag buffer used by LLG and step metrics.
+ * `h_visual_xyz` preserves full-domain recovered demag for observables and
+ * visualization. The cached buffers, timestamp, validity flag, and Robin
+ * boundary energy support frozen-field Poisson-demag reuse between refreshes.
+ */
+struct DemagRuntimeState {
+    std::vector<double> h_xyz;
+    std::vector<double> h_visual_xyz;
+    std::vector<double> cached_xyz;
+    std::vector<double> cached_visual_xyz;
+    bool cache_valid = false;
+    double last_refresh_time = -1.0;
+    double cached_robin_boundary_energy = 0.0;
+};
+
+/*
+ * Initialize native FEM demag plan fields.
+ *
+ * Copies the ABI plan's demag enable flag, solver configuration, and MFEM-stack
+ * realization settings into Context compatibility storage. Runtime output and
+ * cache storage live on the demag owner, while solver lifecycle, RHS assembly,
+ * potential solves, recovery, cache policy, and telemetry remain in dedicated
+ * demag modules.
+ *
+ * This dispatcher surface does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry. Concrete ownership stays in the demag_poisson.* and
+ * demag_fem_bem.* module families.
+ */
+void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+/*
  * Native FEM demag field-update action selected for one effective-field call.
  *
  * Demag has multiple concrete realizations. The dispatcher owns only the shared

@@ -14,7 +14,7 @@ use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use num_complex::Complex64;
 
 use crate::native_fem;
-use crate::relaxation::relaxation_converged;
+use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
 use crate::types::{AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StepStats};
 use crate::ExecutionProvenance;
 
@@ -678,7 +678,7 @@ fn materialize_equilibrium(
                 max_physical_time_s: None,
             },
         };
-        let mut previous_total_energy = None;
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         while steps_taken < RELAX_MAX_STEPS {
             let report = problem
                 .step(&mut state, RELAX_DT)
@@ -699,17 +699,17 @@ fn materialize_equilibrium(
                 max_h_demag: report.max_demag_field_amplitude,
                 ..StepStats::default()
             };
+            let energy_plateau_range = energy_plateau.record(report.total_energy_joules);
             if relaxation_converged(
                 &control,
                 &stats,
-                previous_total_energy,
+                energy_plateau_range,
                 plan.gyromagnetic_ratio,
                 plan.material.damping,
                 true,
             ) {
                 break;
             }
-            previous_total_energy = Some(report.total_energy_joules);
         }
     }
 

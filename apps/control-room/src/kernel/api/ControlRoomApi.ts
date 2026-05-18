@@ -14,6 +14,7 @@ import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
   MESHING_SHARED_DOMAIN_POLICY_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -155,8 +156,10 @@ import type {
 } from "./apiTypes";
 import {
   decodeFieldVector,
+  decodeMeshQualityData,
   decodeTopology,
   type DecodedFieldVector,
+  type DecodedMeshQualityData,
   type DecodedTopology,
 } from "./codecs";
 import {
@@ -366,6 +369,11 @@ export class ControlRoomApi {
       quality: (options?: RequestOptions) =>
         this.requestJson<MeshSharedDomainQualityResource>(
           MESHING_SHARED_DOMAIN_QUALITY_PATH,
+          options,
+        ),
+      qualityData: (options?: BinaryRequestOptions) =>
+        this.requestMeshQualityData(
+          MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
           options,
         ),
       qualityGates: (options?: RequestOptions) =>
@@ -841,6 +849,13 @@ export class ControlRoomApi {
     pathParams?: PathParams,
   ): Promise<BinaryResourceResult<DecodedTopology>> {
     return this.requestBinaryResource(path, decodeTopology, options, pathParams);
+  }
+
+  private requestMeshQualityData(
+    path: OpenApiV2Path,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedMeshQualityData>> {
+    return this.requestBinaryResource(path, decodeMeshQualityData, options);
   }
 
   private requestFieldVector(

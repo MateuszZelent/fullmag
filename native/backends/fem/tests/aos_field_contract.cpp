@@ -94,8 +94,8 @@ void aos_pack_unpack_and_existing_resize_contract() {
 void periodic_projection_copies_representative_vectors() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 4;
-    ctx.periodic_reduced_node = {0u, 1u, 0u, 1u};
-    ctx.periodic_representative_nodes = {2u, 3u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u, 1u};
+    ctx.mesh.periodic_representative_nodes = {2u, 3u};
     std::vector<double> field = {
         1.0, 2.0, 3.0,
         4.0, 5.0, 6.0,
@@ -114,7 +114,7 @@ void periodic_projection_copies_representative_vectors() {
     check(field == expected, "periodic AoS projection");
 
     field = {1.0, 2.0, 3.0};
-    ctx.periodic_reduced_node.clear();
+    ctx.mesh.periodic_reduced_node.clear();
     fullmag::fem::project_static_periodic_aos(ctx, field);
     check(field == std::vector<double>({1.0, 2.0, 3.0}), "empty periodic map leaves field unchanged");
 }

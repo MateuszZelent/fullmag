@@ -107,6 +107,10 @@ export const MESHING_SHARED_DOMAIN_QUALITY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/quality",
 );
 
+export const MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+);
+
 export const MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
 );

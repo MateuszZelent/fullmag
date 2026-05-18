@@ -27,7 +27,7 @@ function flushPendingInvalidates() {
   }
 }
 
-export function scheduleBatchedViewportInvalidate(invalidate: () => void): void {
+function scheduleBatchedViewportInvalidate(invalidate: () => void): void {
   if (typeof window === "undefined") {
     invalidate();
     return;
@@ -39,7 +39,7 @@ export function scheduleBatchedViewportInvalidate(invalidate: () => void): void 
   pendingTimer = window.setTimeout(flushPendingInvalidates, 0);
 }
 
-export function cancelBatchedViewportInvalidate(invalidate: () => void): void {
+function cancelBatchedViewportInvalidate(invalidate: () => void): void {
   pendingInvalidates.delete(invalidate);
   if (
     pendingInvalidates.size > 0 ||

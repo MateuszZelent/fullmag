@@ -19,7 +19,7 @@ interface FullmagLogoProps {
   className?: string;
 }
 
-export default function FullmagLogo({
+function FullmagLogo({
   size = 64,
   animate: _animate = false,
   spin = false,

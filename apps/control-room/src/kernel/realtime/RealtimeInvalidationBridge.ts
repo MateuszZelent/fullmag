@@ -1,5 +1,6 @@
 import type { ResourceRevision } from "../api/apiTypes";
 import {
+  DATA_SCALARS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -7,6 +8,9 @@ import {
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_SCENE_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -133,7 +137,10 @@ export class RealtimeInvalidationBridge {
         }
 
         if (shouldInvalidateSessionStatus(change.recommended_fetch)) {
-          statusRevision = change.revision;
+          statusRevision =
+            statusRevision !== null
+              ? Math.max(statusRevision as number, change.revision as number)
+              : change.revision;
         }
         if (change.recommended_fetch) {
           this.invalidateResource(change.recommended_fetch, change.revision);
@@ -142,6 +149,9 @@ export class RealtimeInvalidationBridge {
             change.recommended_fetch,
             change.revision,
           );
+          if (change.recommended_fetch === DATA_SCALARS_PATH) {
+            this.invalidateSimulationStepResources(change.revision);
+          }
         }
         handled = true;
       }
@@ -202,6 +212,15 @@ export class RealtimeInvalidationBridge {
     );
     this.resources.invalidatePrefix(
       resourceFamilyPrefix(MESHING_OBJECT_SIZE_FIELD_PATH),
+      revision,
+    );
+  }
+
+  private invalidateSimulationStepResources(revision: ResourceRevision): void {
+    this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
+    this.resources.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
       revision,
     );
   }

@@ -7,7 +7,6 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 export {
   resolveVisualizationRenderResolution,
-  type VisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
 
 export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
@@ -66,7 +65,7 @@ function rgbToHex(red: number, green: number, blue: number): string {
     .join("")}`;
 }
 
-export interface VisualizationPanelField {
+interface VisualizationPanelField {
   id: keyof VisualizationTargetSettings;
   kind: "color" | "mode" | "number" | "toggle";
   label: string;

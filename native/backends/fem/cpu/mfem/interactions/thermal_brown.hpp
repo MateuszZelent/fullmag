@@ -1,53 +1,32 @@
 #pragma once
 
-#include <vector>
+#include "cpu/mfem/interactions/thermal_brown_field.hpp"
+#include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
+#include "cpu/mfem/interactions/thermal_brown_sigma.hpp"
+#include "fullmag_fem.h"
 
 namespace fullmag::fem {
 
 struct Context;
 
 /*
- * Compute the Brown thermal-field standard deviation for one FEM node.
+ * Initialize Brown thermal plan fields.
  *
- * The returned value is an H-field amplitude in A/m:
- *
- *   sigma_i = sqrt(2 alpha_i kB T /
- *                  (gamma0_i mu0 Ms_i V_i dt)),
- *   gamma0_i = gamma_red (1 + alpha_i^2).
- *
- * Invalid, disabled, or non-positive inputs return zero.
+ * Copies the thermal temperature and RNG seed from the ABI plan into Context
+ * compatibility storage and sizes the AoS-3 Brown field buffer. Stochastic
+ * sampling remains owned by thermal_brown_sampler.*.
  */
-double thermal_brown_sigma(
-    double temperature,
-    double damping,
-    double gyromagnetic_ratio,
-    double saturation_magnetisation,
-    double node_volume,
-    double dt_seconds);
+void initialize_thermal_brown_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan);
 
 /*
- * Initialize the Brown thermal-field buffer for the current node count.
+ * Aggregated include surface for Brown thermal-field responsibilities.
  *
- * The buffer is AoS-3 and stores an H field in A/m. Initialization only sizes
- * and clears storage; stochastic sampling happens in refresh_thermal_brown_field.
+ * This compatibility umbrella owns plan-field import only. It does not define
+ * Brown sigma, refresh sampling, cache policy, nonmagnetic zeroing, or H_eff
+ * addition. Those responsibilities stay in the dedicated owner modules:
+ * thermal_brown_sigma.*, thermal_brown_sampler.*, and thermal_brown_field.*.
  */
-void initialize_thermal_brown_field(Context &ctx);
-
-/*
- * Refresh the Brown thermal field for the current time-step state.
- *
- * The module uses per-node dual volumes, alpha, and Ms when available. It caches
- * the last `(current_time, current_dt)` pair so repeated RHS evaluations at the
- * same accepted state reuse the same stochastic field.
- */
-void refresh_thermal_brown_field(Context &ctx);
-
-/*
- * Add the current Brown thermal field to an effective-field buffer in-place.
- *
- * The field is already an H contribution in A/m. No torque, gamma, or damping
- * conversion is applied here.
- */
-void add_thermal_brown_field(const Context &ctx, std::vector<double> &h_eff_xyz);
 
 } // namespace fullmag::fem

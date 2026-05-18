@@ -33,7 +33,7 @@ export const RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND =
   "ribbon.visualization.patch-defaults";
 export const RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND =
   "ribbon.visualization.patch-target";
-export const RIBBON_VISUALIZATION_CLEAR_TARGET_COMMAND =
+const RIBBON_VISUALIZATION_CLEAR_TARGET_COMMAND =
   "ribbon.visualization.clear-target";
 export const RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND =
   "ribbon.visualization.patch-airbox";
@@ -78,12 +78,6 @@ export function visualizationAirboxCommandInput(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
   return patch;
-}
-
-export function visualizationClearTargetCommandInput(
-  target: VisualizationTargetRef,
-): VisualizationTargetRef {
-  return target;
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [

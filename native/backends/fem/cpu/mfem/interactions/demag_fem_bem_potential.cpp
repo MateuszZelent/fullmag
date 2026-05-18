@@ -1,0 +1,53 @@
+/*
+ * FEM/BEM demag potential source contract.
+ *
+ * This source owns boundary trace extraction from solved potentials and
+ * pointwise combination of u1/u2 into the total scalar potential. It does not solve sparse systems, transfer Dirichlet boundary values, recover H_demag, compute energy, or publish telemetry.
+ */
+
+#include "cpu/mfem/interactions/demag_fem_bem_potential.hpp"
+
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
+namespace fullmag::fem {
+
+#if FULLMAG_HAS_MFEM_STACK
+bool extract_demag_fem_bem_boundary_trace(
+    const std::vector<uint32_t> &boundary_nodes,
+    const mfem::Vector &potential,
+    std::vector<double> &boundary_trace,
+    std::string &error)
+{
+    boundary_trace.assign(boundary_nodes.size(), 0.0);
+    for (size_t i = 0; i < boundary_nodes.size(); ++i) {
+        const int tdof = static_cast<int>(boundary_nodes[i]);
+        if (tdof < 0 || tdof >= potential.Size()) {
+            error = "FEM/BEM demag boundary trace references a potential DOF outside the vector";
+            return false;
+        }
+        boundary_trace[i] = potential(tdof);
+    }
+    return true;
+}
+
+bool combine_demag_fem_bem_total_potential(
+    const mfem::Vector &u1,
+    const mfem::Vector &u2,
+    mfem::Vector &total_potential,
+    std::string &error)
+{
+    if (u1.Size() != u2.Size()) {
+        error = "FEM/BEM demag potential vector size mismatch";
+        return false;
+    }
+    total_potential.SetSize(u1.Size());
+    for (int i = 0; i < total_potential.Size(); ++i) {
+        total_potential(i) = u1(i) + u2(i);
+    }
+    return true;
+}
+#endif
+
+} // namespace fullmag::fem

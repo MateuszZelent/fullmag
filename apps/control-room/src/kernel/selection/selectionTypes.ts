@@ -1,6 +1,6 @@
 import type { ModuleId } from "../types";
 
-export type ObjectSelectionKind =
+type ObjectSelectionKind =
   | "object.root"
   | "object.geometry"
   | "object.material"
@@ -11,6 +11,8 @@ export type ObjectSelectionKind =
   | "object.magnetic-texture"
   | "object.mesh"
   | "object.visualization";
+
+type MeshQualitySelectionMetric = "gamma" | "sicn" | "volume";
 
 export type SelectionRef =
   | {
@@ -26,6 +28,22 @@ export type SelectionRef =
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox";
+    }
+  | {
+      centroid: [number, number, number] | null;
+      elementIndex: number;
+      kind: "mesh.quality.element";
+      metric?: MeshQualitySelectionMetric;
+      nodeId: string;
+      type: "mesh-quality-element";
+      visualizationTargetId: `mesh:quality:element:${number}`;
+    }
+  | {
+      kind: "mesh.quality.metric";
+      metric: MeshQualitySelectionMetric;
+      nodeId: string;
+      type: "mesh-quality-metric";
+      visualizationTargetId: `mesh:quality:metric:${MeshQualitySelectionMetric}`;
     };
 
 export interface Selection {

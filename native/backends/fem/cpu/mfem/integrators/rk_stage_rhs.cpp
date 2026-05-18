@@ -1,47 +1,19 @@
+/*
+ * RK stage RHS source contract.
+ *
+ * This source owns one RK-stage RHS evaluation from the current stage
+ * magnetization, including effective-field composition, optional direct-torque
+ * addition, and stage-local timing. It does not define RK tableau coefficients, allocate stepper workspace, accept/reject adaptive steps, or publish final step metrics.
+ */
+
 #include "cpu/mfem/integrators/rk_stage_rhs.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
-
-#include <chrono>
-
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start)
-{
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-class ScopedPhaseTimer {
-public:
-    explicit ScopedPhaseTimer(uint64_t *accumulator)
-        : accumulator_(accumulator)
-    {
-        if (accumulator_ != nullptr) {
-            start_ = SteadyClock::now();
-        }
-    }
-
-    ~ScopedPhaseTimer()
-    {
-        if (accumulator_ != nullptr) {
-            *accumulator_ += elapsed_ns(start_);
-        }
-    }
-
-private:
-    uint64_t *accumulator_ = nullptr;
-    SteadyClock::time_point start_{};
-};
-
-} // namespace
+#include "cpu/mfem/runtime/phase_timings.hpp"
+#include "fem_common.hpp"
 
 namespace fullmag::fem {
 
@@ -75,10 +47,10 @@ bool evaluate_rk_stage_rhs(
         ScopedPhaseTimer timer(timings != nullptr ? &timings->rhs_wall_time_ns : nullptr);
         llg_rhs_aos(m_state, ws.h_eff_tmp,
                     ctx.material.gyromagnetic_ratio, ctx.material.damping,
-                    ctx.alpha_field.empty() ? nullptr : &ctx.alpha_field,
+                    ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     out_k, max_rhs);
-        add_stt_rhs_aos(ctx, m_state, out_k, max_rhs);
-        zero_non_magnetic_nodes_aos(out_k, ctx.magnetic_node_mask);
+        add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt);
+        zero_non_magnetic_nodes_aos(out_k, ctx.mesh.magnetic_node_mask);
     }
     if (out_max_rhs != nullptr) {
         *out_max_rhs = max_rhs;

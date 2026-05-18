@@ -2,7 +2,10 @@
 
 import { useSyncExternalStore } from "react";
 
+import { useCurrentRunResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+
+import { buildStatusBarEngineModel } from "./statusBarModel";
 
 function readString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -28,6 +31,8 @@ export default function StatusBarModule() {
   );
 
   const status = useSessionStatus();
+  const currentRun = useCurrentRunResource({ enabled: mounted });
+  const engine = buildStatusBarEngineModel(mounted ? currentRun.data : null);
   const sessionState = mounted
     ? readString(status.data?.solver.state, status.status)
     : "loading";
@@ -51,6 +56,18 @@ export default function StatusBarModule() {
       <span className="fm-status-bar__item">{sessionName}</span>
       <span className="fm-status-bar__sep" aria-hidden="true" />
       <span className="fm-status-bar__item">{runtimeVersion}</span>
+      <span className="fm-status-bar__spacer" aria-hidden="true" />
+      <span
+        className="fm-status-bar__engine"
+        data-state={engine.state}
+        title={engine.title}
+      >
+        <span className="fm-status-bar__engine-label">{engine.label}</span>
+        <span className="fm-status-bar__engine-sep" aria-hidden="true">
+          {" | "}
+        </span>
+        <span className="fm-status-bar__engine-detail">{engine.detail}</span>
+      </span>
     </div>
   );
 }

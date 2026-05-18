@@ -1,148 +1,68 @@
+/*
+ * Oersted aggregate source contract.
+ *
+ * This compatibility source owns plan import, realization exclusivity, and
+ * dispatch between analytical-cylinder and explicit nodal Oersted paths.
+ * It does not sample analytical cylinders or add explicit nodal fields.
+ */
 #include "cpu/mfem/interactions/oersted.hpp"
 
 #include "context.hpp"
 
-#include <algorithm>
-#include <cmath>
-
 namespace fullmag::fem {
-namespace {
 
-/*
- * Analytical Oersted-cylinder interaction for the native FEM CPU backend.
- *
- * Physical contract
- * -----------------
- * The module precomputes an H field in A/m for a unit current flowing through
- * an infinite cylinder. The runtime effective field is this unit-current field
- * multiplied by the configured current envelope. No gamma, mu0 factor, damping
- * term, or torque conversion is applied here; the LLG RHS handles conversion
- * from effective fields to dm/dt.
- *
- * Explicit Oersted buffers
- * ------------------------
- * A supplied `oersted_field_xyz` buffer is treated as a final nodal H field in
- * A/m. Native FEM plan validation keeps this path mutually exclusive with the
- * analytical cylinder, so explicit buffers are not scaled by current envelopes.
- */
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kZeroThreshold = 1e-30;
-
-} // namespace
-
-bool normalize_oersted_cylinder_axis(Context &ctx, std::string &error)
+bool initialize_oersted_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
 {
-    if (!ctx.has_oersted_cylinder) {
-        return true;
+    const uint64_t expected_field_len = static_cast<uint64_t>(ctx.n_nodes) * 3ull;
+    if (plan.oersted_field_xyz != nullptr &&
+        plan.oersted_field_len != expected_field_len) {
+        error = "oersted_field_xyz length mismatch";
+        return false;
     }
-
-    const double axis_norm = std::sqrt(
-        ctx.oersted_axis[0] * ctx.oersted_axis[0] +
-        ctx.oersted_axis[1] * ctx.oersted_axis[1] +
-        ctx.oersted_axis[2] * ctx.oersted_axis[2]);
-    if (!(axis_norm > kZeroThreshold) || !std::isfinite(axis_norm)) {
-        error = "oersted_axis must be finite and non-zero";
+    if (plan.has_oersted_cylinder != 0 &&
+        plan.oersted_field_xyz != nullptr &&
+        plan.oersted_field_len > 0) {
+        error = "oersted cylinder and explicit oersted_field_xyz are mutually exclusive";
         return false;
     }
 
-    for (double &value : ctx.oersted_axis) {
-        value /= axis_norm;
+    ctx.has_oersted_cylinder = plan.has_oersted_cylinder != 0;
+    ctx.has_oersted_field = plan.oersted_field_xyz != nullptr && plan.oersted_field_len > 0;
+    ctx.oersted_current = plan.oersted_current;
+    ctx.oersted_radius = plan.oersted_radius;
+    for (int i = 0; i < 3; ++i) {
+        ctx.oersted_center[i] = plan.oersted_center[i];
+        ctx.oersted_axis[i] = plan.oersted_axis[i];
     }
-    return true;
-}
+    if (!normalize_oersted_cylinder_axis(ctx, error)) {
+        return false;
+    }
+    ctx.oersted_time_dep_kind = plan.oersted_time_dep_kind;
+    ctx.oersted_time_dep_freq = plan.oersted_time_dep_freq;
+    ctx.oersted_time_dep_phase = plan.oersted_time_dep_phase;
+    ctx.oersted_time_dep_offset = plan.oersted_time_dep_offset;
+    ctx.oersted_time_dep_t_on = plan.oersted_time_dep_t_on;
+    ctx.oersted_time_dep_t_off = plan.oersted_time_dep_t_off;
 
-bool initialize_oersted_cylinder_field(Context &ctx, std::string &error)
-{
-    (void) error;
-    if (!ctx.has_oersted_cylinder || !(ctx.oersted_radius > 0.0)) {
+    if (ctx.has_oersted_field) {
+        ctx.oersted.h_xyz.assign(
+            plan.oersted_field_xyz,
+            plan.oersted_field_xyz + static_cast<size_t>(plan.oersted_field_len));
         return true;
     }
-
-    const double inv_2pi = 1.0 / (2.0 * kPi);
-    const double radius = ctx.oersted_radius;
-    const double radius_sq = radius * radius;
-    const double cx = ctx.oersted_center[0];
-    const double cy = ctx.oersted_center[1];
-    const double cz = ctx.oersted_center[2];
-    const double ax = ctx.oersted_axis[0];
-    const double ay = ctx.oersted_axis[1];
-    const double az = ctx.oersted_axis[2];
-
-    ctx.h_oe_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-    const size_t available_nodes = std::min(
-        static_cast<size_t>(ctx.n_nodes),
-        ctx.nodes_xyz.size() / 3u);
-    for (size_t i = 0; i < available_nodes; ++i) {
-        const size_t base = i * 3u;
-        const double px = ctx.nodes_xyz[base + 0] - cx;
-        const double py = ctx.nodes_xyz[base + 1] - cy;
-        const double pz = ctx.nodes_xyz[base + 2] - cz;
-
-        const double p_dot_a = px * ax + py * ay + pz * az;
-        const double rx = px - p_dot_a * ax;
-        const double ry = py - p_dot_a * ay;
-        const double rz = pz - p_dot_a * az;
-        const double r_perp = std::sqrt(rx * rx + ry * ry + rz * rz);
-
-        if (r_perp < kZeroThreshold) {
-            continue;
-        }
-
-        const double h_mag =
-            (r_perp < radius)
-                ? inv_2pi * r_perp / radius_sq
-                : inv_2pi / r_perp;
-        const double inv_r = 1.0 / r_perp;
-        const double rx_hat = rx * inv_r;
-        const double ry_hat = ry * inv_r;
-        const double rz_hat = rz * inv_r;
-
-        ctx.h_oe_xyz[base + 0] = h_mag * (ay * rz_hat - az * ry_hat);
-        ctx.h_oe_xyz[base + 1] = h_mag * (az * rx_hat - ax * rz_hat);
-        ctx.h_oe_xyz[base + 2] = h_mag * (ax * ry_hat - ay * rx_hat);
-    }
-
-    return true;
-}
-
-double oersted_current_scale(const Context &ctx)
-{
-    if (!ctx.has_oersted_cylinder) {
-        return 1.0;
-    }
-
-    double scale = ctx.oersted_current;
-    switch (ctx.oersted_time_dep_kind) {
-        case 1:
-            scale *= std::sin(
-                         2.0 * kPi * ctx.oersted_time_dep_freq * ctx.current_time +
-                         ctx.oersted_time_dep_phase) +
-                     ctx.oersted_time_dep_offset;
-            break;
-        case 2:
-            scale *= (ctx.current_time >= ctx.oersted_time_dep_t_on &&
-                      ctx.current_time < ctx.oersted_time_dep_t_off)
-                         ? 1.0
-                         : 0.0;
-            break;
-        default:
-            break;
-    }
-    return scale;
+    return initialize_oersted_cylinder_field(ctx, error);
 }
 
 void add_oersted_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if ((!ctx.has_oersted_cylinder && !ctx.has_oersted_field) || ctx.h_oe_xyz.empty()) {
+    if (ctx.has_oersted_cylinder) {
+        add_oersted_cylinder_field(ctx, h_eff_xyz);
         return;
     }
-
-    const double scale = ctx.has_oersted_cylinder ? oersted_current_scale(ctx) : 1.0;
-    const size_t count = std::min(h_eff_xyz.size(), ctx.h_oe_xyz.size());
-    for (size_t i = 0; i < count; ++i) {
-        h_eff_xyz[i] += scale * ctx.h_oe_xyz[i];
-    }
+    add_explicit_oersted_field(ctx, h_eff_xyz);
 }
 
 } // namespace fullmag::fem

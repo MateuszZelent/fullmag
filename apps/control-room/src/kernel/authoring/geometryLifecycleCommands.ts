@@ -2,7 +2,6 @@ import type {
   AuthoringTransactionRequest,
   AuthoringTransactionResponse,
   CommandResponse,
-  ObjectCreateRequest,
   ObjectGeometryPatchRequest,
   ObjectPatchRequest,
   RequestOptions,
@@ -133,21 +132,6 @@ export function deleteObjectTransaction(
     },
     options,
   );
-}
-
-export function directCreateObject(
-  api: {
-    model: {
-      createObject: (
-        request: ObjectCreateRequest,
-        options?: RequestOptions,
-      ) => Promise<unknown>;
-    };
-  },
-  request: ObjectCreateRequest,
-  options?: RequestOptions,
-): Promise<unknown> {
-  return api.model.createObject(request, options);
 }
 
 export function submitObjectMeshBuild(

@@ -4,9 +4,10 @@ use crate::{
     EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR, EquilibriumSourceIR,
     ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmDemagPeriodicityIR,
     FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR, MaterialIR,
-    MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR,
-    SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR,
+    MagnetostrictionLawIR, MaterialIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
+    SpinWaveBoundaryConditionIR, ThermalSeedConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -577,6 +578,10 @@ pub struct FemPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetoelastic: Option<FemMagnetoelasticPlanIR>,
 
+    /// Mechanics contract for magnetoelastic execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanics: Option<FemMechanicalPlanIR>,
+
     /// Policy for the demag linear solver (CG+AMG etc.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_solver_policy: Option<FemLinearSolverPolicy>,
@@ -615,6 +620,35 @@ pub struct FemMagnetoelasticPlanIR {
     /// If Some, treated as uniform strain across the entire body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prescribed_strain: Option<[f64; 6]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMechanicalModeIR {
+    PrescribedStrain,
+    QuasistaticElasticity,
+    Elastodynamics,
+}
+
+/// Self-contained native FEM mechanics contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemMechanicalPlanIR {
+    pub mode: FemMechanicalModeIR,
+    pub body: crate::ElasticBodyIR,
+    pub elastic_material: crate::ElasticMaterialIR,
+    pub magnetostriction_law: MagnetostrictionLawIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_conditions: Vec<MechanicalBoundaryConditionIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loads: Vec<MechanicalLoadIR>,
+    #[serde(default)]
+    pub same_mesh_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_picard_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picard_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical_dt: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,8 +1,16 @@
 # FEM/BEM Open-Boundary Demag
 
 - Status: native FEM CPU dense-reference module contract, active MFEM solve path requires runtime validation
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp/.cpp`
+- Last updated: 2026-05-18
+- Implementation:
+  `native/backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp/.cpp`,
+  `demag_fem_bem_energy.hpp/.cpp`, `demag_fem_bem_solve.hpp/.cpp`,
+  `demag_fem_bem_surface.hpp/.cpp`, `demag_fem_bem_operator.hpp/.cpp`,
+  `demag_fem_bem_linear_solve.hpp/.cpp`,
+  `demag_fem_bem_boundary_values.hpp/.cpp`,
+  `demag_fem_bem_workspace.hpp/.cpp`,
+  `demag_fem_bem_potential.hpp/.cpp`, `demag_fem_bem_telemetry.hpp/.cpp`,
+  and `demag_fem_bem_rhs.hpp/.cpp`
 - Test: `native/backends/fem/tests/demag_fem_bem_contract.cpp`
 - Architecture reference: `docs/physics/0870-fem-bem-demag-open-boundary.md`
 
@@ -28,6 +36,8 @@ E_d = -0.5 mu0 integral_Omega_m Ms m.H_demag dV
 `demag_fem_bem_energy_from_field(...)` delegates this scalar convention to the
 shared demag energy implementation so Poisson and FEM/BEM report consistent
 sign, units, lumped-mass weighting, and magnetic-node masking.
+The wrapper is owned by `demag_fem_bem_energy.*`; `demag_fem_bem.*` is only the
+aggregate include/translation-unit surface.
 
 ## Boundary Operator
 
@@ -53,7 +63,37 @@ correctness/reference operator, not a production compressed BEM/H2/FMM path.
 | demag energy | `E_d` | `J` |
 | boundary potential | `u` | MFEM scalar potential convention |
 
-## Capability Boundary
+## Warunki brzegowe
+
+FEM/BEM demag is the open-boundary realization for body-only magnetic meshes.
+The boundary condition at infinity is represented by the Fredkin-Koehler split:
+the volume Neumann problem computes `u1`, the dense reference BEM operator maps
+the exterior boundary trace to Dirichlet correction values, and the interior
+Laplace correction computes `u2`. The recovered demag field uses the combined
+potential.
+
+This path does not use an airbox Dirichlet or Robin truncation boundary; those
+belong to `fem_demag_poisson.md`.
+
+## Dyskretyzacja FEM
+
+The active path uses P1 tetrahedral FEM spaces on the magnetic body mesh:
+
+```text
+extract exterior magnetic boundary surface
+solve Neumann volume potential u1
+apply dense reference BEM operator on boundary nodes
+solve Dirichlet correction u2
+combine u = u1 + u2
+recover H_demag = -grad(u)
+integrate E_d = -0.5 mu0 integral Ms m.H_demag dV
+```
+
+Boundary extraction, dense-operator assembly, boundary-value transfer,
+workspace lifecycle, potential combination, solve orchestration, telemetry, and
+energy are owned by separate `demag_fem_bem_*.*` modules.
+
+## Ograniczenia capability
 
 - Active FEM/BEM demag requires `FULLMAG_HAS_MFEM_STACK`.
 - The initial active path requires an MPI/Hypre-enabled MFEM runtime.
@@ -61,6 +101,8 @@ correctness/reference operator, not a production compressed BEM/H2/FMM path.
 - The dense BEM operator is validation/reference scale only.
 - Production qualification still requires analytic sphere/thin-film fixtures and
   comparison against converged Poisson airbox demag.
+- Per-step Fredkin-Koehler solve orchestration is owned by
+  `demag_fem_bem_solve.*`.
 
 ## Testy
 
@@ -73,4 +115,9 @@ ctest --test-dir native/build/backends/fem -R fem_demag_fem_bem_contract --outpu
 
 The current contract checks body-only boundary-surface extraction, finite dense
 BEM matrix/apply behavior, constant-potential sanity on a unit tetrahedron, and
-energy parity with the shared demag convention.
+energy parity with the shared demag convention. It also checks source ownership
+for the energy and solve modules so those definitions do not return to the
+aggregate `demag_fem_bem.cpp`. The gate also pins top-level source-contract
+docstrings for the aggregate, surface, dense-operator, linear-solve,
+boundary-values, workspace, potential, telemetry, RHS, solve, and energy
+modules, including each module's non-owning boundary.

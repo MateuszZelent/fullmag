@@ -737,6 +737,9 @@ fn mesh_build_pipeline_status_json(
     active_phase: Option<&str>,
     failed: bool,
     failure_detail: Option<&str>,
+    progress_percent: Option<u8>,
+    progress_label: Option<&str>,
+    duration_ms: Option<u64>,
 ) -> serde_json::Value {
     let phase_details = [
         (
@@ -780,15 +783,48 @@ fn mesh_build_pipeline_status_json(
                 } else {
                     *detail
                 };
-                serde_json::json!({
+                let mut phase = serde_json::json!({
                     "id": id,
                     "label": label,
                     "status": status,
                     "detail": resolved_detail,
-                })
+                });
+                if Some(*id) == active_phase {
+                    if let Some(percent) = progress_percent {
+                        phase["progress_percent"] = serde_json::json!(percent);
+                    }
+                    if let Some(label) = progress_label {
+                        phase["progress_label"] = serde_json::json!(label);
+                    }
+                    if let Some(duration_ms) = duration_ms {
+                        phase["duration_ms"] = serde_json::json!(duration_ms);
+                    }
+                }
+                phase
             })
             .collect(),
     )
+}
+
+fn mesh_progress_percent_from_payload(payload: &serde_json::Value) -> Option<u8> {
+    payload
+        .get("progress_percent")
+        .or_else(|| payload.get("percent"))
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u8::try_from(value.min(100)).ok())
+}
+
+fn mesh_progress_label_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("progress_label")
+        .or_else(|| payload.get("label"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_string())
+}
+
+fn mesh_duration_ms_from_payload(payload: &serde_json::Value) -> Option<u64> {
+    payload.get("duration_ms").and_then(|value| value.as_u64())
 }
 
 fn upsert_mesh_build_overlay(
@@ -799,6 +835,9 @@ fn upsert_mesh_build_overlay(
     last_build_summary: Option<serde_json::Value>,
     last_build_error: Option<String>,
     active_phase: Option<&str>,
+    progress_percent: Option<u8>,
+    progress_label: Option<String>,
+    duration_ms: Option<u64>,
     failed: bool,
 ) {
     let workspace = state
@@ -835,7 +874,14 @@ fn upsert_mesh_build_overlay(
     );
     obj.insert(
         "mesh_pipeline_status".to_string(),
-        mesh_build_pipeline_status_json(active_phase, failed, last_build_error.as_deref()),
+        mesh_build_pipeline_status_json(
+            active_phase,
+            failed,
+            last_build_error.as_deref(),
+            progress_percent,
+            progress_label.as_deref(),
+            duration_ms,
+        ),
     );
 }
 
@@ -906,6 +952,9 @@ pub(crate) fn apply_python_progress_event(
                             None,
                             None,
                             Some("queued"),
+                            mesh_progress_percent_from_payload(&payload),
+                            mesh_progress_label_from_payload(&payload),
+                            mesh_duration_ms_from_payload(&payload),
                             false,
                         );
                     }
@@ -922,6 +971,9 @@ pub(crate) fn apply_python_progress_event(
                             None,
                             None,
                             Some(phase),
+                            mesh_progress_percent_from_payload(&payload),
+                            mesh_progress_label_from_payload(&payload),
+                            mesh_duration_ms_from_payload(&payload),
                             false,
                         );
                     }
@@ -934,6 +986,9 @@ pub(crate) fn apply_python_progress_event(
                             Some(payload.clone()),
                             None,
                             Some("ready"),
+                            Some(100),
+                            Some("mesh ready".to_string()),
+                            mesh_duration_ms_from_payload(&payload),
                             false,
                         );
                     }
@@ -955,6 +1010,9 @@ pub(crate) fn apply_python_progress_event(
                                 .get("phase")
                                 .and_then(|value| value.as_str())
                                 .or(Some("postprocessing")),
+                            mesh_progress_percent_from_payload(&payload),
+                            mesh_progress_label_from_payload(&payload),
+                            mesh_duration_ms_from_payload(&payload),
                             true,
                         );
                     }

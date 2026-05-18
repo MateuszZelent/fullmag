@@ -148,6 +148,7 @@ pub(crate) fn plan_fdm(
         external_field.is_some(),
         enable_oersted,
         false,
+        false,
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -729,6 +730,7 @@ pub(crate) fn plan_fdm_multilayer(
                 EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
             )
         }),
+        false,
         false,
         &mut errors,
     );

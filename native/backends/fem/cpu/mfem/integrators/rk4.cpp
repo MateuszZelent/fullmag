@@ -1,3 +1,10 @@
+/*
+ * RK4 tableau source contract.
+ *
+ * This source owns the classical fixed-step fourth-order RK tableau metadata
+ * for native FEM LLG integration. It does not allocate workspace, evaluate stages, perform steps, or run adaptive control.
+ */
+
 #include "cpu/mfem/integrators/tableaus.hpp"
 
 #include "context.hpp"

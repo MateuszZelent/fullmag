@@ -1,3 +1,10 @@
+/*
+ * AoS field runtime source contract.
+ *
+ * This source owns generic AoS/component field packing, unpacking, accumulation,
+ * projection, and zeroing helpers used by runtime modules. It does not evaluate LLG RHS, compose H_eff, own state I/O, or publish metrics.
+ */
+
 #include "cpu/mfem/runtime/aos_field.hpp"
 
 #include "context.hpp"
@@ -60,13 +67,13 @@ void project_static_periodic_aos(
     const Context &ctx,
     std::vector<double> &field_xyz)
 {
-    if (ctx.periodic_reduced_node.empty()) {
+    if (ctx.mesh.periodic_reduced_node.empty()) {
         return;
     }
     for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         const uint32_t representative =
-            ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+            ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
         const size_t dst = static_cast<size_t>(node) * 3u;
         const size_t src = static_cast<size_t>(representative) * 3u;
         field_xyz[dst + 0u] = field_xyz[src + 0u];

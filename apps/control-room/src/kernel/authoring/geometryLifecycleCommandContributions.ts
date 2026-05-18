@@ -1,10 +1,12 @@
 import {
+  MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -15,7 +17,7 @@ import {
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
-import type { JsonObject } from "../api/apiTypes";
+import type { JsonObject, JsonValue } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
 import {
@@ -193,6 +195,33 @@ function isObjectMeshBuildRunning(
   return visit(activeBuild);
 }
 
+function isSharedDomainMeshBuildRunning(context: CommandContext): boolean {
+  const activeBuild = resourceData(context, MESHING_BUILDS_CURRENT_PATH);
+  const runningStatuses = new Set(["building", "pending", "queued", "running"]);
+
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(visit);
+    const record = asRecord(value);
+    if (!record) return false;
+
+    const status = asString(record.status)?.toLowerCase();
+    const targetKind =
+      asString(asRecord(record.mesh_target)?.kind) ??
+      asString(asRecord(record.target)?.kind) ??
+      asString(record.kind);
+    if (
+      runningStatuses.has(status ?? "") &&
+      (targetKind === "study_domain" || targetKind === "shared_domain")
+    ) {
+      return true;
+    }
+
+    return Object.values(record).some(visit);
+  };
+
+  return visit(activeBuild);
+}
+
 function selectedObjectMeshDisabledReason(context: CommandContext): string | null {
   const objectId = selectedObjectId(context);
   if (!objectId) return "Select a scene object to use this command.";
@@ -266,18 +295,58 @@ function invalidateSharedDomainMeshResources(
   context: CommandContext,
   revision: string | number,
 ): void {
+  context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_REPORT_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH, revision);
   context.resources?.invalidate(
     MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
     revision,
   );
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+}
+
+function jsonValue(value: unknown): JsonValue | undefined {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const items: JsonValue[] = [];
+    for (const item of value) {
+      const converted = jsonValue(item);
+      if (converted !== undefined) items.push(converted);
+    }
+    return items;
+  }
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const object: JsonObject = {};
+  for (const [key, entry] of Object.entries(record)) {
+    const converted = jsonValue(entry);
+    if (converted !== undefined) object[key] = converted;
+  }
+  return object;
+}
+
+function jsonObject(value: unknown): JsonObject | null {
+  const converted = jsonValue(value);
+  return asRecord(converted) ? (converted as JsonObject) : null;
+}
+
+function qualityRefinementMeshOptions(input: unknown): JsonObject | null {
+  const inputRecord = asRecord(input);
+  if (!inputRecord) return null;
+  return jsonObject(inputRecord.meshOptions);
 }
 
 function openPrimitiveDraft(
@@ -569,6 +638,49 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       return response.accepted
         ? { status: "completed" }
         : { message: response.error ?? "Mesh build rejected.", status: "failed" };
+    },
+  },
+  {
+    id: "mesh.refine-worst-quality-element",
+    title: "Refine Worst Quality Element",
+    category: "Mesh",
+    group: "mesh",
+    scope: "workspace",
+    isEnabled: (context) =>
+      !isSharedDomainMeshBuildRunning(context) &&
+      qualityRefinementMeshOptions(context.input) !== null,
+    disabledReason: (context) => {
+      if (isSharedDomainMeshBuildRunning(context)) {
+        return "A shared-domain mesh build is already running.";
+      }
+      return "Open Mesh Quality and choose a refinement action.";
+    },
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const meshOptions = qualityRefinementMeshOptions(context.input);
+      if (!meshOptions) {
+        return {
+          message: "Mesh quality refinement requires a mesh-options payload.",
+          status: "failed",
+        };
+      }
+      const response = await context.api.commands.submit({
+        kind: "mesh_build",
+        mesh_options: meshOptions,
+        mesh_reason: "quality_threshold_refinement",
+        mesh_target: { kind: "study_domain" },
+      });
+      if (response.accepted) {
+        invalidateSharedDomainMeshResources(
+          context,
+          response.command_id ?? `mesh-build:${Date.now()}`,
+        );
+      }
+      return response.accepted
+        ? { status: "completed" }
+        : { message: response.error ?? "Mesh refinement rejected.", status: "failed" };
     },
   },
   meshNavigationCommand(

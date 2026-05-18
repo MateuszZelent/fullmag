@@ -1,4 +1,14 @@
+/*
+ * DMI weak-residual facade source contract.
+ *
+ * This source owns standalone weak-residual kernels used to validate and
+ * project interfacial/bulk DMI element residuals through lumped mass into
+ * A/m fields. It does not own Context plan import, effective-field composition, demag solves, runtime state I/O, or integrator execution.
+ */
+
 #include "dmi_weak_residual.hpp"
+
+#include "fem_common.hpp"
 
 #include <cmath>
 
@@ -6,7 +16,6 @@ namespace fullmag::fem {
 
 namespace {
 
-constexpr double kMu0 = 1.25663706212e-6;
 constexpr double kTiny = 1e-300;
 
 } // namespace

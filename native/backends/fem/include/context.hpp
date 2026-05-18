@@ -1,6 +1,25 @@
 #pragma once
 
-#include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "core/fem_field_buffers.hpp"
+#include "core/fem_material_fields.hpp"
+#include "core/fem_mesh.hpp"
+#include "core/fem_state.hpp"
+#include "cpu/mfem/integrators/adaptive_dt.hpp"
+#include "cpu/mfem/integrators/rk_stepper_workspace.hpp"
+#include "cpu/mfem/interactions/anisotropy.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/dmi.hpp"
+#include "cpu/mfem/interactions/effective_field.hpp"
+#include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp"
+#include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
+#include "cpu/mfem/interactions/zeeman.hpp"
+#include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/runtime/gpu_state_runtime.hpp"
+#include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fullmag_fem.h"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -8,40 +27,31 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <unordered_set>
 #include <vector>
+
+namespace mfem {
+class BilinearForm;
+class Coefficient;
+class FiniteElementCollection;
+class FiniteElementSpace;
+class GridFunction;
+class H1_FECollection;
+class HypreParMatrix;
+class HypreSolver;
+class LinearForm;
+class Mesh;
+class SparseMatrix;
+class Vector;
+}
 
 namespace fullmag::fem {
 
-// ── Butcher tableau for explicit Runge-Kutta methods ──────────────────────
-// Max stages: 7 (DP54 uses 7 for FSAL).
-static constexpr int MAX_RK_STAGES = 7;
-
-struct ExplicitTableau {
-    int stages;                                     // s
-    double c[MAX_RK_STAGES];                        // nodes
-    double a[MAX_RK_STAGES][MAX_RK_STAGES];         // lower-triangular coupling
-    double b_hi[MAX_RK_STAGES];                     // high-order weights
-    double b_lo[MAX_RK_STAGES];                     // low-order weights (embedded error)
-    int order_hi;                                   // order of b_hi
-    int order_est;                                  // order of b_lo (0 = no error est)
-    bool fsal;                                      // first-same-as-last?
-};
-
-// ── Stepper workspace (device-resident allocation, reused per step) ───────
-struct StepperWorkspace {
-    bool allocated = false;
-    size_t dof_len = 0;                             // n_nodes * 3
-    int stages = 0;                                 // currently allocated RK stages
-    std::vector<double> m_backup;                   // backup of m before stage loop
-    std::vector<double> k[MAX_RK_STAGES];           // stage derivatives k_i
-    std::vector<double> m_stage;                    // temp: m at stage evaluation point
-    std::vector<double> h_ex_tmp;                   // temp exchange field
-    std::vector<double> h_demag_tmp;                // temp demag field
-    std::vector<double> h_eff_tmp;                  // temp effective field
-    std::vector<double> err;                        // error = h*(b_hi - b_lo) . K
-    bool fsal_valid = false;                        // true when k[0] holds valid FSAL RHS
-};
+struct DemagFemBemWorkspace;
+struct DemagRecoveryWorkspace;
+struct DmiElementWorkspace;
+struct PeriodicPoissonReducedWorkspace;
+struct PoissonHypreWorkspace;
+struct PoissonRhsWorkspace;
 
 struct Context {
     uint32_t n_nodes = 0;
@@ -53,25 +63,11 @@ struct Context {
     double dt_seconds = 0.0;
     double air_box_factor = 0.0;
     fullmag_fem_field_refresh_policy field_refresh{};
-    fullmag_fem_relax_stop relax_stop{};
 
     fullmag_fem_precision precision = FULLMAG_FEM_PRECISION_DOUBLE;
     fullmag_fem_integrator integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
 
-    // ── S17: Adaptive time stepping (PI controller) ──
-    bool adaptive_dt_enabled = false;
-    double dt_min = 1e-16;
-    double dt_max = 1e-10;
-    double adaptive_atol = 1e-6;      // absolute tolerance
-    double adaptive_rtol = 1e-3;      // relative tolerance
-    double pi_alpha = 0.7;            // PI controller exponent for error
-    double pi_beta = 0.4;             // PI controller exponent for prev error ratio
-    double safety_factor = 0.9;       // safety multiplier on predicted dt
-    double dt_grow_max = 2.0;         // max growth ratio per step
-    double dt_shrink_min = 0.2;       // min shrink ratio per step
-    uint32_t max_reject = 50;         // max rejected attempts per accepted step
-    double prev_error_norm = 1.0;     // for PI: error from previous accepted step
-    uint64_t rejected_steps = 0;      // total rejected (retried) steps
+    AdaptiveDtRuntimeState adaptive_dt{};
 
     bool enable_exchange = true;
     bool enable_demag = false;
@@ -96,7 +92,7 @@ struct Context {
     double cubic_Kc3 = 0.0;
     std::array<double, 3> cubic_axis1{1.0, 0.0, 0.0};
     std::array<double, 3> cubic_axis2{0.0, 1.0, 0.0};
-    std::vector<double> h_cubic_ani_xyz;
+    AnisotropyRuntimeState anisotropy{};
 
     // ── Magnetoelastic coupling (prescribed-strain) ──────────────────
     bool enable_magnetoelastic = false;
@@ -104,28 +100,9 @@ struct Context {
     double mel_b2 = 0.0;             // B₂ [Pa]
     bool mel_uniform_strain = true;  // true = single 6-vector, false = per-node
     std::vector<double> mel_strain_voigt;  // 6 (uniform) or 6*n_nodes
-    std::vector<double> h_mel_xyz;         // per-node H_mel buffer (AOS-3)
-    double mel_energy = 0.0;               // E_mel [J] from last evaluation
+    MagnetoelasticRuntimeState magnetoelastic{};
 
-    // ── Per-node dual volumes for thermal noise scaling ──────────────
-    // V_i = sum over tets containing node i of (1/4) * V_tet.
-    // Computed once during context_from_plan.  Used by thermal field
-    // instead of a single average_magnetic_node_volume.
-    std::vector<double> node_volumes;
-
-    // ── Per-node spatially varying material fields ────────────────────
-    // When non-empty (size == n_nodes), kernels use per-node values.
-    // When empty, scalar fallback (ctx.material.saturation_magnetisation etc.).
-    std::vector<double> Ms_field;
-    std::vector<double> A_field;
-    std::vector<double> alpha_field;
-    std::vector<double> Ku_field;
-    std::vector<double> Ku2_field;
-    std::vector<double> Dind_field;
-    std::vector<double> Dbulk_field;
-    std::vector<double> Kc1_field;
-    std::vector<double> Kc2_field;
-    std::vector<double> Kc3_field;
+    FemMaterialFieldsRuntimeState material_fields{};
 
     fullmag_fem_material_desc material{};
     fullmag_fem_solver_config demag_solver{};
@@ -133,63 +110,15 @@ struct Context {
     uint64_t step_count = 0;
     uint64_t demag_call_count = 0;
     double current_time = 0.0;
-    double relax_pseudotime_s = 0.0;
-    double relax_previous_total_energy_j = 0.0;
-    bool relax_previous_total_energy_valid = false;
-    fullmag_fem_stage_completion stage_completion{};
+    StageCompletionRuntimeState stage_completion{};
 
-    std::vector<double> nodes_xyz;
-    std::vector<uint32_t> elements;
-    std::vector<uint32_t> element_markers;
-    std::vector<uint32_t> boundary_faces;
-    std::vector<uint32_t> boundary_markers;
-    std::vector<uint32_t> periodic_node_pairs; // flat [node_a,node_b] pairs
-    std::vector<uint32_t> periodic_reduced_node; // full node -> reduced periodic class
-    std::vector<uint32_t> periodic_representative_nodes; // reduced class -> representative node
-    uint32_t periodic_reduced_node_count = 0;
-
-    // MFEM boundary attribute markers belonging to periodic seam face pairs.
-    // These faces are excluded from the Robin boundary mass integrator so that
-    // the open-boundary Robin condition does not apply on periodic seams.
-    std::unordered_set<uint32_t> periodic_boundary_marker_set;
-
-    // Returns true when demag PBC via algebraic P^T A P reduction is active.
-    bool demag_periodic_enabled() const {
-        return enable_demag && !periodic_node_pairs.empty();
-    }
-
-    std::vector<uint8_t> magnetic_element_mask;
-    std::vector<uint8_t> magnetic_node_mask;
-
-    std::vector<double> m_xyz;
-    std::vector<double> h_ex_xyz;
-    std::vector<double> h_demag_xyz;
-    std::vector<double> h_demag_cached_xyz;
-    std::vector<double> h_ext_xyz;
-    std::vector<double> h_ani_xyz;
-    std::vector<double> h_dmi_xyz;
-    std::vector<double> h_bulk_dmi_xyz;   // Per-node bulk DMI field (AOS-3)
-    std::vector<double> h_eff_xyz;
-    double last_anisotropy_energy_joules = 0.0;
-    double last_dmi_energy_joules = 0.0;
-    double last_magnetoelastic_energy_joules = 0.0;
-
-    // Full-domain H_demag for visualization (includes airbox nodes).
-    // h_demag_xyz is zeroed on non-magnetic nodes for LLG/energy,
-    // but this copy preserves the Poisson-recovered field everywhere.
-    std::vector<double> h_demag_visual_xyz;
-    std::vector<double> h_demag_cached_visual_xyz;
-    // Full-domain H_eff for visualization (includes airbox contribution
-    // from H_demag and H_ext).
-    std::vector<double> h_eff_visual_xyz;
-    bool demag_cache_valid = false;
-    double demag_last_refresh_time = -1.0;
-
-    // Cached Robin boundary energy term: +μ₀/2 β ∫_Γ u² dS.
-    // Stored during each fresh Poisson solve so that frozen-field energy
-    // updates (when field_refresh skips a solve) can include this term
-    // without re-solving the Poisson system.
-    double cached_robin_boundary_energy = 0.0;
+    FemMeshRuntimeState mesh{};
+    FemStateRuntimeState state{};
+    ExchangeRuntimeState exchange{};
+    DemagRuntimeState demag{};
+    ZeemanRuntimeState zeeman{};
+    DmiRuntimeState dmi{};
+    EffectiveFieldRuntimeState effective_field{};
 
     // ── Spin-transfer torque ──
     bool has_zhang_li_stt = false;
@@ -216,85 +145,58 @@ struct Context {
     double oersted_time_dep_offset = 0.0;
     double oersted_time_dep_t_on = 0.0;
     double oersted_time_dep_t_off = 0.0;
-    std::vector<double> h_oe_xyz;  // Precomputed static Oersted field for I=1A (AOS-3)
+    OerstedRuntimeState oersted{};
 
     // ── Thermal noise (Brown field) ──
     double temperature = 0.0;       // Kelvin
-    double thermal_sigma = 0.0;     // Precomputed noise amplitude (A/m)
     double current_dt = 1e-13;      // Current timestep for thermal sigma computation
-    double last_thermal_refresh_time = -1.0;
-    double last_thermal_refresh_dt = -1.0;
     uint64_t thermal_seed = 0;      // 0 = random seed from system entropy
-    std::vector<double> h_therm_xyz;  // Per-node thermal field buffer (AOS-3)
+    ThermalBrownRuntimeState thermal_brown{};
 
-    // Transitional nodal integration weights used by local interaction energy
-    // tests and, in the MFEM path, populated from the scalar lumped mass form.
-    std::vector<double> mfem_lumped_mass;
+    FemIntegrationWeightsRuntimeState integration_weights{};
 
-    // FEM-029 fix: explicit GPU device index from plan. -1 = env / default.
-    int32_t gpu_device_index = -1;
-
-    // FEM-030 fix: explicit MFEM device string from plan. Empty = env / default.
-    std::string mfem_device_string_override;
+    MfemDeviceRuntimeState mfem_device{};
 
     // CPU OpenMP runtime diagnostics for Poisson/Robin demag and telemetry.
-    bool cpu_threads_auto_requested = false;
-    int requested_omp_threads = 1;
-    int effective_omp_threads = 1;
+    CpuThreadRuntimeState cpu_threads{};
+    MfemContextRuntimeState mfem_context{};
 
 #if FULLMAG_HAS_MFEM_STACK
     std::vector<double> mfem_mx;
     std::vector<double> mfem_my;
     std::vector<double> mfem_mz;
-    std::vector<double> mfem_h_ex_x;
-    std::vector<double> mfem_h_ex_y;
-    std::vector<double> mfem_h_ex_z;
-    std::vector<double> mfem_exchange_tmp;
-
-    int mfem_selected_device_index = -1;
-    void *mfem_mesh = nullptr;
-    void *mfem_device = nullptr;
-    void *mfem_fec = nullptr;
-    void *mfem_fes = nullptr;
-    void *mfem_gf_mx = nullptr;
-    void *mfem_gf_my = nullptr;
-    void *mfem_gf_mz = nullptr;
-    void *mfem_gf_a = nullptr;
-    void *mfem_gf_ms = nullptr;
-    void *mfem_a_coeff = nullptr;
-    void *mfem_exchange_form = nullptr;
-    void *mfem_mass_form = nullptr;
-    void *mfem_mass_ones = nullptr;
-    void *mfem_mass_lumped = nullptr;
-    void *mfem_inv_lumped_mass = nullptr;
-    void *mfem_exchange_tmp_vec = nullptr;
-    void *mfem_exchange_out_vec = nullptr;
+    mfem::Mesh *mfem_mesh = nullptr;
+    mfem::FiniteElementCollection *mfem_fec = nullptr;
+    mfem::FiniteElementSpace *mfem_fes = nullptr;
+    mfem::GridFunction *mfem_gf_mx = nullptr;
+    mfem::GridFunction *mfem_gf_my = nullptr;
+    mfem::GridFunction *mfem_gf_mz = nullptr;
+    mfem::GridFunction *mfem_gf_a = nullptr;
+    mfem::GridFunction *mfem_gf_ms = nullptr;
+    mfem::Coefficient *mfem_a_coeff = nullptr;
     bool mfem_ready = false;
-    bool mfem_exchange_ready = false;
-    // FND-013: consistent-mass projection for exchange (CG solve M*h = K*m).
-    bool use_consistent_mass = false;
 
     // ── Poisson demag (S02-S05) ──
     // Scalar H1 space for potential u on the FULL mesh (magnetic + air).
-    void *mfem_potential_fec = nullptr;   // mfem::H1_FECollection*
-    void *mfem_potential_fes = nullptr;   // mfem::FiniteElementSpace*
-    void *mfem_gf_potential = nullptr;    // mfem::GridFunction* (solution u)
-    void *mfem_poisson_bilinear = nullptr;// mfem::BilinearForm* (stiffness: ∫∇u·∇v)
-    void *mfem_poisson_matrix = nullptr;  // mfem::SparseMatrix* (assembled, owned by form)
+    mfem::H1_FECollection *mfem_potential_fec = nullptr;
+    mfem::FiniteElementSpace *mfem_potential_fes = nullptr;
+    mfem::GridFunction *mfem_gf_potential = nullptr;    // solution u
+    mfem::BilinearForm *mfem_poisson_bilinear = nullptr;// stiffness: integral grad(u).grad(v)
+    mfem::SparseMatrix *mfem_poisson_matrix = nullptr;  // assembled, owned by form
 
     // S09: BC-eliminated Poisson operator (mfem::SparseMatrix*).
     // Created once by FormLinearSystem during init; reused every solve.
     // Owned by the BilinearForm — do NOT delete separately.
-    void *mfem_poisson_bc_op = nullptr;
+    mfem::SparseMatrix *mfem_poisson_bc_op = nullptr;
 
     // RHS and solver workspace
-    void *mfem_poisson_rhs_workspace = nullptr; // PoissonRhsWorkspace* (owns RHS objects)
-    void *mfem_poisson_rhs = nullptr;           // mfem::LinearForm* (reusable handle)
-    void *mfem_poisson_rhs_vec = nullptr;       // mfem::Vector* (assembled RHS b)
-    void *mfem_poisson_solution_vec = nullptr;  // mfem::Vector* (reusable non-PBC true DOF solution)
-    void *mfem_demag_recovery_workspace = nullptr; // DemagRecoveryWorkspace* (owns recovery scratch)
-    void *mfem_poisson_hypre_workspace = nullptr;  // PoissonHypreWorkspace* (owns Hypre transfer vectors)
-    void *mfem_dmi_workspace = nullptr;             // DmiElementWorkspace* (owns DMI element scratch)
+    PoissonRhsWorkspace *mfem_poisson_rhs_workspace = nullptr;
+    mfem::LinearForm *mfem_poisson_rhs = nullptr;
+    mfem::Vector *mfem_poisson_rhs_vec = nullptr;
+    mfem::Vector *mfem_poisson_solution_vec = nullptr;
+    DemagRecoveryWorkspace *mfem_demag_recovery_workspace = nullptr;
+    PoissonHypreWorkspace *mfem_poisson_hypre_workspace = nullptr;
+    DmiElementWorkspace *mfem_dmi_workspace = nullptr;
 
     // Dirichlet boundary: DOFs on outer air-box boundary (marker = boundary_marker)
     std::vector<int> poisson_ess_tdof_list;
@@ -309,9 +211,9 @@ struct Context {
     uint32_t demag_solves_current_step = 0;
 
     // Cached Hypre solver/preconditioner (persistent across solves)
-    void *mfem_cached_hypre_par = nullptr;            // mfem::HypreParMatrix* (wraps bc_op)
-    void *mfem_cached_hypre_preconditioner = nullptr; // mfem::HypreSolver*
-    void *mfem_cached_hypre_solver = nullptr;         // mfem::HypreSolver*
+    mfem::HypreParMatrix *mfem_cached_hypre_par = nullptr; // wraps bc_op
+    mfem::HypreSolver *mfem_cached_hypre_preconditioner = nullptr;
+    mfem::HypreSolver *mfem_cached_hypre_solver = nullptr;
     bool poisson_solver_setup = false;
 
     // Demag realization:
@@ -323,48 +225,29 @@ struct Context {
     int    robin_beta_mode = 0;          // 0=dirichlet, 1=legacy(c=1), 2=dipole(c=2), 3=user
     double robin_beta_factor = 1.0;      // c in β = c/R*
     double robin_effective_beta = 0.0;   // computed β value
-    void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
+    mfem::BilinearForm *mfem_boundary_mass = nullptr; // boundary mass for Robin
 
     // ── Periodic demag: algebraic P^T A P reduced Poisson system ──
-    // Assembled once in context_initialize_poisson when demag_periodic_enabled().
+    // Assembled once when periodic demag reduction is requested.
     // The reduced system has periodic_reduced_node_count DOFs.
-    void *mfem_periodic_poisson_matrix = nullptr;    // mfem::SparseMatrix* (P^T A_open P)
-    void *mfem_periodic_poisson_rhs = nullptr;       // mfem::Vector* (work: b_p)
-    void *mfem_periodic_poisson_solution = nullptr;  // mfem::Vector* (work: x_p)
-    void *mfem_periodic_poisson_workspace = nullptr; // PeriodicPoissonReducedWorkspace*
+    mfem::SparseMatrix *mfem_periodic_poisson_matrix = nullptr;    // P^T A_open P
+    mfem::Vector *mfem_periodic_poisson_rhs = nullptr;             // work: b_p
+    mfem::Vector *mfem_periodic_poisson_solution = nullptr;        // work: x_p
+    PeriodicPoissonReducedWorkspace *mfem_periodic_poisson_workspace = nullptr;
     bool poisson_periodic_reduced_ready = false;
 
     // Body-only Fredkin-Koehler FEM/BEM demag subsystem.
-    // Owned by cpu/mfem/interactions/demag_fem_bem.cpp.
-    void *mfem_demag_fem_bem_workspace = nullptr;
+    // Owned by cpu/mfem/interactions/demag_fem_bem_workspace.cpp.
+    DemagFemBemWorkspace *mfem_demag_fem_bem_workspace = nullptr;
     bool demag_fem_bem_ready = false;
 #endif
 
-    // ── S12: CUDA stream management ──
-#if FULLMAG_HAS_CUDA_RUNTIME
-    void *compute_stream = nullptr; // cudaStream_t (high priority)
-    void *io_stream = nullptr;      // cudaStream_t (low priority, snapshot I/O)
-    void *compute_event = nullptr;  // cudaEvent_t (signal scalars ready)
-    // Double-buffered pinned host snapshots (S13)
-    void *pinned_snapshot[2] = {nullptr, nullptr};
-    size_t pinned_snapshot_bytes = 0;
-    int active_snapshot_buffer = 0;
-#endif
+    CudaRuntimeState cuda_runtime{};
 
-    fullmag_fem_device_info device_info_cache{};
-    bool device_info_valid = false;
     mutable TransferAudit transfer_audit;
     FemGpuState gpu_state;
 
-    // Legacy sparse exchange operator metadata captured after MFEM assembly.
-    // This is not sufficient for all-in GPU by itself; the CSR and mass
-    // vectors still need device-resident upload before operator_mode can move
-    // from unsupported to legacy_sparse_gpu.
-    bool gpu_exchange_legacy_sparse_metadata_ready = false;
-    uint64_t gpu_exchange_legacy_sparse_rows = 0;
-    uint64_t gpu_exchange_legacy_sparse_cols = 0;
-    uint64_t gpu_exchange_legacy_sparse_nnz = 0;
-    bool gpu_exchange_lumped_mass_ready = false;
+    LegacyGpuExchangeRuntimeState gpu_exchange{};
 
     // ── Unified RK stepper workspace ──
     StepperWorkspace stepper;
@@ -376,92 +259,6 @@ struct Context {
 };
 
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
-bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error);
-int context_copy_field_f64(
-    const Context &ctx,
-    fullmag_fem_observable observable,
-    double *out_xyz,
-    uint64_t out_len,
-    std::string &error);
-int context_upload_magnetization_f64(
-    Context &ctx,
-    const double *m_xyz,
-    uint64_t len,
-    std::string &error);
-void context_populate_device_info(Context &ctx);
-#if FULLMAG_HAS_MFEM_STACK
-bool context_initialize_mfem(Context &ctx, std::string &error);
-bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);
-void context_destroy_mfem(Context &ctx);
-bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error);
-bool context_step_exchange_heun_mfem(
-    Context &ctx,
-    double dt_seconds,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-bool context_step_explicit_rk_mfem(
-    Context &ctx,
-    const ExplicitTableau &tab,
-    double dt_seconds,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-bool context_snapshot_stats_mfem(
-    Context &ctx,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-void context_update_stage_completion_from_stats(
-    Context &ctx,
-    const fullmag_fem_step_stats &stats);
-const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator);
-void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
-bool context_initialize_poisson(Context &ctx, std::string &error);
-void context_destroy_poisson(Context &ctx);
-struct PhaseTimings {
-    uint64_t exchange_wall_time_ns = 0;
-    DemagPoissonPhaseTimings demag;
-    uint64_t rhs_wall_time_ns = 0;
-    uint64_t extra_energy_wall_time_ns = 0;
-    uint64_t snapshot_wall_time_ns = 0;
-};
-
-// MFEM device classification helpers (defined in cpu/mfem/runtime/mfem_device.cpp)
-const char *configured_mfem_device_string();
-const char *configured_mfem_device_string(const Context &ctx);
-bool is_gpu_device_string(const char *device);
-bool mfem_device_requests_gpu();
-bool mfem_device_requests_gpu(const Context &ctx);
-
-bool context_compute_demag_poisson(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_demag_xyz,
-    double &demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error);
-bool compute_effective_fields_for_magnetization(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ex_xyz,
-    std::vector<double> &h_demag_xyz,
-    std::vector<double> &h_eff_xyz,
-    double *exchange_energy,
-    double *demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error);
-#endif
-
-inline bool poll_interrupt(Context &ctx) {
-    if (ctx.interrupt_poll == nullptr) {
-        return false;
-    }
-    if (ctx.interrupt_poll(ctx.interrupt_poll_user_data) == 0) {
-        return false;
-    }
-    ctx.step_interrupted = true;
-    return true;
-}
 
 } // namespace fullmag::fem
 

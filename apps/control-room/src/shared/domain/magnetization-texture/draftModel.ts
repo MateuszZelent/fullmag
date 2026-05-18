@@ -83,7 +83,7 @@ export function buildMagnetizationAssetPatch(
   };
 }
 
-export function normalizeMagnetizationRef(
+function normalizeMagnetizationRef(
   value: string | null | undefined,
 ): string | null {
   const trimmed = value?.trim();

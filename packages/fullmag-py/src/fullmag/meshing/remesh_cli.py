@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -31,6 +34,10 @@ from fullmag.meshing.gmsh_bridge import (
     generate_mesh,
     remesh_with_size_field,
 )
+from fullmag.meshing._gmsh_types import (
+    _build_mesh_statistics_report,
+    _mesh_statistics_report_to_ir,
+)
 from fullmag.model.discretization import FEM
 from fullmag.model.geometry import (
     ArchWaveguide,
@@ -45,6 +52,14 @@ from fullmag.model.geometry import (
     Translate,
     Union,
 )
+
+_DEFAULT_INLINE_TOPOLOGY_MAX_BYTES = 8 * 1024 * 1024
+_QUALITY_DATA_HEADER_LEN = 32
+_QUALITY_DATA_VERSION = 1
+_QUALITY_DATA_KIND_F64 = 1
+_QUALITY_DATA_FLAG_SICN = 1 << 0
+_QUALITY_DATA_FLAG_GAMMA = 1 << 1
+_QUALITY_DATA_FLAG_VOLUME = 1 << 2
 
 
 def _geometry_from_ir(entry: dict[str, Any]) -> Any:
@@ -201,6 +216,171 @@ def _size_field_from_dict(raw: dict[str, Any]) -> SizeFieldData:
     )
 
 
+def _resolve_inline_topology_max_bytes(override: int | None) -> int:
+    if override is not None:
+        return int(override)
+    raw = os.environ.get("FULLMAG_REMESH_INLINE_TOPOLOGY_MAX_BYTES")
+    if raw is None or not raw.strip():
+        return _DEFAULT_INLINE_TOPOLOGY_MAX_BYTES
+    return int(raw)
+
+
+def _resolve_topology_artifact_dir(explicit: str | Path | None) -> Path:
+    if explicit is not None:
+        return Path(explicit)
+    raw_dir = os.environ.get("FULLMAG_REMESH_TOPOLOGY_ARTIFACT_DIR")
+    if raw_dir and raw_dir.strip():
+        return Path(raw_dir)
+    cache_dir = os.environ.get("FULLMAG_FEM_MESH_CACHE_DIR")
+    if cache_dir and cache_dir.strip():
+        return Path(cache_dir) / "remesh_topology"
+    return Path(tempfile.gettempdir()) / "fullmag-remesh-topology"
+
+
+def _resolve_quality_artifact_dir(explicit: str | Path | None) -> Path:
+    if explicit is not None:
+        return Path(explicit)
+    raw_dir = os.environ.get("FULLMAG_REMESH_QUALITY_ARTIFACT_DIR")
+    if raw_dir and raw_dir.strip():
+        return Path(raw_dir)
+    cache_dir = os.environ.get("FULLMAG_FEM_MESH_CACHE_DIR")
+    if cache_dir and cache_dir.strip():
+        return Path(cache_dir) / "remesh_quality"
+    return Path(tempfile.gettempdir()) / "fullmag-remesh-quality"
+
+
+def _topology_byte_count(mesh_data: Any) -> int:
+    return int(
+        mesh_data.nodes.nbytes
+        + mesh_data.elements.nbytes
+        + mesh_data.element_markers.nbytes
+        + mesh_data.boundary_faces.nbytes
+        + mesh_data.boundary_markers.nbytes
+    )
+
+
+def _safe_artifact_prefix(mesh_name: str) -> str:
+    safe = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in mesh_name
+    ).strip("_")
+    return (safe or "mesh")[:64]
+
+
+def _write_topology_artifact_if_needed(
+    mesh_data: Any,
+    *,
+    mesh_name: str,
+    topology_artifact_dir: str | Path | None,
+    inline_topology_max_bytes: int | None,
+) -> dict[str, Any] | None:
+    topology_bytes = _topology_byte_count(mesh_data)
+    if topology_bytes <= _resolve_inline_topology_max_bytes(inline_topology_max_bytes):
+        return None
+
+    target_dir = _resolve_topology_artifact_dir(topology_artifact_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    handle, path = tempfile.mkstemp(
+        prefix=f"{_safe_artifact_prefix(mesh_name)}-topology-",
+        suffix=".json",
+        dir=target_dir,
+        text=True,
+    )
+    artifact_path = Path(path)
+    payload = {
+        "schema_version": 1,
+        "mesh_name": mesh_name,
+        "nodes": mesh_data.nodes.tolist(),
+        "elements": mesh_data.elements.tolist(),
+        "element_markers": mesh_data.element_markers.tolist(),
+        "boundary_faces": mesh_data.boundary_faces.tolist(),
+        "boundary_markers": mesh_data.boundary_markers.tolist(),
+        "periodic_boundary_pairs": list(mesh_data.periodic_boundary_pairs),
+        "periodic_node_pairs": list(mesh_data.periodic_node_pairs),
+    }
+    with os.fdopen(handle, "w", encoding="utf-8") as fp:
+        json.dump(payload, fp, separators=(",", ":"))
+        fp.flush()
+        os.fsync(fp.fileno())
+
+    return {
+        "kind": "remesh_topology_json",
+        "schema_version": 1,
+        "path": str(artifact_path),
+        "byte_size": artifact_path.stat().st_size,
+        "topology_nbytes": topology_bytes,
+    }
+
+
+def _quality_array(values: list[float] | None, *, element_count: int, metric: str) -> np.ndarray | None:
+    if values is None:
+        return None
+    array = np.asarray(values, dtype=np.float64)
+    if array.shape != (element_count,):
+        raise ValueError(
+            f"per-element {metric} quality array length mismatch: "
+            f"expected {element_count}, got {array.size}"
+        )
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"per-element {metric} quality array contains non-finite values")
+    return array.astype("<f8", copy=False)
+
+
+def _write_quality_data_artifact_if_available(
+    mesh_data: Any,
+    *,
+    mesh_name: str,
+    quality_artifact_dir: str | Path | None,
+) -> dict[str, Any] | None:
+    quality = getattr(mesh_data, "quality", None)
+    if quality is None:
+        return None
+
+    element_count = int(quality.n_elements)
+    arrays: list[tuple[str, int, np.ndarray]] = []
+    sicn = _quality_array(quality.element_sicn, element_count=element_count, metric="sicn")
+    gamma = _quality_array(quality.element_gamma, element_count=element_count, metric="gamma")
+    volume = _quality_array(quality.element_volume, element_count=element_count, metric="volume")
+    if sicn is not None:
+        arrays.append(("sicn", _QUALITY_DATA_FLAG_SICN, sicn))
+    if gamma is not None:
+        arrays.append(("gamma", _QUALITY_DATA_FLAG_GAMMA, gamma))
+    if volume is not None:
+        arrays.append(("volume", _QUALITY_DATA_FLAG_VOLUME, volume))
+    if not arrays:
+        return None
+
+    target_dir = _resolve_quality_artifact_dir(quality_artifact_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    handle, path = tempfile.mkstemp(
+        prefix=f"{_safe_artifact_prefix(mesh_name)}-quality-",
+        suffix=".fmmq",
+        dir=target_dir,
+    )
+    artifact_path = Path(path)
+    flags = 0
+    for _metric, flag, _array in arrays:
+        flags |= flag
+
+    with os.fdopen(handle, "wb") as fp:
+        fp.write(b"FMMQ")
+        fp.write(bytes([_QUALITY_DATA_VERSION, _QUALITY_DATA_KIND_F64]))
+        fp.write(struct.pack("<HIIQQ", 0, element_count, flags, 0, 0))
+        for _metric, _flag, array in arrays:
+            fp.write(array.tobytes(order="C"))
+        fp.flush()
+        os.fsync(fp.fileno())
+
+    return {
+        "kind": "fmmq.v1",
+        "schema_version": 1,
+        "path": str(artifact_path),
+        "byte_size": artifact_path.stat().st_size,
+        "element_count": element_count,
+        "metrics": [metric for metric, _flag, _array in arrays],
+    }
+
+
 def _mesh_result_payload(
     mesh_data: Any,
     *,
@@ -209,21 +389,45 @@ def _mesh_result_payload(
     mesh_provenance: dict[str, Any],
     size_field_stats: dict[str, Any] | None = None,
     region_markers: list[dict[str, Any]] | None = None,
+    topology_artifact_dir: str | Path | None = None,
+    inline_topology_max_bytes: int | None = None,
 ) -> dict[str, Any]:
-    mesh_ir = mesh_data.to_ir(mesh_name)
+    mesh = mesh_data.oriented_copy()
+    mesh.validate_strict(require_positive_orientation=True)
+    mesh_statistics = _mesh_statistics_report_to_ir(
+        _build_mesh_statistics_report(mesh, mesh_name)
+    )
+    topology_artifact = _write_topology_artifact_if_needed(
+        mesh,
+        mesh_name=mesh_name,
+        topology_artifact_dir=topology_artifact_dir,
+        inline_topology_max_bytes=inline_topology_max_bytes,
+    )
+    quality_data_artifact = _write_quality_data_artifact_if_available(
+        mesh,
+        mesh_name=mesh_name,
+        quality_artifact_dir=topology_artifact_dir,
+    )
+    inline_topology = topology_artifact is None
     result: dict[str, Any] = {
         "mesh_name": mesh_name,
-        "nodes": mesh_data.nodes.tolist(),
-        "elements": mesh_data.elements.tolist(),
-        "element_markers": mesh_data.element_markers.tolist(),
-        "boundary_faces": mesh_data.boundary_faces.tolist(),
-        "boundary_markers": mesh_data.boundary_markers.tolist(),
-        "periodic_boundary_pairs": list(mesh_ir.get("periodic_boundary_pairs", [])),
-        "periodic_node_pairs": list(mesh_ir.get("periodic_node_pairs", [])),
-        "mesh_statistics": mesh_ir.get("mesh_statistics"),
+        "nodes": mesh.nodes.tolist() if inline_topology else [],
+        "elements": mesh.elements.tolist() if inline_topology else [],
+        "element_markers": mesh.element_markers.tolist() if inline_topology else [],
+        "boundary_faces": mesh.boundary_faces.tolist() if inline_topology else [],
+        "boundary_markers": mesh.boundary_markers.tolist() if inline_topology else [],
+        "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs) if inline_topology else [],
+        "periodic_node_pairs": list(mesh.periodic_node_pairs) if inline_topology else [],
+        "mesh_statistics": mesh_statistics,
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
     }
+
+    if topology_artifact is not None:
+        result["topology_artifact"] = topology_artifact
+
+    if quality_data_artifact is not None:
+        result["quality_data_artifact"] = quality_data_artifact
 
     if size_field_stats is not None:
         result["size_field_stats"] = size_field_stats

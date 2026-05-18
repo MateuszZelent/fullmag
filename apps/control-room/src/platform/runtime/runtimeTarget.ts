@@ -10,14 +10,6 @@ interface RuntimeDetectionSource {
   };
 }
 
-export interface RuntimeCapabilities {
-  readonly runtimeTarget: RuntimeTarget;
-  readonly fileDialogs: boolean;
-  readonly nativeWindowControls: boolean;
-  readonly systemTray: boolean;
-  readonly localBackendDefault: boolean;
-}
-
 export function detectRuntimeTarget(
   source: RuntimeDetectionSource = globalThis as RuntimeDetectionSource,
 ): RuntimeTarget {
@@ -30,18 +22,4 @@ export function detectRuntimeTarget(
   }
 
   return "web";
-}
-
-export function getRuntimeCapabilities(
-  runtimeTarget: RuntimeTarget = detectRuntimeTarget(),
-): RuntimeCapabilities {
-  const isDesktop = runtimeTarget === "tauri" || runtimeTarget === "electron";
-
-  return {
-    runtimeTarget,
-    fileDialogs: isDesktop,
-    nativeWindowControls: isDesktop,
-    systemTray: isDesktop,
-    localBackendDefault: isDesktop,
-  };
 }

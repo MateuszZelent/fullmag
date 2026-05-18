@@ -1,18 +1,15 @@
 import type { components } from "./generated/openapi-v2-types";
 
 export type ResourceRevision = string | number;
-export type JsonPrimitive = boolean | null | number | string;
+type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
-export const OBJECT_INTERACTION_KINDS = [
-  "exchange",
-  "demag",
-  "interfacial_dmi",
-  "uniaxial_anisotropy",
-] as const;
-
-export type ObjectInteractionKind = (typeof OBJECT_INTERACTION_KINDS)[number];
+export type ObjectInteractionKind =
+  | "exchange"
+  | "demag"
+  | "interfacial_dmi"
+  | "uniaxial_anisotropy";
 
 interface BaseAuthoringTransaction {
   base_revision?: number | null;
@@ -241,8 +238,18 @@ export type SessionImportInspectRequest =
   components["schemas"]["SessionImportInspectRequest"];
 export type SessionImportInspectResponse =
   components["schemas"]["SessionImportInspectResponse"];
-export type StructuredCommandRequest =
+type GeneratedStructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
+type RuntimeCommandIntent = components["schemas"]["RuntimeCommandIntent"];
+type MeshBuildCommandRequest = RuntimeCommandIntent & {
+  kind: "mesh_build";
+  mesh_options?: JsonObject | null;
+  mesh_reason?: string | null;
+  mesh_target?: components["schemas"]["MeshCommandTarget"] | null;
+};
+export type StructuredCommandRequest =
+  | Exclude<GeneratedStructuredCommandRequest, { kind: "mesh_build" }>
+  | MeshBuildCommandRequest;
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];
 export type UniverseResource = components["schemas"]["UniverseResource"];
 export type VisualizationStatePatch =

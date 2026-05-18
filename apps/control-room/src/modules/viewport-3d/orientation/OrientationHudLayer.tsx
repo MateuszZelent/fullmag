@@ -221,7 +221,7 @@ function ScreenAnchoredGroup({
   );
 }
 
-export function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
+function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
   const geometry = useMemo(() => buildHslSphereGeometry(), []);
 
   useEffect(() => () => geometry.dispose(), [geometry]);

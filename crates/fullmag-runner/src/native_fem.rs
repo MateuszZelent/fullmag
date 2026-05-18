@@ -10,9 +10,7 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
-use crate::derived_fields::{
-    compute_torque_field, max_torque_apm_from_torque_t, max_torque_t_from_field,
-};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 #[cfg(feature = "fem-gpu")]
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
@@ -1234,9 +1232,7 @@ impl NativeFemBackend {
 
         let magnetization = self.copy_m(node_count)?;
         let effective_field = self.copy_h_eff(node_count)?;
-        let torque_t =
-            max_torque_t_from_field(&magnetization, &effective_field, self.damping, true);
-        let torque_apm = max_torque_apm_from_torque_t(torque_t);
+        let torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1254,7 +1250,7 @@ impl NativeFemBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
-            max_torque_T: torque_t,
+            max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
@@ -1744,6 +1740,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -2014,6 +2011,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -2758,7 +2756,8 @@ mod tests {
 
     #[test]
     fn native_fem_fsal_cached_fields_move_without_copying() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source =
+            include_str!("../../../native/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
         let start = source
             .find("if (final_stage_cache_valid) {")
             .expect("FSAL final-stage cache block");
@@ -2769,28 +2768,29 @@ mod tests {
         let body = &rest[..end];
 
         assert!(
-            body.contains("std::swap(ctx.h_ex_xyz, ws.h_ex_tmp)"),
+            body.contains("std::swap(ctx.exchange.h_xyz, ws.h_ex_tmp)"),
             "FSAL accepted step should publish cached exchange field by swapping buffers"
         );
         assert!(
-            body.contains("std::swap(ctx.h_demag_xyz, ws.h_demag_tmp)"),
+            body.contains("std::swap(ctx.demag.h_xyz, ws.h_demag_tmp)"),
             "FSAL accepted step should publish cached demag field by swapping buffers"
         );
         assert!(
-            body.contains("std::swap(ctx.h_eff_xyz, ws.h_eff_tmp)"),
+            body.contains("std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp)"),
             "FSAL accepted step should publish cached effective field by swapping buffers"
         );
         assert!(
-            !body.contains("ctx.h_ex_xyz = ws.h_ex_tmp")
-                && !body.contains("ctx.h_demag_xyz = ws.h_demag_tmp")
-                && !body.contains("ctx.h_eff_xyz = ws.h_eff_tmp"),
+            !body.contains("ctx.exchange.h_xyz = ws.h_ex_tmp")
+                && !body.contains("ctx.demag.h_xyz = ws.h_demag_tmp")
+                && !body.contains("ctx.effective_field.h_xyz = ws.h_eff_tmp"),
             "FSAL accepted step must not copy full field buffers out of the stepper workspace"
         );
     }
 
     #[test]
     fn native_fem_non_fsal_final_refresh_reuses_stepper_workspace() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source =
+            include_str!("../../../native/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
         let start = source
             .find("if (final_stage_cache_valid) {")
             .expect("final field publish block");
@@ -2814,11 +2814,11 @@ mod tests {
         );
 
         let rhs_start = source
-            .find("// Post-step RHS for max_dm_dt metric")
+            .find("if (final_stage_cache_valid) {\n        max_rhs_final = max_norm_aos(ws.k[0]);")
             .expect("post-step RHS block");
         let rhs_rest = &source[rhs_start..];
         let rhs_end = rhs_rest
-            .find("\n\n    stats.step = ctx.step_count;")
+            .find("\n    stats.step = ctx.step_count;")
             .expect("post-step RHS block end");
         let rhs_body = &rhs_rest[..rhs_end];
         assert!(
@@ -2920,26 +2920,27 @@ mod tests {
 
     #[test]
     fn native_fem_step_metrics_reuse_effective_field_local_energies() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source =
+            include_str!("../../../native/backends/fem/cpu/mfem/runtime/step_metrics.cpp");
         let start = source
             .find("void fill_common_step_metrics(")
             .expect("fill_common_step_metrics definition");
         let rest = &source[start..];
         let end = rest
-            .find("\n// ─────────────────────────────────────────────────────────────────────────────")
+            .find("\n} // namespace fullmag::fem")
             .expect("fill_common_step_metrics end marker");
         let body = &rest[..end];
 
         assert!(
-            body.contains("last_anisotropy_energy_joules"),
+            body.contains("ctx.anisotropy.energy_joules"),
             "step metrics must reuse the anisotropy energy from the final effective-field evaluation"
         );
         assert!(
-            body.contains("last_dmi_energy_joules"),
+            body.contains("ctx.dmi.energy_joules"),
             "step metrics must reuse the DMI energy from the final effective-field evaluation"
         );
         assert!(
-            body.contains("last_magnetoelastic_energy_joules"),
+            body.contains("ctx.magnetoelastic.energy_joules"),
             "step metrics must reuse the magnetoelastic energy from the final effective-field evaluation"
         );
         assert!(

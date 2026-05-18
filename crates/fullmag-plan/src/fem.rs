@@ -1,8 +1,9 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, DomainFrameIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExecutionPlanIR, ExecutionPrecision, FemEigenPlanIR,
-    FemMagnetoelasticPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR, MechanicalLoadIR,
-    OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
+    FemMagnetoelasticPlanIR, FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR,
+    MagnetostrictionLawIR, MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -51,6 +52,142 @@ fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String
             "execution_precision='single' is not executable in the {context} CPU path; current FEM CPU execution supports only 'double'"
         )
     }
+}
+
+fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
+    match &problem.study {
+        fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
+        | fullmag_ir::StudyIR::Relaxation { dynamics, .. }
+        | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. } => match dynamics {
+            fullmag_ir::DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
+        },
+    }
+}
+
+fn resolve_fem_magnetoelastic_plan(
+    problem: &ProblemIR,
+) -> Result<Option<(FemMagnetoelasticPlanIR, FemMechanicalPlanIR)>, PlanError> {
+    let mut terms = problem.energy_terms.iter().filter_map(|term| {
+        if let EnergyTermIR::Magnetoelastic { body, law, .. } = term {
+            Some((body.as_str(), law.as_str()))
+        } else {
+            None
+        }
+    });
+    let Some((body_name, law_name)) = terms.next() else {
+        return Ok(None);
+    };
+    if terms.next().is_some() {
+        return Err(PlanError {
+            reasons: vec![
+                "current native FEM prescribed-strain magnetoelastic path supports exactly one Magnetoelastic energy term"
+                    .to_string(),
+            ],
+        });
+    }
+
+    match study_mechanics(problem) {
+        Some(fullmag_ir::MechanicsIR::QuasistaticElasticity { .. }) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "FEM quasistatic magnetoelasticity is not executable yet; current native FEM supports only prescribed-strain magnetoelastic coupling"
+                        .to_string(),
+                ],
+            });
+        }
+        Some(fullmag_ir::MechanicsIR::Elastodynamics { .. }) => {
+            return Err(PlanError {
+                reasons: vec![
+                    "FEM elastodynamic magnetoelasticity is not executable yet; current native FEM supports only prescribed-strain magnetoelastic coupling"
+                        .to_string(),
+                ],
+            });
+        }
+        Some(fullmag_ir::MechanicsIR::PrescribedStrain) | None => {}
+    }
+
+    let prescribed_strain = problem.mechanical_loads.iter().find_map(|load| {
+        if let MechanicalLoadIR::PrescribedStrain { strain } = load {
+            Some(*strain)
+        } else {
+            None
+        }
+    });
+    let Some(prescribed_strain) = prescribed_strain else {
+        return Err(PlanError {
+            reasons: vec![
+                "current native FEM magnetoelastic execution requires MechanicalLoadIR::PrescribedStrain; quasistatic/dynamic mechanics are not executable yet"
+                    .to_string(),
+            ],
+        });
+    };
+
+    let Some(body) = problem
+        .elastic_bodies
+        .iter()
+        .find(|candidate| candidate.name == body_name)
+        .cloned()
+    else {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "Magnetoelastic references unknown elastic body '{body_name}'"
+            )],
+        });
+    };
+    let Some(elastic_material) = problem
+        .elastic_materials
+        .iter()
+        .find(|candidate| candidate.name == body.elastic_material)
+        .cloned()
+    else {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "Magnetoelastic elastic body '{}' references unknown elastic material '{}'",
+                body.name, body.elastic_material
+            )],
+        });
+    };
+    let Some(law_ir) = problem
+        .magnetostriction_laws
+        .iter()
+        .find(|law| law.name() == law_name)
+        .cloned()
+    else {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "Magnetoelastic references unknown magnetostriction law '{law_name}'"
+            )],
+        });
+    };
+    let (b1, b2) = match &law_ir {
+        MagnetostrictionLawIR::Cubic { b1, b2, .. } => (*b1, *b2),
+        MagnetostrictionLawIR::Isotropic { lambda_s, .. } => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "isotropic magnetostriction (lambda_s={lambda_s}) is not executable for FEM without a physically justified B1/B2 mapping; refusing lossy fallback"
+                )],
+            });
+        }
+    };
+    Ok(Some((
+        FemMagnetoelasticPlanIR {
+            b1,
+            b2,
+            prescribed_strain: Some(prescribed_strain),
+        },
+        FemMechanicalPlanIR {
+            mode: FemMechanicalModeIR::PrescribedStrain,
+            body,
+            elastic_material,
+            magnetostriction_law: law_ir,
+            boundary_conditions: problem.mechanical_bcs.clone(),
+            loads: problem.mechanical_loads.clone(),
+            same_mesh_only: true,
+            max_picard_iterations: None,
+            picard_tolerance: None,
+            mechanical_dt: None,
+        },
+    )))
 }
 
 fn geometry_to_object_id_map(
@@ -631,6 +768,7 @@ pub(crate) fn plan_fem(
     let mut interfacial_dmi: Option<f64> = None;
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
     let mut bulk_dmi: Option<f64> = None;
+    let mut has_magnetoelastic = false;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => {
@@ -672,11 +810,11 @@ pub(crate) fn plan_fem(
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 // Oersted field: extracted separately below.
             }
-            other => {
-                errors.push(format!(
-                    "energy term '{:?}' is semantic-only in the current FEM executable path",
-                    other
-                ));
+            fullmag_ir::EnergyTermIR::Magnetoelastic { .. } => {
+                if has_magnetoelastic {
+                    errors.push("Magnetoelastic is declared more than once".to_string());
+                }
+                has_magnetoelastic = true;
             }
         }
     }
@@ -696,10 +834,11 @@ pub(crate) fn plan_fem(
         || enable_demag
         || external_field.is_some()
         || interfacial_dmi.is_some()
-        || bulk_dmi.is_some())
+        || bulk_dmi.is_some()
+        || has_magnetoelastic)
     {
         errors.push(
-            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, or BulkDmi"
+            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, BulkDmi, or Magnetoelastic"
                 .to_string(),
         );
     }
@@ -716,6 +855,7 @@ pub(crate) fn plan_fem(
                     | fullmag_ir::EnergyTermIR::OerstedField { .. }
             )
         }),
+        has_magnetoelastic,
         has_antenna_field_source(problem),
         &mut errors,
     );
@@ -744,6 +884,9 @@ pub(crate) fn plan_fem(
         return Err(PlanError { reasons: errors });
     }
 
+    let (magnetoelastic, mechanics) = resolve_fem_magnetoelastic_plan(problem)?
+        .map(|(magnetoelastic, mechanics)| (Some(magnetoelastic), Some(mechanics)))
+        .unwrap_or((None, None));
     let current_transports =
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fem)?;
     let spin_torque =
@@ -1003,7 +1146,8 @@ pub(crate) fn plan_fem(
         oersted_time_dep_offset: 0.0,
         oersted_time_dep_t_on: 0.0,
         oersted_time_dep_t_off: 0.0,
-        magnetoelastic: None,
+        magnetoelastic,
+        mechanics,
         demag_solver_policy: problem
             .backend_policy
             .discretization_hints
@@ -1074,43 +1218,6 @@ pub(crate) fn plan_fem(
                     fem_plan.oersted_realization =
                         Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
                 }
-            }
-            break;
-        }
-    }
-
-    // ── Extract magnetoelastic coupling from energy terms ──
-    for term in &problem.energy_terms {
-        if let EnergyTermIR::Magnetoelastic { law, .. } = term {
-            // Find the MagnetostrictionLawIR by name
-            if let Some(law_ir) = problem
-                .magnetostriction_laws
-                .iter()
-                .find(|l| l.name() == law)
-            {
-                let (b1, b2) = match law_ir {
-                    MagnetostrictionLawIR::Cubic { b1, b2, .. } => (*b1, *b2),
-                    MagnetostrictionLawIR::Isotropic { lambda_s, .. } => {
-                        return Err(PlanError {
-                            reasons: vec![format!(
-                                "isotropic magnetostriction (lambda_s={lambda_s}) is not executable for FEM without a physically justified B1/B2 mapping; refusing lossy fallback"
-                            )],
-                        });
-                    }
-                };
-                // Find prescribed strain from mechanical loads
-                let prescribed_strain = problem.mechanical_loads.iter().find_map(|load| {
-                    if let MechanicalLoadIR::PrescribedStrain { strain } = load {
-                        Some(*strain)
-                    } else {
-                        None
-                    }
-                });
-                fem_plan.magnetoelastic = Some(FemMagnetoelasticPlanIR {
-                    b1,
-                    b2,
-                    prescribed_strain,
-                });
             }
             break;
         }

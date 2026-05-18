@@ -1,7 +1,10 @@
 export interface MeshPipelinePhase {
   detail: string;
+  durationMs: number | null;
   id: string;
   label: string;
+  progressLabel: string | null;
+  progressPercent: number | null;
   status: string;
 }
 
@@ -27,12 +30,23 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function percent(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.round(value));
+}
+
 function titleFromId(id: string): string {
-  return id
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts: string[] = [];
+  for (const part of id.split(/[-_]/)) {
+    if (part.length === 0) continue;
+    parts.push(part.slice(0, 1).toUpperCase() + part.slice(1));
+  }
+  return parts.join(" ");
 }
 
 function phaseFromRecord(
@@ -52,19 +66,33 @@ function phaseFromRecord(
     nonEmptyString(record.detail) ??
     nonEmptyString(record.message) ??
     "";
+  const progressPercent =
+    percent(record.progress_percent) ??
+    percent(record.progressPercent) ??
+    percent(record.percent);
+  const progressLabel =
+    nonEmptyString(record.progress_label) ??
+    nonEmptyString(record.progressLabel) ??
+    null;
+  const durationMs =
+    nonNegativeInteger(record.duration_ms) ??
+    nonNegativeInteger(record.durationMs);
 
   if (id === fallbackId && status === "unknown" && detail.length === 0) {
     return null;
   }
 
-  return { detail, id, label, status };
+  return { detail, durationMs, id, label, progressLabel, progressPercent, status };
 }
 
 export function normalizeMeshPipelineStatus(value: unknown): MeshPipelinePhase[] {
   if (Array.isArray(value)) {
-    return value
-      .map((entry, index) => phaseFromRecord(entry, `phase-${index + 1}`))
-      .filter((phase): phase is MeshPipelinePhase => phase !== null);
+    const phases: MeshPipelinePhase[] = [];
+    value.forEach((entry, index) => {
+      const phase = phaseFromRecord(entry, `phase-${index + 1}`);
+      if (phase) phases.push(phase);
+    });
+    return phases;
   }
 
   const phase = phaseFromRecord(value, "active");

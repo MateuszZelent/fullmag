@@ -1,5 +1,10 @@
 #pragma once
 
+#include "cpu/mfem/interactions/zeeman_energy.hpp"
+#include "cpu/mfem/interactions/zeeman_field.hpp"
+#include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
+#include "fullmag_fem.h"
+
 #include <vector>
 
 namespace fullmag::fem {
@@ -7,34 +12,32 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Initialize the native FEM Zeeman field buffer from a uniform external field.
+ * Runtime products emitted by the Zeeman interaction modules.
  *
- * The input `external_field_am` is already an H field in A/m. This helper
- * broadcasts it to the nodal `h_ext_xyz` buffer when the interaction is enabled
- * and writes a zero field otherwise. No gamma, damping, or torque conversion is
- * applied here.
+ * The nodal external-field buffer is stored in AOS-3 order and is consumed by
+ * H_eff composition, Zeeman energy integration, observable state I/O, and GPU
+ * runtime bootstrap.
  */
-void initialize_uniform_zeeman_field(Context &ctx);
+struct ZeemanRuntimeState {
+    std::vector<double> h_ext_xyz;
+};
 
 /*
- * Add the Zeeman field contribution to an effective-field buffer in-place.
+ * Initialize native FEM Zeeman plan fields.
  *
- * The output buffer remains in A/m. This is a local additive field term and has
- * no FEM assembly, solver, or boundary condition.
+ * Copies the ABI plan's uniform external H field in A/m and its enable flag
+ * into Context compatibility storage. Uniform nodal broadcast, H_eff addition,
+ * and energy integration remain in the dedicated Zeeman modules included here.
  */
-void add_zeeman_field(const Context &ctx, std::vector<double> &h_eff_xyz);
+void initialize_zeeman_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
 
 /*
- * Compute Zeeman energy from the current H_ext buffer.
+ * Aggregated include surface for native FEM Zeeman responsibilities.
  *
- * The reported convention is
- *
- *   E_Z = -mu0 integral_Omega Ms m.H_ext dV,
- *
- * integrated with the current nodal lumped weights and returned in joules.
+ * This compatibility umbrella owns uniform-field plan import and runtime output
+ * storage only. It does not broadcast H_ext, add H_eff, or integrate energy.
+ * Those responsibilities stay in zeeman_uniform_field.*, zeeman_field.*, and
+ * zeeman_energy.*.
  */
-double zeeman_energy_from_field(
-    const Context &ctx,
-    const std::vector<double> &m_xyz);
 
 } // namespace fullmag::fem

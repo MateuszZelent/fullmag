@@ -7,6 +7,7 @@ import {
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
   VISUALIZATION_STATE_PATH,
@@ -17,6 +18,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
+  DecodedMeshQualityData,
   DecodedTopology,
 } from "@/kernel/api/codecs";
 import { useKernel } from "@/kernel/KernelContext";
@@ -29,20 +31,20 @@ const topologyCache = new ResourceCache<DecodedTopology>({
 const fieldVectorCache = new ResourceCache<DecodedFieldVector>({
   maxBytes: 128 * 1024 * 1024,
 });
+const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
+  maxBytes: 48 * 1024 * 1024,
+});
 
-export const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
-export const VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY = DATA_DOMAIN_TOPOLOGY_PATH;
-export const VIEWPORT_3D_VISUALIZATION_STATE_RESOURCE_KEY =
+const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
+const VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY = DATA_DOMAIN_TOPOLOGY_PATH;
+const VIEWPORT_3D_VISUALIZATION_STATE_RESOURCE_KEY =
   VISUALIZATION_STATE_PATH;
-export const VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
+const VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_MANIFEST_PATH;
-export const VIEWPORT_3D_SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
-export const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
-
-export interface Viewport3DResourceOptions {
-  fieldQuery?: FieldVectorQuery;
-  quantityId: string;
-}
+const VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
+const VIEWPORT_3D_SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
+const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
 
 function resolveDomainMetaRevision(meta: { generation_id: number }) {
   return meta.generation_id;
@@ -59,7 +61,16 @@ function resolveSharedDomainManifestRevision(
 }
 
 function resolveTopologyRevision() {
-  return topologyCache.peek(VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY)?.etag ?? null;
+  return (
+    topologyCache.peek(VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY)?.etag ?? null
+  );
+}
+
+function resolveQualityDataRevision() {
+  return (
+    qualityDataCache.peek(VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY)
+      ?.etag ?? null
+  );
 }
 
 function resolveUniverseRevision(universe: { scene_revision: number }) {
@@ -69,10 +80,17 @@ function resolveUniverseRevision(universe: { scene_revision: number }) {
 export function getViewport3DCacheStats() {
   const topologyStats = topologyCache.stats();
   const fieldVectorStats = fieldVectorCache.stats();
+  const qualityDataStats = qualityDataCache.stats();
 
   return {
-    byteLength: topologyStats.byteLength + fieldVectorStats.byteLength,
-    entryCount: topologyStats.entryCount + fieldVectorStats.entryCount,
+    byteLength:
+      topologyStats.byteLength +
+      fieldVectorStats.byteLength +
+      qualityDataStats.byteLength,
+    entryCount:
+      topologyStats.entryCount +
+      fieldVectorStats.entryCount +
+      qualityDataStats.entryCount,
   };
 }
 
@@ -194,6 +212,26 @@ export function useViewport3DFieldVector(
   });
 }
 
+export function useViewport3DMeshQualityData(enabled = true) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      loadCachedBinaryResource(
+        qualityDataCache,
+        VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
+        (etag) => api.meshing.sharedDomain.qualityData({ etag, signal }),
+      ),
+    [api],
+  );
+
+  return useResource({
+    enabled,
+    load,
+    resolveRevision: resolveQualityDataRevision,
+    resourceKey: VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
+  });
+}
+
 export function useViewport3DVisualizationState() {
   const { api } = useKernel();
   const load = useCallback(
@@ -248,19 +286,4 @@ export function useViewport3DUniverse() {
     resolveRevision: resolveUniverseRevision,
     resourceKey: VIEWPORT_3D_UNIVERSE_RESOURCE_KEY,
   });
-}
-
-export function useViewport3DResources({
-  fieldQuery = {},
-  quantityId,
-}: Viewport3DResourceOptions) {
-  return {
-    domainMeta: useViewport3DDomainMeta(),
-    fieldVector: useViewport3DFieldVector(quantityId, fieldQuery),
-    scene: useViewport3DScene(),
-    sharedDomainManifest: useViewport3DSharedDomainManifest(),
-    topology: useViewport3DDomainTopology(),
-    universe: useViewport3DUniverse(),
-    visualizationState: useViewport3DVisualizationState(),
-  };
 }
