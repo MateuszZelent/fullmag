@@ -1,7 +1,7 @@
 # FEM Dzyaloshinskii-Moriya Interaction
 
 - Status: native FEM CPU module contract, MFEM execution path requires runtime validation
-- Last updated: 2026-05-16
+- Last updated: 2026-05-18
 - Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_bulk.hpp/.cpp`,
@@ -98,7 +98,9 @@ Current gate:
   field/energy, that active DMI reports a clear MFEM-stack requirement in a
   non-MFEM build, that interfacial DMI ownership stays in
   `dmi_interfacial.*`, that bulk DMI ownership stays in `dmi_bulk.*`, and that
-  DMI workspace ownership stays in `dmi_workspace.*`.
+  DMI workspace ownership stays in `dmi_workspace.*`. It also checks top-level
+  source contracts for `dmi.cpp`, `dmi_interfacial.cpp`, `dmi_bulk.cpp`, and
+  `dmi_workspace.cpp` so source files keep their ownership boundaries visible.
 
 Required before production qualification:
 

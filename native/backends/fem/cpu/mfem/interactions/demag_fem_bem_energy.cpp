@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag energy source contract.
+ *
+ * This source owns the FEM/BEM energy wrapper that delegates to the shared
+ * Poisson-demag energy convention. It does not extract surfaces, assemble operators, solve sparse systems, recover fields, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_energy.hpp"
 
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"

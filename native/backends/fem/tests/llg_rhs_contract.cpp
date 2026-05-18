@@ -99,6 +99,36 @@ void llg_rhs_uses_llg_gilbert_form_and_nodewise_damping() {
     check_near(max_rhs, std::sqrt(450.0), 1e-14, "LLG RHS max norm");
 }
 
+double zeeman_like_energy(const std::vector<double> &m, const std::vector<double> &h) {
+    double energy = 0.0;
+    for (size_t i = 0; i < m.size(); i += 3u) {
+        energy -= m[i + 0] * h[i + 0] + m[i + 1] * h[i + 1] + m[i + 2] * h[i + 2];
+    }
+    return energy;
+}
+
+void damping_only_macrospin_energy_decreases_under_relaxation() {
+    std::vector<double> m = {1.0, 0.0, 0.0};
+    const std::vector<double> h = {0.0, 0.0, 1.0};
+    std::vector<double> rhs;
+    double max_rhs = 0.0;
+
+    const double initial_energy = zeeman_like_energy(m, h);
+    fullmag::fem::llg_rhs_aos(m, h, 10.0, 0.5, nullptr, rhs, max_rhs);
+
+    const double dt = 1.0e-3;
+    for (size_t i = 0; i < m.size(); ++i) {
+        m[i] += dt * rhs[i];
+    }
+    fullmag::fem::normalize_aos_field(m);
+    const double relaxed_energy = zeeman_like_energy(m, h);
+
+    check(
+        relaxed_energy < initial_energy,
+        "damping-only macrospin relaxation must decrease Zeeman-like energy");
+    check(max_rhs > 0.0, "damping-only macrospin fixture must exercise LLG RHS");
+}
+
 void aos_helpers_normalize_and_mask_nodes() {
     std::vector<double> m = {
         3.0, 4.0, 0.0,
@@ -126,6 +156,7 @@ void aos_helpers_normalize_and_mask_nodes() {
 int main() {
     llg_rhs_is_owned_by_integrator_module();
     llg_rhs_uses_llg_gilbert_form_and_nodewise_damping();
+    damping_only_macrospin_energy_decreases_under_relaxation();
     aos_helpers_normalize_and_mask_nodes();
     return 0;
 }

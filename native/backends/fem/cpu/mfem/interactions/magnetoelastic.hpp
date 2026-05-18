@@ -22,6 +22,9 @@ void initialize_magnetoelastic_plan_fields(
 /*
  * Aggregated include surface for prescribed-strain magnetoelastic
  * responsibilities.
+ *
+ * This compatibility umbrella owns ABI plan import only. It does not compute B1/B2 H_mel/energy or add H_mel to H_eff. Those responsibilities stay in
+ * magnetoelastic_prescribed_strain.* and magnetoelastic_field.*.
  */
 
 } // namespace fullmag::fem

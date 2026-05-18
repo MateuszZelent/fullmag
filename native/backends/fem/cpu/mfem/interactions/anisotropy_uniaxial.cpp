@@ -1,14 +1,15 @@
+/*
+ * Uniaxial anisotropy source contract.
+ *
+ * This source owns easy-axis Ku1/Ku2 H_eff projection, per-node overrides,
+ * joule energy integration, and nonmagnetic-node zeroing. It does not validate cubic axes or compute cubic H_eff.
+ */
 #include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 namespace fullmag::fem {
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-
-} // namespace
 
 void compute_uniaxial_anisotropy_field(
     const Context &ctx,
@@ -20,7 +21,7 @@ void compute_uniaxial_anisotropy_field(
     h_ani_xyz.assign(n * 3u, 0.0);
     if (!ctx.enable_anisotropy ||
         (ctx.anisotropy_Ku == 0.0 && ctx.anisotropy_Ku2 == 0.0 &&
-         ctx.Ku_field.empty() && ctx.Ku2_field.empty())) {
+         ctx.material_fields.Ku_field.empty() && ctx.material_fields.Ku2_field.empty())) {
         if (anisotropy_energy != nullptr) {
             *anisotropy_energy = 0.0;
         }
@@ -36,12 +37,12 @@ void compute_uniaxial_anisotropy_field(
     double energy = 0.0;
 
     for (size_t i = 0; i < n; ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
             continue;
         }
-        const double Ms_i = ctx.Ms_field.empty() ? uniform_Ms : ctx.Ms_field[i];
-        const double Ku_i = ctx.Ku_field.empty() ? uniform_Ku : ctx.Ku_field[i];
-        const double Ku2_i = ctx.Ku2_field.empty() ? uniform_Ku2 : ctx.Ku2_field[i];
+        const double Ms_i = ctx.material_fields.Ms_field.empty() ? uniform_Ms : ctx.material_fields.Ms_field[i];
+        const double Ku_i = ctx.material_fields.Ku_field.empty() ? uniform_Ku : ctx.material_fields.Ku_field[i];
+        const double Ku2_i = ctx.material_fields.Ku2_field.empty() ? uniform_Ku2 : ctx.material_fields.Ku2_field[i];
         const double prefactor = 2.0 * Ku_i / (kMu0 * Ms_i);
         const double prefactor2 = (Ku2_i != 0.0) ? 4.0 * Ku2_i / (kMu0 * Ms_i) : 0.0;
         const size_t base = i * 3u;
@@ -56,9 +57,9 @@ void compute_uniaxial_anisotropy_field(
         h_ani_xyz[base + 1] = coeff * uy;
         h_ani_xyz[base + 2] = coeff * uz;
 
-        if (anisotropy_energy != nullptr && !ctx.mfem_lumped_mass.empty()) {
+        if (anisotropy_energy != nullptr && !ctx.integration_weights.mfem_lumped_mass.empty()) {
             energy += (-Ku_i * m_dot_u2 - Ku2_i * m_dot_u2 * m_dot_u2) *
-                      ctx.mfem_lumped_mass[i];
+                      ctx.integration_weights.mfem_lumped_mass[i];
         }
     }
 

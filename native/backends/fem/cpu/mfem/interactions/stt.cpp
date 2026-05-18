@@ -1,27 +1,28 @@
+/*
+ * STT aggregate source contract.
+ *
+ * This source owns executable STT plan import, single-family validation,
+ * Slonczewski spin-polarization normalization, reusable workspace preparation,
+ * family dispatch, and max_rhs refresh. It does not define Slonczewski CPP or Zhang-Li CIP torque physics.
+ */
 #include "cpu/mfem/interactions/stt.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 
 namespace fullmag::fem {
-namespace {
 
-/*
- * Aggregate spin-transfer torque entry point.
- *
- * Individual executable torque families live in dedicated modules. This file
- * combines enabled STT RHS contributions and refreshes max_rhs after a torque
- * changes the RHS.
- */
-
-double vector_norm3(double x, double y, double z)
+void prepare_stt_workspace(
+    SttWorkspace &workspace,
+    std::size_t dof_len,
+    std::size_t n_nodes)
 {
-    return std::sqrt(x * x + y * y + z * z);
+    prepare_zhang_li_stt_workspace(workspace.zhang_li, dof_len, n_nodes);
 }
-
-} // namespace
 
 bool initialize_stt_plan_fields(
     Context &ctx,
@@ -74,24 +75,34 @@ void add_stt_rhs_aos(
     std::vector<double> &rhs_xyz,
     double &max_rhs)
 {
-    const std::vector<double> llg_only = rhs_xyz;
+    SttWorkspace workspace;
+    prepare_stt_workspace(workspace, rhs_xyz.size(), rhs_xyz.size() / 3u);
+    add_stt_rhs_aos(ctx, m_xyz, rhs_xyz, max_rhs, workspace);
+}
+
+void add_stt_rhs_aos(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &rhs_xyz,
+    double &max_rhs,
+    SttWorkspace &workspace)
+{
+    if (!ctx.has_slonczewski_stt && !ctx.has_zhang_li_stt) {
+        return;
+    }
+
     add_slonczewski_stt_rhs_aos(ctx, m_xyz, rhs_xyz);
     if (ctx.has_zhang_li_stt) {
-        std::vector<double> zhang_li(rhs_xyz.size(), 0.0);
-        add_zhang_li_stt_rhs_aos(ctx, m_xyz, zhang_li);
-        for (size_t i = 0; i < rhs_xyz.size(); ++i) {
-            rhs_xyz[i] += zhang_li[i];
-        }
+        add_zhang_li_stt_rhs_aos(ctx, m_xyz, rhs_xyz, workspace.zhang_li);
     }
-    if (rhs_xyz != llg_only) {
-        max_rhs = 0.0;
-        const size_t n = rhs_xyz.size() / 3u;
-        for (size_t i = 0; i < n; ++i) {
-            const size_t base = i * 3u;
-            max_rhs = std::max(
-                max_rhs,
-                vector_norm3(rhs_xyz[base + 0], rhs_xyz[base + 1], rhs_xyz[base + 2]));
-        }
+
+    max_rhs = 0.0;
+    const size_t n = rhs_xyz.size() / 3u;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t base = i * 3u;
+        max_rhs = std::max(
+            max_rhs,
+            vector_norm3(rhs_xyz[base + 0], rhs_xyz[base + 1], rhs_xyz[base + 2]));
     }
 }
 

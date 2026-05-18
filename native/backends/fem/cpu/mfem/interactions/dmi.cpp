@@ -1,3 +1,11 @@
+/*
+ * DMI aggregate source contract.
+ *
+ * This compatibility source owns ABI plan import for interfacial and bulk DMI:
+ * enable flags, scalar constants, and normalized interface-normal fallback.
+ * It does not assemble interfacial or bulk residuals, project H_DMI, accumulate
+ * DMI energy, or own element-loop scratch lifetime.
+ */
 #include "cpu/mfem/interactions/dmi.hpp"
 
 #include "context.hpp"

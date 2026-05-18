@@ -86,10 +86,10 @@ void context_state_io_is_owned_by_runtime_module() {
 void observable_copy_prefers_visual_demag_and_effective_fields() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 2;
-    ctx.h_demag_xyz = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
-    ctx.h_demag_visual_xyz = {11.0, 12.0, 13.0, 14.0, 15.0, 16.0};
-    ctx.h_eff_xyz = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0};
-    ctx.h_eff_visual_xyz = {31.0, 32.0, 33.0, 34.0, 35.0, 36.0};
+    ctx.demag.h_xyz = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    ctx.demag.h_visual_xyz = {11.0, 12.0, 13.0, 14.0, 15.0, 16.0};
+    ctx.effective_field.h_xyz = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0};
+    ctx.effective_field.h_visual_xyz = {31.0, 32.0, 33.0, 34.0, 35.0, 36.0};
 
     double out[6] = {};
     std::string error;
@@ -124,18 +124,18 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     ctx.has_external_field = true;
     ctx.enable_exchange = false;
     ctx.enable_demag = false;
-    ctx.h_ext_xyz = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
-    ctx.h_ex_xyz.assign(6, 9.0);
-    ctx.h_demag_xyz.assign(6, 8.0);
-    ctx.h_eff_xyz.assign(6, 7.0);
-    ctx.h_therm_xyz.assign(6, 6.0);
+    ctx.zeeman.h_ext_xyz = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+    ctx.exchange.h_xyz.assign(6, 9.0);
+    ctx.demag.h_xyz.assign(6, 8.0);
+    ctx.effective_field.h_xyz.assign(6, 7.0);
+    ctx.thermal_brown.h_xyz.assign(6, 6.0);
     ctx.stepper.fsal_valid = true;
-    ctx.prev_error_norm = 0.5;
-    ctx.demag_cache_valid = true;
-    ctx.demag_last_refresh_time = 4.0;
-    ctx.thermal_sigma = 5.0;
-    ctx.last_thermal_refresh_time = 2.0;
-    ctx.last_thermal_refresh_dt = 3.0;
+    ctx.adaptive_dt.prev_error_norm = 0.5;
+    ctx.demag.cache_valid = true;
+    ctx.demag.last_refresh_time = 4.0;
+    ctx.thermal_brown.sigma = 5.0;
+    ctx.thermal_brown.last_refresh_time = 2.0;
+    ctx.thermal_brown.last_refresh_dt = 3.0;
 
     const double m_xyz[] = {
         0.0, 0.0, 1.0,
@@ -146,18 +146,18 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
         fullmag::fem::context_upload_magnetization_f64(ctx, m_xyz, 6, error) ==
             FULLMAG_FEM_OK,
         "host-resident magnetization upload should succeed");
-    check(ctx.m_xyz == std::vector<double>(m_xyz, m_xyz + 6), "magnetization copied");
+    check(ctx.state.m_xyz == std::vector<double>(m_xyz, m_xyz + 6), "magnetization copied");
     check(!ctx.stepper.fsal_valid, "FSAL cache invalidated");
-    check(ctx.prev_error_norm == 1.0, "adaptive previous error reset");
-    check(!ctx.demag_cache_valid, "demag cache invalidated");
-    check(ctx.demag_last_refresh_time == -1.0, "demag refresh timestamp reset");
-    check(ctx.h_ex_xyz == std::vector<double>(6, 0.0), "disabled exchange field zeroed");
-    check(ctx.h_demag_xyz == std::vector<double>(6, 0.0), "disabled demag field zeroed");
-    check(ctx.h_eff_xyz == ctx.h_ext_xyz, "fallback H_eff seeded from external field");
-    check(ctx.thermal_sigma == 0.0, "thermal sigma reset");
-    check(ctx.last_thermal_refresh_time == -1.0, "thermal refresh time reset");
-    check(ctx.last_thermal_refresh_dt == -1.0, "thermal refresh dt reset");
-    for (double value : ctx.h_therm_xyz) {
+    check(ctx.adaptive_dt.prev_error_norm == 1.0, "adaptive previous error reset");
+    check(!ctx.demag.cache_valid, "demag cache invalidated");
+    check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
+    check(ctx.exchange.h_xyz == std::vector<double>(6, 0.0), "disabled exchange field zeroed");
+    check(ctx.demag.h_xyz == std::vector<double>(6, 0.0), "disabled demag field zeroed");
+    check(ctx.effective_field.h_xyz == ctx.zeeman.h_ext_xyz, "fallback H_eff seeded from external field");
+    check(ctx.thermal_brown.sigma == 0.0, "thermal sigma reset");
+    check(ctx.thermal_brown.last_refresh_time == -1.0, "thermal refresh time reset");
+    check(ctx.thermal_brown.last_refresh_dt == -1.0, "thermal refresh dt reset");
+    for (double value : ctx.thermal_brown.h_xyz) {
         check(value == 0.0, "thermal field zeroed on upload");
     }
     check(

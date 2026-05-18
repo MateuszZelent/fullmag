@@ -1,3 +1,9 @@
+/*
+ * Magnetoelastic aggregate source contract.
+ *
+ * This source owns prescribed-strain magnetoelastic ABI plan import for enable
+ * state, B1/B2 constants, uniform-strain mode, and strain buffers. It does not compute B1/B2 H_mel/energy or add H_mel to H_eff.
+ */
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 
 #include "context.hpp"
@@ -18,13 +24,7 @@ void initialize_magnetoelastic_plan_fields(
             plan.mel_strain_voigt,
             plan.mel_strain_voigt + static_cast<size_t>(plan.mel_strain_len));
     }
-    ctx.mel_energy = 0.0;
+    ctx.magnetoelastic.energy_joules = 0.0;
 }
-
-/*
- * Compatibility translation unit for the prescribed-strain magnetoelastic
- * aggregate include surface. Plan import is kept here; field/energy computation
- * and H_eff addition live in dedicated modules.
- */
 
 } // namespace fullmag::fem

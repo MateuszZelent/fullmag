@@ -1,3 +1,10 @@
+/*
+ * Poisson demag cache source contract.
+ *
+ * This source owns frozen-field refresh policy and cached demag/visual field
+ * storage for field-refresh intervals. It does not solve Poisson, recover fields, or compute fresh-field energy.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_cache.hpp"
 
 #include "context.hpp"
@@ -9,13 +16,13 @@ bool demag_poisson_should_refresh_field(const Context &ctx)
     if (ctx.field_refresh.has_demag_interval_s == 0) {
         return true;
     }
-    if (!ctx.demag_cache_valid) {
+    if (!ctx.demag.cache_valid) {
         return true;
     }
     if (!(ctx.field_refresh.demag_interval_s > 0.0)) {
         return true;
     }
-    const double elapsed = ctx.current_time - ctx.demag_last_refresh_time;
+    const double elapsed = ctx.current_time - ctx.demag.last_refresh_time;
     return elapsed + 1e-30 >= ctx.field_refresh.demag_interval_s;
 }
 
@@ -26,24 +33,24 @@ void demag_poisson_store_refreshed_field_cache(
     if (ctx.field_refresh.has_demag_interval_s == 0) {
         return;
     }
-    ctx.h_demag_cached_xyz = h_demag_xyz;
-    ctx.h_demag_cached_visual_xyz = ctx.h_demag_visual_xyz;
-    ctx.demag_last_refresh_time = ctx.current_time;
-    ctx.demag_cache_valid = true;
+    ctx.demag.cached_xyz = h_demag_xyz;
+    ctx.demag.cached_visual_xyz = ctx.demag.h_visual_xyz;
+    ctx.demag.last_refresh_time = ctx.current_time;
+    ctx.demag.cache_valid = true;
 }
 
 bool demag_poisson_try_load_cached_field(
     Context &ctx,
     std::vector<double> &h_demag_xyz)
 {
-    if (!ctx.demag_cache_valid || ctx.h_demag_cached_xyz.size() != h_demag_xyz.size()) {
+    if (!ctx.demag.cache_valid || ctx.demag.cached_xyz.size() != h_demag_xyz.size()) {
         return false;
     }
-    h_demag_xyz = ctx.h_demag_cached_xyz;
-    if (ctx.h_demag_cached_visual_xyz.size() == h_demag_xyz.size()) {
-        ctx.h_demag_visual_xyz = ctx.h_demag_cached_visual_xyz;
+    h_demag_xyz = ctx.demag.cached_xyz;
+    if (ctx.demag.cached_visual_xyz.size() == h_demag_xyz.size()) {
+        ctx.demag.h_visual_xyz = ctx.demag.cached_visual_xyz;
     } else {
-        ctx.h_demag_visual_xyz.clear();
+        ctx.demag.h_visual_xyz.clear();
     }
     return true;
 }

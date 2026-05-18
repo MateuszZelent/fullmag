@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag linear-solve source contract.
+ *
+ * This source owns sparse Hypre/MPI solve policy for FEM/BEM scalar systems,
+ * local MPI initialization, and CG/GMRES dispatch. It does not assemble boundary operators, prepare RHS, transfer boundary values, recover fields, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 
 #include "context.hpp"

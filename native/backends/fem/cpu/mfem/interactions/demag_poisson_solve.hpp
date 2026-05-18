@@ -15,6 +15,7 @@ struct PhaseTimings;
  * solve policy, recovers `H_demag`, finalizes field/visual buffers, records
  * per-call profiling, accumulates demag phase timings, and increments the
  * per-step demag solve counter.
+ * It does not own RHS coefficient definitions, boundary operator construction, Hypre workspace internals, recovery kernels, energy formulas, or telemetry formatting.
  */
 bool context_compute_demag_poisson(
     Context &ctx,

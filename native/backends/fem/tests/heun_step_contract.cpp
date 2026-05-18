@@ -1,5 +1,5 @@
 /*
- * heun_step_contract.cpp - native FEM Heun step ownership contracts.
+ * heun_step_contract.cpp - native FEM Heun step removal contracts.
  */
 
 #include <cstdio>
@@ -37,33 +37,39 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
-void heun_step_is_owned_by_integrator_module() {
+void legacy_heun_stepper_is_removed() {
     const std::filesystem::path root = fem_source_root();
-    const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
-    const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string heun_step =
-        read_text_file(root / "cpu" / "mfem" / "integrators" / "heun_step.cpp");
-    const std::string heun_step_header =
-        read_text_file(root / "cpu" / "mfem" / "integrators" / "heun_step.hpp");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
+    const std::string rk_explicit =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit.cpp");
+    const std::filesystem::path heun_step_cpp =
+        root / "cpu" / "mfem" / "integrators" / "heun_step.cpp";
+    const std::filesystem::path heun_step_hpp =
+        root / "cpu" / "mfem" / "integrators" / "heun_step.hpp";
 
     check(
-        bridge.find("bool context_step_exchange_heun_mfem(") == std::string::npos,
-        "Heun exchange step must not be defined in mfem_bridge.cpp");
+        !std::filesystem::exists(heun_step_cpp),
+        "legacy Heun step implementation file must be removed");
     check(
-        context_header.find("bool context_step_exchange_heun_mfem(") == std::string::npos,
-        "Heun exchange step declaration must not live in context.hpp");
+        !std::filesystem::exists(heun_step_hpp),
+        "legacy Heun step header must be removed");
     check(
-        heun_step.find("bool context_step_exchange_heun_mfem(") != std::string::npos,
-        "Heun exchange step must be defined in integrators/heun_step.cpp");
+        api.find("heun_step.hpp") == std::string::npos &&
+            api.find("context_step_exchange_heun_mfem") == std::string::npos,
+        "C ABI facade must not include or call the legacy Heun stepper");
     check(
-        heun_step_header.find("Advance one native FEM Heun predictor-corrector step") !=
+        cmake.find("heun_step.cpp") == std::string::npos,
+        "legacy Heun step implementation must not be compiled");
+    check(
+        rk_explicit.find("case FULLMAG_FEM_INTEGRATOR_HEUN:      return heun_tableau();") !=
             std::string::npos,
-        "Heun step header must document its time-integration contract");
+        "Heun integrator must route through the generic explicit RK tableau");
 }
 
 } // namespace
 
 int main() {
-    heun_step_is_owned_by_integrator_module();
+    legacy_heun_stepper_is_removed();
     return 0;
 }

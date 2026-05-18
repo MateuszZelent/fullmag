@@ -80,14 +80,21 @@ void stage_completion_is_owned_by_runtime_module() {
         api.find("fullmag::fem::set_stage_completion(") != std::string::npos,
         "C ABI API must use the runtime stage-completion setter");
     check(
+        api.find("*out_completion = handle->context.stage_completion;") ==
+            std::string::npos,
+        "C ABI API must not read stage-completion storage directly");
+    check(
+        api.find("fullmag::fem::stage_completion_snapshot(") != std::string::npos,
+        "C ABI API must use the runtime stage-completion snapshot helper");
+    check(
         context_header.find("constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS") ==
             std::string::npos,
         "stage completion plateau-window size must not be defined in context.hpp");
     check(
-        context.find("ctx.relax_stop = plan.relax_stop;") == std::string::npos,
+        context.find("ctx.stage_completion.relax_stop = plan.relax_stop;") == std::string::npos,
         "Context construction must delegate relaxation stop state initialization");
     check(
-        context.find("ctx.relax_energy_window_j = {};") == std::string::npos,
+        context.find("ctx.stage_completion.relax_energy_window_j = {};") == std::string::npos,
         "Context construction must not reset relaxation energy window directly");
     check(
         context.find("relax_stop.torque_tolerance_apm must be positive") == std::string::npos,
@@ -108,6 +115,41 @@ void stage_completion_is_owned_by_runtime_module() {
         stage_header.find("constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;") !=
             std::string::npos,
         "stage completion header must define the plateau-window size");
+    check(
+        stage_header.find("Return the current native FEM stage-completion snapshot") !=
+            std::string::npos,
+        "stage completion header must document snapshot ownership");
+    check(
+        stage_header.find("fullmag_fem_stage_completion stage_completion_snapshot(") !=
+            std::string::npos,
+        "stage completion header must declare snapshot helper");
+    check(
+        stage_header.find("struct StageCompletionRuntimeState") != std::string::npos,
+        "stage completion header must declare the runtime state owner");
+    check(
+        stage_header.find("fullmag_fem_relax_stop relax_stop") != std::string::npos &&
+            stage_header.find("fullmag_fem_stage_completion snapshot") !=
+                std::string::npos &&
+            stage_header.find("relax_energy_window_j") != std::string::npos,
+        "stage completion runtime state must own relax-stop policy, snapshot, and energy window");
+    check(
+        context_header.find("StageCompletionRuntimeState stage_completion{}") !=
+            std::string::npos,
+        "Context must store stage completion runtime state under stage_completion");
+    for (const char *flat_field : {
+             "fullmag_fem_relax_stop relax_stop",
+             "double relax_pseudotime_s",
+             "double relax_previous_total_energy_j",
+             "bool relax_previous_total_energy_valid",
+             "std::array<double, RELAX_ENERGY_PLATEAU_WINDOW_STEPS> relax_energy_window_j",
+             "uint32_t relax_energy_window_count",
+             "uint32_t relax_energy_window_next",
+             "fullmag_fem_stage_completion stage_completion{}",
+         }) {
+        check(
+            context_header.find(flat_field) == std::string::npos,
+            "Context must not own flat stage-completion runtime fields");
+    }
 }
 
 void relax_stop_validation_rejects_invalid_thresholds() {
@@ -172,13 +214,13 @@ void relax_stop_validation_rejects_invalid_thresholds() {
 
 void stage_completion_initialization_resets_relaxation_state() {
     fullmag::fem::Context ctx;
-    ctx.stage_completion.has_reason = 1;
-    ctx.relax_pseudotime_s = 5.0;
-    ctx.relax_previous_total_energy_j = 9.0;
-    ctx.relax_previous_total_energy_valid = true;
-    ctx.relax_energy_window_j[0] = 3.0;
-    ctx.relax_energy_window_count = 4;
-    ctx.relax_energy_window_next = 2;
+    ctx.stage_completion.snapshot.has_reason = 1;
+    ctx.stage_completion.relax_pseudotime_s = 5.0;
+    ctx.stage_completion.relax_previous_total_energy_j = 9.0;
+    ctx.stage_completion.relax_previous_total_energy_valid = true;
+    ctx.stage_completion.relax_energy_window_j[0] = 3.0;
+    ctx.stage_completion.relax_energy_window_count = 4;
+    ctx.stage_completion.relax_energy_window_next = 2;
 
     fullmag_fem_relax_stop relax_stop{};
     relax_stop.has_max_steps = 1;
@@ -186,15 +228,15 @@ void stage_completion_initialization_resets_relaxation_state() {
 
     fullmag::fem::initialize_stage_completion_state(ctx, relax_stop);
 
-    check(ctx.relax_stop.has_max_steps == 1, "relax stop flag copied");
-    check(ctx.relax_stop.max_steps == 7, "relax stop value copied");
-    check(ctx.stage_completion.has_reason == 0, "stage completion reset");
-    check(ctx.relax_pseudotime_s == 0.0, "relax pseudotime reset");
-    check(ctx.relax_previous_total_energy_j == 0.0, "previous energy reset");
-    check(!ctx.relax_previous_total_energy_valid, "previous energy validity reset");
-    check(ctx.relax_energy_window_j[0] == 0.0, "relax energy window reset");
-    check(ctx.relax_energy_window_count == 0, "relax energy window count reset");
-    check(ctx.relax_energy_window_next == 0, "relax energy window index reset");
+    check(ctx.stage_completion.relax_stop.has_max_steps == 1, "relax stop flag copied");
+    check(ctx.stage_completion.relax_stop.max_steps == 7, "relax stop value copied");
+    check(ctx.stage_completion.snapshot.has_reason == 0, "stage completion reset");
+    check(ctx.stage_completion.relax_pseudotime_s == 0.0, "relax pseudotime reset");
+    check(ctx.stage_completion.relax_previous_total_energy_j == 0.0, "previous energy reset");
+    check(!ctx.stage_completion.relax_previous_total_energy_valid, "previous energy validity reset");
+    check(ctx.stage_completion.relax_energy_window_j[0] == 0.0, "relax energy window reset");
+    check(ctx.stage_completion.relax_energy_window_count == 0, "relax energy window count reset");
+    check(ctx.stage_completion.relax_energy_window_next == 0, "relax energy window index reset");
 }
 
 void no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged() {
@@ -205,17 +247,17 @@ void no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged() {
 
     fullmag::fem::update_stage_completion_from_stats(ctx, stats);
 
-    check(ctx.stage_completion.has_reason == 0, "no criteria does not stop");
-    check(!ctx.relax_previous_total_energy_valid, "no criteria leaves previous energy invalid");
-    check(ctx.relax_pseudotime_s == 0.0, "no criteria leaves pseudotime unchanged");
+    check(ctx.stage_completion.snapshot.has_reason == 0, "no criteria does not stop");
+    check(!ctx.stage_completion.relax_previous_total_energy_valid, "no criteria leaves previous energy invalid");
+    check(ctx.stage_completion.relax_pseudotime_s == 0.0, "no criteria leaves pseudotime unchanged");
 }
 
 void energy_stop_requires_50_step_plateau_and_torque_gate() {
     fullmag::fem::Context ctx;
-    ctx.relax_stop.has_energy_tolerance_j = 1;
-    ctx.relax_stop.energy_tolerance_j = 0.25;
-    ctx.relax_stop.has_torque_tolerance_apm = 1;
-    ctx.relax_stop.torque_tolerance_apm = 5.0;
+    ctx.stage_completion.relax_stop.has_energy_tolerance_j = 1;
+    ctx.stage_completion.relax_stop.energy_tolerance_j = 0.25;
+    ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    ctx.stage_completion.relax_stop.torque_tolerance_apm = 5.0;
 
     for (uint32_t i = 0; i + 1 < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
         fullmag_fem_step_stats stats{};
@@ -223,11 +265,11 @@ void energy_stop_requires_50_step_plateau_and_torque_gate() {
         stats.max_torque_Apm = 3.0;
         stats.dt_seconds = 1.0;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
-        check(ctx.stage_completion.has_reason == 0, "energy plateau needs full sample window");
+        check(ctx.stage_completion.snapshot.has_reason == 0, "energy plateau needs full sample window");
     }
-    check(ctx.relax_previous_total_energy_valid, "energy samples update previous energy");
+    check(ctx.stage_completion.relax_previous_total_energy_valid, "energy samples update previous energy");
     check(
-        ctx.relax_energy_window_count == fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS - 1,
+        ctx.stage_completion.relax_energy_window_count == fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS - 1,
         "energy plateau records samples before completion");
 
     fullmag_fem_step_stats high_torque{};
@@ -235,7 +277,7 @@ void energy_stop_requires_50_step_plateau_and_torque_gate() {
     high_torque.max_torque_Apm = 8.0;
     high_torque.dt_seconds = 1.0;
     fullmag::fem::update_stage_completion_from_stats(ctx, high_torque);
-    check(ctx.stage_completion.has_reason == 0, "energy plateau still respects torque gate");
+    check(ctx.stage_completion.snapshot.has_reason == 0, "energy plateau still respects torque gate");
 
     fullmag_fem_step_stats low_torque{};
     low_torque.total_energy_joules = 10.002;
@@ -243,19 +285,19 @@ void energy_stop_requires_50_step_plateau_and_torque_gate() {
     low_torque.dt_seconds = 1.5;
     fullmag::fem::update_stage_completion_from_stats(ctx, low_torque);
 
-    check(ctx.stage_completion.has_reason == 1, "energy tolerance stops");
-    check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
+    check(ctx.stage_completion.snapshot.has_reason == 1, "energy tolerance stops");
+    check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
     check(
-        std::strcmp(ctx.stage_completion.metric_name, "total_energy_plateau_range_J") == 0,
+        std::strcmp(ctx.stage_completion.snapshot.metric_name, "total_energy_plateau_range_J") == 0,
         "energy metric name");
-    check(ctx.stage_completion.metric_value <= 0.25, "energy plateau metric value");
-    check(std::fabs(ctx.relax_pseudotime_s - 51.5) < 1e-12, "pseudotime accumulates");
+    check(ctx.stage_completion.snapshot.metric_value <= 0.25, "energy plateau metric value");
+    check(std::fabs(ctx.stage_completion.relax_pseudotime_s - 51.5) < 1e-12, "pseudotime accumulates");
 }
 
 void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
     fullmag::fem::Context ctx;
-    ctx.relax_stop.has_energy_tolerance_j = 1;
-    ctx.relax_stop.energy_tolerance_j = 0.25;
+    ctx.stage_completion.relax_stop.has_energy_tolerance_j = 1;
+    ctx.stage_completion.relax_stop.energy_tolerance_j = 0.25;
 
     for (uint32_t i = 0; i < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
         fullmag_fem_step_stats stats{};
@@ -265,56 +307,80 @@ void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
     }
 
-    check(ctx.stage_completion.has_reason == 1, "negative-energy plateau stops");
-    check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
-    check(ctx.stage_completion.metric_value >= 0.0, "energy plateau metric is nonnegative");
-    check(ctx.stage_completion.metric_value <= 0.25, "negative-energy plateau range");
+    check(ctx.stage_completion.snapshot.has_reason == 1, "negative-energy plateau stops");
+    check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
+    check(ctx.stage_completion.snapshot.metric_value >= 0.0, "energy plateau metric is nonnegative");
+    check(ctx.stage_completion.snapshot.metric_value <= 0.25, "negative-energy plateau range");
 }
 
 void torque_physical_time_pseudotime_and_step_stops_are_reported() {
     {
         fullmag::fem::Context ctx;
-        ctx.relax_stop.has_torque_tolerance_apm = 1;
-        ctx.relax_stop.torque_tolerance_apm = 2.0;
+        ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+        ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
         fullmag_fem_step_stats stats{};
         stats.max_torque_Apm = 1.5;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
-        check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_TORQUE, "torque stop");
+        check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_TORQUE, "torque stop");
     }
 
     {
         fullmag::fem::Context ctx;
-        ctx.relax_stop.has_max_physical_time_s = 1;
-        ctx.relax_stop.max_physical_time_s = 4.0;
+        ctx.stage_completion.relax_stop.has_max_physical_time_s = 1;
+        ctx.stage_completion.relax_stop.max_physical_time_s = 4.0;
         fullmag_fem_step_stats stats{};
         stats.time_seconds = 4.5;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
         check(
-            ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME,
+            ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME,
             "physical time stop");
     }
 
     {
         fullmag::fem::Context ctx;
-        ctx.relax_stop.has_max_pseudotime_s = 1;
-        ctx.relax_stop.max_pseudotime_s = 1.0;
+        ctx.stage_completion.relax_stop.has_max_pseudotime_s = 1;
+        ctx.stage_completion.relax_stop.max_pseudotime_s = 1.0;
         fullmag_fem_step_stats stats{};
         stats.dt_seconds = 1.2;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
         check(
-            ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME,
+            ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME,
             "pseudotime stop");
     }
 
     {
         fullmag::fem::Context ctx;
-        ctx.relax_stop.has_max_steps = 1;
-        ctx.relax_stop.max_steps = 3;
+        ctx.stage_completion.relax_stop.has_max_steps = 1;
+        ctx.stage_completion.relax_stop.max_steps = 3;
         fullmag_fem_step_stats stats{};
         stats.step = 3;
         fullmag::fem::update_stage_completion_from_stats(ctx, stats);
-        check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS, "step stop");
+        check(ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS, "step stop");
     }
+}
+
+void stage_completion_snapshot_returns_public_state() {
+    fullmag::fem::Context ctx;
+    ctx.stage_completion.snapshot.has_reason = 1;
+    ctx.stage_completion.snapshot.reason = FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS;
+    ctx.stage_completion.snapshot.has_metric_name = 1;
+    std::snprintf(
+        ctx.stage_completion.snapshot.metric_name,
+        sizeof(ctx.stage_completion.snapshot.metric_name),
+        "%s",
+        "steps");
+    ctx.stage_completion.snapshot.metric_value = 7.0;
+    ctx.stage_completion.snapshot.threshold = 5.0;
+
+    const fullmag_fem_stage_completion snapshot =
+        fullmag::fem::stage_completion_snapshot(ctx);
+
+    check(snapshot.has_reason == 1, "snapshot carries completion flag");
+    check(snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS, "snapshot reason");
+    check(snapshot.has_metric_name == 1, "snapshot metric name flag");
+    check(std::strcmp(snapshot.metric_name, "steps") == 0, "snapshot metric name");
+    check(snapshot.metric_value == 7.0, "snapshot metric value");
+    check(snapshot.threshold == 5.0, "snapshot threshold");
 }
 
 } // namespace
@@ -327,5 +393,6 @@ int main() {
     energy_stop_requires_50_step_plateau_and_torque_gate();
     energy_plateau_uses_unsigned_range_for_signed_total_energy();
     torque_physical_time_pseudotime_and_step_stops_are_reported();
+    stage_completion_snapshot_returns_public_state();
     return 0;
 }

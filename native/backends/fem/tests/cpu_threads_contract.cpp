@@ -72,6 +72,9 @@ private:
 void cpu_thread_runtime_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string runtime_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "cpu_threads.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "cpu_threads.cpp");
 
@@ -87,6 +90,18 @@ void cpu_thread_runtime_is_owned_by_runtime_module() {
     check(
         runtime.find("void configure_cpu_openmp_runtime(") != std::string::npos,
         "CPU OpenMP runtime configuration must be defined in cpu_threads.cpp");
+    check(
+        runtime_header.find("struct CpuThreadRuntimeState") != std::string::npos,
+        "CPU thread telemetry state must be defined by cpu_threads.hpp");
+    check(
+        context_header.find("bool cpu_threads_auto_requested") == std::string::npos,
+        "Context must not expose flat CPU thread auto telemetry");
+    check(
+        context_header.find("int requested_omp_threads") == std::string::npos,
+        "Context must not expose flat requested OMP telemetry");
+    check(
+        context_header.find("int effective_omp_threads") == std::string::npos,
+        "Context must not expose flat effective OMP telemetry");
 }
 
 void manual_env_precedence_matches_runtime_contract() {
@@ -154,9 +169,9 @@ void configure_cpu_runtime_writes_context_fields() {
     fullmag::fem::Context ctx;
     fullmag::fem::configure_cpu_openmp_runtime(ctx);
 
-    check(!ctx.cpu_threads_auto_requested, "manual CPU runtime does not mark auto mode");
-    check(ctx.requested_omp_threads == 3, "manual CPU runtime stores requested threads");
-    check(ctx.effective_omp_threads == 3, "manual CPU runtime stores effective threads");
+    check(!ctx.cpu_threads.auto_requested, "manual CPU runtime does not mark auto mode");
+    check(ctx.cpu_threads.requested_omp_threads == 3, "manual CPU runtime stores requested threads");
+    check(ctx.cpu_threads.effective_omp_threads == 3, "manual CPU runtime stores effective threads");
 }
 
 } // namespace

@@ -59,7 +59,7 @@ void field_refresh_policy_is_owned_by_runtime_module() {
         context_from_plan.find("ctx.field_refresh = plan.field_refresh;") == std::string::npos,
         "Context construction must not copy field-refresh policy directly");
     check(
-        context_from_plan.find("ctx.demag_last_refresh_time = -1.0;") == std::string::npos,
+        context_from_plan.find("ctx.demag.last_refresh_time = -1.0;") == std::string::npos,
         "Context construction must not reset field-refresh demag cache directly");
     check(
         field_refresh.find("bool initialize_field_refresh_plan_fields(") != std::string::npos,
@@ -74,11 +74,11 @@ void field_refresh_plan_import_validates_policy_and_resets_cache() {
     fullmag::fem::Context ctx;
     ctx.field_refresh.has_demag_interval_s = 1;
     ctx.field_refresh.demag_interval_s = 9.0;
-    ctx.demag_cache_valid = true;
-    ctx.demag_last_refresh_time = 4.0;
-    ctx.cached_robin_boundary_energy = 3.0;
-    ctx.h_demag_cached_xyz = {1.0, 2.0, 3.0};
-    ctx.h_demag_cached_visual_xyz = {4.0, 5.0, 6.0};
+    ctx.demag.cache_valid = true;
+    ctx.demag.last_refresh_time = 4.0;
+    ctx.demag.cached_robin_boundary_energy = 3.0;
+    ctx.demag.cached_xyz = {1.0, 2.0, 3.0};
+    ctx.demag.cached_visual_xyz = {4.0, 5.0, 6.0};
 
     fullmag_fem_field_refresh_policy policy{};
     policy.has_demag_interval_s = 1;
@@ -90,11 +90,11 @@ void field_refresh_plan_import_validates_policy_and_resets_cache() {
         error.c_str());
     check(ctx.field_refresh.has_demag_interval_s == 1, "field refresh flag copied");
     check(ctx.field_refresh.demag_interval_s == 2.5, "field refresh interval copied");
-    check(!ctx.demag_cache_valid, "demag cache validity reset");
-    check(ctx.demag_last_refresh_time == -1.0, "demag refresh timestamp reset");
-    check(ctx.cached_robin_boundary_energy == 0.0, "cached Robin boundary energy reset");
-    check(ctx.h_demag_cached_xyz.empty(), "cached demag field cleared");
-    check(ctx.h_demag_cached_visual_xyz.empty(), "cached visual demag field cleared");
+    check(!ctx.demag.cache_valid, "demag cache validity reset");
+    check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
+    check(ctx.demag.cached_robin_boundary_energy == 0.0, "cached Robin boundary energy reset");
+    check(ctx.demag.cached_xyz.empty(), "cached demag field cleared");
+    check(ctx.demag.cached_visual_xyz.empty(), "cached visual demag field cleared");
 
     policy.demag_interval_s = 0.0;
     check(

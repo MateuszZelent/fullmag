@@ -11,6 +11,8 @@ struct Context;
  *
  * The output buffer remains in A/m. This is a local additive field term and has
  * no FEM assembly, solver, or boundary condition.
+ *
+ * It does not broadcast uniform fields or integrate Zeeman energy.
  */
 void add_zeeman_field(const Context &ctx, std::vector<double> &h_eff_xyz);
 

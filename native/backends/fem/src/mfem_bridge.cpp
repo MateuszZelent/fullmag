@@ -1,9 +1,8 @@
 /*
- * Legacy MFEM bridge translation unit kept for source-list compatibility.
+ * Legacy MFEM bridge facade source contract.
  *
- * Runtime lifecycle now lives in cpu/mfem/runtime/mfem_context.*. Physics
- * interactions, time integrators, field buffers, metrics, and CPU runtime
- * policy live in their dedicated cpu/mfem modules.
+ * This translation unit is kept for source-list compatibility while the
+ * implementation lives in dedicated cpu/mfem modules. It does not own runtime lifecycle, interaction physics, integrators, field buffers, metrics, or CPU runtime policy.
  */
 
 namespace fullmag::fem {

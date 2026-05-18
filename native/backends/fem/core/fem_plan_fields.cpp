@@ -1,3 +1,11 @@
+/*
+ * FEM plan-fields core source contract.
+ *
+ * This source owns base native FEM plan validation and scalar runtime import:
+ * mesh cardinalities, P1-only fe_order policy, timestep, hmax, precision,
+ * airbox factor, and explicit integrator selection. It does not import mesh geometry, material fields, state vectors, field buffers, runtime devices, or interactions.
+ */
+
 #include "core/fem_plan_fields.hpp"
 
 #include "context.hpp"

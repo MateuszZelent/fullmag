@@ -1,3 +1,10 @@
+/*
+ * Poisson demag readiness source contract.
+ *
+ * This source owns the fresh-solve readiness predicate for native Poisson-demag
+ * realization and operator availability. It does not initialize MFEM resources, assemble RHS, solve Poisson, or recover fields.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_ready.hpp"
 
 namespace fullmag::fem {

@@ -1,12 +1,19 @@
+/*
+ * Brown thermal sigma source contract.
+ *
+ * This source owns the Brown thermal-field standard-deviation formula and its
+ * invalid-input zero policy. Its gyromagnetic_ratio input is the bare gamma_mu0,
+ * not gamma_bar. It does not sample RNG state or add H_therm to H_eff.
+ */
 #include "cpu/mfem/interactions/thermal_brown_sigma.hpp"
+
+#include "fem_common.hpp"
 
 #include <cmath>
 
 namespace fullmag::fem {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
 constexpr double kB = 1.380649e-23;
 
 } // namespace

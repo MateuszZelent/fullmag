@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag potential source contract.
+ *
+ * This source owns boundary trace extraction from solved potentials and
+ * pointwise combination of u1/u2 into the total scalar potential. It does not solve sparse systems, transfer Dirichlet boundary values, recover H_demag, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_potential.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK

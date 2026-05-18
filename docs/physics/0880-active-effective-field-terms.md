@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-05-16
+- Last updated: 2026-05-18
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/problem-ir-v0.md`, `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/capability-matrix-v0.md`
 
@@ -77,6 +77,17 @@ same `ProblemIR.energy_terms`. Removing `Exchange` omits the exchange operator.
 Removing `Demag` omits Poisson demag setup, solve, recovery, energy, and demag
 refresh cadence. MFEM receives resolved operators through the existing plan, not
 through an extra UI-only mask.
+
+At runtime, disabled local field terms must leave both the composed `H_eff` and
+their public readback buffers at zero. The native FEM composition point
+therefore zeros inactive interfacial DMI, cubic anisotropy, and bulk DMI buffers
+before adding enabled local terms into `H_eff`.
+The `effective_field.cpp` source-level contract also pins that this module owns
+only the field/direct-torque gate, eager initial refresh policy, top-level
+`H_eff` composition, periodic projection of composed local fields, and local
+energy bookkeeping. Individual interaction physics, demag solvers, exchange
+operator assembly, state I/O, and step metrics remain in their dedicated
+modules.
 
 ### 3.3 Hybrid
 

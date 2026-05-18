@@ -78,9 +78,22 @@ void base_plan_fields_are_owned_by_core_module() {
         plan_fields.find("bool initialize_base_plan_fields(") != std::string::npos,
         "Base plan import must be defined in core/fem_plan_fields.cpp");
     check(
+        plan_fields.find("FEM plan-fields core source contract") != std::string::npos,
+        "FemPlanFields source file must document its source contract");
+    check(
+        plan_fields.find("does not import mesh geometry, material fields, state vectors, field buffers, runtime devices, or interactions") != std::string::npos,
+        "FemPlanFields source file must document its non-owning module boundary");
+    check(
         plan_header.find("Own native FEM base plan validation and scalar runtime import") !=
             std::string::npos,
         "FemPlanFields header must document its contract");
+    check(
+        plan_header.find("It does not own mesh geometry, material fields, state") !=
+                std::string::npos &&
+            plan_header.find(
+                "buffers, runtime devices, integrators, or interaction physics") !=
+                std::string::npos,
+        "FemPlanFields header must document its non-owning module boundary");
 }
 
 fullmag_fem_plan_desc valid_base_plan() {

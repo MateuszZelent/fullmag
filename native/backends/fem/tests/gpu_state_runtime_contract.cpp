@@ -65,6 +65,7 @@ std::string extract_function_body(const std::string &source, const std::string &
 void gpu_state_bootstrap_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
     const std::string runtime_header =
@@ -110,47 +111,98 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
         runtime_header.find("Initialize and upload native FEM GPU state runtime buffers") !=
             std::string::npos,
         "gpu_state_runtime header must document GPU-state bootstrap ownership");
+    check(
+        runtime_header.find("struct LegacyGpuExchangeRuntimeState") != std::string::npos,
+        "gpu_state_runtime header must declare the legacy GPU exchange metadata owner");
+    check(
+        runtime_header.find("bool legacy_sparse_metadata_ready") != std::string::npos &&
+            runtime_header.find("uint64_t legacy_sparse_rows") != std::string::npos &&
+            runtime_header.find("uint64_t legacy_sparse_cols") != std::string::npos &&
+            runtime_header.find("uint64_t legacy_sparse_nnz") != std::string::npos &&
+            runtime_header.find("bool lumped_mass_ready") != std::string::npos,
+        "legacy GPU exchange runtime state must own sparse metadata and lumped-mass readiness");
+    check(
+        context_header.find("LegacyGpuExchangeRuntimeState gpu_exchange{}") !=
+            std::string::npos,
+        "Context must store legacy GPU exchange metadata under gpu_exchange");
+    for (const char *flat_field : {
+             "bool gpu_exchange_legacy_sparse_metadata_ready",
+             "uint64_t gpu_exchange_legacy_sparse_rows",
+             "uint64_t gpu_exchange_legacy_sparse_cols",
+             "uint64_t gpu_exchange_legacy_sparse_nnz",
+             "bool gpu_exchange_lumped_mass_ready",
+         }) {
+        check(
+            context_header.find(flat_field) == std::string::npos,
+            "Context must not own flat legacy GPU exchange metadata fields");
+    }
+    check(
+        runtime_header.find("struct CudaRuntimeState") != std::string::npos,
+        "gpu_state_runtime header must declare the CUDA stream/snapshot state owner");
+    check(
+        runtime_header.find("void *compute_stream") != std::string::npos &&
+            runtime_header.find("void *io_stream") != std::string::npos &&
+            runtime_header.find("void *compute_event") != std::string::npos &&
+            runtime_header.find("void *pinned_snapshot[2]") != std::string::npos &&
+            runtime_header.find("size_t pinned_snapshot_bytes") != std::string::npos &&
+            runtime_header.find("int active_snapshot_buffer") != std::string::npos,
+        "CUDA runtime state must own streams, compute event, and pinned snapshot buffers");
+    check(
+        context_header.find("CudaRuntimeState cuda_runtime{}") != std::string::npos,
+        "Context must store CUDA stream/snapshot state under cuda_runtime");
+    for (const char *flat_cuda_field : {
+             "void *compute_stream",
+             "void *io_stream",
+             "void *compute_event",
+             "void *pinned_snapshot[2]",
+             "size_t pinned_snapshot_bytes",
+             "int active_snapshot_buffer",
+         }) {
+        check(
+            context_header.find(flat_cuda_field) == std::string::npos,
+            "Context must not own flat CUDA stream/snapshot fields");
+    }
 }
 
 void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 4;
     ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
-    ctx.m_xyz = {
+    ctx.state.m_xyz = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
         1.0, 0.0, 0.0,
     };
-    ctx.h_ex_xyz.assign(12, 0.0);
-    ctx.h_demag_xyz.assign(12, 0.0);
-    ctx.h_ext_xyz.assign(12, 0.0);
-    ctx.h_eff_xyz.assign(12, 0.0);
-    ctx.h_ani_xyz.assign(12, 0.0);
-    ctx.h_cubic_ani_xyz.assign(12, 0.0);
-    ctx.h_dmi_xyz.assign(12, 0.0);
-    ctx.h_bulk_dmi_xyz.assign(12, 0.0);
-    ctx.h_oe_xyz.assign(12, 0.0);
-    ctx.h_therm_xyz.assign(12, 0.0);
-    ctx.h_mel_xyz.assign(12, 0.0);
-    ctx.node_volumes.assign(4, 0.25);
-    ctx.Ms_field.assign(4, 800e3);
-    ctx.A_field.assign(4, 13e-12);
-    ctx.alpha_field.assign(4, 0.1);
-    ctx.magnetic_node_mask.assign(4, 1);
-    ctx.nodes_xyz = {
+    ctx.exchange.h_xyz.assign(12, 0.0);
+    ctx.demag.h_xyz.assign(12, 0.0);
+    ctx.zeeman.h_ext_xyz.assign(12, 0.0);
+    ctx.effective_field.h_xyz.assign(12, 0.0);
+    ctx.anisotropy.h_uniaxial_xyz.assign(12, 0.0);
+    ctx.anisotropy.h_cubic_xyz.assign(12, 0.0);
+    ctx.dmi.h_interfacial_xyz.assign(12, 0.0);
+    ctx.dmi.h_bulk_xyz.assign(12, 0.0);
+    ctx.oersted.h_xyz.assign(12, 0.0);
+    ctx.thermal_brown.h_xyz.assign(12, 0.0);
+    ctx.magnetoelastic.h_xyz.assign(12, 0.0);
+    ctx.mesh.node_volumes.assign(4, 0.25);
+    ctx.material_fields.Ms_field.assign(4, 800e3);
+    ctx.material_fields.A_field.assign(4, 13e-12);
+    ctx.material_fields.alpha_field.assign(4, 0.1);
+    ctx.mesh.magnetic_node_mask.assign(4, 1);
+    ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.elements = {0, 1, 2, 3};
-    ctx.magnetic_element_mask.assign(1, 1);
+    ctx.mesh.elements = {0, 1, 2, 3};
+    ctx.mesh.magnetic_element_mask.assign(1, 1);
     ctx.material.saturation_magnetisation = 800e3;
     ctx.material.exchange_stiffness = 13e-12;
     ctx.material.damping = 0.1;
-    ctx.device_info_cache.is_gpu_enabled = 0;
-    ctx.device_info_valid = true;
+    ctx.mfem_device.device_info_cache.is_gpu_enabled = 0;
+    ctx.mfem_device.device_info_valid = true;
 
     std::string error;
     check(

@@ -104,6 +104,35 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
             std::string::npos,
         "exchange aggregate header must document consistent-mass plan ownership");
     check(
+        aggregate_header.find("does not assemble operators") != std::string::npos &&
+            aggregate_header.find("compute") != std::string::npos &&
+            aggregate_header.find("H_ex") != std::string::npos &&
+            aggregate_header.find("refresh runtime fields") != std::string::npos &&
+            aggregate_header.find("handle fallback") != std::string::npos &&
+            aggregate_header.find("project mass") != std::string::npos &&
+            aggregate_header.find("upload GPU") != std::string::npos &&
+            aggregate_header.find("state") != std::string::npos,
+        "exchange aggregate header must document its non-owning module boundary");
+    check(
+        aggregate_header.find("runtime output") != std::string::npos &&
+            aggregate_header.find("storage") != std::string::npos,
+        "exchange aggregate header must document runtime-output ownership");
+    check(
+        aggregate_header.find("exchange_operator.*") != std::string::npos,
+        "exchange aggregate header must name the operator owner");
+    check(
+        aggregate_header.find("exchange_field.*") != std::string::npos,
+        "exchange aggregate header must name the field owner");
+    check(
+        aggregate_header.find("exchange_runtime.*") != std::string::npos,
+        "exchange aggregate header must name the runtime refresh owner");
+    check(
+        aggregate_header.find("exchange_mass_projection.*") != std::string::npos,
+        "exchange aggregate header must name the mass-projection owner");
+    check(
+        aggregate_header.find("exchange_legacy_gpu_upload.*") != std::string::npos,
+        "exchange aggregate header must name the legacy GPU upload owner");
+    check(
         context.find("ctx.enable_exchange = plan.enable_exchange != 0;") ==
             std::string::npos,
         "context_from_plan must delegate exchange enable import to exchange.cpp");
@@ -136,6 +165,10 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
             std::string::npos,
         "exchange operator header must document its physical contract");
     check(
+        operator_header.find("does not compute H_ex, project mass, refresh runtime fields, handle no-MFEM fallback, or upload GPU state") !=
+            std::string::npos,
+        "exchange operator header must document its non-owning field/runtime boundary");
+    check(
         field_header.find("Compute the exchange field for a magnetization state") !=
             std::string::npos,
         "exchange field header must document its physical contract");
@@ -144,8 +177,75 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
             std::string::npos,
         "exchange runtime header must document its contract");
     check(
+        runtime_header.find("does not assemble exchange operators, project exchange mass, own no-MFEM fallback, or upload legacy GPU exchange state") !=
+            std::string::npos,
+        "exchange runtime header must document its non-owning operator/fallback/upload boundary");
+    check(
         fallback_header.find("no-MFEM exchange fallback") != std::string::npos,
         "exchange fallback header must document its contract");
+    check(
+        fallback_header.find("does not assemble MFEM operators, compute H_ex, project mass, refresh runtime fields, or claim active exchange execution") !=
+            std::string::npos,
+        "exchange fallback header must document its non-owning active-MFEM boundary");
+}
+
+void exchange_runtime_state_is_owned_by_aggregate_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string exchange_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.hpp");
+
+    check(
+        exchange_header.find("struct ExchangeRuntimeState") != std::string::npos,
+        "exchange runtime state must be declared by exchange.hpp");
+    check(
+        exchange_header.find("std::vector<double> h_xyz") != std::string::npos,
+        "exchange runtime state must own the H_ex field buffer");
+    check(
+        context_header.find("ExchangeRuntimeState exchange") != std::string::npos,
+        "Context must store exchange runtime output through the exchange owner");
+    check(
+        context_header.find("std::vector<double> h_ex_xyz") == std::string::npos,
+        "Context must not own a flat exchange field buffer");
+    check(
+        exchange_header.find("struct ExchangeMfemRuntimeState") != std::string::npos,
+        "exchange runtime state must declare the MFEM exchange workspace owner");
+    check(
+        exchange_header.find("bool use_consistent_mass") != std::string::npos &&
+            exchange_header.find("std::vector<double> h_x") != std::string::npos &&
+            exchange_header.find("std::vector<double> h_y") != std::string::npos &&
+            exchange_header.find("std::vector<double> h_z") != std::string::npos &&
+            exchange_header.find("void *exchange_form") != std::string::npos &&
+            exchange_header.find("void *mass_form") != std::string::npos &&
+            exchange_header.find("void *mass_ones") != std::string::npos &&
+            exchange_header.find("void *mass_lumped") != std::string::npos &&
+            exchange_header.find("void *inv_lumped_mass") != std::string::npos &&
+            exchange_header.find("void *tmp_vec") != std::string::npos &&
+            exchange_header.find("void *out_vec") != std::string::npos &&
+            exchange_header.find("bool ready") != std::string::npos,
+        "exchange MFEM runtime state must own forms, mass vectors, component buffers, readiness, and consistent-mass policy");
+    check(
+        exchange_header.find("ExchangeMfemRuntimeState mfem{}") != std::string::npos,
+        "exchange runtime state must store MFEM exchange workspace under exchange.mfem");
+    for (const char *flat_exchange_field : {
+             "std::vector<double> mfem_h_ex_x",
+             "std::vector<double> mfem_h_ex_y",
+             "std::vector<double> mfem_h_ex_z",
+             "std::vector<double> mfem_exchange_tmp",
+             "void *mfem_exchange_form",
+             "void *mfem_mass_form",
+             "void *mfem_mass_ones",
+             "void *mfem_mass_lumped",
+             "void *mfem_inv_lumped_mass",
+             "void *mfem_exchange_tmp_vec",
+             "void *mfem_exchange_out_vec",
+             "bool mfem_exchange_ready",
+             "bool use_consistent_mass",
+         }) {
+        check(
+            context_header.find(flat_exchange_field) == std::string::npos,
+            "Context must not own flat MFEM exchange runtime workspace fields");
+    }
 }
 
 void exchange_mass_projection_is_owned_by_mass_module() {
@@ -210,6 +310,67 @@ void exchange_legacy_gpu_upload_is_owned_by_upload_module() {
         "legacy sparse exchange CSR validation must be in exchange_legacy_gpu_upload.cpp");
 }
 
+void exchange_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
+    const std::string operator_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.cpp");
+    const std::string field_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_field.cpp");
+    const std::string runtime_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_runtime.cpp");
+    const std::string fallback_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_fallback.cpp");
+    const std::string mass_projection =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_mass_projection.cpp");
+    const std::string gpu_upload = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_legacy_gpu_upload.cpp");
+
+    check(
+        aggregate.find("Exchange aggregate source contract") != std::string::npos,
+        "exchange aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not assemble operators, compute H_ex, refresh runtime fields, handle fallback, project mass, or upload GPU state") != std::string::npos,
+        "exchange aggregate source file must document its non-owning module boundary");
+    check(
+        operator_module.find("Exchange operator source contract") != std::string::npos,
+        "exchange operator source file must document its source contract");
+    check(
+        operator_module.find("does not compute H_ex, project mass, refresh runtime fields, or upload GPU state") != std::string::npos,
+        "exchange operator source file must document its non-owning field/runtime boundary");
+    check(
+        field_module.find("Exchange field-compute source contract") != std::string::npos,
+        "exchange field source file must document its source contract");
+    check(
+        field_module.find("does not assemble exchange operators or own runtime refresh") != std::string::npos,
+        "exchange field source file must document its non-owning operator/runtime boundary");
+    check(
+        runtime_module.find("Exchange runtime refresh source contract") != std::string::npos,
+        "exchange runtime source file must document its source contract");
+    check(
+        runtime_module.find("does not assemble operators or compute exchange components directly") != std::string::npos,
+        "exchange runtime source file must document its non-owning compute boundary");
+    check(
+        fallback_module.find("Exchange no-MFEM fallback source contract") != std::string::npos,
+        "exchange fallback source file must document its source contract");
+    check(
+        fallback_module.find("does not assemble MFEM operators or claim active exchange execution") != std::string::npos,
+        "exchange fallback source file must document its non-owning active-MFEM boundary");
+    check(
+        mass_projection.find("Exchange mass-projection source contract") != std::string::npos,
+        "exchange mass-projection source file must document its source contract");
+    check(
+        mass_projection.find("does not assemble exchange operators or upload GPU state") != std::string::npos,
+        "exchange mass-projection source file must document its non-owning operator/upload boundary");
+    check(
+        gpu_upload.find("Exchange legacy GPU upload source contract") != std::string::npos,
+        "exchange legacy GPU upload source file must document its source contract");
+    check(
+        gpu_upload.find("does not assemble exchange operators or compute H_ex") != std::string::npos,
+        "exchange legacy GPU upload source file must document its non-owning operator/field boundary");
+}
+
 void check_zero_field(const std::vector<double> &field, const char *label) {
     for (double value : field) {
         if (value != 0.0) {
@@ -242,11 +403,15 @@ void exchange_plan_fields_are_imported_by_aggregate() {
 #if FULLMAG_HAS_MFEM_STACK
     plan.use_consistent_mass = 1;
     fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
-    check(ctx.use_consistent_mass, "exchange plan import enables consistent-mass projection");
+    check(
+        ctx.exchange.mfem.use_consistent_mass,
+        "exchange plan import enables consistent-mass projection");
 
     plan.use_consistent_mass = 0;
     fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
-    check(!ctx.use_consistent_mass, "exchange plan import disables consistent-mass projection");
+    check(
+        !ctx.exchange.mfem.use_consistent_mass,
+        "exchange plan import disables consistent-mass projection");
 #endif
 }
 
@@ -298,8 +463,10 @@ void active_exchange_reports_mfem_requirement_without_stack() {
 
 int main() {
     exchange_responsibilities_are_owned_by_separate_modules();
+    exchange_runtime_state_is_owned_by_aggregate_module();
     exchange_mass_projection_is_owned_by_mass_module();
     exchange_legacy_gpu_upload_is_owned_by_upload_module();
+    exchange_source_files_document_module_boundaries();
     exchange_plan_fields_are_imported_by_aggregate();
 #if !FULLMAG_HAS_MFEM_STACK
     disabled_exchange_is_zero_without_mfem_stack();

@@ -1,3 +1,10 @@
+/*
+ * Interrupt runtime source contract.
+ *
+ * This source owns cooperative interrupt polling and step-interrupted latching
+ * for native FEM runtime calls. It does not own step execution, stage completion, field composition, or metrics publication.
+ */
+
 #include "cpu/mfem/runtime/interrupt.hpp"
 
 #include "context.hpp"

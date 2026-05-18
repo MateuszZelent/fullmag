@@ -1,7 +1,7 @@
 # FEM Demag Poisson
 
 - Status: partial native FEM CPU module contract
-- Last updated: 2026-05-17
+- Last updated: 2026-05-18
 - Implementation:
   `native/backends/fem/cpu/mfem/interactions/demag_poisson.hpp/.cpp`,
   `demag_poisson_ready.hpp/.cpp`, `demag_poisson_lifecycle.hpp/.cpp`,
@@ -131,9 +131,11 @@ Current gate:
   nodal lumped weights, per-node `Ms`, nonmagnetic-node masking, frozen-field
   refresh policy, cached Robin boundary energy, and demag solver stats reset in
   local non-MFEM builds. It also checks the full-domain visualization H_eff
-  reconstruction helper and source ownership for the ready/lifecycle/solve
-  modules so runtime wrapper definitions do not return to `demag_poisson.cpp` or
-  `mfem_bridge.cpp`.
+  reconstruction helper, telemetry-header docstring, top-level source-contract
+  docstrings for the aggregate, ready, lifecycle, solve, RHS, boundary,
+  periodic, Hypre, recovery, field, cache, energy, and telemetry modules, and
+  source ownership for the ready/lifecycle/solve modules so runtime wrapper
+  definitions do not return to `demag_poisson.cpp` or `mfem_bridge.cpp`.
 - Local non-MFEM builds compile the public energy contract. The MFEM RHS,
   boundary-policy, periodic-reduction, Hypre-solve, and recovery code are
   guarded by `FULLMAG_HAS_MFEM_STACK`.

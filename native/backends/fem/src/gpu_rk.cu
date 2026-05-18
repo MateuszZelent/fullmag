@@ -185,28 +185,28 @@ bool compute_legacy_sparse_exchange(
 
 GpuAdaptiveResult gpu_adaptive_pi_step(Context &ctx, double error_norm)
 {
-    if (!ctx.adaptive_dt_enabled || error_norm <= 0.0) {
+    if (!ctx.adaptive_dt.enabled || error_norm <= 0.0) {
         return {true, ctx.dt_seconds};
     }
 
     const double clamped_error = std::max(error_norm, 1e-15);
     if (clamped_error <= 1.0) {
-        double ratio = ctx.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.pi_alpha) *
-                       std::pow(ctx.prev_error_norm / clamped_error, ctx.pi_beta);
-        ratio = std::min(ratio, ctx.dt_grow_max);
+        double ratio = ctx.adaptive_dt.safety_factor *
+                       std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha) *
+                       std::pow(ctx.adaptive_dt.prev_error_norm / clamped_error, ctx.adaptive_dt.pi_beta);
+        ratio = std::min(ratio, ctx.adaptive_dt.dt_grow_max);
         ratio = std::max(ratio, 1.0);
 
-        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.dt_max);
-        ctx.prev_error_norm = clamped_error;
+        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
+        ctx.adaptive_dt.prev_error_norm = clamped_error;
         return {true, dt_new};
     }
 
-    double ratio = ctx.safety_factor * std::pow(1.0 / clamped_error, ctx.pi_alpha);
-    ratio = std::max(ratio, ctx.dt_shrink_min);
+    double ratio = ctx.adaptive_dt.safety_factor * std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha);
+    ratio = std::max(ratio, ctx.adaptive_dt.dt_shrink_min);
 
-    const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.dt_min);
-    ctx.rejected_steps += 1;
+    const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
+    ctx.adaptive_dt.rejected_steps += 1;
     return {false, dt_new};
 }
 
@@ -257,8 +257,8 @@ bool compute_adaptive_error_norm_device(
         tableau.b_lo[0], tableau.b_lo[1], tableau.b_lo[2], tableau.b_lo[3],
         tableau.b_lo[4], tableau.b_lo[5], tableau.b_lo[6],
         dt_seconds,
-        ctx.adaptive_atol,
-        ctx.adaptive_rtol,
+        ctx.adaptive_dt.atol,
+        ctx.adaptive_dt.rtol,
         gpu.scalar_reduce_workspace,
         tableau.stages,
         n,
@@ -532,7 +532,7 @@ bool compute_rhs_for_magnetization(
             ctx.dmi_n_hat[0],
             ctx.dmi_n_hat[1],
             ctx.dmi_n_hat[2],
-            bulk_mode ? !ctx.Dbulk_field.empty() : !ctx.Dind_field.empty(),
+            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
             bulk_mode,
             static_cast<int>(ctx.n_elements),
             n,
@@ -573,8 +573,8 @@ bool compute_rhs_for_magnetization(
             ctx.anisotropy_axis[0],
             ctx.anisotropy_axis[1],
             ctx.anisotropy_axis[2],
-            !ctx.Ku_field.empty(),
-            !ctx.Ku2_field.empty(),
+            !ctx.material_fields.Ku_field.empty(),
+            !ctx.material_fields.Ku2_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy field", reason)) {
@@ -612,9 +612,9 @@ bool compute_rhs_for_magnetization(
             ctx.cubic_axis2[0],
             ctx.cubic_axis2[1],
             ctx.cubic_axis2[2],
-            !ctx.Kc1_field.empty(),
-            !ctx.Kc2_field.empty(),
-            !ctx.Kc3_field.empty(),
+            !ctx.material_fields.Kc1_field.empty(),
+            !ctx.material_fields.Kc2_field.empty(),
+            !ctx.material_fields.Kc3_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK cubic anisotropy field", reason)) {
@@ -701,7 +701,7 @@ bool compute_rhs_for_magnetization(
             ctx.current_dt,
             ctx.thermal_seed,
             ctx.step_count,
-            !ctx.alpha_field.empty(),
+            !ctx.material_fields.alpha_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK deterministic thermal field", reason)) {
@@ -784,7 +784,7 @@ bool compute_rhs_for_magnetization(
         gpu.alpha,
         ctx.material.gyromagnetic_ratio,
         ctx.material.damping,
-        !ctx.alpha_field.empty(),
+        !ctx.material_fields.alpha_field.empty(),
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK RHS", reason)) {
@@ -905,7 +905,7 @@ bool gpu_rk_exchange_only_step(
     auto &gpu = ctx.gpu_state;
     const int n = static_cast<int>(ctx.n_nodes);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.compute_stream);
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream);
 
     if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH &&
         gpu.device_state == FemGpuSyncState::DeviceClean &&
@@ -922,7 +922,7 @@ bool gpu_rk_exchange_only_step(
         return false;
     }
 
-    const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt_enabled;
+    const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled;
     const bool fsal_method = is_rk23 || is_rk45;
     double active_dt = dt_seconds;
     double error_estimate = 0.0;
@@ -1304,7 +1304,7 @@ bool gpu_rk_finalize_step_stats(
         return true;
     }
 
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.compute_stream);
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream);
     double max_rhs = 0.0;
     if (!read_scalar_result(
             ctx,
@@ -1435,7 +1435,7 @@ bool gpu_rk_finalize_step_stats(
             ctx.dmi_n_hat[0],
             ctx.dmi_n_hat[1],
             ctx.dmi_n_hat[2],
-            bulk_mode ? !ctx.Dbulk_field.empty() : !ctx.Dind_field.empty(),
+            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
             bulk_mode,
             static_cast<int>(ctx.n_elements),
             n,
@@ -1501,8 +1501,8 @@ bool gpu_rk_finalize_step_stats(
             ctx.anisotropy_axis[0],
             ctx.anisotropy_axis[1],
             ctx.anisotropy_axis[2],
-            !ctx.Ku_field.empty(),
-            !ctx.Ku2_field.empty(),
+            !ctx.material_fields.Ku_field.empty(),
+            !ctx.material_fields.Ku2_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy blocks", reason)) {
@@ -1561,9 +1561,9 @@ bool gpu_rk_finalize_step_stats(
             ctx.cubic_axis2[0],
             ctx.cubic_axis2[1],
             ctx.cubic_axis2[2],
-            !ctx.Kc1_field.empty(),
-            !ctx.Kc2_field.empty(),
-            !ctx.Kc3_field.empty(),
+            !ctx.material_fields.Kc1_field.empty(),
+            !ctx.material_fields.Kc2_field.empty(),
+            !ctx.material_fields.Kc3_field.empty(),
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy blocks", reason)) {
@@ -1839,8 +1839,8 @@ bool gpu_rk_finalize_step_stats(
     stats.demag_solve_count = 0;
     stats.demag_linear_iterations = 0;
     stats.demag_linear_residual = 0.0;
-    stats.requested_omp_threads = ctx.requested_omp_threads;
-    stats.effective_omp_threads = ctx.effective_omp_threads;
+    stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
+    stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
     context_update_stage_completion_from_stats(ctx, stats);
     return true;
 }

@@ -1,3 +1,10 @@
+/*
+ * Oersted aggregate source contract.
+ *
+ * This compatibility source owns plan import, realization exclusivity, and
+ * dispatch between analytical-cylinder and explicit nodal Oersted paths.
+ * It does not sample analytical cylinders or add explicit nodal fields.
+ */
 #include "cpu/mfem/interactions/oersted.hpp"
 
 #include "context.hpp"
@@ -41,7 +48,7 @@ bool initialize_oersted_plan_fields(
     ctx.oersted_time_dep_t_off = plan.oersted_time_dep_t_off;
 
     if (ctx.has_oersted_field) {
-        ctx.h_oe_xyz.assign(
+        ctx.oersted.h_xyz.assign(
             plan.oersted_field_xyz,
             plan.oersted_field_xyz + static_cast<size_t>(plan.oersted_field_len));
         return true;

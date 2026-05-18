@@ -147,6 +147,112 @@ void stt_plan_fields_are_owned_by_stt_module() {
         "STT aggregate header must document plan-field initialization ownership");
 }
 
+void stt_aggregate_header_documents_submodule_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string stt_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.hpp");
+
+    check(
+        stt_header.find("owns plan import") != std::string::npos,
+        "STT aggregate header must document plan import ownership");
+    check(
+        stt_header.find("family dispatch") != std::string::npos,
+        "STT aggregate header must document dispatch ownership");
+    check(
+        stt_header.find("reusable") != std::string::npos &&
+            stt_header.find("workspace") != std::string::npos,
+        "STT aggregate header must document aggregate ownership");
+    check(
+        stt_header.find("does not define") != std::string::npos &&
+            stt_header.find("Slonczewski CPP") != std::string::npos &&
+            stt_header.find("torque") != std::string::npos,
+        "STT aggregate header must document that Slonczewski physics is not owned by the aggregate");
+    check(
+        stt_header.find("does not define") != std::string::npos &&
+            stt_header.find("Zhang-Li CIP") != std::string::npos &&
+            stt_header.find("torque") != std::string::npos,
+        "STT aggregate header must document that Zhang-Li physics is not owned by the aggregate");
+    check(
+        stt_header.find("stt_slonczewski.*") != std::string::npos,
+        "STT aggregate header must name the Slonczewski owner");
+    check(
+        stt_header.find("stt_zhang_li.*") != std::string::npos,
+        "STT aggregate header must name the Zhang-Li owner");
+}
+
+void stt_rhs_hot_path_uses_reusable_workspace() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string stt =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
+    const std::string rk_stage_rhs =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
+    const std::string rk_workspace =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
+
+    check(
+        stt.find("llg_only") == std::string::npos,
+        "STT aggregate must not copy the full LLG RHS in the hot path");
+    check(
+        stt.find("std::vector<double> zhang_li") == std::string::npos,
+        "STT aggregate must not allocate a temporary Zhang-Li RHS in the hot path");
+    check(
+        rk_workspace.find("SttWorkspace stt;") != std::string::npos,
+        "RK stepper workspace must own reusable STT scratch buffers");
+    check(
+        rk_stage_rhs.find("add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt)") !=
+            std::string::npos,
+        "RK stage RHS must pass reusable STT workspace into the aggregate");
+}
+
+void stt_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string stt =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
+    const std::string slonczewski = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "stt_slonczewski.cpp");
+    const std::string zhang_li =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt_zhang_li.cpp");
+
+    check(
+        stt.find("STT aggregate source contract") != std::string::npos,
+        "STT aggregate source file must document its source contract");
+    check(
+        stt.find("does not define Slonczewski CPP or Zhang-Li CIP torque physics") !=
+            std::string::npos,
+        "STT aggregate source file must document its non-owning torque boundary");
+    check(
+        slonczewski.find("Slonczewski CPP STT source contract") != std::string::npos,
+        "Slonczewski STT source file must document its source contract");
+    check(
+        slonczewski.find("does not import plan fields or compute Zhang-Li CIP torque") !=
+            std::string::npos,
+        "Slonczewski STT source file must document its non-owning aggregate/Zhang-Li boundary");
+    check(
+        zhang_li.find("Zhang-Li CIP STT source contract") != std::string::npos,
+        "Zhang-Li STT source file must document its source contract");
+    check(
+        zhang_li.find("does not import plan fields or compute Slonczewski CPP torque") !=
+            std::string::npos,
+        "Zhang-Li STT source file must document its non-owning aggregate/Slonczewski boundary");
+}
+
+void stt_leaf_headers_document_non_owning_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string slonczewski_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "stt_slonczewski.hpp");
+    const std::string zhang_li_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt_zhang_li.hpp");
+
+    check(
+        slonczewski_header.find("does not own Zhang-Li CIP torque, reusable Zhang-Li scratch, aggregate family dispatch, or effective-field composition") !=
+            std::string::npos,
+        "Slonczewski STT header must document its non-owning Zhang-Li/scratch/composition boundary");
+    check(
+        zhang_li_header.find("does not own Slonczewski CPP torque, aggregate family dispatch, plan import, or effective-field composition") !=
+            std::string::npos,
+        "Zhang-Li STT header must document its non-owning Slonczewski/aggregate/composition boundary");
+}
+
 void check_near(double actual, double expected, double tol, const char *msg) {
     if (std::fabs(actual - expected) > tol) {
         std::fprintf(
@@ -197,9 +303,41 @@ void slonczewski_cpp_rhs_uses_current_sign_and_field_like_term() {
     check_near(signed_rhs[2], beta_stt, beta_stt * 1e-12, "Slonczewski current sign");
 }
 
+void macrospin_cpp_sign_and_precession_direction_match_reference() {
+    auto ctx = make_slonczewski_context();
+    ctx.stt_epsilon_prime = 0.0;
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
+
+    const double prefactor =
+        (1.0e12 * kHbarTest) /
+        (2.0 * kElectronChargeTest * kMu0Test *
+         ctx.material.saturation_magnetisation * ctx.stt_free_layer_thickness);
+    const double beta_stt = prefactor * 0.5;
+
+    check_near(rhs[0], 0.0, 0.0, "macrospin CPP rhs x");
+    check_near(rhs[1], 0.0, beta_stt * 1e-12, "macrospin CPP field-like-free y");
+    check_near(
+        rhs[2],
+        -beta_stt,
+        beta_stt * 1e-12,
+        "macrospin CPP positive current drives m x (m x p) toward -p");
+
+    std::vector<double> reversed_rhs(3u, 0.0);
+    ctx.stt_current_sign = -1.0;
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, reversed_rhs);
+    check_near(
+        reversed_rhs[2],
+        beta_stt,
+        beta_stt * 1e-12,
+        "macrospin CPP current sign reverses the reference precession direction");
+}
+
 void slonczewski_skips_nonmagnetic_nodes() {
     auto ctx = make_slonczewski_context();
-    ctx.magnetic_node_mask = {0u};
+    ctx.mesh.magnetic_node_mask = {0u};
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs = {1.0, 2.0, 3.0};
 
@@ -219,14 +357,14 @@ fullmag::fem::Context make_zhang_li_context() {
     ctx.stt_degree = 1.0;
     ctx.stt_beta = 0.0;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.nodes_xyz = {
+    ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.elements = {0, 1, 2, 3};
-    ctx.magnetic_element_mask = {1u};
+    ctx.mesh.elements = {0, 1, 2, 3};
+    ctx.mesh.magnetic_element_mask = {1u};
     return ctx;
 }
 
@@ -251,6 +389,28 @@ void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
     check_near(rhs[2], u_x, u_x * 1e-12, "Zhang-Li node0 rhs z");
     check_near(rhs[3], -u_x, u_x * 1e-12, "Zhang-Li node1 rhs x");
     check_near(rhs[5], u_x, u_x * 1e-12, "Zhang-Li node1 rhs z");
+}
+
+void zhang_li_adds_torque_without_scaling_existing_rhs() {
+    auto ctx = make_zhang_li_context();
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> rhs(12u, 10.0);
+
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, rhs);
+
+    const double u_x =
+        (ctx.stt_degree * kBohrMagnetonTest * ctx.stt_current_density_am2[0]) /
+        (kElectronChargeTest * ctx.material.saturation_magnetisation);
+
+    check_near(rhs[0], 10.0, 0.0, "Zhang-Li preserves existing rhs x");
+    check_near(rhs[2], 10.0 + u_x, u_x * 1e-12, "Zhang-Li adds to existing rhs z");
+    check_near(rhs[3], 10.0 - u_x, u_x * 1e-12, "Zhang-Li adds node1 rhs x");
+    check_near(rhs[5], 10.0 + u_x, u_x * 1e-12, "Zhang-Li adds node1 rhs z");
 }
 
 void combined_stt_updates_max_rhs() {
@@ -316,9 +476,15 @@ int main() {
     slonczewski_cpp_is_owned_by_slonczewski_module();
     zhang_li_cip_is_owned_by_zhang_li_module();
     stt_plan_fields_are_owned_by_stt_module();
+    stt_aggregate_header_documents_submodule_boundaries();
+    stt_rhs_hot_path_uses_reusable_workspace();
+    stt_source_files_document_module_boundaries();
+    stt_leaf_headers_document_non_owning_boundaries();
     slonczewski_cpp_rhs_uses_current_sign_and_field_like_term();
+    macrospin_cpp_sign_and_precession_direction_match_reference();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
+    zhang_li_adds_torque_without_scaling_existing_rhs();
     combined_stt_updates_max_rhs();
     stt_plan_import_copies_parameters_and_validates_family();
     return 0;

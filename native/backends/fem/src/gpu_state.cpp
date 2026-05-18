@@ -1,3 +1,11 @@
+/*
+ * GPU state facade source contract.
+ *
+ * This source owns FemGpuState allocation/free, host-device buffer transfers,
+ * runtime coefficient uploads, mesh/material/stage storage, and CUDA/no-CUDA
+ * fallback behavior for the native FEM GPU scaffold. It does not own MFEM device selection, Context construction, exchange operator assembly, integrator execution, or C ABI entrypoints.
+ */
+
 #include "gpu_state.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME

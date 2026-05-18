@@ -1,3 +1,11 @@
+/*
+ * FEM/BEM demag solve orchestration source contract.
+ *
+ * This source owns per-step Fredkin-Koehler orchestration: source RHS reuse,
+ * u1/u2 solves, BEM boundary apply, total potential construction, recovery,
+ * interrupt checkpoints, and telemetry handoff. It does not extract surfaces, assemble dense BEM operators, own sparse solver internals, define boundary-value helpers, own workspace lifecycle, or compute energy formula.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_solve.hpp"
 
 #include "context.hpp"
@@ -5,6 +13,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_potential.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_rhs.hpp"
+#include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_telemetry.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"

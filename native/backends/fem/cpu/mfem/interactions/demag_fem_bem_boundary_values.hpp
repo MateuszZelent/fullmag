@@ -21,6 +21,7 @@ namespace fullmag::fem {
  * the interior Laplace correction, pins boundary true DOFs to the prescribed
  * values, and leaves assembly, dense BEM application, sparse solve, recovery,
  * energy, and full update orchestration to their dedicated modules.
+ * It does not extract boundary surfaces, solve sparse systems, combine potentials, recover fields, compute energy, or publish telemetry.
  */
 bool set_demag_fem_bem_boundary_values(
     const std::vector<uint32_t> &boundary_nodes,

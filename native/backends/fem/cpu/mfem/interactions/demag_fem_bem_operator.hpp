@@ -18,6 +18,7 @@ struct Context;
  * It uses an intentionally O(Nb^2) dense matrix as a correctness/reference
  * implementation. Production-scale compressed BEM/H2/FMM operators are future
  * implementations behind the same boundary-operator role.
+ * It does not extract boundary surfaces, solve sparse systems, transfer boundary values, compute energy, or manage workspace.
  */
 class DenseDemagBemOperator {
 public:

@@ -13,6 +13,9 @@ struct Context;
  *
  * Validates the ABI field-refresh policy, copies it into Context, and resets
  * the demag frozen-field cache state used when a refresh interval is active.
+ *
+ * It does not solve demag, compose H_eff, own state I/O, or publish step
+ * metrics.
  */
 bool initialize_field_refresh_plan_fields(
     Context &ctx,

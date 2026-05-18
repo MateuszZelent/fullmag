@@ -1,3 +1,10 @@
+/*
+ * Exchange runtime refresh source contract.
+ *
+ * This source owns the Context runtime wrapper that syncs magnetization from
+ * device/host state, calls effective-field composition, publishes exchange
+ * readiness, and emits optional startup checkpoints. It does not assemble operators or compute exchange components directly.
+ */
 #include "cpu/mfem/interactions/exchange_runtime.hpp"
 
 #include "context.hpp"
@@ -50,10 +57,10 @@ bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error)
     double demag_energy = 0.0;
     if (!compute_effective_fields_for_magnetization(
             ctx,
-            ctx.m_xyz,
-            ctx.h_ex_xyz,
-            ctx.h_demag_xyz,
-            ctx.h_eff_xyz,
+            ctx.state.m_xyz,
+            ctx.exchange.h_xyz,
+            ctx.demag.h_xyz,
+            ctx.effective_field.h_xyz,
             &exchange_energy,
             &demag_energy,
             false,
@@ -61,7 +68,7 @@ bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error)
             error)) {
         return false;
     }
-    ctx.mfem_exchange_ready = true;
+    ctx.exchange.mfem.ready = true;
     debug_checkpoint("context_refresh_exchange_field_mfem:done");
     return true;
 }

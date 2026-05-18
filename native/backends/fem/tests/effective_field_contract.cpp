@@ -80,6 +80,55 @@ void effective_field_composition_is_owned_by_interaction_module() {
         effective_header.find("Refresh initial native FEM effective-field buffers") !=
             std::string::npos,
         "effective_field header must document eager initial refresh ownership");
+    check(
+        effective_header.find("does not assemble exchange operators, implement demag solvers, define individual interaction physics, own state I/O, or publish step metrics") !=
+            std::string::npos,
+        "effective_field header must document its non-owning module boundary");
+    check(
+        effective_header.find("exchange") != std::string::npos &&
+            effective_header.find("demag") != std::string::npos &&
+            effective_header.find("Zeeman") != std::string::npos,
+        "effective_field header must name representative interaction owners");
+}
+
+void effective_field_runtime_state_is_owned_by_composition_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string effective_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.hpp");
+
+    check(
+        effective_header.find("struct EffectiveFieldRuntimeState") != std::string::npos,
+        "effective-field runtime state must be declared by effective_field.hpp");
+    check(
+        effective_header.find("std::vector<double> h_xyz") != std::string::npos,
+        "effective-field runtime state must own the composed H_eff field buffer");
+    check(
+        effective_header.find("std::vector<double> h_visual_xyz") != std::string::npos,
+        "effective-field runtime state must own the visual H_eff field buffer");
+    check(
+        context_header.find("EffectiveFieldRuntimeState effective_field") !=
+            std::string::npos,
+        "Context must store effective-field runtime output through the composition owner");
+    check(
+        context_header.find("std::vector<double> h_eff_xyz") == std::string::npos,
+        "Context must not own a flat effective-field buffer");
+    check(
+        context_header.find("std::vector<double> h_eff_visual_xyz") == std::string::npos,
+        "Context must not own a flat visual effective-field buffer");
+}
+
+void effective_field_source_file_documents_composition_boundary() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string effective =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
+
+    check(
+        effective.find("Effective-field composition source contract") != std::string::npos,
+        "effective-field source file must document its source contract");
+    check(
+        effective.find("does not assemble exchange operators, implement demag solvers, define individual interaction physics, own state I/O, or publish step metrics") != std::string::npos,
+        "effective-field source file must document its non-owning module boundary");
 }
 
 void field_or_torque_gate_covers_all_runtime_terms() {
@@ -142,10 +191,29 @@ void field_or_torque_gate_covers_all_runtime_terms() {
     check(!fullmag::fem::has_any_field_or_direct_torque_term(ctx), "cleared context has no RHS terms");
 }
 
+void disabled_local_field_buffers_are_zeroed_before_composition() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string effective =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
+
+    check(
+        effective.find("ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0)") != std::string::npos,
+        "disabled interfacial DMI buffer must be zeroed before H_eff composition");
+    check(
+        effective.find("ctx.anisotropy.h_cubic_xyz.assign(m_xyz.size(), 0.0)") != std::string::npos,
+        "disabled cubic anisotropy buffer must be zeroed before H_eff composition");
+    check(
+        effective.find("ctx.dmi.h_bulk_xyz.assign(m_xyz.size(), 0.0)") != std::string::npos,
+        "disabled bulk DMI buffer must be zeroed before readback/visual reuse");
+}
+
 } // namespace
 
 int main() {
     effective_field_composition_is_owned_by_interaction_module();
+    effective_field_runtime_state_is_owned_by_composition_module();
+    effective_field_source_file_documents_composition_boundary();
     field_or_torque_gate_covers_all_runtime_terms();
+    disabled_local_field_buffers_are_zeroed_before_composition();
     return 0;
 }

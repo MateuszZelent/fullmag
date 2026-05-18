@@ -1,3 +1,11 @@
+/*
+ * FEM material-fields core source contract.
+ *
+ * This source owns scalar material import, optional per-node material field
+ * copies, field length checks, finite-value checks, and scalar material
+ * convention validation. It does not import mesh topology, initialize magnetization, size field buffers, choose runtime devices, or compute interaction fields.
+ */
+
 #include "core/fem_material_fields.hpp"
 
 #include "context.hpp"
@@ -66,41 +74,41 @@ void initialize_material_plan_fields(Context &ctx, const fullmag_fem_plan_desc &
 }
 
 void copy_plan_material_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
-    copy_field(ctx.Ms_field, plan.ms_field, plan.ms_field_len);
-    copy_field(ctx.A_field, plan.a_field, plan.a_field_len);
-    copy_field(ctx.alpha_field, plan.alpha_field, plan.alpha_field_len);
-    copy_field(ctx.Ku_field, plan.ku_field, plan.ku_field_len);
-    copy_field(ctx.Ku2_field, plan.ku2_field, plan.ku2_field_len);
-    copy_field(ctx.Dind_field, plan.dind_field, plan.dind_field_len);
-    copy_field(ctx.Dbulk_field, plan.dbulk_field, plan.dbulk_field_len);
-    copy_field(ctx.Kc1_field, plan.kc1_field, plan.kc1_field_len);
-    copy_field(ctx.Kc2_field, plan.kc2_field, plan.kc2_field_len);
-    copy_field(ctx.Kc3_field, plan.kc3_field, plan.kc3_field_len);
+    copy_field(ctx.material_fields.Ms_field, plan.ms_field, plan.ms_field_len);
+    copy_field(ctx.material_fields.A_field, plan.a_field, plan.a_field_len);
+    copy_field(ctx.material_fields.alpha_field, plan.alpha_field, plan.alpha_field_len);
+    copy_field(ctx.material_fields.Ku_field, plan.ku_field, plan.ku_field_len);
+    copy_field(ctx.material_fields.Ku2_field, plan.ku2_field, plan.ku2_field_len);
+    copy_field(ctx.material_fields.Dind_field, plan.dind_field, plan.dind_field_len);
+    copy_field(ctx.material_fields.Dbulk_field, plan.dbulk_field, plan.dbulk_field_len);
+    copy_field(ctx.material_fields.Kc1_field, plan.kc1_field, plan.kc1_field_len);
+    copy_field(ctx.material_fields.Kc2_field, plan.kc2_field, plan.kc2_field_len);
+    copy_field(ctx.material_fields.Kc3_field, plan.kc3_field, plan.kc3_field_len);
 }
 
 bool validate_material_fields(const Context &ctx, std::string &error) {
-    if (!check_field_len(ctx, ctx.Ms_field, "Ms_field", error) ||
-        !check_field_len(ctx, ctx.A_field, "A_field", error) ||
-        !check_field_len(ctx, ctx.alpha_field, "alpha_field", error) ||
-        !check_field_len(ctx, ctx.Ku_field, "Ku_field", error) ||
-        !check_field_len(ctx, ctx.Ku2_field, "Ku2_field", error) ||
-        !check_field_len(ctx, ctx.Dind_field, "Dind_field", error) ||
-        !check_field_len(ctx, ctx.Dbulk_field, "Dbulk_field", error) ||
-        !check_field_len(ctx, ctx.Kc1_field, "Kc1_field", error) ||
-        !check_field_len(ctx, ctx.Kc2_field, "Kc2_field", error) ||
-        !check_field_len(ctx, ctx.Kc3_field, "Kc3_field", error)) {
+    if (!check_field_len(ctx, ctx.material_fields.Ms_field, "Ms_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.A_field, "A_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.alpha_field, "alpha_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Ku_field, "Ku_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Ku2_field, "Ku2_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Dind_field, "Dind_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Dbulk_field, "Dbulk_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Kc1_field, "Kc1_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Kc2_field, "Kc2_field", error) ||
+        !check_field_len(ctx, ctx.material_fields.Kc3_field, "Kc3_field", error)) {
         return false;
     }
-    if (!validate_field_values(ctx.Ms_field, "Ms_field", true, false, error) ||
-        !validate_field_values(ctx.A_field, "A_field", true, true, error) ||
-        !validate_field_values(ctx.alpha_field, "alpha_field", true, true, error) ||
-        !validate_field_values(ctx.Ku_field, "Ku_field", false, true, error) ||
-        !validate_field_values(ctx.Ku2_field, "Ku2_field", false, true, error) ||
-        !validate_field_values(ctx.Dind_field, "Dind_field", false, true, error) ||
-        !validate_field_values(ctx.Dbulk_field, "Dbulk_field", false, true, error) ||
-        !validate_field_values(ctx.Kc1_field, "Kc1_field", false, true, error) ||
-        !validate_field_values(ctx.Kc2_field, "Kc2_field", false, true, error) ||
-        !validate_field_values(ctx.Kc3_field, "Kc3_field", false, true, error)) {
+    if (!validate_field_values(ctx.material_fields.Ms_field, "Ms_field", true, false, error) ||
+        !validate_field_values(ctx.material_fields.A_field, "A_field", true, true, error) ||
+        !validate_field_values(ctx.material_fields.alpha_field, "alpha_field", true, true, error) ||
+        !validate_field_values(ctx.material_fields.Ku_field, "Ku_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Ku2_field, "Ku2_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Dind_field, "Dind_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Dbulk_field, "Dbulk_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Kc1_field, "Kc1_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Kc2_field, "Kc2_field", false, true, error) ||
+        !validate_field_values(ctx.material_fields.Kc3_field, "Kc3_field", false, true, error)) {
         return false;
     }
     if (!std::isfinite(ctx.material.saturation_magnetisation) ||

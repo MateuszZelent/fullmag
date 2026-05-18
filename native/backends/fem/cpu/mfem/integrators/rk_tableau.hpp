@@ -12,6 +12,9 @@ static constexpr int MAX_RK_STAGES = 7;
  * LLG RHS. Stage increments use dt in seconds and RHS values in 1/s, so the
  * resulting magnetization updates remain dimensionless. Embedded pairs populate
  * both b_hi and b_lo; fixed-order methods leave order_est at zero.
+ *
+ * It does not allocate workspace, evaluate stages, perform steps, or run
+ * adaptive control.
  */
 struct ExplicitTableau {
     int stages;                                     // s

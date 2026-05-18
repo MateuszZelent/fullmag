@@ -1,6 +1,14 @@
+/*
+ * Poisson demag RHS assembly source contract.
+ *
+ * This source owns M_s m vector-coefficient evaluation and RHS assembly workspace
+ * for the scalar potential equation. It does not configure boundary operators, solve Poisson, recover H_demag, compute energy, or manage cache.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -12,16 +20,6 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
-namespace {
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
-}
-
 /// MFEM vector coefficient for M_s m(x), restricted to magnetic elements.
 class MagnetizationCoefficient : public mfem::VectorCoefficient {
 public:
@@ -60,9 +58,9 @@ public:
 
         const int elem_no = T.ElementNo;
         if (elem_no >= 0 &&
-            !ctx_.magnetic_element_mask.empty() &&
-            static_cast<size_t>(elem_no) < ctx_.magnetic_element_mask.size() &&
-            ctx_.magnetic_element_mask[static_cast<size_t>(elem_no)] == 0u) {
+            !ctx_.mesh.magnetic_element_mask.empty() &&
+            static_cast<size_t>(elem_no) < ctx_.mesh.magnetic_element_mask.size() &&
+            ctx_.mesh.magnetic_element_mask[static_cast<size_t>(elem_no)] == 0u) {
             V = 0.0;
             return;
         }
@@ -90,13 +88,13 @@ public:
         }
 
         double Ms = ctx_.material.saturation_magnetisation;
-        if (!ctx_.Ms_field.empty()) {
+        if (!ctx_.material_fields.Ms_field.empty()) {
             Ms = 0.0;
             for (int i = 0; i < ndof; ++i) {
                 const int global_dof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
                 Ms += shape(i) *
                     scalar_field_value(
-                        ctx_.Ms_field,
+                        ctx_.material_fields.Ms_field,
                         static_cast<size_t>(global_dof),
                         ctx_.material.saturation_magnetisation);
             }
@@ -125,6 +123,8 @@ struct PoissonRhsWorkspace {
     mfem::LinearForm rhs_form;
     mfem::Vector rhs_true;
 };
+
+namespace {
 
 } // namespace
 

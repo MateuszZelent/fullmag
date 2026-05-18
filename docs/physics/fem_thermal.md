@@ -18,6 +18,12 @@ This umbrella document exists because the release plan names
 executable implementation is intentionally more specific: Brown thermal field
 sampling.
 
+## Pole / torque
+
+Thermal Brown noise contributes an additive stochastic effective field
+`H_therm` in `A/m` to `H_eff`. It is not a direct torque and does not apply
+gamma, damping, or LLG RHS scaling inside the interaction module.
+
 ## Kontrakt
 
 Thermal noise contributes an H-field term `H_therm` in `A/m` to `H_eff`. It is
@@ -37,6 +43,12 @@ accepted `(time, dt)` reuse the sampled thermal field.
 The executable Brown implementation is split into the sigma formula module,
 the sampler/cache/RNG module, and the additive field-composition module.
 
+## Energia
+
+Thermal Brown noise is a stochastic drive and the current native FEM CPU
+implementation does not report a deterministic standalone energy term. Energy
+monitors should treat it as a non-conservative stochastic field contribution.
+
 ## Jednostki
 
 | Quantity | Symbol | Solver unit |
@@ -49,7 +61,29 @@ the sampler/cache/RNG module, and the additive field-composition module.
 | timestep | `dt` | `s` |
 | thermal field | `H_therm` | `A/m` |
 
-## Walidacja
+## Warunki brzegowe
+
+The Brown field is sampled per magnetic node and has no FEM weak boundary term.
+Nonmagnetic nodes are explicitly zeroed. Boundary behavior therefore follows
+the magnetic-node mask and accepted-step sampling policy, not a separate
+surface or airbox condition.
+
+## Dyskretyzacja FEM
+
+The Brown sigma module computes a nodal standard deviation from the FEM nodal
+dual volume `V_i`. The sampler uses the accepted `(time, dt)` state, seed, node
+volumes, material fields, and magnetic mask to refresh or reuse the stochastic
+AoS-3 field buffer. The field module then adds that sampled H field to `H_eff`.
+
+## Ograniczenia capability
+
+- The executable native FEM CPU thermal interaction is Brown thermal field
+  sampling only.
+- The stochastic field is tied to accepted-step `(time, dt)` cache semantics.
+- GPU parity and production statistical qualification are not claimed by this
+  umbrella document.
+
+## Testy
 
 Current local gate:
 

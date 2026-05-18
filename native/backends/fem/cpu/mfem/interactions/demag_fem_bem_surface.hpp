@@ -33,6 +33,7 @@ struct DemagBoundarySurface {
  * present. The resulting triangles are oriented with outward normals. This
  * module owns topology validation and outward-normal construction only; dense
  * BEM matrix assembly and Fredkin-Koehler solve orchestration live elsewhere.
+ * It does not assemble BEM operators, solve sparse systems, transfer boundary values, compute energy, or orchestrate solves.
  */
 bool build_demag_boundary_surface(
     const Context &ctx,

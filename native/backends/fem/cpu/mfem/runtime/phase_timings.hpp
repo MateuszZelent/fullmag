@@ -14,6 +14,9 @@ namespace fullmag::fem {
  * native FEM evaluation. It intentionally stays outside Context so module
  * entrypoints can accumulate timing data without exporting transient telemetry
  * definitions from the Context compatibility facade.
+ *
+ * It does not execute phases, compute fields, solve demag, advance
+ * integrators, or publish ABI snapshots.
  */
 struct PhaseTimings {
     uint64_t exchange_wall_time_ns = 0;

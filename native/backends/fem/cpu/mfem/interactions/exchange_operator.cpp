@@ -1,3 +1,9 @@
+/*
+ * Exchange operator source contract.
+ *
+ * This source owns MFEM exchange and mass bilinear-form assembly, magnetic
+ * attribute selection, lumped-mass setup, and legacy sparse metadata. It does not compute H_ex, project mass, refresh runtime fields, or upload GPU state.
+ */
 #include "cpu/mfem/interactions/exchange_operator.hpp"
 
 #include "context.hpp"
@@ -38,9 +44,9 @@ bool initialize_exchange_operator_mfem(
     mfem::Array<int> magnetic_attr_marker(max_attr);
     magnetic_attr_marker = 0;
     for (int e = 0; e < mesh.GetNE(); ++e) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            static_cast<size_t>(e) < ctx.magnetic_element_mask.size() &&
-            ctx.magnetic_element_mask[e] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            static_cast<size_t>(e) < ctx.mesh.magnetic_element_mask.size() &&
+            ctx.mesh.magnetic_element_mask[e] == 0u) {
             continue;
         }
         const int attr = mesh.GetAttribute(e);
@@ -71,12 +77,12 @@ bool initialize_exchange_operator_mfem(
     exchange_form->Finalize();
 
     const auto &exchange_spmat = exchange_form->SpMat();
-    ctx.gpu_exchange_legacy_sparse_metadata_ready = true;
-    ctx.gpu_exchange_legacy_sparse_rows =
+    ctx.gpu_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_exchange.legacy_sparse_rows =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Height()));
-    ctx.gpu_exchange_legacy_sparse_cols =
+    ctx.gpu_exchange.legacy_sparse_cols =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Width()));
-    ctx.gpu_exchange_legacy_sparse_nnz =
+    ctx.gpu_exchange.legacy_sparse_nnz =
         static_cast<uint64_t>(std::max(0, exchange_spmat.NumNonZeroElems()));
 
     mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
@@ -90,13 +96,13 @@ bool initialize_exchange_operator_mfem(
         *mass_ones,
         *mass_lumped,
         *inv_lumped_mass,
-        ctx.mfem_lumped_mass);
-    ctx.gpu_exchange_lumped_mass_ready =
-        ctx.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
+        ctx.integration_weights.mfem_lumped_mass);
+    ctx.gpu_exchange.lumped_mass_ready =
+        ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
 
     const bool has_nonzero_lumped_mass = std::any_of(
-        ctx.mfem_lumped_mass.begin(),
-        ctx.mfem_lumped_mass.end(),
+        ctx.integration_weights.mfem_lumped_mass.begin(),
+        ctx.integration_weights.mfem_lumped_mass.end(),
         [](double value) { return value > 0.0; });
     if (ctx.enable_exchange && !has_nonzero_lumped_mass) {
         error = "F-01 validation: enable_exchange=true but MFEM lumped "
@@ -106,13 +112,13 @@ bool initialize_exchange_operator_mfem(
         return false;
     }
 
-    ctx.mfem_exchange_form = exchange_form.release();
-    ctx.mfem_mass_form = mass_form.release();
-    ctx.mfem_mass_ones = mass_ones.release();
-    ctx.mfem_mass_lumped = mass_lumped.release();
-    ctx.mfem_inv_lumped_mass = inv_lumped_mass.release();
-    ctx.mfem_exchange_tmp_vec = exchange_tmp_vec.release();
-    ctx.mfem_exchange_out_vec = exchange_out_vec.release();
+    ctx.exchange.mfem.exchange_form = exchange_form.release();
+    ctx.exchange.mfem.mass_form = mass_form.release();
+    ctx.exchange.mfem.mass_ones = mass_ones.release();
+    ctx.exchange.mfem.mass_lumped = mass_lumped.release();
+    ctx.exchange.mfem.inv_lumped_mass = inv_lumped_mass.release();
+    ctx.exchange.mfem.tmp_vec = exchange_tmp_vec.release();
+    ctx.exchange.mfem.out_vec = exchange_out_vec.release();
     return true;
 }
 #endif

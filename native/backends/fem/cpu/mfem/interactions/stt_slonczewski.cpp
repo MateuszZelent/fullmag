@@ -1,19 +1,23 @@
+/*
+ * Slonczewski CPP STT source contract.
+ *
+ * This source owns CPP damping-like/field-like torque, current sign and
+ * magnitude handling, spin-polarization geometry, free-layer thickness fallback,
+ * per-node Ms fallback, and nonmagnetic-node masking. It does not import plan fields or compute Zhang-Li CIP torque.
+ */
 #include "cpu/mfem/interactions/stt_slonczewski.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <limits>
 
 namespace fullmag::fem {
 namespace {
 
 using Vec3 = std::array<double, 3>;
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
 
 double dot3(const Vec3 &a, const Vec3 &b)
 {
@@ -34,32 +38,19 @@ Vec3 scale3(const Vec3 &a, double s)
     return {a[0] * s, a[1] * s, a[2] * s};
 }
 
-double vector_norm3(double x, double y, double z)
-{
-    return std::sqrt(x * x + y * y + z * z);
-}
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
-}
-
 double effective_magnetic_thickness_along_axis(const Context &ctx, const Vec3 &axis)
 {
     double min_proj = std::numeric_limits<double>::infinity();
     double max_proj = -std::numeric_limits<double>::infinity();
     bool any = false;
     for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
             continue;
         }
         const size_t base = i * 3u;
-        const double proj = ctx.nodes_xyz[base + 0] * axis[0] +
-                            ctx.nodes_xyz[base + 1] * axis[1] +
-                            ctx.nodes_xyz[base + 2] * axis[2];
+        const double proj = ctx.mesh.nodes_xyz[base + 0] * axis[0] +
+                            ctx.mesh.nodes_xyz[base + 1] * axis[1] +
+                            ctx.mesh.nodes_xyz[base + 2] * axis[2];
         min_proj = std::min(min_proj, proj);
         max_proj = std::max(max_proj, proj);
         any = true;
@@ -107,13 +98,13 @@ void add_slonczewski_stt_rhs_aos(
 
     const size_t n = m_xyz.size() / 3u;
     for (size_t i = 0; i < n; ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
             continue;
         }
         const size_t base = i * 3u;
         const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
         const double ms = scalar_field_value(
-            ctx.Ms_field,
+            ctx.material_fields.Ms_field,
             i,
             ctx.material.saturation_magnetisation);
         if (!(ms > 0.0)) {

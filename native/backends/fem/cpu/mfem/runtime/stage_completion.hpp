@@ -2,6 +2,7 @@
 
 #include "fullmag_fem.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -18,6 +19,24 @@ struct Context;
  * but this runtime module owns the window-size policy.
  */
 constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;
+
+/*
+ * Runtime state for native FEM relaxation stage completion.
+ *
+ * The state owns the copied relaxation-stop policy, public completion
+ * snapshot, pseudo-time accumulator, previous energy sample, and fixed-size
+ * total-energy window used by the plateau criterion.
+ */
+struct StageCompletionRuntimeState {
+    fullmag_fem_relax_stop relax_stop{};
+    fullmag_fem_stage_completion snapshot{};
+    double relax_pseudotime_s = 0.0;
+    double relax_previous_total_energy_j = 0.0;
+    bool relax_previous_total_energy_valid = false;
+    std::array<double, RELAX_ENERGY_PLATEAU_WINDOW_STEPS> relax_energy_window_j{};
+    uint32_t relax_energy_window_count = 0;
+    uint32_t relax_energy_window_next = 0;
+};
 
 /*
  * Validate native FEM relaxation stop configuration.
@@ -61,12 +80,23 @@ void set_stage_completion(
     double threshold);
 
 /*
+ * Return the current native FEM stage-completion snapshot.
+ *
+ * Context keeps the ABI-compatible completion storage, while this runtime
+ * helper owns the read boundary used by the public C ABI snapshot endpoint.
+ */
+fullmag_fem_stage_completion stage_completion_snapshot(const Context &ctx);
+
+/*
  * Update relaxation stop state from the latest public step statistics.
  *
  * The function accumulates pseudo-time from non-negative `dt_seconds`, tracks
  * a 50 accepted-step total-energy window for plateau criteria, and checks stop
  * criteria in the native FEM priority order: energy plateau + torque,
  * torque-only, physical time, pseudo-time, then max steps.
+ *
+ * It does not integrate RK stages, compute fields, own adaptive control, or
+ * publish common step metrics.
  */
 void update_stage_completion_from_stats(
     Context &ctx,

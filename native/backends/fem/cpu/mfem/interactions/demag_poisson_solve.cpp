@@ -1,3 +1,11 @@
+/*
+ * Poisson demag solve orchestration source contract.
+ *
+ * This source owns one-call Poisson-demag assemble/solve/recover orchestration,
+ * interrupt checkpoints, cache refresh integration, and phase timing
+ * accumulation. It does not own RHS coefficient definitions, boundary operator construction, Hypre workspace internals, recovery kernels, energy formulas, or telemetry formatting.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_solve.hpp"
 
 #include "context.hpp"
@@ -9,6 +17,7 @@
 #include "cpu/mfem/interactions/demag_poisson_telemetry.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/phase_timings.hpp"
+#include "fem_common.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -27,15 +36,6 @@ namespace fullmag::fem {
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
 
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
 bool debug_startup_env_enabled()
 {
     const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
@@ -53,7 +53,8 @@ bool debug_startup_env_enabled()
 
 void debug_checkpoint(const char *stage)
 {
-    if (!debug_startup_env_enabled()) {
+    static const bool enabled = debug_startup_env_enabled();
+    if (!enabled) {
         return;
     }
     std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);
@@ -78,7 +79,7 @@ bool context_compute_demag_poisson(
     debug_checkpoint("context_compute_demag_poisson:enter");
     const uint64_t demag_call_index = ++ctx.demag_call_count;
 
-    const auto assemble_wall_start = SteadyClock::now();
+    const auto assemble_wall_start = FemSteadyClock::now();
     mfem::Vector *rhs = nullptr;
     debug_checkpoint("context_compute_demag_poisson:assemble_rhs_enter");
     if (!assemble_demag_poisson_rhs(ctx, m_xyz, rhs, error)) {
@@ -117,7 +118,7 @@ bool context_compute_demag_poisson(
         }
 
         uint64_t energy_wall_time_ns_pbc = 0;
-        const auto recover_wall_start_pbc = SteadyClock::now();
+        const auto recover_wall_start_pbc = FemSteadyClock::now();
         debug_checkpoint("context_compute_demag_poisson:recover_enter");
         if (!recover_demag_poisson_field(
                 ctx,
@@ -178,7 +179,7 @@ bool context_compute_demag_poisson(
         gf_potential->GetTrueDofs(*solution);
     }
 
-    const auto solve_wall_start = SteadyClock::now();
+    const auto solve_wall_start = FemSteadyClock::now();
     debug_checkpoint("context_compute_demag_poisson:solve_enter_hypre");
     if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, error)) {
         return false;
@@ -191,7 +192,7 @@ bool context_compute_demag_poisson(
     }
 
     uint64_t energy_wall_time_ns = 0;
-    const auto recover_wall_start = SteadyClock::now();
+    const auto recover_wall_start = FemSteadyClock::now();
     debug_checkpoint("context_compute_demag_poisson:recover_enter");
     if (!recover_demag_poisson_field(
             ctx,

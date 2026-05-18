@@ -1,3 +1,10 @@
+/*
+ * Adaptive timestep source contract.
+ *
+ * This source owns adaptive RK plan-field validation/import, scalar PI
+ * accept/reject control, and AoS componentwise embedded-error normalization. It does not evaluate RK stages, compose H_eff, update magnetization, or publish step metrics.
+ */
+
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
 
 #include "context.hpp"
@@ -58,19 +65,19 @@ bool initialize_adaptive_dt_plan_fields(
         return false;
     }
 
-    ctx.adaptive_dt_enabled = true;
-    ctx.adaptive_atol = adaptive.atol;
-    ctx.adaptive_rtol = adaptive.rtol;
+    ctx.adaptive_dt.enabled = true;
+    ctx.adaptive_dt.atol = adaptive.atol;
+    ctx.adaptive_dt.rtol = adaptive.rtol;
     ctx.dt_seconds = adaptive.dt_initial > 0.0
                          ? adaptive.dt_initial
                          : plan.dt_seconds;
     ctx.current_dt = ctx.dt_seconds;
-    ctx.dt_min = adaptive.dt_min;
-    ctx.dt_max = adaptive.dt_max;
-    ctx.safety_factor = adaptive.safety;
-    ctx.dt_grow_max = adaptive.growth_limit;
-    ctx.dt_shrink_min = adaptive.shrink_limit;
-    ctx.max_reject = adaptive.max_reject;
+    ctx.adaptive_dt.dt_min = adaptive.dt_min;
+    ctx.adaptive_dt.dt_max = adaptive.dt_max;
+    ctx.adaptive_dt.safety_factor = adaptive.safety;
+    ctx.adaptive_dt.dt_grow_max = adaptive.growth_limit;
+    ctx.adaptive_dt.dt_shrink_min = adaptive.shrink_limit;
+    ctx.adaptive_dt.max_reject = adaptive.max_reject;
     return true;
 }
 
@@ -96,30 +103,30 @@ double compute_adaptive_error_norm(
 
 AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm)
 {
-    if (!ctx.adaptive_dt_enabled || error_norm <= 0.0) {
+    if (!ctx.adaptive_dt.enabled || error_norm <= 0.0) {
         return {true, ctx.dt_seconds};
     }
 
     const double clamped_error = std::max(error_norm, 1e-15);
 
     if (clamped_error <= 1.0) {
-        double ratio = ctx.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.pi_alpha) *
-                       std::pow(ctx.prev_error_norm / clamped_error, ctx.pi_beta);
-        ratio = std::min(ratio, ctx.dt_grow_max);
+        double ratio = ctx.adaptive_dt.safety_factor *
+                       std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha) *
+                       std::pow(ctx.adaptive_dt.prev_error_norm / clamped_error, ctx.adaptive_dt.pi_beta);
+        ratio = std::min(ratio, ctx.adaptive_dt.dt_grow_max);
         ratio = std::max(ratio, 1.0);
 
-        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.dt_max);
-        ctx.prev_error_norm = clamped_error;
+        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
+        ctx.adaptive_dt.prev_error_norm = clamped_error;
         return {true, dt_new};
     }
 
-    double ratio = ctx.safety_factor *
-                   std::pow(1.0 / clamped_error, ctx.pi_alpha);
-    ratio = std::max(ratio, ctx.dt_shrink_min);
+    double ratio = ctx.adaptive_dt.safety_factor *
+                   std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha);
+    ratio = std::max(ratio, ctx.adaptive_dt.dt_shrink_min);
 
-    const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.dt_min);
-    ctx.rejected_steps += 1;
+    const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
+    ctx.adaptive_dt.rejected_steps += 1;
     return {false, dt_new};
 }
 

@@ -15,6 +15,9 @@ struct Context;
  * before the mesh/runtime-specific modules run, then copies the scalar runtime
  * settings and mesh cardinalities into Context. It keeps context_from_plan as
  * orchestration while the base plan contract has a focused owner.
+ *
+ * It does not own mesh geometry, material fields, state vectors, field
+ * buffers, runtime devices, integrators, or interaction physics.
  */
 bool initialize_base_plan_fields(
     Context &ctx,

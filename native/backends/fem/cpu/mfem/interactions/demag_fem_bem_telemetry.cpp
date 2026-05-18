@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag telemetry source contract.
+ *
+ * This source owns Fredkin-Koehler solve-stat publication and phase timing
+ * accumulation into the shared demag telemetry surface. It does not extract surfaces, solve sparse systems, transfer potentials, recover fields, or compute energy.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_telemetry.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK

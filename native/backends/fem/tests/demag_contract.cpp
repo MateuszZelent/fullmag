@@ -56,6 +56,20 @@ void demag_update_execution_is_owned_by_demag_module() {
         demag_header.find("Initialize native FEM demag plan fields") != std::string::npos,
         "demag header must document plan import ownership");
     check(
+        demag_header.find("does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry") !=
+            std::string::npos,
+        "demag header must document its non-owning solver boundary");
+    check(
+        demag_header.find("demag_poisson.*") != std::string::npos,
+        "demag header must name the Poisson-demag owner family");
+    check(
+        demag_header.find("demag_fem_bem.*") != std::string::npos,
+        "demag header must name the FEM/BEM-demag owner family");
+    check(
+        demag_header.find("Runtime output") != std::string::npos &&
+            demag_header.find("cache storage") != std::string::npos,
+        "demag header must document runtime-output/cache ownership");
+    check(
         context.find("ctx.enable_demag = plan.enable_demag != 0;") == std::string::npos,
         "context_from_plan must delegate demag enable import to demag.cpp");
     check(
@@ -74,6 +88,76 @@ void demag_update_execution_is_owned_by_demag_module() {
     check(
         bridge.find("case DemagFieldUpdateAction::") == std::string::npos,
         "mfem_bridge.cpp must not dispatch concrete demag update actions");
+}
+
+void demag_runtime_state_is_owned_by_demag_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string demag_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.hpp");
+
+    check(
+        demag_header.find("struct DemagRuntimeState") != std::string::npos,
+        "demag runtime state must be declared by demag.hpp");
+    check(
+        demag_header.find("std::vector<double> h_xyz") != std::string::npos,
+        "demag runtime state must own the LLG H_demag field buffer");
+    check(
+        demag_header.find("std::vector<double> h_visual_xyz") != std::string::npos,
+        "demag runtime state must own the visual H_demag field buffer");
+    check(
+        demag_header.find("std::vector<double> cached_xyz") != std::string::npos,
+        "demag runtime state must own the cached H_demag field buffer");
+    check(
+        demag_header.find("std::vector<double> cached_visual_xyz") != std::string::npos,
+        "demag runtime state must own the cached visual H_demag field buffer");
+    check(
+        demag_header.find("bool cache_valid") != std::string::npos,
+        "demag runtime state must own the frozen-cache validity flag");
+    check(
+        demag_header.find("double last_refresh_time") != std::string::npos,
+        "demag runtime state must own the frozen-cache refresh timestamp");
+    check(
+        demag_header.find("double cached_robin_boundary_energy") != std::string::npos,
+        "demag runtime state must own the cached Robin boundary energy");
+    check(
+        context_header.find("DemagRuntimeState demag") != std::string::npos,
+        "Context must store demag runtime output through the demag owner");
+    check(
+        context_header.find("std::vector<double> h_demag_xyz") == std::string::npos,
+        "Context must not own a flat demag field buffer");
+    check(
+        context_header.find("std::vector<double> h_demag_visual_xyz") == std::string::npos,
+        "Context must not own a flat demag visual field buffer");
+    check(
+        context_header.find("std::vector<double> h_demag_cached_xyz") == std::string::npos,
+        "Context must not own a flat demag cached field buffer");
+    check(
+        context_header.find("std::vector<double> h_demag_cached_visual_xyz") ==
+            std::string::npos,
+        "Context must not own a flat demag cached visual field buffer");
+    check(
+        context_header.find("bool demag_cache_valid") == std::string::npos,
+        "Context must not own a flat demag cache validity flag");
+    check(
+        context_header.find("double demag_last_refresh_time") == std::string::npos,
+        "Context must not own a flat demag refresh timestamp");
+    check(
+        context_header.find("double cached_robin_boundary_energy") == std::string::npos,
+        "Context must not own a flat cached Robin boundary energy");
+}
+
+void demag_source_file_documents_dispatch_boundary() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string demag =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.cpp");
+
+    check(
+        demag.find("Demag dispatcher source contract") != std::string::npos,
+        "demag dispatcher source file must document its source contract");
+    check(
+        demag.find("does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry") != std::string::npos,
+        "demag dispatcher source file must document its non-owning solver boundary");
 }
 
 void demag_plan_fields_are_imported_by_demag_module() {
@@ -198,6 +282,8 @@ void unsupported_fresh_demag_plan_is_rejected() {
 
 int main() {
     demag_update_execution_is_owned_by_demag_module();
+    demag_runtime_state_is_owned_by_demag_module();
+    demag_source_file_documents_dispatch_boundary();
     demag_plan_fields_are_imported_by_demag_module();
     cached_field_plan_does_not_validate_fresh_solve_readiness();
     poisson_airbox_plan_requires_ready_poisson_operator();

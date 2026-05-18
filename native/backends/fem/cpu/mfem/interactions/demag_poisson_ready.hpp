@@ -11,6 +11,7 @@ namespace fullmag::fem {
  *
  * Only airbox Dirichlet and airbox Robin realizations are executable in this
  * module. The caller must also have initialized the Poisson operator workspace.
+ * It does not initialize MFEM resources, assemble RHS, solve Poisson, or recover fields.
  */
 bool demag_poisson_operator_ready_for_fresh_solve(
     int demag_realization,

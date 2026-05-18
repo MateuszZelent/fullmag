@@ -1,7 +1,7 @@
 # FEM Zeeman / External Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-17
+- Last updated: 2026-05-18
 - Implementation:
   `native/backends/fem/cpu/mfem/interactions/zeeman.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/zeeman_uniform_field.hpp/.cpp`,
@@ -69,7 +69,9 @@ Current gate:
 
 - `fem_zeeman_contract` checks disabled-field zero behavior, uniform field
   broadcast, additive `H_eff` semantics, Zeeman energy sign/units, and
-  source-module ownership.
+  source-module ownership. It also checks top-level source contracts for the
+  aggregate, uniform-field broadcast, field-add, and energy integration source
+  files so their ownership boundaries stay visible in implementation files.
 
 Required before production qualification:
 

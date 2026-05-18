@@ -1,3 +1,10 @@
+/*
+ * CPU threading runtime source contract.
+ *
+ * This source owns plan/env CPU thread resolution, OpenMP runtime limits, and
+ * demag/exchange thread policy publication into Context. It does not choose MFEM devices, manage contexts, execute steps, or publish solver metrics.
+ */
+
 #include "cpu/mfem/runtime/cpu_threads.hpp"
 
 #include "context.hpp"
@@ -93,16 +100,16 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads)
 void configure_cpu_openmp_runtime(Context &ctx)
 {
     const CpuThreadRequest request = requested_cpu_threads();
-    ctx.cpu_threads_auto_requested = request.auto_requested;
-    ctx.requested_omp_threads = request.requested_threads;
-    ctx.effective_omp_threads = request.requested_threads;
+    ctx.cpu_threads.auto_requested = request.auto_requested;
+    ctx.cpu_threads.requested_omp_threads = request.requested_threads;
+    ctx.cpu_threads.effective_omp_threads = request.requested_threads;
     if (request.auto_requested) {
-        ctx.effective_omp_threads = request.auto_resolved_threads > 0
+        ctx.cpu_threads.effective_omp_threads = request.auto_resolved_threads > 0
             ? std::min(request.requested_threads, request.auto_resolved_threads)
             : auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
     }
 #ifdef _OPENMP
-    omp_set_num_threads(ctx.effective_omp_threads);
+    omp_set_num_threads(ctx.cpu_threads.effective_omp_threads);
 #endif
 }
 
@@ -111,7 +118,7 @@ void log_cpu_runtime_selection(const Context &ctx)
     if (mfem_device_requests_gpu(ctx)) {
         return;
     }
-    const char *thread_mode = ctx.cpu_threads_auto_requested ? "auto" : "manual";
+    const char *thread_mode = ctx.cpu_threads.auto_requested ? "auto" : "manual";
 
     std::fprintf(
         stderr,
@@ -119,8 +126,8 @@ void log_cpu_runtime_selection(const Context &ctx)
         demag_poisson_linear_solver_name(ctx.demag_solver.solver),
         demag_poisson_preconditioner_name(ctx.demag_solver.preconditioner),
         thread_mode,
-        ctx.requested_omp_threads,
-        ctx.effective_omp_threads,
+        ctx.cpu_threads.requested_omp_threads,
+        ctx.cpu_threads.effective_omp_threads,
         ctx.n_nodes,
         ctx.n_elements);
 }

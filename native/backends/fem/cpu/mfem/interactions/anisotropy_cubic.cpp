@@ -1,14 +1,15 @@
+/*
+ * Cubic anisotropy source contract.
+ *
+ * This source owns cubic crystal-frame K1/K2/K3 H_eff projection, per-node
+ * overrides, joule energy integration, and nonmagnetic-node zeroing. It does not validate plan axes or compute uniaxial H_eff.
+ */
 #include "cpu/mfem/interactions/anisotropy_cubic.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 namespace fullmag::fem {
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-
-} // namespace
 
 void compute_cubic_anisotropy_field(
     const Context &ctx,
@@ -20,7 +21,7 @@ void compute_cubic_anisotropy_field(
     h_cub_xyz.assign(n * 3u, 0.0);
     if (!ctx.enable_cubic_anisotropy ||
         (ctx.cubic_Kc1 == 0.0 && ctx.cubic_Kc2 == 0.0 && ctx.cubic_Kc3 == 0.0 &&
-         ctx.Kc1_field.empty() && ctx.Kc2_field.empty() && ctx.Kc3_field.empty())) {
+         ctx.material_fields.Kc1_field.empty() && ctx.material_fields.Kc2_field.empty() && ctx.material_fields.Kc3_field.empty())) {
         if (cubic_energy != nullptr) {
             *cubic_energy = 0.0;
         }
@@ -41,13 +42,13 @@ void compute_cubic_anisotropy_field(
     double energy = 0.0;
 
     for (size_t i = 0; i < n; ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
             continue;
         }
-        const double Ms_i = ctx.Ms_field.empty() ? uniform_Ms : ctx.Ms_field[i];
-        const double Kc1_i = ctx.Kc1_field.empty() ? uniform_Kc1 : ctx.Kc1_field[i];
-        const double Kc2_i = ctx.Kc2_field.empty() ? uniform_Kc2 : ctx.Kc2_field[i];
-        const double Kc3_i = ctx.Kc3_field.empty() ? uniform_Kc3 : ctx.Kc3_field[i];
+        const double Ms_i = ctx.material_fields.Ms_field.empty() ? uniform_Ms : ctx.material_fields.Ms_field[i];
+        const double Kc1_i = ctx.material_fields.Kc1_field.empty() ? uniform_Kc1 : ctx.material_fields.Kc1_field[i];
+        const double Kc2_i = ctx.material_fields.Kc2_field.empty() ? uniform_Kc2 : ctx.material_fields.Kc2_field[i];
+        const double Kc3_i = ctx.material_fields.Kc3_field.empty() ? uniform_Kc3 : ctx.material_fields.Kc3_field[i];
         const double inv_mu0Ms = inv_mu0 / Ms_i;
         const double pf1 = -2.0 * Kc1_i * inv_mu0Ms;
         const double pf2 = -2.0 * Kc2_i * inv_mu0Ms;
@@ -70,13 +71,13 @@ void compute_cubic_anisotropy_field(
         double g2 = pf1 * m2 * (m1sq + m3sq);
         double g3 = pf1 * m3 * (m1sq + m2sq);
 
-        if (ctx.cubic_Kc2 != 0.0 || !ctx.Kc2_field.empty()) {
+        if (ctx.cubic_Kc2 != 0.0 || !ctx.material_fields.Kc2_field.empty()) {
             g1 += pf2 * m1 * m2sq * m3sq;
             g2 += pf2 * m1sq * m2 * m3sq;
             g3 += pf2 * m1sq * m2sq * m3;
         }
 
-        if (ctx.cubic_Kc3 != 0.0 || !ctx.Kc3_field.empty()) {
+        if (ctx.cubic_Kc3 != 0.0 || !ctx.material_fields.Kc3_field.empty()) {
             g1 += pf3 * sigma * m1 * (m2sq + m3sq);
             g2 += pf3 * sigma * m2 * (m1sq + m3sq);
             g3 += pf3 * sigma * m3 * (m1sq + m2sq);
@@ -86,11 +87,11 @@ void compute_cubic_anisotropy_field(
         h_cub_xyz[base + 1] = g1 * c1y + g2 * c2y + g3 * c3y;
         h_cub_xyz[base + 2] = g1 * c1z + g2 * c2z + g3 * c3z;
 
-        if (cubic_energy != nullptr && !ctx.mfem_lumped_mass.empty()) {
+        if (cubic_energy != nullptr && !ctx.integration_weights.mfem_lumped_mass.empty()) {
             energy += (Kc1_i * sigma +
                        Kc2_i * m1sq * m2sq * m3sq +
                        Kc3_i * sigma * sigma) *
-                      ctx.mfem_lumped_mass[i];
+                      ctx.integration_weights.mfem_lumped_mass[i];
         }
     }
 

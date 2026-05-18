@@ -1,3 +1,12 @@
+/*
+ * Zeeman aggregate source contract.
+ *
+ * This compatibility source owns ABI plan import for the executable uniform
+ * external-field term: enable flag and H_ext vector in A/m.
+ * It does not broadcast H_ext, add H_eff, or integrate energy.
+ * Those responsibilities stay in zeeman_uniform_field.*, zeeman_field.*, and
+ * zeeman_energy.*.
+ */
 #include "cpu/mfem/interactions/zeeman.hpp"
 
 #include "context.hpp"
@@ -13,11 +22,5 @@ void initialize_zeeman_plan_fields(Context &ctx, const fullmag_fem_plan_desc &pl
         plan.external_field_am[2],
     };
 }
-
-/*
- * Compatibility translation unit for the native FEM Zeeman aggregate include
- * surface. Plan import is kept here; uniform-field broadcast, H_eff addition,
- * and energy integration live in dedicated modules.
- */
 
 } // namespace fullmag::fem

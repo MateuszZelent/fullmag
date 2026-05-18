@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag RHS source contract.
+ *
+ * This source owns Neumann RHS preparation and gauge pinning for the first
+ * Fredkin-Koehler potential solve. It does not assemble source RHS, solve sparse systems, transfer boundary values, recover fields, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_rhs.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK

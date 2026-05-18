@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/mfem/integrators/rk_tableau.hpp"
+#include "cpu/mfem/interactions/stt.hpp"
 
 #include <cstddef>
 #include <vector>
@@ -15,6 +16,9 @@ namespace fullmag::fem {
  * fields, adaptive error estimates, and the FSAL cache validity flag. The
  * structure contains storage only; physical RHS assembly and time integration
  * live in the RK modules.
+ *
+ * It does not evaluate stage RHS, advance time, compose H_eff, or own adaptive
+ * accept/reject policy.
  */
 struct StepperWorkspace {
     bool allocated = false;
@@ -26,6 +30,7 @@ struct StepperWorkspace {
     std::vector<double> h_ex_tmp;                  // temp exchange field
     std::vector<double> h_demag_tmp;               // temp demag field
     std::vector<double> h_eff_tmp;                 // temp effective field
+    SttWorkspace stt;                              // temp direct-torque scratch
     std::vector<double> err;                       // error = h*(b_hi - b_lo) . K
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
 };

@@ -20,6 +20,7 @@ struct Context;
  * The returned energy is integrated with the current nodal lumped-mass weights
  * and reported in joules. Nonmagnetic nodes are left at zero. The module does
  * not assemble MFEM operators, apply gamma_mu0, or handle cubic anisotropy.
+ * It also does not validate cubic axes or compute cubic H_eff.
  */
 void compute_uniaxial_anisotropy_field(
     const Context &ctx,

@@ -1,3 +1,10 @@
+/*
+ * Poisson demag periodic-reduction source contract.
+ *
+ * This source owns periodic Poisson reduction, reduced solve, and lift helpers
+ * for the static periodic class space. It does not assemble RHS, recover fields, compute energy, or manage non-periodic Hypre state.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
 #include "context.hpp"
@@ -15,21 +22,10 @@ namespace fullmag::fem {
 
 bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 {
-    return ctx.enable_demag && !ctx.periodic_node_pairs.empty();
+    return ctx.enable_demag && !ctx.mesh.periodic_node_pairs.empty();
 }
 
 #if FULLMAG_HAS_MFEM_STACK
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
 struct PeriodicPoissonReducedWorkspace {
     explicit PeriodicPoissonReducedWorkspace(mfem::SparseMatrix &op)
         : preconditioner(op)
@@ -49,22 +45,33 @@ struct PeriodicPoissonReducedWorkspace {
     mfem::Vector full_solution;
 };
 
+namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+
+uint64_t elapsed_ns(const SteadyClock::time_point &start) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            SteadyClock::now() - start)
+            .count());
+}
+
 mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(
     const mfem::SparseMatrix &A,
     const Context &ctx)
 {
-    const int nred = static_cast<int>(ctx.periodic_reduced_node_count);
+    const int nred = static_cast<int>(ctx.mesh.periodic_reduced_node_count);
     auto *R = new mfem::SparseMatrix(nred, nred);
 
     mfem::Array<int> cols;
     mfem::Vector vals;
     for (int i = 0; i < A.Height(); ++i) {
         const int ri = static_cast<int>(
-            ctx.periodic_reduced_node[static_cast<size_t>(i)]);
+            ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)]);
         A.GetRow(i, cols, vals);
         for (int k = 0; k < cols.Size(); ++k) {
             const int rj = static_cast<int>(
-                ctx.periodic_reduced_node[static_cast<size_t>(cols[k])]);
+                ctx.mesh.periodic_reduced_node[static_cast<size_t>(cols[k])]);
             R->Add(ri, rj, vals[k]);
         }
     }
@@ -77,10 +84,10 @@ void reduce_vector_by_periodic_classes(
     const mfem::Vector &full,
     mfem::Vector &reduced)
 {
-    reduced.SetSize(static_cast<int>(ctx.periodic_reduced_node_count));
+    reduced.SetSize(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
     reduced = 0.0;
     for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const uint32_t r = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t r = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         reduced[static_cast<int>(r)] += full[static_cast<int>(node)];
     }
 }
@@ -92,7 +99,7 @@ void lift_vector_by_periodic_classes(
 {
     full.SetSize(static_cast<int>(ctx.n_nodes));
     for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const uint32_t r = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t r = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         full[static_cast<int>(node)] = reduced[static_cast<int>(r)];
     }
 }
@@ -104,7 +111,7 @@ bool initialize_demag_periodic_poisson_reduction(
     std::string &error)
 {
     if (!demag_periodic_poisson_reduction_requested(ctx) ||
-        ctx.periodic_reduced_node_count == 0) {
+        ctx.mesh.periodic_reduced_node_count == 0) {
         return true;
     }
 
@@ -118,9 +125,9 @@ bool initialize_demag_periodic_poisson_reduction(
         ctx.mfem_periodic_poisson_matrix =
             reduce_sparse_matrix_by_periodic_classes(*A_full, ctx);
         ctx.mfem_periodic_poisson_rhs =
-            new mfem::Vector(static_cast<int>(ctx.periodic_reduced_node_count));
+            new mfem::Vector(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
         auto *periodic_solution =
-            new mfem::Vector(static_cast<int>(ctx.periodic_reduced_node_count));
+            new mfem::Vector(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
         *periodic_solution = 0.0;
         ctx.mfem_periodic_poisson_solution = periodic_solution;
         ctx.mfem_periodic_poisson_workspace =

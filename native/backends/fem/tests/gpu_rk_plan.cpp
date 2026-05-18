@@ -91,8 +91,8 @@ int main() {
     ctx.gpu_state.node_count = 8;
     ctx.gpu_state.dof_len = 24;
     ctx.gpu_state.stage_count = 2;
-    ctx.gpu_exchange_legacy_sparse_metadata_ready = false;
-    ctx.gpu_exchange_lumped_mass_ready = false;
+    ctx.gpu_exchange.legacy_sparse_metadata_ready = false;
+    ctx.gpu_exchange.lumped_mass_ready = false;
 
     std::string reason;
     const auto no_allocation = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
@@ -195,7 +195,7 @@ int main() {
         blocked.has_slonczewski_stt = true;
         blocked.stt_current_density_am2 = {1.0e11, 0.0, 0.0};
         blocked.stt_spin_polarization = {0.0, 0.0, 1.0};
-        blocked.nodes_xyz.assign({
+        blocked.mesh.nodes_xyz.assign({
             0.0, 0.0, 0.0,
             2.0e-9, 0.0, 0.0,
             0.0, 1.0e-9, 0.0,
@@ -269,7 +269,7 @@ int main() {
     {
         auto blocked = ctx;
         blocked.has_oersted_field = true;
-        blocked.h_oe_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+        blocked.oersted.h_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
         reason.clear();
         const auto oersted_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -342,7 +342,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.alpha_field.assign(static_cast<size_t>(ctx.n_nodes), ctx.material.damping);
+        blocked.material_fields.alpha_field.assign(
+            static_cast<size_t>(ctx.n_nodes),
+            ctx.material.damping);
         reason.clear();
         const auto damping_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -359,7 +361,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.periodic_reduced_node.push_back(0);
+        blocked.mesh.periodic_reduced_node.push_back(0);
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
         require_blocked(blocked, "periodic", "GPU RK exchange-only path must reject PBC");
 #else
@@ -369,7 +371,7 @@ int main() {
 #if FULLMAG_HAS_MFEM_STACK
     {
         auto blocked = ctx;
-        blocked.use_consistent_mass = true;
+        blocked.exchange.mfem.use_consistent_mass = true;
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK
         require_blocked(blocked, "consistent-mass", "GPU RK exchange-only path must reject consistent mass");
 #else
@@ -388,7 +390,7 @@ int main() {
     check(!rk4_plan.enabled, "RK4 GPU RK must stay blocked until device stage exchange is ready");
 
     ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK23_BS;
-    ctx.adaptive_dt_enabled = false;
+    ctx.adaptive_dt.enabled = false;
     reason.clear();
     const auto rk23_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(rk23_plan.stage_count == 4, "RK23 should request four GPU RK stages");
@@ -399,7 +401,7 @@ int main() {
 
     {
         auto adaptive = ctx;
-        adaptive.adaptive_dt_enabled = true;
+        adaptive.adaptive_dt.enabled = true;
         reason.clear();
         const auto adaptive_rk23_plan = fullmag::fem::gpu_rk_plan_exchange_only(adaptive, reason);
         check(adaptive_rk23_plan.stage_count == 4, "adaptive RK23 should keep four GPU RK stages");
@@ -410,7 +412,7 @@ int main() {
     }
 
     ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
-    ctx.adaptive_dt_enabled = true;
+    ctx.adaptive_dt.enabled = true;
     reason.clear();
     const auto adaptive_rk45_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(adaptive_rk45_plan.stage_count == 7, "adaptive RK45 should request seven GPU RK stages");
@@ -419,7 +421,7 @@ int main() {
         "GPU RK plan must not reject adaptive RK45 once retry scaffold is device-resident");
     check(!adaptive_rk45_plan.enabled, "adaptive RK45 GPU RK must stay blocked until device stage exchange is ready");
 
-    ctx.adaptive_dt_enabled = false;
+    ctx.adaptive_dt.enabled = false;
     reason.clear();
     const auto rk45_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(rk45_plan.stage_count == 7, "RK45 should request seven GPU RK stages");
@@ -429,7 +431,7 @@ int main() {
     check(!rk45_plan.enabled, "fixed-step RK45 GPU RK must stay blocked until device stage exchange is ready");
 
     ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
-    ctx.adaptive_dt_enabled = false;
+    ctx.adaptive_dt.enabled = false;
     const auto exchange_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
         !exchange_plan.stage_exchange_device_resident,
@@ -440,10 +442,10 @@ int main() {
         reason.find("legacy sparse exchange metadata") != std::string::npos,
         "MFEM+CUDA build must first require captured legacy sparse exchange metadata");
 
-    ctx.gpu_exchange_legacy_sparse_metadata_ready = true;
-    ctx.gpu_exchange_legacy_sparse_rows = 8;
-    ctx.gpu_exchange_legacy_sparse_cols = 8;
-    ctx.gpu_exchange_legacy_sparse_nnz = 32;
+    ctx.gpu_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_exchange.legacy_sparse_rows = 8;
+    ctx.gpu_exchange.legacy_sparse_cols = 8;
+    ctx.gpu_exchange.legacy_sparse_nnz = 32;
     reason.clear();
     const auto missing_mass_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -453,7 +455,7 @@ int main() {
         reason.find("lumped mass") != std::string::npos,
         "MFEM+CUDA build must require lumped mass metadata before GPU exchange");
 
-    ctx.gpu_exchange_lumped_mass_ready = true;
+    ctx.gpu_exchange.lumped_mass_ready = true;
     reason.clear();
     const auto runtime_coefficients_blocked_plan =
         fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);

@@ -1,3 +1,10 @@
+/*
+ * Exchange field-compute source contract.
+ *
+ * This source owns component upload, exchange operator application, exchange
+ * energy accumulation, nonmagnetic-node zeroing, optional H_eff export, and
+ * transfer-audit scoping. It does not assemble exchange operators or own runtime refresh.
+ */
 #include "cpu/mfem/interactions/exchange_field.hpp"
 
 #include "context.hpp"
@@ -56,21 +63,21 @@ bool compute_exchange_for_magnetization(
         return false;
     }
 
-    auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);
-    auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
+    auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
+    auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
     auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
     auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
     auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
     auto *gf_ms = static_cast<mfem::GridFunction *>(ctx.mfem_gf_ms);
-    auto *inv_lumped_mass = static_cast<mfem::Vector *>(ctx.mfem_inv_lumped_mass);
-    auto *tmp_vec = static_cast<mfem::Vector *>(ctx.mfem_exchange_tmp_vec);
-    auto *out_vec = static_cast<mfem::Vector *>(ctx.mfem_exchange_out_vec);
+    auto *inv_lumped_mass = static_cast<mfem::Vector *>(ctx.exchange.mfem.inv_lumped_mass);
+    auto *tmp_vec = static_cast<mfem::Vector *>(ctx.exchange.mfem.tmp_vec);
+    auto *out_vec = static_cast<mfem::Vector *>(ctx.exchange.mfem.out_vec);
     if (exchange_form == nullptr || gf_mx == nullptr || gf_my == nullptr || gf_mz == nullptr ||
         gf_ms == nullptr || inv_lumped_mass == nullptr || tmp_vec == nullptr || out_vec == nullptr) {
         error = "MFEM exchange scaffold is missing one or more operator/device buffers";
         return false;
     }
-    if (ctx.use_consistent_mass && mass_form == nullptr) {
+    if (ctx.exchange.mfem.use_consistent_mass && mass_form == nullptr) {
         error = "MFEM mass form is required for consistent-mass exchange but is null";
         return false;
     }
@@ -95,10 +102,10 @@ bool compute_exchange_for_magnetization(
             *gf_ms,
             *inv_lumped_mass,
             *mass_form,
-            ctx.use_consistent_mass,
+            ctx.exchange.mfem.use_consistent_mass,
             *tmp_vec,
             *out_vec,
-            ctx.mfem_h_ex_x,
+            ctx.exchange.mfem.h_x,
             exchange_energy != nullptr ? &component_energy : nullptr)) {
         return false;
     }
@@ -114,10 +121,10 @@ bool compute_exchange_for_magnetization(
             *gf_ms,
             *inv_lumped_mass,
             *mass_form,
-            ctx.use_consistent_mass,
+            ctx.exchange.mfem.use_consistent_mass,
             *tmp_vec,
             *out_vec,
-            ctx.mfem_h_ex_y,
+            ctx.exchange.mfem.h_y,
             exchange_energy != nullptr ? &component_energy : nullptr)) {
         return false;
     }
@@ -133,10 +140,10 @@ bool compute_exchange_for_magnetization(
             *gf_ms,
             *inv_lumped_mass,
             *mass_form,
-            ctx.use_consistent_mass,
+            ctx.exchange.mfem.use_consistent_mass,
             *tmp_vec,
             *out_vec,
-            ctx.mfem_h_ex_z,
+            ctx.exchange.mfem.h_z,
             exchange_energy != nullptr ? &component_energy : nullptr)) {
         return false;
     }
@@ -146,17 +153,17 @@ bool compute_exchange_for_magnetization(
     if (exchange_energy != nullptr) {
         exchange_energy_accum += component_energy;
     }
-    pack_components_to_aos(ctx.mfem_h_ex_x, ctx.mfem_h_ex_y, ctx.mfem_h_ex_z, h_ex_xyz);
+    pack_components_to_aos(ctx.exchange.mfem.h_x, ctx.exchange.mfem.h_y, ctx.exchange.mfem.h_z, h_ex_xyz);
 
-    if (!ctx.magnetic_node_mask.empty()) {
-        for (size_t i = 0; i < ctx.magnetic_node_mask.size(); ++i) {
+    if (!ctx.mesh.magnetic_node_mask.empty()) {
+        for (size_t i = 0; i < ctx.mesh.magnetic_node_mask.size(); ++i) {
             if (allow_interrupt &&
                 i > 0 &&
                 (i % static_cast<size_t>(kInterruptPollStride)) == 0 &&
                 poll_interrupt(ctx)) {
                 return false;
             }
-            if (ctx.magnetic_node_mask[i] == 0u) {
+            if (ctx.mesh.magnetic_node_mask[i] == 0u) {
                 const size_t base = i * 3u;
                 h_ex_xyz[base + 0u] = 0.0;
                 h_ex_xyz[base + 1u] = 0.0;
@@ -169,7 +176,7 @@ bool compute_exchange_for_magnetization(
         h_eff_xyz->resize(h_ex_xyz.size());
         if (ctx.has_external_field) {
             for (size_t i = 0; i < h_ex_xyz.size(); ++i) {
-                (*h_eff_xyz)[i] = h_ex_xyz[i] + ctx.h_ext_xyz[i];
+                (*h_eff_xyz)[i] = h_ex_xyz[i] + ctx.zeeman.h_ext_xyz[i];
             }
         } else {
             *h_eff_xyz = h_ex_xyz;

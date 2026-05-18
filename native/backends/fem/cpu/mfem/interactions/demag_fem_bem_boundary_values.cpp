@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag boundary-values source contract.
+ *
+ * This source owns BEM boundary potential injection and Dirichlet RHS
+ * preparation for the second Fredkin-Koehler potential solve. It does not extract boundary surfaces, solve sparse systems, combine potentials, recover fields, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_boundary_values.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK

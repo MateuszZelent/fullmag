@@ -1,3 +1,11 @@
+/*
+ * Interfacial DMI source contract.
+ *
+ * This source owns the interfacial weak-residual element loop, no-MFEM active
+ * error, lumped-mass H_DMI projection, and joule energy accumulation for the
+ * configured interface normal. It does not own bulk DMI, shared scratch
+ * lifetime, top-level plan import, or LLG torque conversion.
+ */
 #include "cpu/mfem/interactions/dmi_interfacial.hpp"
 
 #include "context.hpp"
@@ -5,10 +13,14 @@
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "dmi_weak_residual.hpp"
 
+#include <algorithm>
 #include <vector>
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #endif
 
 namespace fullmag::fem {
@@ -22,7 +34,7 @@ bool compute_interfacial_dmi_field(
 {
     const size_t n = ctx.n_nodes;
     h_dmi_xyz.assign(n * 3u, 0.0);
-    if (!ctx.enable_dmi || (ctx.dmi_D == 0.0 && ctx.Dind_field.empty())) {
+    if (!ctx.enable_dmi || (ctx.dmi_D == 0.0 && ctx.material_fields.Dind_field.empty())) {
         if (dmi_energy != nullptr) {
             *dmi_energy = 0.0;
         }
@@ -47,8 +59,6 @@ bool compute_interfacial_dmi_field(
     double energy = 0.0;
 
     auto *dmi_workspace = dmi_element_workspace(ctx);
-    dmi_workspace->prepare_residual(n * 3u);
-    std::vector<double> &residual_xyz = dmi_workspace->residual_xyz;
 
     unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
 
@@ -56,23 +66,34 @@ bool compute_interfacial_dmi_field(
     auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
     auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
 
-    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            static_cast<size_t>(elem) < ctx.magnetic_element_mask.size() &&
-            ctx.magnetic_element_mask[elem] == 0u) {
-            continue;
+    int dmi_threads = 1;
+#ifdef _OPENMP
+    dmi_threads = std::max(1, ctx.cpu_threads.effective_omp_threads);
+#endif
+    const bool parallel_dmi = dmi_threads > 1 && mesh->GetNE() >= 2000;
+    dmi_workspace->prepare_thread_residuals(parallel_dmi ? dmi_threads : 1, n * 3u);
+
+    auto accumulate_element = [&](int elem, int thread_index, double &thread_energy) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            static_cast<size_t>(elem) < ctx.mesh.magnetic_element_mask.size() &&
+            ctx.mesh.magnetic_element_mask[elem] == 0u) {
+            return;
         }
 
         const mfem::FiniteElement *fe = fes->GetFE(elem);
         mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
-        mfem::Array<int> &dofs = dmi_workspace->dofs;
+        mfem::Array<int> &dofs =
+            dmi_workspace->dofs_by_thread[static_cast<size_t>(thread_index)];
         fes->GetElementDofs(elem, dofs);
         const int local_ndof = dofs.Size();
-        dmi_workspace->prepare_local(local_ndof);
+        dmi_workspace->prepare_thread_local(thread_index, local_ndof);
 
-        mfem::Vector &mx_elem = dmi_workspace->mx_elem;
-        mfem::Vector &my_elem = dmi_workspace->my_elem;
-        mfem::Vector &mz_elem = dmi_workspace->mz_elem;
+        mfem::Vector &mx_elem =
+            dmi_workspace->mx_elem_by_thread[static_cast<size_t>(thread_index)];
+        mfem::Vector &my_elem =
+            dmi_workspace->my_elem_by_thread[static_cast<size_t>(thread_index)];
+        mfem::Vector &mz_elem =
+            dmi_workspace->mz_elem_by_thread[static_cast<size_t>(thread_index)];
         for (int i = 0; i < local_ndof; ++i) {
             const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
             const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
@@ -82,10 +103,10 @@ bool compute_interfacial_dmi_field(
         }
 
         double elem_D = 0.0;
-        if (!ctx.Dind_field.empty()) {
+        if (!ctx.material_fields.Dind_field.empty()) {
             for (int i = 0; i < local_ndof; ++i) {
                 const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                elem_D += ctx.Dind_field[gdof];
+                elem_D += ctx.material_fields.Dind_field[gdof];
             }
             elem_D /= static_cast<double>(local_ndof);
         } else {
@@ -100,7 +121,8 @@ bool compute_interfacial_dmi_field(
             T->SetIntPoint(&ip);
             const double w = ip.weight * T->Weight();
 
-            mfem::DenseMatrix &dshape = dmi_workspace->dshape;
+            mfem::DenseMatrix &dshape =
+                dmi_workspace->dshape_by_thread[static_cast<size_t>(thread_index)];
             fe->CalcPhysDShape(*T, dshape);
 
             const double nx = ctx.dmi_n_hat[0];
@@ -127,7 +149,8 @@ bool compute_interfacial_dmi_field(
                 nx * dm[0][2] + ny * dm[1][2] + nz * dm[2][2],
             };
 
-            mfem::Vector &shape = dmi_workspace->shape;
+            mfem::Vector &shape =
+                dmi_workspace->shape_by_thread[static_cast<size_t>(thread_index)];
             fe->CalcShape(ip, shape);
             double m_q[3] = {};
             for (int i = 0; i < local_ndof; ++i) {
@@ -135,6 +158,8 @@ bool compute_interfacial_dmi_field(
                 m_q[1] += my_elem(i) * shape(i);
                 m_q[2] += mz_elem(i) * shape(i);
             }
+            std::vector<double> &thread_residual =
+                dmi_workspace->residual_xyz_by_thread[static_cast<size_t>(thread_index)];
             for (int i = 0; i < local_ndof; ++i) {
                 const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
                 if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
@@ -160,7 +185,7 @@ bool compute_interfacial_dmi_field(
                     data,
                     n_hat,
                     elem_D,
-                    &residual_xyz[static_cast<size_t>(gdof) * 3u]);
+                    &thread_residual[static_cast<size_t>(gdof) * 3u]);
             }
 
             if (dmi_energy != nullptr) {
@@ -175,19 +200,44 @@ bool compute_interfacial_dmi_field(
                 const double m_dot_n = mx_q * nx + my_q * ny + mz_q * nz;
                 const double m_grad_mn =
                     mx_q * grad_mn[0] + my_q * grad_mn[1] + mz_q * grad_mn[2];
-                energy += elem_D * (m_dot_n * div_m - m_grad_mn) * w;
+                thread_energy += elem_D * (m_dot_n * div_m - m_grad_mn) * w;
             }
         }
-    }
+    };
 
-    if (ctx.mfem_lumped_mass.size() != n) {
+#ifdef _OPENMP
+    if (parallel_dmi) {
+#pragma omp parallel num_threads(dmi_threads)
+        {
+            const int thread_index = omp_get_thread_num();
+            double thread_energy = 0.0;
+#pragma omp for schedule(static)
+            for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+                accumulate_element(elem, thread_index, thread_energy);
+            }
+#pragma omp atomic
+            energy += thread_energy;
+        }
+    } else
+#endif
+    {
+        double thread_energy = 0.0;
+        for (int elem = 0; elem < mesh->GetNE(); ++elem) {
+            accumulate_element(elem, 0, thread_energy);
+        }
+        energy += thread_energy;
+    }
+    dmi_workspace->reduce_thread_residuals(n * 3u);
+    std::vector<double> &residual_xyz = dmi_workspace->residual_xyz;
+
+    if (ctx.integration_weights.mfem_lumped_mass.size() != n) {
         error = "MFEM lumped mass is unavailable for interfacial DMI weak-residual projection";
         return false;
     }
     if (!dmi_project_lumped_field(
             residual_xyz.data(),
-            ctx.mfem_lumped_mass.data(),
-            ctx.Ms_field.empty() ? nullptr : ctx.Ms_field.data(),
+            ctx.integration_weights.mfem_lumped_mass.data(),
+            ctx.material_fields.Ms_field.empty() ? nullptr : ctx.material_fields.Ms_field.data(),
             static_cast<uint64_t>(n),
             uniform_Ms,
             h_dmi_xyz.data(),

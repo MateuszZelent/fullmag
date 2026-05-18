@@ -4,12 +4,39 @@
 #include "cpu/mfem/interactions/stt_zhang_li.hpp"
 #include "fullmag_fem.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+
+/*
+ * Aggregated include and dispatch surface for executable STT families.
+ *
+ * This compatibility umbrella owns plan import, family dispatch, and reusable
+ * workspace routing for the RHS hot path. It does not define Slonczewski CPP
+ * torque, Zhang-Li CIP torque, CPP thickness/current physics, or CIP gradient
+ * projection. Those responsibilities stay in the dedicated owner modules:
+ * stt_slonczewski.* and stt_zhang_li.*.
+ */
+
+/*
+ * Reusable scratch for aggregate STT RHS assembly.
+ *
+ * Slonczewski is local and writes directly to the RHS. Zhang-Li needs a
+ * projected nodal torque and weight buffer so the aggregate can add it to an
+ * already-computed LLG RHS without allocating or scaling the existing RHS.
+ */
+struct SttWorkspace {
+    ZhangLiSttWorkspace zhang_li;
+};
+
+void prepare_stt_workspace(
+    SttWorkspace &workspace,
+    std::size_t dof_len,
+    std::size_t n_nodes);
 
 /*
  * Initialize executable STT plan fields.
@@ -32,5 +59,12 @@ void add_stt_rhs_aos(
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz,
     double &max_rhs);
+
+void add_stt_rhs_aos(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &rhs_xyz,
+    double &max_rhs,
+    SttWorkspace &workspace);
 
 } // namespace fullmag::fem

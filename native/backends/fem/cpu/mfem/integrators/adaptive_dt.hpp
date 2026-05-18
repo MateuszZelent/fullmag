@@ -2,6 +2,7 @@
 
 #include "fullmag_fem.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,11 +23,38 @@ struct AdaptiveResult {
 };
 
 /*
+ * Runtime state for the native FEM adaptive PI time-step controller.
+ *
+ * The controller owns tolerance bounds, PI gains, growth/shrink clamps, the
+ * rejection budget, and the scalar history used to choose the next explicit RK
+ * step. Global step timestamps and committed `dt_seconds` remain in Context's
+ * compatibility facade.
+ */
+struct AdaptiveDtRuntimeState {
+    bool enabled = false;
+    double dt_min = 1e-16;
+    double dt_max = 1e-10;
+    double atol = 1e-6;
+    double rtol = 1e-3;
+    double pi_alpha = 0.7;
+    double pi_beta = 0.4;
+    double safety_factor = 0.9;
+    double dt_grow_max = 2.0;
+    double dt_shrink_min = 0.2;
+    uint32_t max_reject = 50;
+    double prev_error_norm = 1.0;
+    uint64_t rejected_steps = 0;
+};
+
+/*
  * Initialize adaptive RK plan fields.
  *
  * Validates the optional ABI adaptive_config and copies tolerances, time-step
  * bounds, PI safety/growth/shrink factors, and rejection budget into Context.
  * If no adaptive config is provided, fixed-step plan state is left unchanged.
+ *
+ * It does not evaluate RK stages, compose H_eff, update magnetization, or
+ * publish step metrics.
  */
 bool initialize_adaptive_dt_plan_fields(
     Context &ctx,

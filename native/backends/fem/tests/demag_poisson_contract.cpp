@@ -123,21 +123,182 @@ void poisson_runtime_wrappers_are_owned_by_separate_modules() {
             std::string::npos,
         "Poisson demag readiness header must document its contract");
     check(
+        ready_header.find(
+            "does not initialize MFEM resources, assemble RHS, solve Poisson, or recover fields") !=
+            std::string::npos,
+        "Poisson demag readiness header must document its non-owning compute boundary");
+    check(
         lifecycle_header.find("Initialize the native Poisson-demag MFEM lifecycle") !=
             std::string::npos,
         "Poisson demag lifecycle header must document its contract");
     check(
+        lifecycle_header.find(
+            "does not assemble per-step RHS, solve Poisson, recover fields, compute energy, or publish telemetry") !=
+            std::string::npos,
+        "Poisson demag lifecycle header must document its non-owning compute boundary");
+    check(
         solve_header.find("Compute one native Poisson-demag field solve") != std::string::npos,
         "Poisson demag solve header must document its contract");
+    check(
+        solve_header.find(
+            "does not own RHS coefficient definitions, boundary operator construction, Hypre workspace internals, recovery kernels, energy formulas, or telemetry formatting") !=
+            std::string::npos,
+        "Poisson demag solve header must document its non-owning helper boundary");
+}
+
+void poisson_aggregate_header_documents_submodule_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.hpp");
+
+    check(
+        aggregate_header.find("does not define RHS assembly") != std::string::npos,
+        "Poisson demag aggregate header must document its non-owning RHS boundary");
+    check(
+        aggregate_header.find("boundary policy, solve, recovery, energy, cache, or telemetry") !=
+            std::string::npos,
+        "Poisson demag aggregate header must document its non-owning boundary");
+    check(
+        aggregate_header.find("demag_poisson_rhs.*") != std::string::npos,
+        "Poisson demag aggregate header must name the RHS owner");
+    check(
+        aggregate_header.find("demag_poisson_solve.*") != std::string::npos,
+        "Poisson demag aggregate header must name the solve owner");
+    check(
+        aggregate_header.find("demag_poisson_energy.*") != std::string::npos,
+        "Poisson demag aggregate header must name the energy owner");
+}
+
+void poisson_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string ready =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_ready.cpp");
+    const std::string lifecycle =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_lifecycle.cpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+    const std::string rhs =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_rhs.cpp");
+    const std::string boundary =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_boundary.cpp");
+    const std::string periodic =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_periodic.cpp");
+    const std::string hypre =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
+    const std::string recovery =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_field.cpp");
+    const std::string cache =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_cache.cpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_energy.cpp");
+    const std::string telemetry =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_telemetry.cpp");
+
+    check(
+        aggregate.find("Poisson demag aggregate source contract") != std::string::npos,
+        "Poisson demag aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not assemble RHS, configure boundary policy, reduce periodic systems, solve Hypre, recover fields, compute energy, manage cache, postprocess fields, publish telemetry, or own lifecycle") != std::string::npos,
+        "Poisson demag aggregate source file must document its non-owning module boundary");
+    check(
+        ready.find("Poisson demag readiness source contract") != std::string::npos,
+        "Poisson demag readiness source file must document its source contract");
+    check(
+        ready.find("does not initialize MFEM resources, assemble RHS, solve Poisson, or recover fields") != std::string::npos,
+        "Poisson demag readiness source file must document its non-owning compute boundary");
+    check(
+        lifecycle.find("Poisson demag lifecycle source contract") != std::string::npos,
+        "Poisson demag lifecycle source file must document its source contract");
+    check(
+        lifecycle.find("does not assemble per-step RHS, solve Poisson, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "Poisson demag lifecycle source file must document its non-owning compute boundary");
+    check(
+        solve.find("Poisson demag solve orchestration source contract") != std::string::npos,
+        "Poisson demag solve source file must document its source contract");
+    check(
+        solve.find("does not own RHS coefficient definitions, boundary operator construction, Hypre workspace internals, recovery kernels, energy formulas, or telemetry formatting") != std::string::npos,
+        "Poisson demag solve source file must document its non-owning helper boundary");
+    check(
+        rhs.find("Poisson demag RHS assembly source contract") != std::string::npos,
+        "Poisson demag RHS source file must document its source contract");
+    check(
+        rhs.find("does not configure boundary operators, solve Poisson, recover H_demag, compute energy, or manage cache") != std::string::npos,
+        "Poisson demag RHS source file must document its non-owning solver boundary");
+    check(
+        boundary.find("Poisson demag boundary-operator source contract") != std::string::npos,
+        "Poisson demag boundary source file must document its source contract");
+    check(
+        boundary.find("does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache") != std::string::npos,
+        "Poisson demag boundary source file must document its non-owning solver boundary");
+    check(
+        periodic.find("Poisson demag periodic-reduction source contract") != std::string::npos,
+        "Poisson demag periodic source file must document its source contract");
+    check(
+        periodic.find("does not assemble RHS, recover fields, compute energy, or manage non-periodic Hypre state") != std::string::npos,
+        "Poisson demag periodic source file must document its non-owning solver boundary");
+    check(
+        hypre.find("Poisson demag Hypre solve source contract") != std::string::npos,
+        "Poisson demag Hypre source file must document its source contract");
+    check(
+        hypre.find("does not assemble RHS, construct boundary operators, recover H_demag, compute energy, or format telemetry") != std::string::npos,
+        "Poisson demag Hypre source file must document its non-owning module boundary");
+    check(
+        recovery.find("Poisson demag recovery source contract") != std::string::npos,
+        "Poisson demag recovery source file must document its source contract");
+    check(
+        recovery.find("does not assemble RHS, solve Poisson, or format telemetry") != std::string::npos,
+        "Poisson demag recovery source file must document its non-owning compute boundary");
+    check(
+        field.find("Poisson demag field postprocessing source contract") != std::string::npos,
+        "Poisson demag field source file must document its source contract");
+    check(
+        field.find("does not recover fields from scalar potential, compute demag energy, or manage cache refresh") != std::string::npos,
+        "Poisson demag field source file must document its non-owning recovery boundary");
+    check(
+        cache.find("Poisson demag cache source contract") != std::string::npos,
+        "Poisson demag cache source file must document its source contract");
+    check(
+        cache.find("does not solve Poisson, recover fields, or compute fresh-field energy") != std::string::npos,
+        "Poisson demag cache source file must document its non-owning compute boundary");
+    check(
+        energy.find("Poisson demag energy source contract") != std::string::npos,
+        "Poisson demag energy source file must document its source contract");
+    check(
+        energy.find("does not assemble RHS, solve Poisson, recover fields, or manage cache validity") != std::string::npos,
+        "Poisson demag energy source file must document its non-owning compute boundary");
+    check(
+        telemetry.find("Poisson demag telemetry source contract") != std::string::npos,
+        "Poisson demag telemetry source file must document its source contract");
+    check(
+        telemetry.find("does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache") != std::string::npos,
+        "Poisson demag telemetry source file must document its non-owning compute boundary");
+}
+
+void poisson_debug_env_gate_is_cached_on_hot_path() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+
+    check(
+        solve.find("static const bool enabled = debug_startup_env_enabled();") !=
+            std::string::npos,
+        "Poisson solve debug env gate must cache getenv/strcmp result");
+    check(
+        solve.find("if (!debug_startup_env_enabled())") == std::string::npos,
+        "Poisson solve debug checkpoints must not call getenv on every checkpoint");
 }
 
 void demag_energy_uses_half_factor_ms_mass_and_magnetic_mask() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 3;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.Ms_field = {800e3, 1.0e6, 2.0e6};
-    ctx.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
-    ctx.magnetic_node_mask = {1u, 1u, 0u};
+    ctx.material_fields.Ms_field = {800e3, 1.0e6, 2.0e6};
+    ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
 
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -170,13 +331,13 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
 
     ctx.field_refresh.has_demag_interval_s = 1;
     ctx.field_refresh.demag_interval_s = 2.0;
-    ctx.demag_cache_valid = false;
+    ctx.demag.cache_valid = false;
     check(
         fullmag::fem::demag_poisson_should_refresh_field(ctx),
         "demag refresh without valid cache");
 
-    ctx.demag_cache_valid = true;
-    ctx.demag_last_refresh_time = 10.0;
+    ctx.demag.cache_valid = true;
+    ctx.demag.last_refresh_time = 10.0;
     ctx.current_time = 11.0;
     check(
         !fullmag::fem::demag_poisson_should_refresh_field(ctx),
@@ -197,14 +358,14 @@ void cached_demag_energy_includes_frozen_robin_boundary_term() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 1;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.mfem_lumped_mass = {2.0e-27};
-    ctx.cached_robin_boundary_energy = 7.0e-21;
+    ctx.integration_weights.mfem_lumped_mass = {2.0e-27};
+    ctx.demag.cached_robin_boundary_energy = 7.0e-21;
 
     const std::vector<double> m = {1.0, 0.0, 0.0};
     const std::vector<double> h_demag = {-100.0, 0.0, 0.0};
     const double expected =
         fullmag::fem::demag_poisson_energy_from_field(ctx, m, h_demag) +
-        ctx.cached_robin_boundary_energy;
+        ctx.demag.cached_robin_boundary_energy;
 
     check_near(
         fullmag::fem::demag_poisson_cached_energy_from_field(ctx, m, h_demag),
@@ -266,32 +427,32 @@ void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
     };
 
     ctx.current_time = 4.5;
-    ctx.h_demag_visual_xyz = visual;
+    ctx.demag.h_visual_xyz = visual;
     fullmag::fem::demag_poisson_store_refreshed_field_cache(ctx, field);
-    check(!ctx.demag_cache_valid, "demag cache stays disabled without interval policy");
-    check(ctx.h_demag_cached_xyz.empty(), "disabled demag cache leaves field empty");
+    check(!ctx.demag.cache_valid, "demag cache stays disabled without interval policy");
+    check(ctx.demag.cached_xyz.empty(), "disabled demag cache leaves field empty");
 
     ctx.field_refresh.has_demag_interval_s = 1;
     fullmag::fem::demag_poisson_store_refreshed_field_cache(ctx, field);
-    check(ctx.demag_cache_valid, "demag cache is marked valid after refresh");
-    check(ctx.demag_last_refresh_time == 4.5, "demag cache refresh time is current time");
-    check(ctx.h_demag_cached_xyz == field, "demag cache stores refreshed field");
-    check(ctx.h_demag_cached_visual_xyz == visual, "demag cache stores refreshed visual field");
+    check(ctx.demag.cache_valid, "demag cache is marked valid after refresh");
+    check(ctx.demag.last_refresh_time == 4.5, "demag cache refresh time is current time");
+    check(ctx.demag.cached_xyz == field, "demag cache stores refreshed field");
+    check(ctx.demag.cached_visual_xyz == visual, "demag cache stores refreshed visual field");
 
     std::vector<double> loaded(field.size(), 0.0);
-    ctx.h_demag_visual_xyz.clear();
+    ctx.demag.h_visual_xyz.clear();
     check(
         fullmag::fem::demag_poisson_try_load_cached_field(ctx, loaded),
         "valid demag cache loads when target size matches");
     check(loaded == field, "loaded demag cache field");
-    check(ctx.h_demag_visual_xyz == visual, "loaded demag visual cache field");
+    check(ctx.demag.h_visual_xyz == visual, "loaded demag visual cache field");
 
-    ctx.h_demag_cached_visual_xyz.pop_back();
-    ctx.h_demag_visual_xyz = visual;
+    ctx.demag.cached_visual_xyz.pop_back();
+    ctx.demag.h_visual_xyz = visual;
     check(
         fullmag::fem::demag_poisson_try_load_cached_field(ctx, loaded),
         "demag cache still loads without matching visual cache");
-    check(ctx.h_demag_visual_xyz.empty(), "mismatched visual demag cache clears visual field");
+    check(ctx.demag.h_visual_xyz.empty(), "mismatched visual demag cache clears visual field");
 
     std::vector<double> wrong_size(field.size() + 3u, -1.0);
     check(
@@ -299,7 +460,7 @@ void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
         "demag cache does not load into mismatched target size");
     check(wrong_size[0] == -1.0, "mismatched target remains untouched");
 
-    ctx.demag_cache_valid = false;
+    ctx.demag.cache_valid = false;
     check(
         !fullmag::fem::demag_poisson_try_load_cached_field(ctx, loaded),
         "invalid demag cache does not load");
@@ -311,6 +472,8 @@ void demag_telemetry_is_owned_by_poisson_telemetry_module() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
     const std::string telemetry =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_telemetry.cpp");
+    const std::string telemetry_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_telemetry.hpp");
 
     const char *symbols[] = {
         "void fill_demag_poisson_solver_stats(",
@@ -329,6 +492,14 @@ void demag_telemetry_is_owned_by_poisson_telemetry_module() {
             telemetry.find(symbol) != std::string::npos,
             "Poisson demag telemetry must be defined in demag_poisson_telemetry.cpp");
     }
+    check(
+        telemetry_header.find("Telemetry state and public reporting contract for Poisson demag") !=
+            std::string::npos,
+        "Poisson demag telemetry header must document its module contract");
+    check(
+        telemetry_header.find("does not assemble RHS, solve Poisson, recover fields, or define demag energy") !=
+            std::string::npos,
+        "Poisson demag telemetry header must document its non-owning boundary");
 }
 
 void demag_field_visual_postprocessing_is_owned_by_poisson_field_module() {
@@ -439,7 +610,7 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             std::string::npos,
         "Poisson periodic header must declare the periodic-demag predicate");
     check(
-        periodic.find("return ctx.enable_demag && !ctx.periodic_node_pairs.empty();") !=
+        periodic.find("return ctx.enable_demag && !ctx.mesh.periodic_node_pairs.empty();") !=
             std::string::npos,
         "Poisson periodic module must define the periodic-demag predicate semantics");
 }
@@ -487,8 +658,8 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "void destroy_demag_poisson_recovery_workspace(",
         "bool recover_demag_poisson_field(",
         "fe->CalcPhysDShape",
-        "ctx.h_demag_visual_xyz = h_demag_xyz;",
-        "ctx.cached_robin_boundary_energy =",
+        "ctx.demag.h_visual_xyz = h_demag_xyz;",
+        "ctx.demag.cached_robin_boundary_energy =",
         "bdr_mass->SpMat().Mult(gf_u",
     };
     for (const char *symbol : symbols) {
@@ -683,7 +854,7 @@ void demag_call_profile_format_is_owned_by_poisson_module() {
 
 void demag_visual_effective_field_preserves_full_domain_demag() {
     fullmag::fem::Context ctx;
-    ctx.h_demag_visual_xyz = {
+    ctx.demag.h_visual_xyz = {
         10.0, 20.0, 30.0,
         40.0, 50.0, 60.0,
     };
@@ -697,25 +868,25 @@ void demag_visual_effective_field_preserves_full_domain_demag() {
     };
 
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
-    check(ctx.h_eff_visual_xyz.size() == h_eff.size(), "visual H_eff size");
-    check(ctx.h_eff_visual_xyz[0] == 4.0, "visual H_eff first x");
-    check(ctx.h_eff_visual_xyz[1] == 14.0, "visual H_eff first y");
-    check(ctx.h_eff_visual_xyz[2] == 24.0, "visual H_eff first z");
-    check(ctx.h_eff_visual_xyz[3] == 43.0, "visual H_eff second x");
-    check(ctx.h_eff_visual_xyz[4] == 53.0, "visual H_eff second y");
-    check(ctx.h_eff_visual_xyz[5] == 63.0, "visual H_eff second z");
+    check(ctx.effective_field.h_visual_xyz.size() == h_eff.size(), "visual H_eff size");
+    check(ctx.effective_field.h_visual_xyz[0] == 4.0, "visual H_eff first x");
+    check(ctx.effective_field.h_visual_xyz[1] == 14.0, "visual H_eff first y");
+    check(ctx.effective_field.h_visual_xyz[2] == 24.0, "visual H_eff first z");
+    check(ctx.effective_field.h_visual_xyz[3] == 43.0, "visual H_eff second x");
+    check(ctx.effective_field.h_visual_xyz[4] == 53.0, "visual H_eff second y");
+    check(ctx.effective_field.h_visual_xyz[5] == 63.0, "visual H_eff second z");
 
-    ctx.h_demag_visual_xyz.pop_back();
+    ctx.demag.h_visual_xyz.pop_back();
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
-    check(ctx.h_eff_visual_xyz.empty(), "visual H_eff clears on mismatched demag visual size");
+    check(ctx.effective_field.h_visual_xyz.empty(), "visual H_eff clears on mismatched demag visual size");
 }
 
 void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 3;
-    ctx.periodic_reduced_node = {0u, 1u, 0u};
-    ctx.periodic_representative_nodes = {2u, 1u};
-    ctx.h_demag_visual_xyz = {1.0};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u};
+    ctx.mesh.periodic_representative_nodes = {2u, 1u};
+    ctx.demag.h_visual_xyz = {1.0};
 
     std::vector<double> h_demag = {
         10.0, 11.0, 12.0,
@@ -730,23 +901,26 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
         30.0, 31.0, 32.0,
     };
     check(h_demag == expected, "demag recovered field periodic projection");
-    check(ctx.h_demag_visual_xyz == expected, "demag visual field follows projected field");
+    check(ctx.demag.h_visual_xyz == expected, "demag visual field follows projected field");
 
-    ctx.periodic_reduced_node.clear();
-    ctx.h_demag_visual_xyz.clear();
+    ctx.mesh.periodic_reduced_node.clear();
+    ctx.demag.h_visual_xyz.clear();
     h_demag = {
         1.0, 2.0, 3.0,
         4.0, 5.0, 6.0,
     };
     fullmag::fem::finalize_demag_poisson_recovered_field(ctx, h_demag);
     check(h_demag[0] == 1.0 && h_demag[3] == 4.0, "nonperiodic demag field unchanged");
-    check(ctx.h_demag_visual_xyz.empty(), "empty visual demag remains empty");
+    check(ctx.demag.h_visual_xyz.empty(), "empty visual demag remains empty");
 }
 
 } // namespace
 
 int main() {
     poisson_runtime_wrappers_are_owned_by_separate_modules();
+    poisson_aggregate_header_documents_submodule_boundaries();
+    poisson_source_files_document_module_boundaries();
+    poisson_debug_env_gate_is_cached_on_hot_path();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
     demag_cache_refresh_policy_matches_bridge_contract();
     cached_demag_energy_includes_frozen_robin_boundary_term();

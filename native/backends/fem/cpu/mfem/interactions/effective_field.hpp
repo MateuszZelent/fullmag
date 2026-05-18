@@ -11,6 +11,18 @@ struct Context;
 struct PhaseTimings;
 
 /*
+ * Runtime products emitted by top-level effective-field composition.
+ *
+ * `h_xyz` is the magnetic-domain H_eff buffer used by LLG, observables, step
+ * metrics, snapshots, and GPU runtime bootstrap. `h_visual_xyz` is the
+ * full-domain visualization buffer when demag recovery provides airbox data.
+ */
+struct EffectiveFieldRuntimeState {
+    std::vector<double> h_xyz;
+    std::vector<double> h_visual_xyz;
+};
+
+/*
  * Return whether the native FEM state has any term that can drive dm/dt.
  *
  * This covers both H_eff field contributors and direct torque contributors.
@@ -27,7 +39,12 @@ bool has_any_field_or_direct_torque_term(const Context &ctx);
  * anisotropy, DMI, Zeeman, Oersted, thermal Brown field, and magnetoelastic
  * field terms. Direct torques remain RHS additions, but this routine owns the
  * H_eff buffer, per-term energy side effects, periodic projection for local
- * fields, optional interrupt polling, and phase timing accumulation.
+ * fields, disabled local-buffer zeroing, optional interrupt polling, and phase
+ * timing accumulation.
+ *
+ * This composition surface does not assemble exchange operators, implement demag solvers, define individual interaction physics, own state I/O, or publish step metrics. Those responsibilities stay with exchange, demag, Zeeman,
+ * anisotropy, DMI, Oersted, thermal, magnetoelastic, STT, runtime state I/O,
+ * and step-metrics owner modules.
  */
 #if FULLMAG_HAS_MFEM_STACK
 /*

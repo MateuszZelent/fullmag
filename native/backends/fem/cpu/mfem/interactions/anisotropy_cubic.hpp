@@ -19,6 +19,7 @@ struct Context;
  * where mi = m.ci. The field is H_cub = -(1/(mu0 Ms)) de_cub/dm, returned in
  * A/m. The global energy is integrated with nodal lumped mass. The module does
  * not assemble MFEM operators, apply gamma_mu0, or handle uniaxial anisotropy.
+ * It also does not validate plan axes or compute uniaxial H_eff.
  */
 void compute_cubic_anisotropy_field(
     const Context &ctx,

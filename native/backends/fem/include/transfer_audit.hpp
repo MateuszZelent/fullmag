@@ -44,4 +44,23 @@ void record_mfem_host_read(uint64_t bytes);
 void record_mfem_host_write(uint64_t bytes);
 void record_mfem_host_read_write(uint64_t bytes);
 
+/*
+ * Return the current transfer-audit public counters.
+ *
+ * TransferAudit owns internal hot-loop scope and violation state; this helper
+ * is the read boundary used by C ABI snapshot endpoints that expose only the
+ * public counter struct.
+ */
+fullmag_fem_transfer_audit transfer_audit_snapshot(const TransferAudit &audit);
+
+/*
+ * Configure transfer-audit assertion gates from environment.
+ *
+ * Imports FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC and
+ * FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC into the audit state used by
+ * native FEM hot-loop scopes. The C ABI layer owns backend allocation, but this
+ * module owns how transfer-audit environment policy maps onto audit flags.
+ */
+void configure_transfer_audit_from_env(TransferAudit &audit);
+
 } // namespace fullmag::fem

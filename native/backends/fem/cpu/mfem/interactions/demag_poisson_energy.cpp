@@ -1,25 +1,19 @@
+/*
+ * Poisson demag energy source contract.
+ *
+ * This source owns Poisson demag energy integration and cached Robin correction
+ * addition for frozen-field reuse. It does not assemble RHS, solve Poisson, recover fields, or manage cache validity.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cstddef>
 
 namespace fullmag::fem {
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
-}
-
-} // namespace
 
 double demag_poisson_energy_from_field(
     const Context &ctx,
@@ -27,12 +21,12 @@ double demag_poisson_energy_from_field(
     const std::vector<double> &h_demag_xyz,
     int energy_threads)
 {
-    if (ctx.mfem_lumped_mass.empty()) {
+    if (ctx.integration_weights.mfem_lumped_mass.empty()) {
         return 0.0;
     }
 
     const size_t n = std::min(
-        {ctx.mfem_lumped_mass.size(), m_xyz.size() / 3u, h_demag_xyz.size() / 3u});
+        {ctx.integration_weights.mfem_lumped_mass.size(), m_xyz.size() / 3u, h_demag_xyz.size() / 3u});
     double demag_energy = 0.0;
 #ifdef _OPENMP
     energy_threads = std::max(1, energy_threads);
@@ -44,7 +38,7 @@ double demag_poisson_energy_from_field(
 #endif
     for (int node_index = 0; node_index < static_cast<int>(n); ++node_index) {
         const size_t node = static_cast<size_t>(node_index);
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;
         }
         const size_t base = node * 3u;
@@ -53,10 +47,10 @@ double demag_poisson_energy_from_field(
             m_xyz[base + 1] * h_demag_xyz[base + 1] +
             m_xyz[base + 2] * h_demag_xyz[base + 2];
         const double ms_i = scalar_field_value(
-            ctx.Ms_field,
+            ctx.material_fields.Ms_field,
             node,
             ctx.material.saturation_magnetisation);
-        demag_energy += -0.5 * kMu0 * ms_i * mdoth * ctx.mfem_lumped_mass[node];
+        demag_energy += -0.5 * kMu0 * ms_i * mdoth * ctx.integration_weights.mfem_lumped_mass[node];
     }
     return demag_energy;
 }
@@ -68,7 +62,7 @@ double demag_poisson_cached_energy_from_field(
     int energy_threads)
 {
     return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads) +
-           ctx.cached_robin_boundary_energy;
+           ctx.demag.cached_robin_boundary_energy;
 }
 
 } // namespace fullmag::fem

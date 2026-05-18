@@ -1,3 +1,9 @@
+/*
+ * Exchange no-MFEM fallback source contract.
+ *
+ * This source owns disabled zero-field behavior and explicit MFEM-stack errors
+ * for builds without the native MFEM runtime. It does not assemble MFEM operators or claim active exchange execution.
+ */
 #include "cpu/mfem/interactions/exchange_fallback.hpp"
 
 #include "context.hpp"

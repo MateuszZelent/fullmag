@@ -1,7 +1,7 @@
 # FEM Magnetoelastic Prescribed Strain
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-17
+- Last updated: 2026-05-18
 - Implementation:
   `native/backends/fem/cpu/mfem/interactions/magnetoelastic.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp/.cpp`,
@@ -92,7 +92,8 @@ Current gate:
 - `fem_magnetoelastic_contract` checks the `B1/B2` field formula, engineering
   shear conversion, energy integration with nodal lumped masses, per-node strain
   selection, nonmagnetic-node masking, additive `H_eff` semantics, and
-  source-module ownership.
+  source-module ownership. It also checks top-level source-contract docstrings
+  for the aggregate, prescribed-strain compute, and field-add sources.
 
 Required before production qualification:
 

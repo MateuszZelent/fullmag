@@ -1,3 +1,10 @@
+/*
+ * Snapshot runtime source contract.
+ *
+ * This source owns on-demand native FEM snapshot assembly for current
+ * magnetization, fields, torques, energy, and stop metrics. It does not own steady-state integration, state I/O primitives, common step metrics, or field-refresh policy.
+ */
+
 #include "cpu/mfem/runtime/snapshot.hpp"
 
 #include "context.hpp"
@@ -8,44 +15,12 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "fem_common.hpp"
 
-#include <chrono>
 #include <utility>
 #include <vector>
 
 namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start)
-{
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-class ScopedPhaseTimer {
-public:
-    explicit ScopedPhaseTimer(uint64_t *accumulator)
-        : accumulator_(accumulator)
-    {
-        if (accumulator_ != nullptr) {
-            start_ = SteadyClock::now();
-        }
-    }
-
-    ~ScopedPhaseTimer()
-    {
-        if (accumulator_ != nullptr) {
-            *accumulator_ += elapsed_ns(start_);
-        }
-    }
-
-private:
-    uint64_t *accumulator_ = nullptr;
-    SteadyClock::time_point start_{};
-};
 
 #if FULLMAG_HAS_MFEM_STACK
 void apply_phase_timings(
@@ -70,7 +45,7 @@ bool context_snapshot_stats_mfem(
     fullmag_fem_step_stats &stats,
     std::string &error)
 {
-    const auto wall_start = SteadyClock::now();
+    const auto wall_start = FemSteadyClock::now();
     PhaseTimings timings;
     stats = {};
     ctx.demag_solves_current_step = 0;
@@ -94,7 +69,7 @@ bool context_snapshot_stats_mfem(
     double demag_energy = 0.0;
     if (!compute_effective_fields_for_magnetization(
             ctx,
-            ctx.m_xyz,
+            ctx.state.m_xyz,
             h_ex_current,
             h_demag_current,
             h_eff_current,
@@ -109,25 +84,25 @@ bool context_snapshot_stats_mfem(
         return true;
     }
 
-    ctx.h_ex_xyz = std::move(h_ex_current);
-    ctx.h_demag_xyz = std::move(h_demag_current);
-    ctx.h_eff_xyz = std::move(h_eff_current);
-    ctx.mfem_exchange_ready = true;
+    ctx.exchange.h_xyz = std::move(h_ex_current);
+    ctx.demag.h_xyz = std::move(h_demag_current);
+    ctx.effective_field.h_xyz = std::move(h_eff_current);
+    ctx.exchange.mfem.ready = true;
 
     std::vector<double> rhs_current;
     double max_rhs_current = 0.0;
     {
         ScopedPhaseTimer timer(&timings.rhs_wall_time_ns);
         llg_rhs_aos(
-            ctx.m_xyz,
-            ctx.h_eff_xyz,
+            ctx.state.m_xyz,
+            ctx.effective_field.h_xyz,
             ctx.material.gyromagnetic_ratio,
             ctx.material.damping,
-            ctx.alpha_field.empty() ? nullptr : &ctx.alpha_field,
+            ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
             rhs_current,
             max_rhs_current);
-        add_stt_rhs_aos(ctx, ctx.m_xyz, rhs_current, max_rhs_current);
-        zero_non_magnetic_nodes_aos(rhs_current, ctx.magnetic_node_mask);
+        add_stt_rhs_aos(ctx, ctx.state.m_xyz, rhs_current, max_rhs_current);
+        zero_non_magnetic_nodes_aos(rhs_current, ctx.mesh.magnetic_node_mask);
         max_rhs_current = max_norm_aos(rhs_current);
     }
 

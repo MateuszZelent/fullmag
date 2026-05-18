@@ -17,6 +17,9 @@ struct Context;
  * embedded adaptive error control, final field publication, post-step RHS
  * telemetry, and relaxation stage-completion updates. Per-stage field/RHS
  * assembly remains delegated to rk_stage_rhs.*.
+ *
+ * It does not define tableau coefficients, own workspace allocation, compose
+ * H_eff internals, or publish standalone stage RHS.
  */
 #if FULLMAG_HAS_MFEM_STACK
 bool context_step_explicit_rk_mfem(

@@ -1,3 +1,9 @@
+/*
+ * Exchange legacy GPU upload source contract.
+ *
+ * This source owns validation and publication of assembled legacy sparse
+ * exchange CSR data, lumped mass, and inverse mass into GPU state. It does not assemble exchange operators or compute H_ex.
+ */
 #include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 
 #include "context.hpp"
@@ -35,7 +41,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         error = "legacy sparse exchange CSR dimensions exceed u32 GPU indexing";
         return false;
     }
-    if (ctx.mfem_lumped_mass.size() != static_cast<size_t>(height)) {
+    if (ctx.integration_weights.mfem_lumped_mass.size() != static_cast<size_t>(height)) {
         error = "legacy sparse exchange CSR row count does not match lumped mass";
         return false;
     }
@@ -70,9 +76,9 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         col_indices[static_cast<size_t>(i)] = static_cast<uint32_t>(col_indices_raw[i]);
     }
 
-    std::vector<double> inv_lumped(ctx.mfem_lumped_mass.size(), 0.0);
-    for (size_t i = 0; i < ctx.mfem_lumped_mass.size(); ++i) {
-        const double mass = ctx.mfem_lumped_mass[i];
+    std::vector<double> inv_lumped(ctx.integration_weights.mfem_lumped_mass.size(), 0.0);
+    for (size_t i = 0; i < ctx.integration_weights.mfem_lumped_mass.size(); ++i) {
+        const double mass = ctx.integration_weights.mfem_lumped_mass[i];
         inv_lumped[i] = mass > 0.0 ? 1.0 / mass : 0.0;
     }
 
@@ -86,8 +92,8 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         static_cast<uint64_t>(col_indices.size()),
         values_raw,
         static_cast<uint64_t>(nnz),
-        ctx.mfem_lumped_mass.data(),
-        static_cast<uint64_t>(ctx.mfem_lumped_mass.size()),
+        ctx.integration_weights.mfem_lumped_mass.data(),
+        static_cast<uint64_t>(ctx.integration_weights.mfem_lumped_mass.size()),
         inv_lumped.data(),
         static_cast<uint64_t>(inv_lumped.size()),
         ctx.transfer_audit,

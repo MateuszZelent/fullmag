@@ -16,8 +16,7 @@ struct Context;
  *
  * plus its element-loop residual assembly, optional periodic input projection,
  * lumped-mass projection to an observable H_DMI field in A/m, and joule energy
- * accumulation. It does not implement interfacial boundary tilt, direct torque
- * factors, gamma/damping conversion, or shared DMI scratch lifetime.
+ * accumulation. It does not own interfacial boundary tilt, shared DMI scratch allocation, direct torque scaling, or effective-field composition.
  */
 bool compute_bulk_dmi_field(
     Context &ctx,

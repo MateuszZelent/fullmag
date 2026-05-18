@@ -1,3 +1,10 @@
+/*
+ * Poisson demag recovery source contract.
+ *
+ * This source owns scalar-potential-to-H_demag recovery, nonmagnetic zeroing,
+ * visual demag sync, and Robin boundary energy extraction. It does not assemble RHS, solve Poisson, or format telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 
 #include "context.hpp"
@@ -23,20 +30,6 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
-namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
 struct DemagRecoveryWorkspace {
     struct Scratch {
         mfem::Array<int> dofs;
@@ -84,6 +77,20 @@ struct DemagRecoveryWorkspace {
     std::vector<std::unique_ptr<Scratch>> thread_scratch;
     mfem::Vector robin_boundary_tmp;
 };
+
+namespace {
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kMu0 = 4.0e-7 * kPi;
+
+using SteadyClock = std::chrono::steady_clock;
+
+uint64_t elapsed_ns(const SteadyClock::time_point &start) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            SteadyClock::now() - start)
+            .count());
+}
 
 void zero_non_magnetic_nodes_aos(
     std::vector<double> &field_xyz,
@@ -210,7 +217,7 @@ bool recover_demag_poisson_field(
 
     int recover_threads = 1;
 #ifdef _OPENMP
-    recover_threads = std::max(1, ctx.effective_omp_threads);
+    recover_threads = std::max(1, ctx.cpu_threads.effective_omp_threads);
     const size_t bytes_per_thread =
         sizeof(double) * (field_len + node_count);
     constexpr size_t kMaxRecoverScratchBytes = 256ull * 1024ull * 1024ull;
@@ -315,11 +322,11 @@ bool recover_demag_poisson_field(
     }
 
     // Preserve full-domain H_demag for visualization before zeroing airbox.
-    ctx.h_demag_visual_xyz = h_demag_xyz;
+    ctx.demag.h_visual_xyz = h_demag_xyz;
 
-    zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.magnetic_node_mask);
+    zero_non_magnetic_nodes_aos(h_demag_xyz, ctx.mesh.magnetic_node_mask);
 
-    if (ctx.mfem_lumped_mass.empty()) {
+    if (ctx.integration_weights.mfem_lumped_mass.empty()) {
         error = "MFEM lumped mass is unavailable for Poisson demag energy evaluation";
         return false;
     }
@@ -332,7 +339,7 @@ bool recover_demag_poisson_field(
         recover_threads);
 
     // Robin BC correction: E_bdr = (mu0/2) * beta * integral_Gamma u^2 dS.
-    ctx.cached_robin_boundary_energy = 0.0;
+    ctx.demag.cached_robin_boundary_energy = 0.0;
     if (ctx.demag_realization == 2 /* AIRBOX_ROBIN */ &&
         ctx.robin_effective_beta > 0.0 &&
         ctx.mfem_boundary_mass != nullptr) {
@@ -342,9 +349,9 @@ bool recover_demag_poisson_field(
             demag_recovery_workspace->robin_boundary_tmp;
         robin_boundary_tmp.SetSize(gf_u.Size());
         bdr_mass->SpMat().Mult(gf_u, robin_boundary_tmp);
-        ctx.cached_robin_boundary_energy =
+        ctx.demag.cached_robin_boundary_energy =
             0.5 * kMu0 * ctx.robin_effective_beta * (gf_u * robin_boundary_tmp);
-        demag_energy += ctx.cached_robin_boundary_energy;
+        demag_energy += ctx.demag.cached_robin_boundary_energy;
     }
     if (energy_wall_time_ns != nullptr) {
         *energy_wall_time_ns += elapsed_ns(energy_wall_start);

@@ -1,3 +1,10 @@
+/*
+ * GPU-state runtime source contract.
+ *
+ * This source owns GPU-state bootstrap, runtime coefficient upload, host-resident
+ * fallback metadata, and teardown coordination when bootstrap fails. It does not choose MFEM devices, assemble exchange operators, execute RK stages, or own state I/O.
+ */
+
 #include "cpu/mfem/runtime/gpu_state_runtime.hpp"
 
 #include "context.hpp"
@@ -24,52 +31,52 @@ bool gpu_bootstrap_failed(Context &ctx) {
 bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     bool allocate_gpu_state = false;
 #if FULLMAG_HAS_CUDA_RUNTIME
-    allocate_gpu_state = ctx.device_info_cache.is_gpu_enabled != 0;
+    allocate_gpu_state = ctx.mfem_device.device_info_cache.is_gpu_enabled != 0;
 #endif
     if (!gpu_state_initialize(
             ctx.gpu_state,
             ctx.n_nodes,
             ctx.integrator,
             allocate_gpu_state,
-            ctx.m_xyz.data(),
-            static_cast<uint64_t>(ctx.m_xyz.size()),
+            ctx.state.m_xyz.data(),
+            static_cast<uint64_t>(ctx.state.m_xyz.size()),
             ctx.transfer_audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
     if (!gpu_state_upload_runtime_coefficients(
             ctx.gpu_state,
-            ctx.node_volumes.data(),
-            static_cast<uint64_t>(ctx.node_volumes.size()),
-            ctx.Ms_field.data(),
-            static_cast<uint64_t>(ctx.Ms_field.size()),
+            ctx.mesh.node_volumes.data(),
+            static_cast<uint64_t>(ctx.mesh.node_volumes.size()),
+            ctx.material_fields.Ms_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Ms_field.size()),
             ctx.material.saturation_magnetisation,
-            ctx.A_field.data(),
-            static_cast<uint64_t>(ctx.A_field.size()),
+            ctx.material_fields.A_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.A_field.size()),
             ctx.material.exchange_stiffness,
-            ctx.alpha_field.data(),
-            static_cast<uint64_t>(ctx.alpha_field.size()),
+            ctx.material_fields.alpha_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.alpha_field.size()),
             ctx.material.damping,
-            ctx.Ku_field.data(),
-            static_cast<uint64_t>(ctx.Ku_field.size()),
-            ctx.Ku2_field.data(),
-            static_cast<uint64_t>(ctx.Ku2_field.size()),
-            ctx.Dind_field.data(),
-            static_cast<uint64_t>(ctx.Dind_field.size()),
-            ctx.Dbulk_field.data(),
-            static_cast<uint64_t>(ctx.Dbulk_field.size()),
-            ctx.Kc1_field.data(),
-            static_cast<uint64_t>(ctx.Kc1_field.size()),
-            ctx.Kc2_field.data(),
-            static_cast<uint64_t>(ctx.Kc2_field.size()),
-            ctx.Kc3_field.data(),
-            static_cast<uint64_t>(ctx.Kc3_field.size()),
-            ctx.magnetic_node_mask.data(),
-            static_cast<uint64_t>(ctx.magnetic_node_mask.size()),
-            ctx.periodic_reduced_node.data(),
-            static_cast<uint64_t>(ctx.periodic_reduced_node.size()),
-            ctx.periodic_representative_nodes.data(),
-            static_cast<uint64_t>(ctx.periodic_representative_nodes.size()),
+            ctx.material_fields.Ku_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Ku_field.size()),
+            ctx.material_fields.Ku2_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Ku2_field.size()),
+            ctx.material_fields.Dind_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Dind_field.size()),
+            ctx.material_fields.Dbulk_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Dbulk_field.size()),
+            ctx.material_fields.Kc1_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Kc1_field.size()),
+            ctx.material_fields.Kc2_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Kc2_field.size()),
+            ctx.material_fields.Kc3_field.data(),
+            static_cast<uint64_t>(ctx.material_fields.Kc3_field.size()),
+            ctx.mesh.magnetic_node_mask.data(),
+            static_cast<uint64_t>(ctx.mesh.magnetic_node_mask.size()),
+            ctx.mesh.periodic_reduced_node.data(),
+            static_cast<uint64_t>(ctx.mesh.periodic_reduced_node.size()),
+            ctx.mesh.periodic_representative_nodes.data(),
+            static_cast<uint64_t>(ctx.mesh.periodic_representative_nodes.size()),
             ctx.transfer_audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
@@ -86,12 +93,12 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
     if (!gpu_state_upload_mesh_geometry(
             ctx.gpu_state,
-            ctx.nodes_xyz.data(),
-            static_cast<uint64_t>(ctx.nodes_xyz.size()),
-            ctx.elements.data(),
-            static_cast<uint64_t>(ctx.elements.size()),
-            ctx.magnetic_element_mask.data(),
-            static_cast<uint64_t>(ctx.magnetic_element_mask.size()),
+            ctx.mesh.nodes_xyz.data(),
+            static_cast<uint64_t>(ctx.mesh.nodes_xyz.size()),
+            ctx.mesh.elements.data(),
+            static_cast<uint64_t>(ctx.mesh.elements.size()),
+            ctx.mesh.magnetic_element_mask.data(),
+            static_cast<uint64_t>(ctx.mesh.magnetic_element_mask.size()),
             ctx.transfer_audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
@@ -104,25 +111,25 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
 #endif
     if (!gpu_state_upload_effective_fields_aos(
             ctx.gpu_state,
-            ctx.h_ex_xyz.data(),
-            ctx.h_demag_xyz.data(),
-            ctx.h_ext_xyz.data(),
-            ctx.h_eff_xyz.data(),
-            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.exchange.h_xyz.data(),
+            ctx.demag.h_xyz.data(),
+            ctx.zeeman.h_ext_xyz.data(),
+            ctx.effective_field.h_xyz.data(),
+            static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
             ctx.transfer_audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
     if (!gpu_state_upload_local_vector_fields_aos(
             ctx.gpu_state,
-            ctx.h_ani_xyz.data(),
-            ctx.h_cubic_ani_xyz.data(),
-            ctx.h_dmi_xyz.data(),
-            ctx.h_bulk_dmi_xyz.data(),
-            ctx.h_oe_xyz.data(),
-            ctx.h_therm_xyz.data(),
-            ctx.h_mel_xyz.data(),
-            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.anisotropy.h_uniaxial_xyz.data(),
+            ctx.anisotropy.h_cubic_xyz.data(),
+            ctx.dmi.h_interfacial_xyz.data(),
+            ctx.dmi.h_bulk_xyz.data(),
+            ctx.oersted.h_xyz.data(),
+            ctx.thermal_brown.h_xyz.data(),
+            ctx.magnetoelastic.h_xyz.data(),
+            static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
             ctx.transfer_audit,
             error)) {
         return gpu_bootstrap_failed(ctx);

@@ -1,3 +1,11 @@
+/*
+ * FEM state core source contract.
+ *
+ * This source owns initial magnetization pointer/length validation, state copy,
+ * static-periodic magnetization projection, and time/step reset during native
+ * FEM Context construction. It does not import mesh topology, material coefficients, field buffers, runtime devices, or interaction physics.
+ */
+
 #include "core/fem_state.hpp"
 
 #include "context.hpp"
@@ -22,10 +30,10 @@ bool initialize_state_plan_fields(
 
     ctx.step_count = 0;
     ctx.current_time = 0.0;
-    ctx.m_xyz.assign(
+    ctx.state.m_xyz.assign(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
-    project_static_periodic_aos(ctx, ctx.m_xyz);
+    project_static_periodic_aos(ctx, ctx.state.m_xyz);
     return true;
 }
 

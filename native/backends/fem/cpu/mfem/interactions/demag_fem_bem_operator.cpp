@@ -1,6 +1,14 @@
+/*
+ * FEM/BEM demag dense-operator source contract.
+ *
+ * This source owns dense boundary-integral operator assembly, solid-angle
+ * weights, and dense reference apply for extracted boundary surfaces. It does not extract boundary surfaces, solve sparse systems, transfer boundary values, compute energy, or manage workspace.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <array>
 #include <cmath>
@@ -8,7 +16,6 @@
 namespace fullmag::fem {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kVertexCoincidenceTol2 = 1e-48;
 
 using Vec3 = std::array<double, 3>;
@@ -40,9 +47,9 @@ double norm(const Vec3 &a) {
 Vec3 node_position(const Context &ctx, uint32_t node) {
     const size_t base = static_cast<size_t>(node) * 3u;
     return {
-        ctx.nodes_xyz[base + 0u],
-        ctx.nodes_xyz[base + 1u],
-        ctx.nodes_xyz[base + 2u],
+        ctx.mesh.nodes_xyz[base + 0u],
+        ctx.mesh.nodes_xyz[base + 1u],
+        ctx.mesh.nodes_xyz[base + 2u],
     };
 }
 
@@ -150,14 +157,14 @@ double boundary_node_solid_angle_sum(
 {
     double sum = 0.0;
     for (uint32_t elem = 0; elem < ctx.n_elements; ++elem) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
         }
         const size_t base = static_cast<size_t>(elem) * 4u;
         int local = -1;
         for (int i = 0; i < 4; ++i) {
-            if (ctx.elements[base + static_cast<size_t>(i)] == node) {
+            if (ctx.mesh.elements[base + static_cast<size_t>(i)] == node) {
                 local = i;
                 break;
             }
@@ -172,7 +179,7 @@ double boundary_node_solid_angle_sum(
             if (i == local) {
                 continue;
             }
-            other[cursor++] = node_position(ctx, ctx.elements[base + static_cast<size_t>(i)]);
+            other[cursor++] = node_position(ctx, ctx.mesh.elements[base + static_cast<size_t>(i)]);
         }
         sum += solid_angle_magnitude(x, other[0], other[1], other[2]);
     }

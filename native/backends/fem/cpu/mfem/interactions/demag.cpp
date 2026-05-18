@@ -1,3 +1,11 @@
+/*
+ * Demag dispatcher source contract.
+ *
+ * This source owns demag plan-field import, cached/fresh field-update decision
+ * policy, and the dispatch wrapper that chooses cached field reuse, fresh
+ * Poisson demag, or fresh Fredkin-Koehler FEM/BEM demag. It does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag.hpp"
 
 #include "context.hpp"
@@ -108,7 +116,7 @@ bool compute_demag_field_for_magnetization(
                     ctx,
                     m_xyz,
                     h_demag_xyz,
-                    ctx.effective_omp_threads);
+                    ctx.cpu_threads.effective_omp_threads);
             }
             break;
     }

@@ -1,3 +1,11 @@
+/*
+ * Explicit RK step source contract.
+ *
+ * This source owns complete explicit RK step execution, including stage
+ * accumulation, adaptive accept/reject loop integration, FSAL cache handling,
+ * normalization, direct-torque addition, and final stats fill. It does not define tableau coefficients, own workspace allocation, compose H_eff internals, or publish standalone stage RHS.
+ */
+
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
 
 #include "context.hpp"
@@ -12,47 +20,14 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "fem_common.hpp"
 #include "gpu_rk.hpp"
 
-#include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <string>
 #include <utility>
 
 namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start)
-{
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-class ScopedPhaseTimer {
-public:
-    explicit ScopedPhaseTimer(uint64_t *accumulator)
-        : accumulator_(accumulator)
-    {
-        if (accumulator_ != nullptr) {
-            start_ = SteadyClock::now();
-        }
-    }
-
-    ~ScopedPhaseTimer()
-    {
-        if (accumulator_ != nullptr) {
-            *accumulator_ += elapsed_ns(start_);
-        }
-    }
-
-private:
-    uint64_t *accumulator_ = nullptr;
-    SteadyClock::time_point start_{};
-};
 
 #if FULLMAG_HAS_MFEM_STACK
 void apply_phase_timings(
@@ -79,7 +54,7 @@ bool context_step_explicit_rk_mfem(
     fullmag_fem_step_stats &stats,
     std::string &error)
 {
-    const auto wall_start = SteadyClock::now();
+    const auto wall_start = FemSteadyClock::now();
     PhaseTimings timings;
     stats = {};
     ctx.demag_solves_current_step = 0;
@@ -115,11 +90,11 @@ bool context_step_explicit_rk_mfem(
 
     ctx.current_dt = dt_seconds;
 
-    const size_t dof_len = ctx.m_xyz.size();
+    const size_t dof_len = ctx.state.m_xyz.size();
     stepper_workspace_allocate(ctx.stepper, dof_len, tab.stages);
     auto &ws = ctx.stepper;
 
-    const bool adaptive = (tab.order_est > 0) && ctx.adaptive_dt_enabled;
+    const bool adaptive = (tab.order_est > 0) && ctx.adaptive_dt.enabled;
     double dt = dt_seconds;
     uint32_t rejected = 0;
     uint32_t total_rhs = 0;
@@ -130,7 +105,7 @@ bool context_step_explicit_rk_mfem(
 
     for (;;) {
         ctx.current_dt = dt;
-        ws.m_backup = ctx.m_xyz;
+        ws.m_backup = ctx.state.m_xyz;
         final_stage_cache_valid = false;
 
         if (tab.fsal && ws.fsal_valid) {
@@ -140,7 +115,7 @@ bool context_step_explicit_rk_mfem(
             double demag_energy_s0 = 0.0;
             if (!evaluate_rk_stage_rhs(
                     ctx,
-                    ctx.m_xyz,
+                    ctx.state.m_xyz,
                     ws,
                     ws.k[0],
                     nullptr,
@@ -149,7 +124,7 @@ bool context_step_explicit_rk_mfem(
                     &timings,
                     error)) {
                 if (ctx.step_interrupted) {
-                    ctx.m_xyz = ws.m_backup;
+                    ctx.state.m_xyz = ws.m_backup;
                     ws.fsal_valid = false;
                     return true;
                 }
@@ -158,7 +133,7 @@ bool context_step_explicit_rk_mfem(
             total_rhs += 1;
         }
         if (poll_interrupt(ctx)) {
-            ctx.m_xyz = ws.m_backup;
+            ctx.state.m_xyz = ws.m_backup;
             ws.fsal_valid = false;
             return true;
         }
@@ -187,14 +162,14 @@ bool context_step_explicit_rk_mfem(
                                        &timings,
                                        error)) {
                 if (ctx.step_interrupted) {
-                    ctx.m_xyz = ws.m_backup;
+                    ctx.state.m_xyz = ws.m_backup;
                     ws.fsal_valid = false;
                     return true;
                 }
                 return false;
             }
             if (poll_interrupt(ctx)) {
-                ctx.m_xyz = ws.m_backup;
+                ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
                 return true;
             }
@@ -209,12 +184,12 @@ bool context_step_explicit_rk_mfem(
             for (int s = 0; s < tab.stages; ++s) {
                 accum += tab.b_hi[s] * ws.k[s][i];
             }
-            ctx.m_xyz[i] = ws.m_backup[i] + dt * accum;
+            ctx.state.m_xyz[i] = ws.m_backup[i] + dt * accum;
         }
-        normalize_aos_field(ctx.m_xyz);
-        project_static_periodic_aos(ctx, ctx.m_xyz);
+        normalize_aos_field(ctx.state.m_xyz);
+        project_static_periodic_aos(ctx, ctx.state.m_xyz);
         if (poll_interrupt(ctx)) {
-            ctx.m_xyz = ws.m_backup;
+            ctx.state.m_xyz = ws.m_backup;
             ws.fsal_valid = false;
             return true;
         }
@@ -230,25 +205,25 @@ bool context_step_explicit_rk_mfem(
             double err_norm = compute_adaptive_error_norm(
                 ws.err,
                 ws.m_backup,
-                ctx.m_xyz,
-                ctx.adaptive_atol,
-                ctx.adaptive_rtol);
+                ctx.state.m_xyz,
+                ctx.adaptive_dt.atol,
+                ctx.adaptive_dt.rtol);
             auto result = adaptive_pi_step(ctx, err_norm);
             if (!result.accepted) {
-                ctx.m_xyz = ws.m_backup;
+                ctx.state.m_xyz = ws.m_backup;
                 dt = result.dt_next;
                 ctx.dt_seconds = dt;
                 ctx.current_dt = dt;
                 ws.fsal_valid = false;
                 rejected += 1;
-                if (rejected > ctx.max_reject) {
+                if (rejected > ctx.adaptive_dt.max_reject) {
                     error = "adaptive RK exceeded adaptive_config.max_reject rejected attempts before accepting a step";
                     return false;
                 }
                 continue;
             }
             if (poll_interrupt(ctx)) {
-                ctx.m_xyz = ws.m_backup;
+                ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
                 return true;
             }
@@ -271,13 +246,13 @@ bool context_step_explicit_rk_mfem(
     }
 
     if (final_stage_cache_valid) {
-        std::swap(ctx.h_ex_xyz, ws.h_ex_tmp);
-        std::swap(ctx.h_demag_xyz, ws.h_demag_tmp);
-        std::swap(ctx.h_eff_xyz, ws.h_eff_tmp);
+        std::swap(ctx.exchange.h_xyz, ws.h_ex_tmp);
+        std::swap(ctx.demag.h_xyz, ws.h_demag_tmp);
+        std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp);
     } else {
         if (!compute_effective_fields_for_magnetization(
                 ctx,
-                ctx.m_xyz,
+                ctx.state.m_xyz,
                 ws.h_ex_tmp,
                 ws.h_demag_tmp,
                 ws.h_eff_tmp,
@@ -287,31 +262,31 @@ bool context_step_explicit_rk_mfem(
                 &timings,
                 error)) {
             if (ctx.step_interrupted) {
-                ctx.m_xyz = ws.m_backup;
+                ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
                 return true;
             }
             return false;
         }
-        std::swap(ctx.h_ex_xyz, ws.h_ex_tmp);
-        std::swap(ctx.h_demag_xyz, ws.h_demag_tmp);
-        std::swap(ctx.h_eff_xyz, ws.h_eff_tmp);
+        std::swap(ctx.exchange.h_xyz, ws.h_ex_tmp);
+        std::swap(ctx.demag.h_xyz, ws.h_demag_tmp);
+        std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp);
     }
     ctx.current_time += dt;
     ctx.step_count += 1;
-    ctx.mfem_exchange_ready = true;
+    ctx.exchange.mfem.ready = true;
 
     double max_rhs_final = 0.0;
     if (final_stage_cache_valid) {
         max_rhs_final = max_norm_aos(ws.k[0]);
     } else {
         ScopedPhaseTimer timer(&timings.rhs_wall_time_ns);
-        llg_rhs_aos(ctx.m_xyz, ctx.h_eff_xyz,
+        llg_rhs_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz,
                     ctx.material.gyromagnetic_ratio, ctx.material.damping,
-                    ctx.alpha_field.empty() ? nullptr : &ctx.alpha_field,
+                    ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     ws.k[0], max_rhs_final);
-        add_stt_rhs_aos(ctx, ctx.m_xyz, ws.k[0], max_rhs_final);
-        zero_non_magnetic_nodes_aos(ws.k[0], ctx.magnetic_node_mask);
+        add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final);
+        zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;
     }

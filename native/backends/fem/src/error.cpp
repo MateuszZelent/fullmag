@@ -1,3 +1,10 @@
+/*
+ * FEM error facade source contract.
+ *
+ * This source owns thread-local global error storage plus handle-scoped last
+ * error synchronization for the native FEM C ABI. It does not own backend creation, Context construction, solver execution, availability policy, or transfer auditing.
+ */
+
 #include "context.hpp"
 
 #include <string>

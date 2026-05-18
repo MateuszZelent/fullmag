@@ -1,68 +1,35 @@
+/*
+ * Step-metrics runtime source contract.
+ *
+ * This source owns common step-stat aggregation, average magnetization,
+ * max-field/RHS norms, energy bookkeeping, and demag solver stat publication. It does not execute steps, compose fields, own snapshots, or manage state I/O.
+ */
+
 #include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 namespace fullmag::fem {
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start)
-{
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-class ScopedPhaseTimer {
-public:
-    explicit ScopedPhaseTimer(uint64_t *accumulator)
-        : accumulator_(accumulator)
-    {
-        if (accumulator_ != nullptr) {
-            start_ = SteadyClock::now();
-        }
-    }
-
-    ~ScopedPhaseTimer()
-    {
-        if (accumulator_ != nullptr) {
-            *accumulator_ += elapsed_ns(start_);
-        }
-    }
-
-private:
-    uint64_t *accumulator_ = nullptr;
-    SteadyClock::time_point start_{};
-};
-
-double vector_norm3(double x, double y, double z)
-{
-    return std::sqrt(x * x + y * y + z * z);
-}
-
-} // namespace
 
 std::array<double, 3> average_magnetization_components(const Context &ctx)
 {
     std::array<double, 3> sum{};
     uint64_t count = 0;
-    const size_t nodes = ctx.m_xyz.size() / 3u;
+    const size_t nodes = ctx.state.m_xyz.size() / 3u;
     for (size_t node = 0; node < nodes; ++node) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;
         }
         const size_t base = node * 3u;
-        const double mx = ctx.m_xyz[base + 0u];
-        const double my = ctx.m_xyz[base + 1u];
-        const double mz = ctx.m_xyz[base + 2u];
+        const double mx = ctx.state.m_xyz[base + 0u];
+        const double my = ctx.state.m_xyz[base + 1u];
+        const double mz = ctx.state.m_xyz[base + 2u];
         if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
             continue;
         }
@@ -116,8 +83,8 @@ void fill_demag_solver_stats(
 {
     fill_demag_poisson_solver_stats(ctx, stats);
 #if FULLMAG_HAS_MFEM_STACK
-    stats.requested_omp_threads = ctx.requested_omp_threads;
-    stats.effective_omp_threads = ctx.effective_omp_threads;
+    stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
+    stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
 #else
     (void)ctx;
 #endif
@@ -135,19 +102,19 @@ void fill_common_step_metrics(
     (void)timings;
 #endif
 
-    stats.external_energy_joules = zeeman_energy_from_field(ctx, ctx.m_xyz);
-    stats.anisotropy_energy_joules = ctx.last_anisotropy_energy_joules;
-    stats.dmi_energy_joules = ctx.last_dmi_energy_joules;
-    stats.magnetoelastic_energy_joules = ctx.last_magnetoelastic_energy_joules;
+    stats.external_energy_joules = zeeman_energy_from_field(ctx, ctx.state.m_xyz);
+    stats.anisotropy_energy_joules = ctx.anisotropy.energy_joules;
+    stats.dmi_energy_joules = ctx.dmi.energy_joules;
+    stats.magnetoelastic_energy_joules = ctx.magnetoelastic.energy_joules;
 
     stats.total_energy_joules =
         stats.exchange_energy_joules + stats.demag_energy_joules +
         stats.external_energy_joules + stats.anisotropy_energy_joules +
         stats.dmi_energy_joules + stats.magnetoelastic_energy_joules;
-    stats.max_effective_field_amplitude = max_norm_aos(ctx.h_eff_xyz);
-    stats.max_demag_field_amplitude = max_norm_aos(ctx.h_demag_xyz);
+    stats.max_effective_field_amplitude = max_norm_aos(ctx.effective_field.h_xyz);
+    stats.max_demag_field_amplitude = max_norm_aos(ctx.demag.h_xyz);
     stats.max_rhs_amplitude = max_rhs;
-    stats.max_torque_Apm = max_cross_norm_aos(ctx.m_xyz, ctx.h_eff_xyz);
+    stats.max_torque_Apm = max_cross_norm_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz);
     const auto average = average_magnetization_components(ctx);
     stats.mx = average[0];
     stats.my = average[1];

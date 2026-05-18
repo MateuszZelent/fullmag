@@ -110,6 +110,85 @@ void oersted_realizations_are_owned_by_separate_modules() {
     check(
         aggregate_header.find("Initialize Oersted plan fields") != std::string::npos,
         "Oersted aggregate header must document plan-field initialization ownership");
+    check(
+        aggregate_header.find("does not sample analytical cylinders or add explicit nodal fields") !=
+            std::string::npos,
+        "Oersted aggregate header must document its non-owning realization boundary");
+    check(
+        aggregate_header.find("oersted_cylinder.*") != std::string::npos,
+        "Oersted aggregate header must name the cylinder owner");
+    check(
+        aggregate_header.find("oersted_explicit.*") != std::string::npos,
+        "Oersted aggregate header must name the explicit-field owner");
+}
+
+void oersted_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted.cpp");
+    const std::string cylinder =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_cylinder.cpp");
+    const std::string explicit_field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_explicit.cpp");
+
+    check(
+        aggregate.find("Oersted aggregate source contract") != std::string::npos,
+        "Oersted aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not sample analytical cylinders or add explicit nodal fields") !=
+            std::string::npos,
+        "Oersted aggregate source file must document its non-owning realization boundary");
+    check(
+        cylinder.find("Oersted cylinder source contract") != std::string::npos,
+        "Oersted cylinder source file must document its source contract");
+    check(
+        cylinder.find("does not import plan fields or add explicit nodal Oersted buffers") !=
+            std::string::npos,
+        "Oersted cylinder source file must document its non-owning plan/explicit boundary");
+    check(
+        explicit_field.find("Oersted explicit-field source contract") != std::string::npos,
+        "Oersted explicit source file must document its source contract");
+    check(
+        explicit_field.find("does not normalize cylinder axes or apply current envelopes") !=
+            std::string::npos,
+        "Oersted explicit source file must document its non-owning cylinder boundary");
+}
+
+void oersted_leaf_headers_document_non_owning_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string cylinder_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_cylinder.hpp");
+    const std::string explicit_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_explicit.hpp");
+
+    check(
+        cylinder_header.find("does not own explicit nodal Oersted buffers, aggregate realization dispatch, plan import, or effective-field composition") !=
+            std::string::npos,
+        "Oersted cylinder header must document its non-owning explicit/aggregate/composition boundary");
+    check(
+        explicit_header.find("does not own analytical cylinder sampling, current-envelope scaling, axis normalization, or effective-field composition") !=
+            std::string::npos,
+        "Explicit Oersted header must document its non-owning cylinder/envelope/composition boundary");
+}
+
+void oersted_runtime_state_is_owned_by_aggregate_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted.hpp");
+
+    check(
+        aggregate_header.find("struct OerstedRuntimeState") != std::string::npos,
+        "Oersted realized-field state must be declared by oersted.hpp");
+    check(
+        aggregate_header.find("std::vector<double> h_xyz") != std::string::npos,
+        "Oersted realized-field state must own the materialized H field buffer");
+    check(
+        context_header.find("OerstedRuntimeState oersted") != std::string::npos,
+        "Context must store Oersted realized-field state through the Oersted owner");
+    check(
+        context_header.find("h_oe_xyz") == std::string::npos,
+        "Context must not own a flat Oersted field buffer");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -127,7 +206,7 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 fullmag::fem::Context make_cylinder_context() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 4;
-    ctx.nodes_xyz = {
+    ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         0.5, 0.0, 0.0,
         2.0, 0.0, 0.0,
@@ -152,25 +231,25 @@ void analytical_cylinder_is_precomputed_for_unit_current() {
         fullmag::fem::initialize_oersted_cylinder_field(ctx, error),
         "Oersted cylinder initialization succeeds");
 
-    check(ctx.h_oe_xyz.size() == 12u, "Oersted field buffer size");
+    check(ctx.oersted.h_xyz.size() == 12u, "Oersted field buffer size");
     check_near(ctx.oersted_axis[2], 1.0, 0.0, "Oersted axis normalized");
 
-    check_near(ctx.h_oe_xyz[0], 0.0, 0.0, "axis node Hx");
-    check_near(ctx.h_oe_xyz[1], 0.0, 0.0, "axis node Hy");
-    check_near(ctx.h_oe_xyz[2], 0.0, 0.0, "axis node Hz");
+    check_near(ctx.oersted.h_xyz[0], 0.0, 0.0, "axis node Hx");
+    check_near(ctx.oersted.h_xyz[1], 0.0, 0.0, "axis node Hy");
+    check_near(ctx.oersted.h_xyz[2], 0.0, 0.0, "axis node Hz");
 
     check_near(
-        ctx.h_oe_xyz[4],
+        ctx.oersted.h_xyz[4],
         1.0 / (4.0 * kPiTest),
         1e-15,
         "inside cylinder unit-current Hy");
     check_near(
-        ctx.h_oe_xyz[7],
+        ctx.oersted.h_xyz[7],
         1.0 / (4.0 * kPiTest),
         1e-15,
         "outside cylinder unit-current Hy");
     check_near(
-        ctx.h_oe_xyz[9],
+        ctx.oersted.h_xyz[9],
         -1.0 / (2.0 * kPiTest),
         1e-15,
         "outside cylinder unit-current Hx");
@@ -233,7 +312,7 @@ void explicit_oersted_field_is_added_unscaled() {
     ctx.has_oersted_field = true;
     ctx.has_oersted_cylinder = false;
     ctx.oersted_current = 3.0;
-    ctx.h_oe_xyz = {1.0, 2.0, 3.0};
+    ctx.oersted.h_xyz = {1.0, 2.0, 3.0};
 
     std::vector<double> h_eff = {10.0, 20.0, 30.0};
     fullmag::fem::add_oersted_field(ctx, h_eff);
@@ -256,7 +335,7 @@ void oersted_plan_import_validates_exclusive_realizations_and_copies_field() {
     check(fullmag::fem::initialize_oersted_plan_fields(ctx, plan, error), error.c_str());
     check(ctx.has_oersted_field, "explicit Oersted flag set");
     check(!ctx.has_oersted_cylinder, "Oersted cylinder flag unset");
-    check(ctx.h_oe_xyz == std::vector<double>({1.0, 2.0, 3.0}), "explicit Oersted field copied");
+    check(ctx.oersted.h_xyz == std::vector<double>({1.0, 2.0, 3.0}), "explicit Oersted field copied");
     check(ctx.oersted_current == 7.0, "Oersted current copied");
 
     plan.has_oersted_cylinder = 1;
@@ -281,6 +360,9 @@ void oersted_plan_import_validates_exclusive_realizations_and_copies_field() {
 
 int main() {
     oersted_realizations_are_owned_by_separate_modules();
+    oersted_source_files_document_module_boundaries();
+    oersted_leaf_headers_document_non_owning_boundaries();
+    oersted_runtime_state_is_owned_by_aggregate_module();
     analytical_cylinder_is_precomputed_for_unit_current();
     invalid_axis_is_rejected();
     time_modulation_scales_cylinder_current();

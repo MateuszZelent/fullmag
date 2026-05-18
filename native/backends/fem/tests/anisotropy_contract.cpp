@@ -100,6 +100,16 @@ void anisotropy_families_are_owned_by_separate_modules() {
             std::string::npos,
         "aggregate anisotropy header must document plan import ownership");
     check(
+        aggregate_header.find("does not compute uniaxial or cubic H_eff/energy") !=
+            std::string::npos,
+        "aggregate anisotropy header must document its non-owning field boundary");
+    check(
+        aggregate_header.find("anisotropy_uniaxial.*") != std::string::npos,
+        "aggregate anisotropy header must name the uniaxial owner");
+    check(
+        aggregate_header.find("anisotropy_cubic.*") != std::string::npos,
+        "aggregate anisotropy header must name the cubic owner");
+    check(
         context.find("ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;") ==
             std::string::npos,
         "context_from_plan must delegate uniaxial anisotropy import to anisotropy.cpp");
@@ -112,12 +122,84 @@ void anisotropy_families_are_owned_by_separate_modules() {
             std::string::npos,
         "uniaxial module header must document its physical contract");
     check(
+        uniaxial_header.find("does not validate cubic axes or compute cubic H_eff") !=
+            std::string::npos,
+        "uniaxial module header must document its non-owning cubic boundary");
+    check(
         cubic_header.find("Compute the cubic anisotropy effective field") != std::string::npos,
         "cubic module header must document its physical contract");
+    check(
+        cubic_header.find("does not validate plan axes or compute uniaxial H_eff") !=
+            std::string::npos,
+        "cubic module header must document its non-owning aggregate/uniaxial boundary");
     check(
         aggregate_header.find("Validate and normalize anisotropy axes from the native FEM plan") !=
             std::string::npos,
         "aggregate anisotropy header must document plan-axis normalization");
+}
+
+void anisotropy_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.cpp");
+    const std::string uniaxial =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_uniaxial.cpp");
+    const std::string cubic =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_cubic.cpp");
+
+    check(
+        aggregate.find("Anisotropy aggregate source contract") != std::string::npos,
+        "anisotropy aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not compute uniaxial or cubic H_eff/energy") !=
+            std::string::npos,
+        "anisotropy aggregate source file must document its non-owning field boundary");
+    check(
+        uniaxial.find("Uniaxial anisotropy source contract") != std::string::npos,
+        "uniaxial anisotropy source file must document its source contract");
+    check(
+        uniaxial.find("does not validate cubic axes or compute cubic H_eff") !=
+            std::string::npos,
+        "uniaxial anisotropy source file must document its non-owning cubic boundary");
+    check(
+        cubic.find("Cubic anisotropy source contract") != std::string::npos,
+        "cubic anisotropy source file must document its source contract");
+    check(
+        cubic.find("does not validate plan axes or compute uniaxial H_eff") !=
+            std::string::npos,
+        "cubic anisotropy source file must document its non-owning aggregate/uniaxial boundary");
+}
+
+void anisotropy_runtime_state_is_owned_by_aggregate_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.hpp");
+
+    check(
+        aggregate_header.find("struct AnisotropyRuntimeState") != std::string::npos,
+        "anisotropy runtime state must be declared by anisotropy.hpp");
+    check(
+        aggregate_header.find("std::vector<double> h_uniaxial_xyz") != std::string::npos,
+        "anisotropy runtime state must own the uniaxial H field buffer");
+    check(
+        aggregate_header.find("std::vector<double> h_cubic_xyz") != std::string::npos,
+        "anisotropy runtime state must own the cubic H field buffer");
+    check(
+        aggregate_header.find("double energy_joules") != std::string::npos,
+        "anisotropy runtime state must own the combined anisotropy energy diagnostic");
+    check(
+        context_header.find("AnisotropyRuntimeState anisotropy") != std::string::npos,
+        "Context must store anisotropy runtime output through the anisotropy owner");
+    check(
+        context_header.find("h_ani_xyz") == std::string::npos,
+        "Context must not own a flat uniaxial anisotropy field buffer");
+    check(
+        context_header.find("h_cubic_ani_xyz") == std::string::npos,
+        "Context must not own a flat cubic anisotropy field buffer");
+    check(
+        context_header.find("last_anisotropy_energy_joules") == std::string::npos,
+        "Context must not own flat anisotropy energy state");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -136,8 +218,8 @@ fullmag::fem::Context make_base_context() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 3;
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
-    ctx.magnetic_node_mask = {1u, 1u, 0u};
+    ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
     return ctx;
 }
 
@@ -188,9 +270,9 @@ void uniaxial_uses_per_node_terms_and_energy_convention() {
     ctx.anisotropy_axis = {0.0, 0.0, 1.0};
     ctx.anisotropy_Ku = 0.0;
     ctx.anisotropy_Ku2 = 0.0;
-    ctx.Ku_field = {1.2e5, 2.0e5, 9.0e5};
-    ctx.Ku2_field = {0.0, 0.5e5, 9.0e5};
-    ctx.Ms_field = {800e3, 1.0e6, 800e3};
+    ctx.material_fields.Ku_field = {1.2e5, 2.0e5, 9.0e5};
+    ctx.material_fields.Ku2_field = {0.0, 0.5e5, 9.0e5};
+    ctx.material_fields.Ms_field = {800e3, 1.0e6, 800e3};
 
     const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
     const std::vector<double> m = {
@@ -298,6 +380,8 @@ void anisotropy_axis_plan_values_are_normalized_and_validated() {
 
 int main() {
     anisotropy_families_are_owned_by_separate_modules();
+    anisotropy_source_files_document_module_boundaries();
+    anisotropy_runtime_state_is_owned_by_aggregate_module();
     anisotropy_plan_fields_are_imported_by_aggregate();
     uniaxial_uses_per_node_terms_and_energy_convention();
     cubic_reports_energy_and_field_in_crystal_frame();

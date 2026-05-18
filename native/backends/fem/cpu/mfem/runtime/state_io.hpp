@@ -16,6 +16,9 @@ struct Context;
  * semantics, external magnetization upload, cache invalidation, and post-upload
  * field-buffer refresh. It keeps C ABI state I/O behavior out of context
  * construction and interaction modules.
+ *
+ * It does not compute fields, advance integrators, own snapshots, or publish
+ * step metrics.
  */
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error);
 int context_copy_field_f64(

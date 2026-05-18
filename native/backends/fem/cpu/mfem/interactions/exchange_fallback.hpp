@@ -9,6 +9,8 @@ namespace fullmag::fem {
  * public exchange operator/field symbols live in `exchange_fallback.cpp`.
  * Disabled exchange returns zero field/energy, while active exchange reports an
  * explicit MFEM-stack requirement.
+ *
+ * It does not assemble MFEM operators, compute H_ex, project mass, refresh runtime fields, or claim active exchange execution.
  */
 
 } // namespace fullmag::fem

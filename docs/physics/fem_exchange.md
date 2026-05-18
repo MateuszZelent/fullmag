@@ -1,7 +1,7 @@
 # FEM Exchange Interaction
 
 - Status: native FEM CPU module contract, full field assembly requires MFEM runtime validation
-- Last updated: 2026-05-17
+- Last updated: 2026-05-18
 - Implementation:
   `native/backends/fem/cpu/mfem/interactions/exchange.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/exchange_operator.hpp/.cpp`,
@@ -114,7 +114,9 @@ ctest --test-dir native/build/backends/fem -R fem_exchange_contract --output-on-
 
 `fem_exchange_contract` also checks source-module ownership for operator
 assembly, field computation, runtime refresh, fallback, mass projection, and
-legacy GPU upload.
+legacy GPU upload. It also checks top-level source-contract docstrings for the
+aggregate, operator, field-compute, runtime-refresh, fallback, mass-projection,
+and legacy GPU upload sources.
 
 The full MFEM exchange branch still requires an environment with complete MFEM
 headers and libraries.

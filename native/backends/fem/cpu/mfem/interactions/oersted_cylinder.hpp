@@ -15,8 +15,7 @@ struct Context;
  * The cylinder model uses an infinite straight current conductor. Its axis is
  * the current-flow direction and may be arbitrary in 3D, but it must be finite
  * and non-zero. The module precomputes a unit-current nodal H field in A/m and
- * later scales that field by the configured current envelope. It does not add
- * explicit nodal Oersted buffers, apply gamma_mu0, or convert fields to torque.
+ * later scales that field by the configured current envelope. It does not own explicit nodal Oersted buffers, aggregate realization dispatch, plan import, or effective-field composition.
  */
 bool normalize_oersted_cylinder_axis(Context &ctx, std::string &error);
 

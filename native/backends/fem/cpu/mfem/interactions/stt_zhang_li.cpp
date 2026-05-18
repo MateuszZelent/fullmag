@@ -1,7 +1,16 @@
+/*
+ * Zhang-Li CIP STT source contract.
+ *
+ * This source owns CIP drift/beta torque, tetrahedral magnetization gradients,
+ * nodal projection, reusable RHS/weight scratch, per-element Ms fallback, and
+ * additive RHS composition. It does not import plan fields or compute Slonczewski CPP torque.
+ */
 #include "cpu/mfem/interactions/stt_zhang_li.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -45,18 +54,10 @@ Vec3 node_coords(const Context &ctx, uint32_t node)
 {
     const size_t base = static_cast<size_t>(node) * 3u;
     return {
-        ctx.nodes_xyz[base + 0],
-        ctx.nodes_xyz[base + 1],
-        ctx.nodes_xyz[base + 2],
+        ctx.mesh.nodes_xyz[base + 0],
+        ctx.mesh.nodes_xyz[base + 1],
+        ctx.mesh.nodes_xyz[base + 2],
     };
-}
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
 }
 
 bool tetrahedron_gradients(
@@ -98,10 +99,30 @@ bool tetrahedron_gradients(
 
 } // namespace
 
+void prepare_zhang_li_stt_workspace(
+    ZhangLiSttWorkspace &workspace,
+    std::size_t dof_len,
+    std::size_t n_nodes)
+{
+    workspace.rhs_xyz.resize(dof_len, 0.0);
+    workspace.node_weight.resize(n_nodes, 0.0);
+}
+
 void add_zhang_li_stt_rhs_aos(
     const Context &ctx,
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz)
+{
+    ZhangLiSttWorkspace workspace;
+    prepare_zhang_li_stt_workspace(workspace, rhs_xyz.size(), static_cast<size_t>(ctx.n_nodes));
+    add_zhang_li_stt_rhs_aos(ctx, m_xyz, rhs_xyz, workspace);
+}
+
+void add_zhang_li_stt_rhs_aos(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &rhs_xyz,
+    ZhangLiSttWorkspace &workspace)
 {
     if (!ctx.has_zhang_li_stt) {
         return;
@@ -110,18 +131,27 @@ void add_zhang_li_stt_rhs_aos(
     constexpr double MU_B = 9.274009994e-24;
     constexpr double E_CHARGE = 1.60217662e-19;
 
-    std::vector<double> node_weight(static_cast<size_t>(ctx.n_nodes), 0.0);
+    if (workspace.rhs_xyz.size() != rhs_xyz.size() ||
+        workspace.node_weight.size() != static_cast<size_t>(ctx.n_nodes)) {
+        prepare_zhang_li_stt_workspace(
+            workspace,
+            rhs_xyz.size(),
+            static_cast<size_t>(ctx.n_nodes));
+    }
+    std::fill(workspace.rhs_xyz.begin(), workspace.rhs_xyz.end(), 0.0);
+    std::fill(workspace.node_weight.begin(), workspace.node_weight.end(), 0.0);
+
     const double beta = ctx.stt_beta;
 
     for (size_t element_index = 0; element_index < static_cast<size_t>(ctx.n_elements); ++element_index) {
-        if (!ctx.magnetic_element_mask.empty() && ctx.magnetic_element_mask[element_index] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() && ctx.mesh.magnetic_element_mask[element_index] == 0u) {
             continue;
         }
         const size_t ebase = element_index * 4u;
-        const uint32_t n0 = ctx.elements[ebase + 0];
-        const uint32_t n1 = ctx.elements[ebase + 1];
-        const uint32_t n2 = ctx.elements[ebase + 2];
-        const uint32_t n3 = ctx.elements[ebase + 3];
+        const uint32_t n0 = ctx.mesh.elements[ebase + 0];
+        const uint32_t n1 = ctx.mesh.elements[ebase + 1];
+        const uint32_t n2 = ctx.mesh.elements[ebase + 2];
+        const uint32_t n3 = ctx.mesh.elements[ebase + 3];
         Vec3 grads[4];
         double volume = 0.0;
         if (!tetrahedron_gradients(
@@ -138,7 +168,7 @@ void add_zhang_li_stt_rhs_aos(
         double elem_ms = 0.0;
         for (int local = 0; local < 4; ++local) {
             elem_ms += scalar_field_value(
-                ctx.Ms_field,
+                ctx.material_fields.Ms_field,
                 nodes[local],
                 ctx.material.saturation_magnetisation);
         }
@@ -175,22 +205,22 @@ void add_zhang_li_stt_rhs_aos(
             const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
             const Vec3 c = cross3(m, dm);
             const Vec3 dc = cross3(m, c);
-            rhs_xyz[base + 0] += nodal_weight * (-dc[0] - beta * c[0]);
-            rhs_xyz[base + 1] += nodal_weight * (-dc[1] - beta * c[1]);
-            rhs_xyz[base + 2] += nodal_weight * (-dc[2] - beta * c[2]);
-            node_weight[node] += nodal_weight;
+            workspace.rhs_xyz[base + 0] += nodal_weight * (-dc[0] - beta * c[0]);
+            workspace.rhs_xyz[base + 1] += nodal_weight * (-dc[1] - beta * c[1]);
+            workspace.rhs_xyz[base + 2] += nodal_weight * (-dc[2] - beta * c[2]);
+            workspace.node_weight[node] += nodal_weight;
         }
     }
 
     for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
-        if (!(node_weight[i] > kGeomEps)) {
+        if (!(workspace.node_weight[i] > kGeomEps)) {
             continue;
         }
-        const double inv_w = 1.0 / node_weight[i];
+        const double inv_w = 1.0 / workspace.node_weight[i];
         const size_t base = i * 3u;
-        rhs_xyz[base + 0] *= inv_w;
-        rhs_xyz[base + 1] *= inv_w;
-        rhs_xyz[base + 2] *= inv_w;
+        rhs_xyz[base + 0] += workspace.rhs_xyz[base + 0] * inv_w;
+        rhs_xyz[base + 1] += workspace.rhs_xyz[base + 1] * inv_w;
+        rhs_xyz[base + 2] += workspace.rhs_xyz[base + 2] * inv_w;
     }
 }
 

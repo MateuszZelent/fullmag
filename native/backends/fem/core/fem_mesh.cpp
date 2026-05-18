@@ -1,3 +1,11 @@
+/*
+ * FEM mesh core source contract.
+ *
+ * This source owns mesh geometry/marker import, magnetic mask policy, static
+ * periodic topology reduction, periodic compatibility gates, periodic material
+ * class validation, and nodal-volume geometry helpers. It does not own base scalar plan fields, material fields, state initialization, field buffers, runtime devices, or interaction physics.
+ */
+
 #include "core/fem_mesh.hpp"
 
 #include "context.hpp"
@@ -67,33 +75,33 @@ bool initialize_mesh_plan_fields(
         return false;
     }
 
-    ctx.nodes_xyz.assign(
+    ctx.mesh.nodes_xyz.assign(
         mesh.nodes_xyz,
         mesh.nodes_xyz + static_cast<size_t>(ctx.n_nodes) * 3u);
-    ctx.elements.assign(
+    ctx.mesh.elements.assign(
         mesh.elements,
         mesh.elements + static_cast<size_t>(ctx.n_elements) * 4u);
     copy_optional_span(
         mesh.element_markers,
         static_cast<size_t>(ctx.n_elements),
-        ctx.element_markers,
+        ctx.mesh.element_markers,
         0u);
     copy_optional_span(
         mesh.boundary_faces,
         static_cast<size_t>(ctx.n_boundary_faces) * 3u,
-        ctx.boundary_faces,
+        ctx.mesh.boundary_faces,
         0u);
     copy_optional_span(
         mesh.boundary_markers,
         static_cast<size_t>(ctx.n_boundary_faces),
-        ctx.boundary_markers,
+        ctx.mesh.boundary_markers,
         0u);
 
-    ctx.periodic_node_pairs.clear();
+    ctx.mesh.periodic_node_pairs.clear();
     if (mesh.n_periodic_node_pairs > 0) {
         const size_t pair_scalar_count =
             static_cast<size_t>(mesh.n_periodic_node_pairs) * 2u;
-        ctx.periodic_node_pairs.assign(
+        ctx.mesh.periodic_node_pairs.assign(
             mesh.periodic_node_pairs,
             mesh.periodic_node_pairs + pair_scalar_count);
     }
@@ -101,13 +109,13 @@ bool initialize_mesh_plan_fields(
         return false;
     }
 
-    ctx.periodic_boundary_marker_set.clear();
+    ctx.mesh.periodic_boundary_marker_set.clear();
     if (mesh.periodic_boundary_pair_markers != nullptr &&
         mesh.periodic_boundary_pair_count > 0) {
         for (uint32_t i = 0; i < mesh.periodic_boundary_pair_count; ++i) {
-            ctx.periodic_boundary_marker_set.insert(
+            ctx.mesh.periodic_boundary_marker_set.insert(
                 mesh.periodic_boundary_pair_markers[2u * i]);
-            ctx.periodic_boundary_marker_set.insert(
+            ctx.mesh.periodic_boundary_marker_set.insert(
                 mesh.periodic_boundary_pair_markers[2u * i + 1u]);
         }
     }
@@ -117,37 +125,37 @@ bool initialize_mesh_plan_fields(
 
 void initialize_magnetic_masks(Context &ctx)
 {
-    ctx.magnetic_element_mask.assign(static_cast<size_t>(ctx.n_elements), 1u);
-    if (!ctx.element_markers.empty()) {
+    ctx.mesh.magnetic_element_mask.assign(static_cast<size_t>(ctx.n_elements), 1u);
+    if (!ctx.mesh.element_markers.empty()) {
         bool has_air = false;
         bool has_magnetic = false;
-        for (size_t i = 0; i < ctx.element_markers.size(); ++i) {
-            has_air = has_air || ctx.element_markers[i] == 0u;
-            has_magnetic = has_magnetic || ctx.element_markers[i] != 0u;
+        for (size_t i = 0; i < ctx.mesh.element_markers.size(); ++i) {
+            has_air = has_air || ctx.mesh.element_markers[i] == 0u;
+            has_magnetic = has_magnetic || ctx.mesh.element_markers[i] != 0u;
         }
         if (has_air && has_magnetic) {
-            for (size_t i = 0; i < ctx.element_markers.size(); ++i) {
-                ctx.magnetic_element_mask[i] =
-                    ctx.element_markers[i] != 0u ? 1u : 0u;
+            for (size_t i = 0; i < ctx.mesh.element_markers.size(); ++i) {
+                ctx.mesh.magnetic_element_mask[i] =
+                    ctx.mesh.element_markers[i] != 0u ? 1u : 0u;
             }
         }
     }
 
-    ctx.magnetic_node_mask.assign(static_cast<size_t>(ctx.n_nodes), 0u);
+    ctx.mesh.magnetic_node_mask.assign(static_cast<size_t>(ctx.n_nodes), 0u);
     for (uint32_t e = 0; e < ctx.n_elements; ++e) {
-        if (ctx.magnetic_element_mask[e] == 0u) {
+        if (ctx.mesh.magnetic_element_mask[e] == 0u) {
             continue;
         }
         const size_t base = static_cast<size_t>(e) * 4u;
         for (int v = 0; v < 4; ++v) {
-            ctx.magnetic_node_mask[ctx.elements[base + static_cast<size_t>(v)]] = 1u;
+            ctx.mesh.magnetic_node_mask[ctx.mesh.elements[base + static_cast<size_t>(v)]] = 1u;
         }
     }
 }
 
 bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
 {
-    if (ctx.periodic_node_pairs.empty()) {
+    if (ctx.mesh.periodic_node_pairs.empty()) {
         return true;
     }
     if (!ctx.enable_exchange) {
@@ -172,23 +180,23 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
         return false;
     }
 
-    if (!validate_periodic_scalar_field_classes(ctx, ctx.Ms_field, "Ms_field", error) ||
-        !validate_periodic_scalar_field_classes(ctx, ctx.A_field, "A_field", error) ||
-        !validate_periodic_scalar_field_classes(ctx, ctx.alpha_field, "alpha_field", error)) {
+    if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Ms_field, "Ms_field", error) ||
+        !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.A_field, "A_field", error) ||
+        !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.alpha_field, "alpha_field", error)) {
         return false;
     }
     if (ctx.enable_anisotropy || ctx.enable_cubic_anisotropy) {
-        if (!validate_periodic_scalar_field_classes(ctx, ctx.Ku_field, "Ku_field", error) ||
-            !validate_periodic_scalar_field_classes(ctx, ctx.Ku2_field, "Ku2_field", error) ||
-            !validate_periodic_scalar_field_classes(ctx, ctx.Kc1_field, "Kc1_field", error) ||
-            !validate_periodic_scalar_field_classes(ctx, ctx.Kc2_field, "Kc2_field", error) ||
-            !validate_periodic_scalar_field_classes(ctx, ctx.Kc3_field, "Kc3_field", error)) {
+        if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Ku_field, "Ku_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Ku2_field, "Ku2_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Kc1_field, "Kc1_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Kc2_field, "Kc2_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Kc3_field, "Kc3_field", error)) {
             return false;
         }
     }
     if (ctx.enable_dmi || ctx.enable_bulk_dmi) {
-        if (!validate_periodic_scalar_field_classes(ctx, ctx.Dind_field, "Dind_field", error) ||
-            !validate_periodic_scalar_field_classes(ctx, ctx.Dbulk_field, "Dbulk_field", error)) {
+        if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dind_field, "Dind_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dbulk_field, "Dbulk_field", error)) {
             return false;
         }
     }
@@ -196,10 +204,10 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
 }
 
 bool build_static_periodic_reduction(Context &ctx, std::string &error) {
-    ctx.periodic_reduced_node.clear();
-    ctx.periodic_representative_nodes.clear();
-    ctx.periodic_reduced_node_count = 0;
-    if (ctx.periodic_node_pairs.empty()) {
+    ctx.mesh.periodic_reduced_node.clear();
+    ctx.mesh.periodic_representative_nodes.clear();
+    ctx.mesh.periodic_reduced_node_count = 0;
+    if (ctx.mesh.periodic_node_pairs.empty()) {
         return true;
     }
 
@@ -232,10 +240,10 @@ bool build_static_periodic_reduction(Context &ctx, std::string &error) {
         parent[static_cast<size_t>(dependent)] = representative;
     };
 
-    const size_t n_pairs = ctx.periodic_node_pairs.size() / 2u;
+    const size_t n_pairs = ctx.mesh.periodic_node_pairs.size() / 2u;
     for (size_t pair_index = 0; pair_index < n_pairs; ++pair_index) {
-        const uint32_t node_a = ctx.periodic_node_pairs[pair_index * 2u];
-        const uint32_t node_b = ctx.periodic_node_pairs[pair_index * 2u + 1u];
+        const uint32_t node_a = ctx.mesh.periodic_node_pairs[pair_index * 2u];
+        const uint32_t node_b = ctx.mesh.periodic_node_pairs[pair_index * 2u + 1u];
         if (node_a >= ctx.n_nodes || node_b >= ctx.n_nodes) {
             error = "FEM mesh periodic_node_pairs references node outside mesh";
             return false;
@@ -249,19 +257,19 @@ bool build_static_periodic_reduction(Context &ctx, std::string &error) {
 
     const uint32_t unset_reduced = static_cast<uint32_t>(-1);
     std::vector<uint32_t> root_to_reduced(static_cast<size_t>(ctx.n_nodes), unset_reduced);
-    ctx.periodic_reduced_node.assign(static_cast<size_t>(ctx.n_nodes), 0u);
+    ctx.mesh.periodic_reduced_node.assign(static_cast<size_t>(ctx.n_nodes), 0u);
     for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
         const uint32_t root = find_root(node);
         uint32_t reduced = root_to_reduced[static_cast<size_t>(root)];
         if (reduced == unset_reduced) {
-            reduced = static_cast<uint32_t>(ctx.periodic_representative_nodes.size());
+            reduced = static_cast<uint32_t>(ctx.mesh.periodic_representative_nodes.size());
             root_to_reduced[static_cast<size_t>(root)] = reduced;
-            ctx.periodic_representative_nodes.push_back(root);
+            ctx.mesh.periodic_representative_nodes.push_back(root);
         }
-        ctx.periodic_reduced_node[static_cast<size_t>(node)] = reduced;
+        ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)] = reduced;
     }
-    ctx.periodic_reduced_node_count =
-        static_cast<uint32_t>(ctx.periodic_representative_nodes.size());
+    ctx.mesh.periodic_reduced_node_count =
+        static_cast<uint32_t>(ctx.mesh.periodic_representative_nodes.size());
     return true;
 }
 
@@ -271,13 +279,13 @@ bool validate_periodic_scalar_field_classes(
     const char *field_name,
     std::string &error)
 {
-    if (field.empty() || ctx.periodic_reduced_node.empty()) {
+    if (field.empty() || ctx.mesh.periodic_reduced_node.empty()) {
         return true;
     }
     for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         const uint32_t representative =
-            ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+            ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
         const double value = field[static_cast<size_t>(node)];
         const double expected = field[static_cast<size_t>(representative)];
         const double tolerance = 1e-12 * std::max(1.0, std::abs(expected));
@@ -292,19 +300,19 @@ bool validate_periodic_scalar_field_classes(
 
 void compute_node_volumes(Context &ctx) {
     const size_t n = static_cast<size_t>(ctx.n_nodes);
-    ctx.node_volumes.assign(n, 0.0);
+    ctx.mesh.node_volumes.assign(n, 0.0);
 
     for (uint32_t elem = 0; elem < ctx.n_elements; ++elem) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
         }
-        const double v_tet = tetrahedron_volume(ctx.nodes_xyz, ctx.elements, elem);
+        const double v_tet = tetrahedron_volume(ctx.mesh.nodes_xyz, ctx.mesh.elements, elem);
         const double quarter_v = v_tet * 0.25;
         const size_t base = static_cast<size_t>(elem) * 4u;
         for (int k = 0; k < 4; ++k) {
-            const uint32_t node = ctx.elements[base + static_cast<size_t>(k)];
-            ctx.node_volumes[node] += quarter_v;
+            const uint32_t node = ctx.mesh.elements[base + static_cast<size_t>(k)];
+            ctx.mesh.node_volumes[node] += quarter_v;
         }
     }
 }

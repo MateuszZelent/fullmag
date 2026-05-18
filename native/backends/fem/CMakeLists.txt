@@ -75,7 +75,6 @@ set(FEM_SOURCES
     cpu/mfem/interactions/zeeman_uniform_field.cpp
     cpu/mfem/integrators/adaptive_dt.cpp
     cpu/mfem/integrators/heun.cpp
-    cpu/mfem/integrators/heun_step.cpp
     cpu/mfem/integrators/llg_rhs.cpp
     cpu/mfem/integrators/rk_explicit.cpp
     cpu/mfem/integrators/rk_explicit_step.cpp
@@ -84,6 +83,7 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
+    cpu/mfem/runtime/availability.cpp
     cpu/mfem/runtime/cpu_threads.cpp
     cpu/mfem/runtime/field_refresh.cpp
     cpu/mfem/runtime/gpu_state_runtime.cpp
@@ -164,13 +164,24 @@ add_test(NAME fem_gpu_state_info COMMAND fem_gpu_state_info)
 
 add_executable(fem_gpu_rk_plan tests/gpu_rk_plan.cpp)
 target_link_libraries(fem_gpu_rk_plan PRIVATE fullmag_fem)
-target_include_directories(fem_gpu_rk_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(fem_gpu_rk_plan PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
 
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
 target_include_directories(fem_transfer_audit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
+
+add_executable(fem_source_facade_contract tests/source_facade_contract.cpp)
+target_link_libraries(fem_source_facade_contract PRIVATE fullmag_fem)
+target_include_directories(fem_source_facade_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_source_facade_contract COMMAND fem_source_facade_contract)
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)
 target_link_libraries(fem_dmi_weak_residual PRIVATE fullmag_fem)
@@ -288,6 +299,14 @@ target_include_directories(fem_cpu_threads_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cpu_threads_contract COMMAND fem_cpu_threads_contract)
+
+add_executable(fem_availability_contract tests/availability_contract.cpp)
+target_link_libraries(fem_availability_contract PRIVATE fullmag_fem)
+target_include_directories(fem_availability_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_availability_contract COMMAND fem_availability_contract)
 
 add_executable(fem_interrupt_contract tests/interrupt_contract.cpp)
 target_link_libraries(fem_interrupt_contract PRIVATE fullmag_fem)

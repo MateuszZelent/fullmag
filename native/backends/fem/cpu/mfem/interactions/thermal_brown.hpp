@@ -22,6 +22,11 @@ void initialize_thermal_brown_plan_fields(
 
 /*
  * Aggregated include surface for Brown thermal-field responsibilities.
+ *
+ * This compatibility umbrella owns plan-field import only. It does not define
+ * Brown sigma, refresh sampling, cache policy, nonmagnetic zeroing, or H_eff
+ * addition. Those responsibilities stay in the dedicated owner modules:
+ * thermal_brown_sigma.*, thermal_brown_sampler.*, and thermal_brown_field.*.
  */
 
 } // namespace fullmag::fem

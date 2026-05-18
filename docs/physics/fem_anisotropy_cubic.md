@@ -1,7 +1,7 @@
 # FEM Cubic Anisotropy
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
+- Last updated: 2026-05-18
 - Implementation: `native/backends/fem/cpu/mfem/interactions/anisotropy_cubic.hpp/.cpp`
 - Test: `native/backends/fem/tests/anisotropy_contract.cpp`
 
@@ -64,7 +64,8 @@ Current gate:
 
 - `fem_anisotropy_contract` checks the `K1/K2/K3` energy convention, field
   values in the crystal frame, a known easy-axis zero-field case,
-  source-module ownership, and nonmagnetic-node masking.
+  source-module ownership, top-level source-contract docstrings for the
+  aggregate/uniaxial/cubic sources, and nonmagnetic-node masking.
 
 Required before production qualification:
 

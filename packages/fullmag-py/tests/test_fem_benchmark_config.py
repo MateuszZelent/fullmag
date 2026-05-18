@@ -3732,7 +3732,7 @@ def test_snapshot_stats_syncs_device_source_magnetization_before_cpu_field_recom
     refresh_end = source.index("bool context_snapshot_stats_mfem(", refresh_start)
     refresh_source = source[refresh_start:refresh_end]
     snapshot_start = refresh_end
-    snapshot_end = source.index("bool context_step_exchange_heun_mfem(", snapshot_start)
+    snapshot_end = source.index("bool context_step_explicit_rk_mfem(", snapshot_start)
     snapshot_source = source[snapshot_start:snapshot_end]
 
     assert "context_sync_gpu_magnetization_to_host(ctx, error)" in refresh_source

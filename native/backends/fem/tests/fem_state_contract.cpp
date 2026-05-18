@@ -50,6 +50,7 @@ void state_plan_initialization_is_owned_by_core_module() {
     const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string state = read_text_file(root / "core" / "fem_state.cpp");
     const std::string state_header = read_text_file(root / "core" / "fem_state.hpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string context_from_plan =
         context.substr(0, context.find("bool context_sync_gpu_magnetization_to_host("));
 
@@ -60,7 +61,7 @@ void state_plan_initialization_is_owned_by_core_module() {
         context_from_plan.find("initial magnetization length mismatch") == std::string::npos,
         "Context construction must not own initial magnetization length validation");
     check(
-        context_from_plan.find("ctx.m_xyz.assign(") == std::string::npos,
+        context_from_plan.find("ctx.state.m_xyz.assign(") == std::string::npos,
         "Context construction must not copy initial magnetization directly");
     check(
         context_from_plan.find("ctx.step_count = 0;") == std::string::npos,
@@ -69,8 +70,33 @@ void state_plan_initialization_is_owned_by_core_module() {
         state.find("bool initialize_state_plan_fields(") != std::string::npos,
         "FEM state plan initialization must be defined in core/fem_state.cpp");
     check(
+        state.find("FEM state core source contract") != std::string::npos,
+        "FemState source file must document its source contract");
+    check(
+        state.find("does not import mesh topology, material coefficients, field buffers, runtime devices, or interaction physics") != std::string::npos,
+        "FemState source file must document its non-owning module boundary");
+    check(
         state_header.find("Own FEM state plan initialization") != std::string::npos,
         "FemState header must document state initialization ownership");
+    check(
+        state_header.find("struct FemStateRuntimeState") != std::string::npos,
+        "FemState header must declare the runtime state owner");
+    check(
+        state_header.find("std::vector<double> m_xyz") != std::string::npos,
+        "FemState runtime state must own the AoS magnetization buffer");
+    check(
+        context_header.find("FemStateRuntimeState state{}") != std::string::npos,
+        "Context must store FEM runtime magnetization under state");
+    check(
+        context_header.find("std::vector<double> m_xyz;") == std::string::npos,
+        "Context must not own a flat magnetization buffer");
+    check(
+        state_header.find(
+            "It does not own mesh topology, material coefficients, field buffers, runtime") !=
+                std::string::npos &&
+            state_header.find("devices, integrators, or interaction physics") !=
+                std::string::npos,
+        "FemState header must document its non-owning module boundary");
 }
 
 void state_plan_initialization_validates_copies_projects_and_resets_time() {
@@ -78,10 +104,10 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
     ctx.n_nodes = 2;
     ctx.step_count = 9;
     ctx.current_time = 4.0;
-    ctx.periodic_node_pairs = {0u, 1u};
-    ctx.periodic_reduced_node = {0u, 0u};
-    ctx.periodic_representative_nodes = {0u};
-    ctx.periodic_reduced_node_count = 1u;
+    ctx.mesh.periodic_node_pairs = {0u, 1u};
+    ctx.mesh.periodic_reduced_node = {0u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u};
+    ctx.mesh.periodic_reduced_node_count = 1u;
 
     const double initial_m[] = {
         1.0, 0.0, 0.0,
@@ -98,7 +124,7 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
         1.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
     };
-    check(ctx.m_xyz == projected, "initial magnetization copied and periodic-projected");
+    check(ctx.state.m_xyz == projected, "initial magnetization copied and periodic-projected");
     check(ctx.step_count == 0u, "step count reset");
     check(ctx.current_time == 0.0, "current time reset");
 

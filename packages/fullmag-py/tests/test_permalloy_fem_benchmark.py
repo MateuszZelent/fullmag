@@ -97,12 +97,51 @@ def test_case_environment_enables_profiler_threads_and_device():
     env = bench.build_case_environment(case, {"PATH": "/bin"}, max_steps=100)
 
     assert env["FULLMAG_FEM_STEP_PROFILE"] == "1"
+    assert str(bench.FULLMAG_PY_SRC) in env["PYTHONPATH"]
+    assert str(bench.BUNDLED_PY_SITE) in env["PYTHONPATH"]
     assert env["FULLMAG_FEM_EXECUTION"] == "cpu"
     assert env["FULLMAG_CPU_THREADS"] == "30"
     assert env["OMP_NUM_THREADS"] == "30"
     assert env["RAYON_NUM_THREADS"] == "30"
     assert env["PERMALLOY_DEVICE"] == "cpu"
     assert env["PERMALLOY_MAX_STEPS"] == "100"
+
+
+def test_enrich_summary_with_metadata_uses_nanosecond_demag_profile():
+    bench = load_benchmark_module()
+    summary = {"label": "cpu-20t"}
+    metadata = {
+        "demag_runtime": {
+            "actual_iterations": 7,
+            "final_residual_norm": 4.2e-7,
+            "requested_fem_omp_threads": 20,
+            "effective_fem_omp_threads": 20,
+            "mfem_device": "cpu",
+            "fem_assembly_mode": "legacy_sparse",
+            "timings_ns": {
+                "assemble": 12_500_000,
+                "solve": 33_250_000,
+                "solver_setup": 2_000_000,
+                "solver_apply": 31_250_000,
+                "recover": 44_750_000,
+                "energy": 100_000,
+                "total": 90_600_000,
+            },
+        }
+    }
+
+    bench.enrich_summary_with_metadata(summary, metadata)
+
+    assert summary["metadata_profile"] is True
+    assert summary["metadata_demag_total_ms"] == 90.6
+    assert summary["metadata_demag_assemble_ms"] == 12.5
+    assert summary["metadata_demag_solve_ms"] == 33.25
+    assert summary["metadata_demag_solver_apply_ms"] == 31.25
+    assert summary["metadata_demag_recover_ms"] == 44.75
+    assert summary["metadata_demag_actual_iterations"] == 7
+    assert summary["metadata_demag_final_residual"] == 4.2e-7
+    assert summary["metadata_mfem_device"] == "cpu"
+    assert summary["metadata_fem_assembly_mode"] == "legacy_sparse"
 
 
 def test_render_markdown_report_includes_ranking_and_fallback_status():
@@ -125,6 +164,14 @@ def test_render_markdown_report_includes_ranking_and_fallback_status():
         elapsed_s=1.0,
         log_path=Path(".fullmag/logs/gpu.log"),
     )
+    bench.enrich_summary_with_metadata(
+        cpu,
+        {
+            "demag_runtime": {
+                "timings_ns": {"total": 123_400_000, "solver_apply": 10_000_000}
+            }
+        },
+    )
 
     report = bench.render_markdown_report(
         [cpu, gpu],
@@ -135,6 +182,7 @@ def test_render_markdown_report_includes_ranking_and_fallback_status():
     assert "# Permalloy FEM demag benchmark" in report
     assert "| cpu-20t | ok | cpu | fem_cpu_native | no | 20 | 20 |" in report
     assert "| gpu | ok | gpu | fem_cpu_native | yes |" in report
+    assert "123.4" in report
     assert "## Ranking" in report
     assert "gpu fallback: yes" in report.lower()
     assert "bottleneck" in report.lower()

@@ -15,6 +15,7 @@ struct PhaseTimings;
  * The active MFEM path solves the Neumann volume potential u1, applies the dense
  * BEM boundary operator for u2 boundary data, solves the Dirichlet correction,
  * recovers H_demag, and reports energy using the common demag convention.
+ * It does not extract surfaces, assemble dense BEM operators, own sparse solver internals, define boundary-value helpers, own workspace lifecycle, or compute energy formula.
  */
 bool context_compute_demag_fem_bem(
     Context &ctx,

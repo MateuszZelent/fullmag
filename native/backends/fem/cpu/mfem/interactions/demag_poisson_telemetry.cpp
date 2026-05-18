@@ -1,3 +1,10 @@
+/*
+ * Poisson demag telemetry source contract.
+ *
+ * This source owns Poisson demag solver stats, phase timing stats, solver names,
+ * and profile log formatting. It does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_telemetry.hpp"
 
 #include "context.hpp"

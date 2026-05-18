@@ -59,25 +59,25 @@ fullmag::fem::Context unit_tet_context() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 4;
     ctx.n_elements = 1;
-    ctx.nodes_xyz = {
+    ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         0.0, 0.0, 1.0,
     };
-    ctx.elements = {0, 1, 2, 3};
-    ctx.element_markers = {1};
-    ctx.magnetic_element_mask = {1};
-    ctx.magnetic_node_mask = {1, 1, 1, 1};
-    ctx.boundary_faces = {
+    ctx.mesh.elements = {0, 1, 2, 3};
+    ctx.mesh.element_markers = {1};
+    ctx.mesh.magnetic_element_mask = {1};
+    ctx.mesh.magnetic_node_mask = {1, 1, 1, 1};
+    ctx.mesh.boundary_faces = {
         0, 2, 1,
         0, 1, 3,
         0, 3, 2,
         1, 2, 3,
     };
-    ctx.boundary_markers = {1, 1, 1, 1};
+    ctx.mesh.boundary_markers = {1, 1, 1, 1};
     ctx.material.saturation_magnetisation = 800e3;
-    ctx.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
+    ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
     return ctx;
 }
 
@@ -172,6 +172,155 @@ void fem_bem_energy_is_owned_by_energy_module() {
         energy_header.find("Compute demag energy for a FEM/BEM recovered field") !=
             std::string::npos,
         "FEM/BEM energy header must document its contract");
+}
+
+void fem_bem_aggregate_header_documents_submodule_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.hpp");
+
+    check(
+        aggregate_header.find("does not define surface extraction") != std::string::npos,
+        "FEM/BEM aggregate header must document its non-owning surface boundary");
+    check(
+        aggregate_header.find("BEM operator assembly") != std::string::npos,
+        "FEM/BEM aggregate header must document its non-owning operator boundary");
+    check(
+        aggregate_header.find("solves, potential transfer, recovery, energy, or telemetry") !=
+            std::string::npos,
+        "FEM/BEM aggregate header must document its non-owning boundary");
+    check(
+        aggregate_header.find("demag_fem_bem_surface.*") != std::string::npos,
+        "FEM/BEM aggregate header must name the surface owner");
+    check(
+        aggregate_header.find("demag_fem_bem_solve.*") != std::string::npos,
+        "FEM/BEM aggregate header must name the solve owner");
+    check(
+        aggregate_header.find("demag_fem_bem_energy.*") != std::string::npos,
+        "FEM/BEM aggregate header must name the energy owner");
+}
+
+void fem_bem_leaf_headers_document_submodule_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string surface_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_surface.hpp");
+    const std::string operator_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_operator.hpp");
+    const std::string boundary_values_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_boundary_values.hpp");
+    const std::string solve_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_solve.hpp");
+    const std::string energy_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_energy.hpp");
+
+    check(
+        surface_header.find("does not assemble BEM operators, solve sparse systems, transfer boundary values, compute energy, or orchestrate solves") != std::string::npos,
+        "FEM/BEM surface header must document its non-owning solver boundary");
+    check(
+        operator_header.find("does not extract boundary surfaces, solve sparse systems, transfer boundary values, compute energy, or manage workspace") != std::string::npos,
+        "FEM/BEM operator header must document its non-owning module boundary");
+    check(
+        boundary_values_header.find("does not extract boundary surfaces, solve sparse systems, combine potentials, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM boundary-values header must document its non-owning module boundary");
+    check(
+        solve_header.find("does not extract surfaces, assemble dense BEM operators, own sparse solver internals, define boundary-value helpers, own workspace lifecycle, or compute energy formula") != std::string::npos,
+        "FEM/BEM solve header must document its non-owning helper boundary");
+    check(
+        energy_header.find("does not extract surfaces, assemble operators, solve sparse systems, recover fields, or publish telemetry") != std::string::npos,
+        "FEM/BEM energy header must document its non-owning compute boundary");
+}
+
+void fem_bem_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string surface =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_surface.cpp");
+    const std::string op =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_operator.cpp");
+    const std::string linear_solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_linear_solve.cpp");
+    const std::string boundary_values =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_boundary_values.cpp");
+    const std::string workspace =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.cpp");
+    const std::string potential =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_potential.cpp");
+    const std::string telemetry =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_telemetry.cpp");
+    const std::string rhs =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_rhs.cpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_solve.cpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_energy.cpp");
+
+    check(
+        aggregate.find("FEM/BEM demag aggregate source contract") != std::string::npos,
+        "FEM/BEM aggregate source file must document its source contract");
+    check(
+        aggregate.find("does not extract surfaces, assemble BEM operators, solve sparse systems, transfer boundary values, manage workspace, combine potentials, prepare RHS, compute energy, publish telemetry, or orchestrate solves") != std::string::npos,
+        "FEM/BEM aggregate source file must document its non-owning module boundary");
+    check(
+        surface.find("FEM/BEM demag surface source contract") != std::string::npos,
+        "FEM/BEM surface source file must document its source contract");
+    check(
+        surface.find("does not assemble BEM operators, solve sparse systems, transfer boundary values, compute energy, or orchestrate solves") != std::string::npos,
+        "FEM/BEM surface source file must document its non-owning solver boundary");
+    check(
+        op.find("FEM/BEM demag dense-operator source contract") != std::string::npos,
+        "FEM/BEM operator source file must document its source contract");
+    check(
+        op.find("does not extract boundary surfaces, solve sparse systems, transfer boundary values, compute energy, or manage workspace") != std::string::npos,
+        "FEM/BEM operator source file must document its non-owning module boundary");
+    check(
+        linear_solve.find("FEM/BEM demag linear-solve source contract") != std::string::npos,
+        "FEM/BEM linear-solve source file must document its source contract");
+    check(
+        linear_solve.find("does not assemble boundary operators, prepare RHS, transfer boundary values, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM linear-solve source file must document its non-owning module boundary");
+    check(
+        boundary_values.find("FEM/BEM demag boundary-values source contract") != std::string::npos,
+        "FEM/BEM boundary-values source file must document its source contract");
+    check(
+        boundary_values.find("does not extract boundary surfaces, solve sparse systems, combine potentials, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM boundary-values source file must document its non-owning module boundary");
+    check(
+        workspace.find("FEM/BEM demag workspace source contract") != std::string::npos,
+        "FEM/BEM workspace source file must document its source contract");
+    check(
+        workspace.find("does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM workspace source file must document its non-owning solve boundary");
+    check(
+        potential.find("FEM/BEM demag potential source contract") != std::string::npos,
+        "FEM/BEM potential source file must document its source contract");
+    check(
+        potential.find("does not solve sparse systems, transfer Dirichlet boundary values, recover H_demag, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM potential source file must document its non-owning module boundary");
+    check(
+        telemetry.find("FEM/BEM demag telemetry source contract") != std::string::npos,
+        "FEM/BEM telemetry source file must document its source contract");
+    check(
+        telemetry.find("does not extract surfaces, solve sparse systems, transfer potentials, recover fields, or compute energy") != std::string::npos,
+        "FEM/BEM telemetry source file must document its non-owning compute boundary");
+    check(
+        rhs.find("FEM/BEM demag RHS source contract") != std::string::npos,
+        "FEM/BEM RHS source file must document its source contract");
+    check(
+        rhs.find("does not assemble source RHS, solve sparse systems, transfer boundary values, recover fields, compute energy, or publish telemetry") != std::string::npos,
+        "FEM/BEM RHS source file must document its non-owning module boundary");
+    check(
+        solve.find("FEM/BEM demag solve orchestration source contract") != std::string::npos,
+        "FEM/BEM solve source file must document its source contract");
+    check(
+        solve.find("does not extract surfaces, assemble dense BEM operators, own sparse solver internals, define boundary-value helpers, own workspace lifecycle, or compute energy formula") != std::string::npos,
+        "FEM/BEM solve source file must document its non-owning helper boundary");
+    check(
+        energy.find("FEM/BEM demag energy source contract") != std::string::npos,
+        "FEM/BEM energy source file must document its source contract");
+    check(
+        energy.find("does not extract surfaces, assemble operators, solve sparse systems, recover fields, or publish telemetry") != std::string::npos,
+        "FEM/BEM energy source file must document its non-owning compute boundary");
 }
 
 void fem_bem_compute_wrapper_is_owned_by_solve_module() {
@@ -437,6 +586,9 @@ int main() {
     dense_bem_operator_is_finite_and_has_constant_sanity();
     fem_bem_energy_matches_demag_energy_contract();
     fem_bem_energy_is_owned_by_energy_module();
+    fem_bem_aggregate_header_documents_submodule_boundaries();
+    fem_bem_leaf_headers_document_submodule_boundaries();
+    fem_bem_source_files_document_module_boundaries();
     fem_bem_compute_wrapper_is_owned_by_solve_module();
     fem_bem_boundary_surface_is_owned_by_surface_module();
     fem_bem_dense_operator_is_owned_by_operator_module();

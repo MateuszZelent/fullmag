@@ -1,7 +1,7 @@
 # FEM Oersted Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-17
+- Last updated: 2026-05-18
 - Implementation: `native/backends/fem/cpu/mfem/interactions/oersted.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/oersted_cylinder.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/oersted_explicit.hpp/.cpp`
@@ -106,7 +106,9 @@ Current gate:
 - `fem_oersted_contract` checks unit-current Ampere-law samples inside,
   outside, and on the axis; zero-axis rejection; sinusoidal and pulse current
   scaling; analytical/explicit source-module ownership; and unscaled explicit
-  nodal field addition.
+  nodal field addition. It also checks top-level source contracts for the
+  aggregate, analytical-cylinder, and explicit-field source files so their
+  realization boundaries remain visible in implementation files.
 
 Required before production qualification:
 

@@ -99,6 +99,147 @@ void dmi_plan_fields_are_owned_by_dmi_module() {
         dmi_header.find("Initialize DMI plan fields and normalize the interface normal") !=
             std::string::npos,
         "DMI aggregate header must document plan-field initialization ownership");
+    check(
+        dmi_header.find("owns ABI plan import, runtime output storage, and") !=
+            std::string::npos,
+        "DMI aggregate header must document runtime-output ownership");
+    check(
+        dmi_header.find("does not assemble interfacial or bulk") !=
+                std::string::npos &&
+            dmi_header.find("residuals, project H_DMI, compute DMI energy") !=
+                std::string::npos &&
+            dmi_header.find("own element-loop scratch") !=
+            std::string::npos,
+        "DMI aggregate header must document its non-owning residual/energy/workspace boundary");
+    check(
+        dmi_header.find("dmi_interfacial.*") != std::string::npos,
+        "DMI aggregate header must name the interfacial owner");
+    check(
+        dmi_header.find("dmi_bulk.*") != std::string::npos,
+        "DMI aggregate header must name the bulk owner");
+    check(
+        dmi_header.find("dmi_workspace.*") != std::string::npos,
+        "DMI aggregate header must name the workspace owner");
+}
+
+void dmi_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string dmi =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi.cpp");
+    const std::string interfacial = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.cpp");
+    const std::string bulk =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_bulk.cpp");
+    const std::string workspace =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.cpp");
+
+    check(
+        dmi.find("DMI aggregate source contract") != std::string::npos,
+        "DMI aggregate source file must document its source contract");
+    check(
+        dmi.find("does not assemble interfacial or bulk residuals") != std::string::npos,
+        "DMI aggregate source file must document its non-owning residual boundary");
+    check(
+        interfacial.find("Interfacial DMI source contract") != std::string::npos,
+        "interfacial DMI source file must document its source contract");
+    check(
+        interfacial.find("does not own bulk DMI") != std::string::npos,
+        "interfacial DMI source file must document its non-owning bulk boundary");
+    check(
+        bulk.find("Bulk DMI source contract") != std::string::npos,
+        "bulk DMI source file must document its source contract");
+    check(
+        bulk.find("does not own interfacial DMI") != std::string::npos,
+        "bulk DMI source file must document its non-owning interfacial boundary");
+    check(
+        workspace.find("DMI workspace source contract") != std::string::npos,
+        "DMI workspace source file must document its source contract");
+    check(
+        workspace.find("does not choose DMI energy density") != std::string::npos,
+        "DMI workspace source file must document its non-owning physics boundary");
+}
+
+void dmi_leaf_headers_document_non_owning_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string interfacial_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.hpp");
+    const std::string bulk_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_bulk.hpp");
+    const std::string workspace_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.hpp");
+
+    check(
+        interfacial_header.find("does not own bulk/Bloch residual assembly, shared DMI scratch allocation, direct torque scaling, or effective-field composition") !=
+            std::string::npos,
+        "interfacial DMI header must document its non-owning bulk/scratch/composition boundary");
+    check(
+        bulk_header.find("does not own interfacial boundary tilt, shared DMI scratch allocation, direct torque scaling, or effective-field composition") !=
+            std::string::npos,
+        "bulk DMI header must document its non-owning interfacial/scratch/composition boundary");
+    check(
+        workspace_header.find("does not own interfacial or bulk DMI physics, field projection, energy accumulation, or effective-field composition") !=
+            std::string::npos,
+        "DMI workspace header must document its non-owning physics/projection/composition boundary");
+}
+
+void dmi_element_loops_are_parallelized_with_thread_local_residuals() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string interfacial = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.cpp");
+    const std::string bulk =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_bulk.cpp");
+    const std::string workspace_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.hpp");
+
+    check(
+        workspace_header.find("residual_xyz_by_thread") != std::string::npos,
+        "DMI workspace must own reusable per-thread residual buffers");
+    for (const std::string *source : {&interfacial, &bulk}) {
+        check(
+            source->find("#pragma omp parallel") != std::string::npos,
+            "DMI element residual assembly must use an OpenMP parallel region");
+        check(
+            source->find("residual_xyz_by_thread") != std::string::npos,
+            "DMI element residual assembly must accumulate into per-thread residual buffers");
+        check(
+            source->find("#pragma omp for") != std::string::npos,
+            "DMI element residual assembly must distribute element work across threads");
+        check(
+            source->find("thread_energy") != std::string::npos,
+            "DMI energy accumulation must use thread-local reductions");
+    }
+}
+
+void dmi_runtime_state_is_owned_by_aggregate_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string dmi_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi.hpp");
+
+    check(
+        dmi_header.find("struct DmiRuntimeState") != std::string::npos,
+        "DMI runtime state must be declared by dmi.hpp");
+    check(
+        dmi_header.find("std::vector<double> h_interfacial_xyz") != std::string::npos,
+        "DMI runtime state must own the interfacial H_DMI field buffer");
+    check(
+        dmi_header.find("std::vector<double> h_bulk_xyz") != std::string::npos,
+        "DMI runtime state must own the bulk H_DMI field buffer");
+    check(
+        dmi_header.find("double energy_joules") != std::string::npos,
+        "DMI runtime state must own the combined DMI energy diagnostic");
+    check(
+        context_header.find("DmiRuntimeState dmi") != std::string::npos,
+        "Context must store DMI runtime output through the DMI owner");
+    check(
+        context_header.find("h_dmi_xyz") == std::string::npos,
+        "Context must not own a flat interfacial DMI field buffer");
+    check(
+        context_header.find("h_bulk_dmi_xyz") == std::string::npos,
+        "Context must not own a flat bulk DMI field buffer");
+    check(
+        context_header.find("last_dmi_energy_joules") == std::string::npos,
+        "Context must not own flat DMI energy state");
 }
 
 void bulk_dmi_is_owned_by_bulk_module() {
@@ -314,6 +455,10 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
 int main() {
     dmi_workspace_is_owned_by_workspace_module();
     dmi_plan_fields_are_owned_by_dmi_module();
+    dmi_source_files_document_module_boundaries();
+    dmi_leaf_headers_document_non_owning_boundaries();
+    dmi_element_loops_are_parallelized_with_thread_local_residuals();
+    dmi_runtime_state_is_owned_by_aggregate_module();
     bulk_dmi_is_owned_by_bulk_module();
     interfacial_dmi_is_owned_by_interfacial_module();
     disabled_interfacial_dmi_is_zero();

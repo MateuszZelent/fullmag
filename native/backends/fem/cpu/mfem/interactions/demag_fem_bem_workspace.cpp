@@ -1,3 +1,11 @@
+/*
+ * FEM/BEM demag workspace source contract.
+ *
+ * This source owns Fredkin-Koehler workspace lifecycle, FE spaces, stiffness
+ * operators, dense boundary operator setup, shared Poisson RHS/recovery setup,
+ * and teardown. It does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -37,7 +45,7 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
         if (!build_demag_boundary_surface(ctx, workspace->surface, error)) {
             return false;
         }
-        if (!ctx.periodic_node_pairs.empty()) {
+        if (!ctx.mesh.periodic_node_pairs.empty()) {
             error = "FEM/BEM Fredkin-Koehler demag does not support periodic FEM meshes";
             return false;
         }

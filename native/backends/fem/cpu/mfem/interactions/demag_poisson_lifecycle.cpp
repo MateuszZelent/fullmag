@@ -1,3 +1,11 @@
+/*
+ * Poisson demag lifecycle source contract.
+ *
+ * This source owns Poisson-demag MFEM resource construction and teardown,
+ * including potential spaces, scalar operators, boundary policy setup, and
+ * workspace allocation. It does not assemble per-step RHS, solve Poisson, recover fields, compute energy, or publish telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 
 #include "context.hpp"

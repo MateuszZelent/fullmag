@@ -50,6 +50,7 @@ void material_field_helpers_are_owned_by_core_module() {
     const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string material_fields = read_text_file(root / "core" / "fem_material_fields.cpp");
     const std::string material_header = read_text_file(root / "core" / "fem_material_fields.hpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
 
     check(
         context.find("auto copy_field = []") == std::string::npos,
@@ -73,9 +74,49 @@ void material_field_helpers_are_owned_by_core_module() {
         material_fields.find("bool validate_material_fields(") != std::string::npos,
         "Material field validation helper must be defined in core/fem_material_fields.cpp");
     check(
+        material_fields.find("FEM material-fields core source contract") != std::string::npos,
+        "FemMaterialFields source file must document its source contract");
+    check(
+        material_fields.find("does not import mesh topology, initialize magnetization, size field buffers, choose runtime devices, or compute interaction fields") != std::string::npos,
+        "FemMaterialFields source file must document its non-owning module boundary");
+    check(
         material_header.find("Own FEM scalar and per-node material field import") !=
             std::string::npos,
         "FemMaterialFields header must document its contract");
+    check(
+        material_header.find("struct FemMaterialFieldsRuntimeState") != std::string::npos,
+        "FemMaterialFields header must declare the runtime field owner");
+    check(
+        material_header.find("std::vector<double> Ms_field") != std::string::npos,
+        "FemMaterialFields runtime state must own the Ms per-node field");
+    check(
+        context_header.find("FemMaterialFieldsRuntimeState material_fields{}") !=
+            std::string::npos,
+        "Context must store per-node material fields under material_fields");
+    for (const char *flat_field : {
+             "std::vector<double> Ms_field;",
+             "std::vector<double> A_field;",
+             "std::vector<double> alpha_field;",
+             "std::vector<double> Ku_field;",
+             "std::vector<double> Ku2_field;",
+             "std::vector<double> Dind_field;",
+             "std::vector<double> Dbulk_field;",
+             "std::vector<double> Kc1_field;",
+             "std::vector<double> Kc2_field;",
+             "std::vector<double> Kc3_field;",
+         }) {
+        check(
+            context_header.find(flat_field) == std::string::npos,
+            "Context must not own flat per-node material fields");
+    }
+    check(
+        material_header.find(
+            "It does not own mesh topology, magnetization initialization, field-buffer") !=
+                std::string::npos &&
+            material_header.find(
+                "sizing, runtime device selection, or interaction field computation") !=
+                std::string::npos,
+        "FemMaterialFields header must document its non-owning module boundary");
 }
 
 void material_plan_import_and_validation_contract() {
@@ -99,15 +140,15 @@ void material_plan_import_and_validation_contract() {
     check(ctx.material.exchange_stiffness == 13e-12, "scalar A copied from plan");
     check(ctx.material.damping == 0.1, "scalar alpha copied from plan");
     check(ctx.material.gyromagnetic_ratio == 2.211e5, "scalar gamma_mu0 copied from plan");
-    check(ctx.Ms_field == std::vector<double>({800e3, 1.0e6}), "Ms field copied from plan");
-    check(ctx.alpha_field == std::vector<double>({0.1, 0.2}), "alpha field copied from plan");
+    check(ctx.material_fields.Ms_field == std::vector<double>({800e3, 1.0e6}), "Ms field copied from plan");
+    check(ctx.material_fields.alpha_field == std::vector<double>({0.1, 0.2}), "alpha field copied from plan");
 
     std::string error;
     check(
         fullmag::fem::validate_material_fields(ctx, error),
         error.empty() ? "material fields should validate" : error.c_str());
 
-    ctx.Ms_field = {800e3};
+    ctx.material_fields.Ms_field = {800e3};
     check(
         !fullmag::fem::validate_material_fields(ctx, error),
         "wrong per-node field length must fail validation");
@@ -115,7 +156,7 @@ void material_plan_import_and_validation_contract() {
         error.find("Ms_field") != std::string::npos,
         "wrong length error should identify the material field");
 
-    ctx.Ms_field = {800e3, 1.0e6};
+    ctx.material_fields.Ms_field = {800e3, 1.0e6};
     ctx.material.gyromagnetic_ratio = 0.0;
     check(
         !fullmag::fem::validate_material_fields(ctx, error),

@@ -1,10 +1,20 @@
+/*
+ * Brown thermal sampler source contract.
+ *
+ * This source owns H_therm buffer initialization, node-volume fallback,
+ * deterministic per-time/dt RNG seeding, same-time/dt cache reuse, and
+ * nonmagnetic-node zeroing. It does not define the sigma formula or add H_therm to H_eff.
+ */
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/thermal_brown_sigma.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <random>
 
 namespace fullmag::fem {
@@ -46,7 +56,7 @@ double tetrahedron_volume(
 double average_magnetic_node_volume(const Context &ctx)
 {
     size_t magnetic_node_count = 0;
-    for (uint8_t magnetic : ctx.magnetic_node_mask) {
+    for (uint8_t magnetic : ctx.mesh.magnetic_node_mask) {
         if (magnetic != 0u) {
             magnetic_node_count += 1;
         }
@@ -57,11 +67,11 @@ double average_magnetic_node_volume(const Context &ctx)
 
     double total_magnetic_volume = 0.0;
     for (uint32_t element = 0; element < ctx.n_elements; ++element) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[static_cast<size_t>(element)] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(element)] == 0u) {
             continue;
         }
-        total_magnetic_volume += tetrahedron_volume(ctx.nodes_xyz, ctx.elements, element);
+        total_magnetic_volume += tetrahedron_volume(ctx.mesh.nodes_xyz, ctx.mesh.elements, element);
     }
     if (total_magnetic_volume <= 0.0) {
         return 0.0;
@@ -69,12 +79,28 @@ double average_magnetic_node_volume(const Context &ctx)
     return total_magnetic_volume / static_cast<double>(magnetic_node_count);
 }
 
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
+uint64_t double_bits(double value)
 {
-    return index < field.size() ? field[index] : fallback;
+    uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value), "unexpected double width");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+uint64_t splitmix64(uint64_t value)
+{
+    value += 0x9e3779b97f4a7c15ull;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ull;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebull;
+    return value ^ (value >> 31);
+}
+
+uint64_t deterministic_thermal_seed(const Context &ctx)
+{
+    uint64_t seed = splitmix64(ctx.thermal_seed);
+    seed ^= splitmix64(double_bits(ctx.current_time));
+    seed ^= splitmix64(double_bits(ctx.current_dt));
+    return splitmix64(seed);
 }
 
 } // namespace
@@ -82,71 +108,73 @@ double scalar_field_value(
 void initialize_thermal_brown_field(Context &ctx)
 {
     if (ctx.temperature > 0.0) {
-        ctx.h_therm_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+        ctx.thermal_brown.h_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
     }
 }
 
 void refresh_thermal_brown_field(Context &ctx)
 {
-    if (ctx.h_therm_xyz.size() != static_cast<size_t>(ctx.n_nodes) * 3u) {
-        ctx.h_therm_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+    if (ctx.thermal_brown.h_xyz.size() != static_cast<size_t>(ctx.n_nodes) * 3u) {
+        ctx.thermal_brown.h_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
     }
     if (ctx.temperature <= 0.0 || ctx.current_dt <= 0.0) {
-        ctx.thermal_sigma = 0.0;
-        std::fill(ctx.h_therm_xyz.begin(), ctx.h_therm_xyz.end(), 0.0);
+        ctx.thermal_brown.sigma = 0.0;
+        std::fill(ctx.thermal_brown.h_xyz.begin(), ctx.thermal_brown.h_xyz.end(), 0.0);
         return;
     }
-    if (ctx.last_thermal_refresh_time == ctx.current_time &&
-        ctx.last_thermal_refresh_dt == ctx.current_dt) {
+    if (ctx.thermal_brown.last_refresh_time == ctx.current_time &&
+        ctx.thermal_brown.last_refresh_dt == ctx.current_dt) {
         return;
     }
 
-    const bool has_per_node_volume = !ctx.node_volumes.empty();
+    const bool has_per_node_volume = !ctx.mesh.node_volumes.empty();
     const double average_volume =
         has_per_node_volume ? 0.0 : average_magnetic_node_volume(ctx);
     if (!has_per_node_volume && !(average_volume > 0.0)) {
-        ctx.thermal_sigma = 0.0;
-        std::fill(ctx.h_therm_xyz.begin(), ctx.h_therm_xyz.end(), 0.0);
-        ctx.last_thermal_refresh_time = ctx.current_time;
-        ctx.last_thermal_refresh_dt = ctx.current_dt;
+        ctx.thermal_brown.sigma = 0.0;
+        std::fill(ctx.thermal_brown.h_xyz.begin(), ctx.thermal_brown.h_xyz.end(), 0.0);
+        ctx.thermal_brown.last_refresh_time = ctx.current_time;
+        ctx.thermal_brown.last_refresh_dt = ctx.current_dt;
         return;
     }
 
-    static thread_local bool rng_initialized = false;
-    static thread_local uint64_t rng_active_seed = 0;
-    static thread_local std::mt19937_64 rng;
-    if (!rng_initialized || rng_active_seed != ctx.thermal_seed) {
-        if (ctx.thermal_seed != 0) {
-            rng.seed(ctx.thermal_seed);
-        } else {
+    std::mt19937_64 deterministic_rng;
+    std::mt19937_64 *rng_ptr = nullptr;
+    if (ctx.thermal_seed != 0) {
+        deterministic_rng.seed(deterministic_thermal_seed(ctx));
+        rng_ptr = &deterministic_rng;
+    } else {
+        static thread_local bool rng_initialized = false;
+        static thread_local std::mt19937_64 rng;
+        if (!rng_initialized) {
             std::random_device rd;
             rng.seed(rd());
+            rng_initialized = true;
         }
-        rng_active_seed = ctx.thermal_seed;
-        rng_initialized = true;
+        rng_ptr = &rng;
     }
 
     double max_sigma = 0.0;
     std::normal_distribution<double> unit_normal(0.0, 1.0);
     for (size_t node = 0; node < static_cast<size_t>(ctx.n_nodes); ++node) {
         const size_t base = node * 3u;
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
-            ctx.h_therm_xyz[base + 0] = 0.0;
-            ctx.h_therm_xyz[base + 1] = 0.0;
-            ctx.h_therm_xyz[base + 2] = 0.0;
+        if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
+            ctx.thermal_brown.h_xyz[base + 0] = 0.0;
+            ctx.thermal_brown.h_xyz[base + 1] = 0.0;
+            ctx.thermal_brown.h_xyz[base + 2] = 0.0;
             continue;
         }
 
         const double damping = scalar_field_value(
-            ctx.alpha_field,
+            ctx.material_fields.alpha_field,
             node,
             ctx.material.damping);
         const double saturation_magnetisation = scalar_field_value(
-            ctx.Ms_field,
+            ctx.material_fields.Ms_field,
             node,
             ctx.material.saturation_magnetisation);
         const double volume =
-            has_per_node_volume ? ctx.node_volumes[node] : average_volume;
+            has_per_node_volume ? ctx.mesh.node_volumes[node] : average_volume;
         const double sigma = thermal_brown_sigma(
             ctx.temperature,
             damping,
@@ -157,20 +185,20 @@ void refresh_thermal_brown_field(Context &ctx)
         max_sigma = std::max(max_sigma, sigma);
 
         if (sigma == 0.0) {
-            ctx.h_therm_xyz[base + 0] = 0.0;
-            ctx.h_therm_xyz[base + 1] = 0.0;
-            ctx.h_therm_xyz[base + 2] = 0.0;
+            ctx.thermal_brown.h_xyz[base + 0] = 0.0;
+            ctx.thermal_brown.h_xyz[base + 1] = 0.0;
+            ctx.thermal_brown.h_xyz[base + 2] = 0.0;
             continue;
         }
 
-        ctx.h_therm_xyz[base + 0] = unit_normal(rng) * sigma;
-        ctx.h_therm_xyz[base + 1] = unit_normal(rng) * sigma;
-        ctx.h_therm_xyz[base + 2] = unit_normal(rng) * sigma;
+        ctx.thermal_brown.h_xyz[base + 0] = unit_normal(*rng_ptr) * sigma;
+        ctx.thermal_brown.h_xyz[base + 1] = unit_normal(*rng_ptr) * sigma;
+        ctx.thermal_brown.h_xyz[base + 2] = unit_normal(*rng_ptr) * sigma;
     }
 
-    ctx.thermal_sigma = max_sigma;
-    ctx.last_thermal_refresh_time = ctx.current_time;
-    ctx.last_thermal_refresh_dt = ctx.current_dt;
+    ctx.thermal_brown.sigma = max_sigma;
+    ctx.thermal_brown.last_refresh_time = ctx.current_time;
+    ctx.thermal_brown.last_refresh_dt = ctx.current_dt;
 }
 
 } // namespace fullmag::fem

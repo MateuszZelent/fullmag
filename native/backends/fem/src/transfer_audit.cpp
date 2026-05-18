@@ -1,12 +1,36 @@
+/*
+ * Transfer-audit facade source contract.
+ *
+ * This source owns transfer-audit env gate import, scope tracking, host-sync
+ * counters, violation latching, and public counter snapshots for native FEM
+ * runtime diagnostics. It does not own C ABI calls, Context construction, MFEM device policy, interaction physics, or integrator execution.
+ */
+
 #include "transfer_audit.hpp"
 
+#include <cctype>
+#include <cstdlib>
 #include <sstream>
+#include <string>
 
 namespace fullmag::fem {
 
 namespace {
 
 thread_local TransferAudit *current_audit = nullptr;
+
+bool env_flag(const char *name)
+{
+    const char *raw = std::getenv(name);
+    if (raw == nullptr) {
+        return false;
+    }
+    std::string value(raw);
+    for (char &ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value == "1" || value == "on" || value == "true" || value == "yes";
+}
 
 void mark_violation(
     TransferAudit &audit,
@@ -172,6 +196,19 @@ void record_mfem_host_read_write(uint64_t bytes)
     if (current_audit != nullptr) {
         record_host_read_write(*current_audit, bytes);
     }
+}
+
+fullmag_fem_transfer_audit transfer_audit_snapshot(const TransferAudit &audit)
+{
+    return audit.counters;
+}
+
+void configure_transfer_audit_from_env(TransferAudit &audit)
+{
+    audit.assert_no_hot_loop_host_sync =
+        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
+    audit.assert_no_hot_loop_compute_sync =
+        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");
 }
 
 } // namespace fullmag::fem

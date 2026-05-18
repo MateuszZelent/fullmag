@@ -1,3 +1,10 @@
+/*
+ * Field-refresh runtime source contract.
+ *
+ * This source owns field-refresh plan validation/import and demag frozen-cache
+ * reset on policy changes. It does not solve demag, compose H_eff, own state I/O, or publish step metrics.
+ */
+
 #include "cpu/mfem/runtime/field_refresh.hpp"
 
 #include "context.hpp"
@@ -15,11 +22,11 @@ bool initialize_field_refresh_plan_fields(
     }
 
     ctx.field_refresh = policy;
-    ctx.demag_cache_valid = false;
-    ctx.demag_last_refresh_time = -1.0;
-    ctx.cached_robin_boundary_energy = 0.0;
-    ctx.h_demag_cached_xyz.clear();
-    ctx.h_demag_cached_visual_xyz.clear();
+    ctx.demag.cache_valid = false;
+    ctx.demag.last_refresh_time = -1.0;
+    ctx.demag.cached_robin_boundary_energy = 0.0;
+    ctx.demag.cached_xyz.clear();
+    ctx.demag.cached_visual_xyz.clear();
     return true;
 }
 

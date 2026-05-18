@@ -1,3 +1,9 @@
+/*
+ * Anisotropy aggregate source contract.
+ *
+ * This source owns native FEM plan import for uniaxial/cubic constants and
+ * anisotropy axis normalization/validation. It does not compute uniaxial or cubic H_eff/energy.
+ */
 #include "cpu/mfem/interactions/anisotropy.hpp"
 
 #include "context.hpp"
@@ -81,11 +87,5 @@ bool normalize_anisotropy_axes(Context &ctx, std::string &error)
     }
     return true;
 }
-
-/*
- * Compatibility translation unit for the aggregate anisotropy include surface.
- * Executable anisotropy families live in anisotropy_uniaxial.cpp and
- * anisotropy_cubic.cpp.
- */
 
 } // namespace fullmag::fem

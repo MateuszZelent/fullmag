@@ -14,6 +14,8 @@ struct Context;
  * invokes the extracted effective-field composition path, records exchange
  * readiness, and keeps debug startup checkpoints out of the exchange operator
  * and exchange field-computation modules.
+ *
+ * It does not assemble exchange operators, project exchange mass, own no-MFEM fallback, or upload legacy GPU exchange state.
  */
 bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error);
 #endif

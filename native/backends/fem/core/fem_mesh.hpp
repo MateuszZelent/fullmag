@@ -2,7 +2,9 @@
 
 #include "fullmag_fem.h"
 
+#include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace fullmag::fem {
@@ -10,11 +12,37 @@ namespace fullmag::fem {
 struct Context;
 
 /*
+ * Runtime mesh state owned by the FEM mesh core module.
+ *
+ * The buffers hold imported topology, optional boundary/marker metadata,
+ * static-periodic reduction maps, magnetic masks, and P1 nodal dual volumes.
+ * They are geometry/topology data consumed by interactions and runtimes, not
+ * interaction outputs or material overrides.
+ */
+struct FemMeshRuntimeState {
+    std::vector<double> nodes_xyz;
+    std::vector<uint32_t> elements;
+    std::vector<uint32_t> element_markers;
+    std::vector<uint32_t> boundary_faces;
+    std::vector<uint32_t> boundary_markers;
+    std::vector<uint32_t> periodic_node_pairs;
+    std::vector<uint32_t> periodic_reduced_node;
+    std::vector<uint32_t> periodic_representative_nodes;
+    uint32_t periodic_reduced_node_count = 0;
+    std::unordered_set<uint32_t> periodic_boundary_marker_set;
+    std::vector<uint8_t> magnetic_element_mask;
+    std::vector<uint8_t> magnetic_node_mask;
+    std::vector<double> node_volumes;
+};
+
+/*
  * Own FEM mesh topology helpers used while importing a native FEM plan.
  *
  * The module covers static periodic node-class reduction, per-periodic-class
- * scalar material validation, and P1 nodal dual-volume accumulation. It is a
- * transitional core module while Context still stores the compatibility fields.
+ * scalar material validation, and P1 nodal dual-volume accumulation.
+ *
+ * It does not own base scalar plan fields, material fields, state
+ * initialization, field buffers, runtime devices, or interaction physics.
  */
 bool initialize_mesh_plan_fields(
     Context &ctx,

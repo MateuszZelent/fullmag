@@ -104,6 +104,144 @@ void rk_workspace_is_owned_by_integrator_module() {
         "explicit RK stepper must be defined in rk_explicit_step.cpp");
 }
 
+void integrator_source_files_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string adaptive =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "adaptive_dt.cpp");
+    const std::string heun =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "heun.cpp");
+    const std::string llg_rhs =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "llg_rhs.cpp");
+    const std::string rk23 =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk23.cpp");
+    const std::string rk4 =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk4.cpp");
+    const std::string rk45 =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk45.cpp");
+    const std::string rk_explicit =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit.cpp");
+    const std::string rk_explicit_step =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
+    const std::string rk_stage_rhs =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
+
+    check(
+        adaptive.find("Adaptive timestep source contract") != std::string::npos,
+        "adaptive_dt source file must document its source contract");
+    check(
+        adaptive.find("does not evaluate RK stages, compose H_eff, update magnetization, or publish step metrics") != std::string::npos,
+        "adaptive_dt source file must document its non-owning step boundary");
+    check(
+        heun.find("Heun tableau source contract") != std::string::npos,
+        "Heun tableau source file must document its source contract");
+    check(
+        heun.find("does not allocate workspace, evaluate stages, perform steps, or run adaptive control") != std::string::npos,
+        "Heun tableau source file must document its non-owning step boundary");
+    check(
+        llg_rhs.find("LLG RHS source contract") != std::string::npos,
+        "LLG RHS source file must document its source contract");
+    check(
+        llg_rhs.find("does not compose H_eff, evaluate interaction fields, advance time, or own step metrics") != std::string::npos,
+        "LLG RHS source file must document its non-owning integration boundary");
+    check(
+        rk23.find("RK23 tableau source contract") != std::string::npos,
+        "RK23 tableau source file must document its source contract");
+    check(
+        rk23.find("does not allocate workspace, evaluate stages, perform steps, or run adaptive control") != std::string::npos,
+        "RK23 tableau source file must document its non-owning step boundary");
+    check(
+        rk4.find("RK4 tableau source contract") != std::string::npos,
+        "RK4 tableau source file must document its source contract");
+    check(
+        rk4.find("does not allocate workspace, evaluate stages, perform steps, or run adaptive control") != std::string::npos,
+        "RK4 tableau source file must document its non-owning step boundary");
+    check(
+        rk45.find("RK45 tableau source contract") != std::string::npos,
+        "RK45 tableau source file must document its source contract");
+    check(
+        rk45.find("does not allocate workspace, evaluate stages, perform steps, or run adaptive control") != std::string::npos,
+        "RK45 tableau source file must document its non-owning step boundary");
+    check(
+        rk_explicit.find("Explicit RK workspace source contract") != std::string::npos,
+        "explicit RK workspace source file must document its source contract");
+    check(
+        rk_explicit.find("does not evaluate stage RHS, perform complete RK steps, compose H_eff, or own adaptive control") != std::string::npos,
+        "explicit RK workspace source file must document its non-owning step boundary");
+    check(
+        rk_explicit_step.find("Explicit RK step source contract") != std::string::npos,
+        "explicit RK step source file must document its source contract");
+    check(
+        rk_explicit_step.find("does not define tableau coefficients, own workspace allocation, compose H_eff internals, or publish standalone stage RHS") != std::string::npos,
+        "explicit RK step source file must document its non-owning helper boundary");
+    check(
+        rk_stage_rhs.find("RK stage RHS source contract") != std::string::npos,
+        "RK stage RHS source file must document its source contract");
+    check(
+        rk_stage_rhs.find("does not define RK tableau coefficients, allocate stepper workspace, accept/reject adaptive steps, or publish final step metrics") != std::string::npos,
+        "RK stage RHS source file must document its non-owning step boundary");
+}
+
+void integrator_headers_document_module_boundaries() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string adaptive =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "adaptive_dt.hpp");
+    const std::string llg_rhs =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "llg_rhs.hpp");
+    const std::string rk_explicit =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit.hpp");
+    const std::string rk_explicit_step =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.hpp");
+    const std::string rk_stage_rhs =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.hpp");
+    const std::string rk_workspace =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
+    const std::string rk_tableau =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_tableau.hpp");
+    const std::string tableaus =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "tableaus.hpp");
+
+    check(
+        adaptive.find("It does not evaluate RK stages") != std::string::npos &&
+            adaptive.find("publish step metrics") != std::string::npos,
+        "adaptive_dt header must document its non-owning step boundary");
+    check(
+        llg_rhs.find("It does not compose H_eff") != std::string::npos &&
+            llg_rhs.find("advance time") != std::string::npos &&
+            llg_rhs.find("step metrics") != std::string::npos,
+        "LLG RHS header must document its non-owning integration boundary");
+    check(
+        rk_explicit.find("It does not evaluate stage RHS") != std::string::npos &&
+            rk_explicit.find("own adaptive control") != std::string::npos,
+        "explicit RK header must document its non-owning step boundary");
+    check(
+        rk_explicit_step.find("It does not define tableau coefficients") !=
+                std::string::npos &&
+            rk_explicit_step.find("standalone stage RHS") != std::string::npos,
+        "explicit RK step header must document its non-owning helper boundary");
+    check(
+        rk_stage_rhs.find("It does not define RK tableau coefficients") !=
+                std::string::npos &&
+            rk_stage_rhs.find("final step") != std::string::npos &&
+            rk_stage_rhs.find("metrics") != std::string::npos,
+        "RK stage RHS header must document its non-owning step boundary");
+    check(
+        rk_workspace.find("It does not evaluate stage RHS") != std::string::npos &&
+            rk_workspace.find("adaptive") != std::string::npos &&
+            rk_workspace.find("accept/reject policy") != std::string::npos,
+        "RK workspace header must document its non-owning module boundary");
+    check(
+        rk_tableau.find("It does not allocate workspace") != std::string::npos &&
+            rk_tableau.find("run") != std::string::npos &&
+            rk_tableau.find("adaptive control") != std::string::npos,
+        "RK tableau header must document its non-owning step boundary");
+    check(
+        tableaus.find("Own named explicit Runge-Kutta tableau accessors") !=
+                std::string::npos &&
+            tableaus.find("run") != std::string::npos &&
+            tableaus.find("adaptive control") != std::string::npos,
+        "named tableaus header must document its ownership and non-owning boundary");
+}
+
 void workspace_reallocates_when_stage_count_grows() {
     fullmag::fem::StepperWorkspace ws;
     fullmag::fem::stepper_workspace_allocate(ws, 6u, 2);
@@ -150,6 +288,8 @@ void workspace_allocates_common_buffers() {
 
 int main() {
     rk_workspace_is_owned_by_integrator_module();
+    integrator_source_files_document_module_boundaries();
+    integrator_headers_document_module_boundaries();
     workspace_reallocates_when_stage_count_grows();
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();

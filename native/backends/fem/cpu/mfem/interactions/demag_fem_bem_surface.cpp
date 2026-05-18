@@ -1,3 +1,10 @@
+/*
+ * FEM/BEM demag surface source contract.
+ *
+ * This source owns body-only boundary surface extraction, oriented exterior face
+ * discovery, boundary-node maps, normals, and triangle areas. It does not assemble BEM operators, solve sparse systems, transfer boundary values, compute energy, or orchestrate solves.
+ */
+
 #include "cpu/mfem/interactions/demag_fem_bem_surface.hpp"
 
 #include "context.hpp"
@@ -58,9 +65,9 @@ double norm(const Vec3 &a) {
 Vec3 node_position(const Context &ctx, uint32_t node) {
     const size_t base = static_cast<size_t>(node) * 3u;
     return {
-        ctx.nodes_xyz[base + 0u],
-        ctx.nodes_xyz[base + 1u],
-        ctx.nodes_xyz[base + 2u],
+        ctx.mesh.nodes_xyz[base + 0u],
+        ctx.mesh.nodes_xyz[base + 1u],
+        ctx.mesh.nodes_xyz[base + 2u],
     };
 }
 
@@ -101,16 +108,16 @@ bool build_face_records(const Context &ctx, std::vector<FaceRecord> &records, st
     records.clear();
     records.reserve(static_cast<size_t>(ctx.n_elements) * 4u);
     for (uint32_t elem = 0; elem < ctx.n_elements; ++elem) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
+        if (!ctx.mesh.magnetic_element_mask.empty() &&
+            ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
         }
         const size_t base = static_cast<size_t>(elem) * 4u;
         const uint32_t tet[4] = {
-            ctx.elements[base + 0u],
-            ctx.elements[base + 1u],
-            ctx.elements[base + 2u],
-            ctx.elements[base + 3u],
+            ctx.mesh.elements[base + 0u],
+            ctx.mesh.elements[base + 1u],
+            ctx.mesh.elements[base + 2u],
+            ctx.mesh.elements[base + 3u],
         };
         for (uint32_t node : tet) {
             if (node >= ctx.n_nodes) {
@@ -226,16 +233,16 @@ bool build_demag_boundary_surface(
         return false;
     }
 
-    if (!ctx.boundary_faces.empty()) {
-        if (ctx.boundary_faces.size() % 3u != 0u) {
+    if (!ctx.mesh.boundary_faces.empty()) {
+        if (ctx.mesh.boundary_faces.size() % 3u != 0u) {
             error = "FEM/BEM demag boundary face buffer length is not a multiple of 3";
             return false;
         }
-        for (size_t i = 0; i < ctx.boundary_faces.size() / 3u; ++i) {
+        for (size_t i = 0; i < ctx.mesh.boundary_faces.size() / 3u; ++i) {
             const std::array<uint32_t, 3> tri = {
-                ctx.boundary_faces[i * 3u + 0u],
-                ctx.boundary_faces[i * 3u + 1u],
-                ctx.boundary_faces[i * 3u + 2u],
+                ctx.mesh.boundary_faces[i * 3u + 0u],
+                ctx.mesh.boundary_faces[i * 3u + 1u],
+                ctx.mesh.boundary_faces[i * 3u + 2u],
             };
             const FaceRecord *record = find_face_record(records, sorted_key(tri));
             if (record == nullptr) {

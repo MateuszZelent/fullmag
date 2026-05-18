@@ -1,3 +1,11 @@
+/*
+ * FEM Context facade source contract.
+ *
+ * This source owns high-level Context construction orchestration: sequencing
+ * core plan import, interaction plan import, runtime setup, device metadata,
+ * demag initialization, initial effective-field refresh, and GPU-state setup. It does not own base/core import helpers, runtime lifecycle, device policy, integrator stage mechanics, or interaction physics.
+ */
+
 #include "context.hpp"
 #include "core/fem_field_buffers.hpp"
 #include "core/fem_material_fields.hpp"

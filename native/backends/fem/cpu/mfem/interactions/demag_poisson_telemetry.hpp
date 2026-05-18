@@ -9,6 +9,13 @@ namespace fullmag::fem {
 
 struct Context;
 
+/*
+ * Telemetry state and public reporting contract for Poisson demag.
+ *
+ * This module owns solver stat structs, stable solver/preconditioner labels,
+ * phase timing accumulation, and optional per-call profiling.
+ * It does not assemble RHS, solve Poisson, recover fields, or define demag energy.
+ */
 struct DemagPoissonPhaseTimings {
     uint64_t wall_time_ns = 0;
     uint64_t assemble_wall_time_ns = 0;

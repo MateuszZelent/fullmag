@@ -1,3 +1,11 @@
+/*
+ * Poisson demag boundary-operator source contract.
+ *
+ * This source owns Dirichlet/Robin boundary-conditioned operator construction,
+ * Robin beta selection, periodic seam exclusion from Robin mass, and essential
+ * true-DOF policy. It does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_boundary.hpp"
 
 #include "context.hpp"
@@ -54,7 +62,7 @@ bool initialize_demag_poisson_boundary_operator(
         mfem::Array<int> bdr_marker(mesh.bdr_attributes.Max());
         bdr_marker = 0;
         bdr_marker[ctx.poisson_boundary_marker - 1] = 1;
-        for (uint32_t pm : ctx.periodic_boundary_marker_set) {
+        for (uint32_t pm : ctx.mesh.periodic_boundary_marker_set) {
             if (pm >= 1 && static_cast<int>(pm) <= mesh.bdr_attributes.Max()) {
                 bdr_marker[static_cast<int>(pm) - 1] = 0;
             }

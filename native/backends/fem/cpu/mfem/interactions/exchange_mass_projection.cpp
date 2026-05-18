@@ -1,7 +1,15 @@
+/*
+ * Exchange mass-projection source contract.
+ *
+ * This source owns lumped, consistent, and periodic reduced-node mass
+ * projection from exchange residuals into H_ex components, including Ms scaling
+ * and interrupt polling. It does not assemble exchange operators or upload GPU state.
+ */
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
+#include "fem_common.hpp"
 #include "transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -16,9 +24,6 @@
 namespace fullmag::fem {
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
 
 uint64_t vector_bytes(const mfem::Vector &vector) {
     return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
@@ -37,14 +42,6 @@ double *audited_host_write(mfem::Vector &vector) {
 double *audited_host_read_write(mfem::Vector &vector) {
     record_mfem_host_read_write(vector_bytes(vector));
     return vector.HostReadWrite();
-}
-
-double scalar_field_value(
-    const std::vector<double> &field,
-    size_t index,
-    double fallback)
-{
-    return index < field.size() ? field[index] : fallback;
 }
 
 void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst) {
@@ -72,15 +69,15 @@ bool apply_periodic_consistent_mass_component(
     std::vector<double> &h_component_host)
 {
     const int ndofs = rhs_full.Size();
-    const uint32_t n_reduced = ctx.periodic_reduced_node_count;
-    if (n_reduced == 0 || ctx.periodic_reduced_node.size() != static_cast<size_t>(ndofs)) {
+    const uint32_t n_reduced = ctx.mesh.periodic_reduced_node_count;
+    if (n_reduced == 0 || ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ndofs)) {
         return false;
     }
 
     std::vector<double> rhs_reduced(static_cast<size_t>(n_reduced), 0.0);
     const double *rhs_host = audited_host_read(rhs_full);
     for (int i = 0; i < ndofs; ++i) {
-        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
         rhs_reduced[static_cast<size_t>(reduced)] += rhs_host[i];
     }
 
@@ -92,7 +89,7 @@ bool apply_periodic_consistent_mass_component(
             full_y.UseDevice(true);
             double *x_host = audited_host_write(full_x);
             for (int i = 0; i < ndofs; ++i) {
-                const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+                const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
                 x_host[i] = x_reduced[static_cast<size_t>(reduced)];
             }
 
@@ -100,7 +97,7 @@ bool apply_periodic_consistent_mass_component(
             out_reduced.assign(static_cast<size_t>(n_reduced), 0.0);
             const double *y_host = audited_host_read(full_y);
             for (int i = 0; i < ndofs; ++i) {
-                const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+                const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
                 out_reduced[static_cast<size_t>(reduced)] += y_host[i];
             }
         };
@@ -150,15 +147,15 @@ bool apply_periodic_consistent_mass_component(
 
     std::vector<double> reduced_ms(static_cast<size_t>(n_reduced), ctx.material.saturation_magnetisation);
     for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
-        const uint32_t representative = ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        const uint32_t representative = ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
         reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
-            ctx.Ms_field,
+            ctx.material_fields.Ms_field,
             static_cast<size_t>(representative),
             ctx.material.saturation_magnetisation);
     }
     double *h_host = audited_host_write(h_component);
     for (int i = 0; i < ndofs; ++i) {
-        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
         const double Ms = reduced_ms[static_cast<size_t>(reduced)];
         if (Ms <= 0.0) {
             h_host[i] = 0.0;
@@ -217,11 +214,11 @@ bool apply_exchange_component_mass_projection(
     }
 
     const int ndofs = tmp.Size();
-    if (ctx != nullptr && !ctx->periodic_reduced_node.empty()) {
-        if (ctx->mfem_lumped_mass.size() != static_cast<size_t>(ndofs)) {
+    if (ctx != nullptr && !ctx->mesh.periodic_reduced_node.empty()) {
+        if (ctx->integration_weights.mfem_lumped_mass.size() != static_cast<size_t>(ndofs)) {
             return false;
         }
-        if (ctx->use_consistent_mass) {
+        if (ctx->exchange.mfem.use_consistent_mass) {
             if (energy_out != nullptr) {
                 *energy_out = m_component * tmp;
             }
@@ -232,16 +229,16 @@ bool apply_exchange_component_mass_projection(
                 h_component,
                 h_component_host);
         }
-        const uint32_t n_reduced = ctx->periodic_reduced_node_count;
+        const uint32_t n_reduced = ctx->mesh.periodic_reduced_node_count;
         std::vector<double> reduced_tmp(static_cast<size_t>(n_reduced), 0.0);
         std::vector<double> reduced_mass(static_cast<size_t>(n_reduced), 0.0);
         const double *tmp_host = audited_host_read(tmp);
         for (int i = 0; i < ndofs; ++i) {
             const uint32_t reduced =
-                ctx->periodic_reduced_node[static_cast<size_t>(i)];
+                ctx->mesh.periodic_reduced_node[static_cast<size_t>(i)];
             reduced_tmp[static_cast<size_t>(reduced)] += tmp_host[i];
             reduced_mass[static_cast<size_t>(reduced)] +=
-                ctx->mfem_lumped_mass[static_cast<size_t>(i)];
+                ctx->integration_weights.mfem_lumped_mass[static_cast<size_t>(i)];
         }
 
         std::vector<double> reduced_ms(
@@ -249,16 +246,16 @@ bool apply_exchange_component_mass_projection(
             ctx->material.saturation_magnetisation);
         for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
             const uint32_t representative =
-                ctx->periodic_representative_nodes[static_cast<size_t>(reduced)];
+                ctx->mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
             reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
-                ctx->Ms_field,
+                ctx->material_fields.Ms_field,
                 static_cast<size_t>(representative),
                 ctx->material.saturation_magnetisation);
         }
         double *h_host = audited_host_write(h_component);
         for (int i = 0; i < ndofs; ++i) {
             const uint32_t reduced =
-                ctx->periodic_reduced_node[static_cast<size_t>(i)];
+                ctx->mesh.periodic_reduced_node[static_cast<size_t>(i)];
             const double mass = reduced_mass[static_cast<size_t>(reduced)];
             const double Ms = reduced_ms[static_cast<size_t>(reduced)];
             if (mass <= 0.0 || Ms <= 0.0) {

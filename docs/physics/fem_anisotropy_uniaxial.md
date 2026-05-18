@@ -1,7 +1,7 @@
 # FEM Uniaxial Anisotropy
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
+- Last updated: 2026-05-18
 - Implementation: `native/backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.hpp/.cpp`
 - Test: `native/backends/fem/tests/anisotropy_contract.cpp`
 
@@ -66,8 +66,9 @@ are used unless the corresponding per-node fields are populated.
 Current gate:
 
 - `fem_anisotropy_contract` checks per-node `Ku1`, `Ku2`, and `Ms` scaling,
-  energy sign/convention, field units, source-module ownership, and zero
-  contribution on nonmagnetic nodes.
+  energy sign/convention, field units, source-module ownership, top-level
+  source-contract docstrings for the aggregate/uniaxial/cubic sources, and
+  zero contribution on nonmagnetic nodes.
 
 Required before production qualification:
 

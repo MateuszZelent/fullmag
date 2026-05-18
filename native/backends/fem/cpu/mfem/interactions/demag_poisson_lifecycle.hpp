@@ -12,6 +12,7 @@ struct Context;
  * This allocates the scalar potential FE collection/space, Poisson bilinear
  * form, potential grid function, boundary-conditioned operator, periodic
  * reduction, RHS workspace, solution vector, and recovery workspace.
+ * It does not assemble per-step RHS, solve Poisson, recover fields, compute energy, or publish telemetry.
  */
 bool context_initialize_poisson(Context &ctx, std::string &error);
 

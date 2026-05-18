@@ -1,3 +1,10 @@
+/*
+ * Poisson demag Hypre solve source contract.
+ *
+ * This source owns non-periodic Hypre vector workspace, warm-start state, solver
+ * setup, and parallel solve for the scalar potential system. It does not assemble RHS, construct boundary operators, recover H_demag, compute energy, or format telemetry.
+ */
+
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 
 #include "context.hpp"
@@ -15,6 +22,24 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
+#ifdef MFEM_USE_MPI
+struct PoissonHypreWorkspace {
+    PoissonHypreWorkspace(
+        MPI_Comm comm,
+        HYPRE_BigInt glob_size,
+        HYPRE_BigInt *row_starts)
+        : rhs_bc(static_cast<int>(glob_size))
+        , b_par(comm, glob_size, row_starts)
+        , x_par(comm, glob_size, row_starts)
+    {}
+
+    mfem::Vector rhs_bc;
+    mfem::HypreParVector b_par;
+    mfem::HypreParVector x_par;
+    bool x_par_contains_solution = false;
+};
+#endif
+
 namespace {
 
 using SteadyClock = std::chrono::steady_clock;
@@ -39,24 +64,6 @@ double *audited_host_write(mfem::Vector &vector) {
     record_mfem_host_write(vector_bytes(vector));
     return vector.HostWrite();
 }
-
-#ifdef MFEM_USE_MPI
-struct PoissonHypreWorkspace {
-    PoissonHypreWorkspace(
-        MPI_Comm comm,
-        HYPRE_BigInt glob_size,
-        HYPRE_BigInt *row_starts)
-        : rhs_bc(static_cast<int>(glob_size))
-        , b_par(comm, glob_size, row_starts)
-        , x_par(comm, glob_size, row_starts)
-    {}
-
-    mfem::Vector rhs_bc;
-    mfem::HypreParVector b_par;
-    mfem::HypreParVector x_par;
-    bool x_par_contains_solution = false;
-};
-#endif
 
 void zero_poisson_essential_values(const Context &ctx, mfem::Vector &vec) {
     for (const int tdof : ctx.poisson_ess_tdof_list) {

@@ -1,3 +1,10 @@
+/*
+ * Explicit RK workspace source contract.
+ *
+ * This source owns explicit RK tableau dispatch and reusable stepper workspace
+ * allocation/invalidation for native FEM LLG integration. It does not evaluate stage RHS, perform complete RK steps, compose H_eff, or own adaptive control.
+ */
+
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 
 #include "cpu/mfem/integrators/tableaus.hpp"
@@ -79,6 +86,7 @@ void stepper_workspace_allocate(StepperWorkspace &ws, std::size_t dof_len, int s
     ws.h_ex_tmp.resize(dof_len, 0.0);
     ws.h_demag_tmp.resize(dof_len, 0.0);
     ws.h_eff_tmp.resize(dof_len, 0.0);
+    prepare_stt_workspace(ws.stt, dof_len, dof_len / 3u);
     ws.err.resize(dof_len, 0.0);
     ws.fsal_valid = false;
     ws.allocated = true;

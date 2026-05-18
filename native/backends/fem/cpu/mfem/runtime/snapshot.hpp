@@ -15,6 +15,9 @@ struct Context;
  * the active effective-field stack without advancing time, computes the current
  * LLG/direct-torque RHS magnitude, fills common energy/field/torque metrics,
  * and records phase timings for the snapshot call.
+ *
+ * It does not own steady-state integration, state I/O primitives, common step
+ * metrics, or field-refresh policy.
  */
 #if FULLMAG_HAS_MFEM_STACK
 bool context_snapshot_stats_mfem(
