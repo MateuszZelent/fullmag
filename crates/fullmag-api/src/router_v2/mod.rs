@@ -485,6 +485,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::persistence::list_recovery).delete(handlers::persistence::clear_recovery),
         )
         .route(
+            "/v2/sessions/current/diagnostics/cpu",
+            get(handlers::diagnostics::get_cpu_telemetry),
+        )
+        .route(
             "/v2/sessions/current/diagnostics/gpu",
             get(handlers::diagnostics::get_gpu_telemetry),
         )

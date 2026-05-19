@@ -4,6 +4,7 @@ import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 
 import { CommandRegistry } from "./CommandRegistry";
+import { CommandDiagnosticsController } from "./CommandDiagnosticsController";
 import type { CommandContribution } from "./commandTypes";
 
 function command(id: string, extra?: Partial<CommandContribution>): CommandContribution {
@@ -22,6 +23,13 @@ function setupWithBus() {
   const registry = new CommandRegistry();
   registry.attach(bus);
   return { bus, registry };
+}
+
+function setupWithDiagnostics() {
+  const diagnostics = new CommandDiagnosticsController();
+  const setup = setupWithBus();
+  setup.registry.attachDiagnostics(diagnostics);
+  return { ...setup, diagnostics };
 }
 
 describe("CommandRegistry", () => {
@@ -80,7 +88,7 @@ describe("CommandRegistry", () => {
   });
 
   it("execute refuses disabled commands before running side effects", async () => {
-    const { bus, registry } = setupWithBus();
+    const { bus, diagnostics, registry } = setupWithDiagnostics();
     const submitted = vi.fn();
     const completed = vi.fn();
     const runFn = vi.fn(() => ({ status: "completed" as const }));
@@ -103,6 +111,14 @@ describe("CommandRegistry", () => {
     expect(runFn).not.toHaveBeenCalled();
     expect(submitted).not.toHaveBeenCalled();
     expect(completed).not.toHaveBeenCalled();
+    expect(diagnostics.list()).toMatchObject([
+      {
+        commandId: "selection-only",
+        disabledReason: "Select an object first.",
+        source: "test",
+        status: "disabled",
+      },
+    ]);
   });
 
   it("isActive delegates to command predicate", () => {
@@ -131,7 +147,7 @@ describe("CommandRegistry", () => {
   });
 
   it("execute runs command and emits events", async () => {
-    const { bus, registry } = setupWithBus();
+    const { bus, diagnostics, registry } = setupWithDiagnostics();
     const submitted = vi.fn();
     const completed = vi.fn();
     bus.on("command:submitted", submitted);
@@ -148,6 +164,18 @@ describe("CommandRegistry", () => {
       commandId: "run-me",
       status: "completed",
     });
+    expect(diagnostics.list()).toMatchObject([
+      {
+        commandId: "run-me",
+        source: "test",
+        status: "submitted",
+      },
+      {
+        commandId: "run-me",
+        source: "test",
+        status: "completed",
+      },
+    ]);
   });
 
   it("passes command input through command context", async () => {
@@ -166,9 +194,21 @@ describe("CommandRegistry", () => {
   });
 
   it("execute returns failed for unknown command", async () => {
-    const { registry } = setupWithBus();
-    const result = await registry.execute("nope", { source: "test" });
+    const { diagnostics, registry } = setupWithDiagnostics();
+    const result = await registry.execute("nope", {
+      source: "test",
+      sourceDetail: "missing-case",
+    });
     expect(result.status).toBe("failed");
+    expect(diagnostics.list()).toMatchObject([
+      {
+        commandId: "nope",
+        message: "Unknown command: nope",
+        source: "test",
+        sourceDetail: "missing-case",
+        status: "missing",
+      },
+    ]);
   });
 
   it("execute catches thrown errors", async () => {

@@ -25,13 +25,13 @@ bool initialize_backend_runtime(
     if (!context_from_plan(ctx, plan, error)) {
         return false;
     }
-    configure_transfer_audit_from_env(ctx.transfer_audit);
+    configure_transfer_audit_from_env(ctx.transfer_audit.audit);
     return true;
 }
 
 void destroy_backend_runtime(Context &ctx)
 {
-    gpu_state_destroy(ctx.gpu_state);
+    gpu_state_destroy(ctx.gpu_state.device);
 #if FULLMAG_HAS_MFEM_STACK
     context_destroy_mfem(ctx);
 #endif

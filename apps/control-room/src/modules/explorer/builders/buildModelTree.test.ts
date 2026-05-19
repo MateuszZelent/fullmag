@@ -72,6 +72,7 @@ describe("buildModelTree", () => {
         "model:airbox:mesh",
         "model:airbox:visualization",
         "model:mesh",
+        "model:mesh:airbox-quality",
         "model:study",
       ]),
     );
@@ -79,6 +80,13 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:free-layer:mesh")
         ?.status,
     ).toBe("stale");
+    expect(
+      flattened.find((node) => node.id === "model:mesh:airbox-quality"),
+    ).toMatchObject({
+      kind: "airbox.mesh",
+      label: "Airbox Quality",
+      parentId: "model:mesh",
+    });
   });
 
   it("projects canonical SceneDocument objects into lifecycle-aware nodes", () => {

@@ -67,12 +67,15 @@ describe("Viewport3DScene scale helpers", () => {
 
   it("adapts orthographic zoom to micromagnetic dimensions", () => {
     expect(
-      resolveViewport3DOrthographicZoom({
-        center: [0, 0, 0],
-        radius: 5e-8,
-        size: [1e-7, 1e-7, 1e-8],
-      }),
-    ).toBeGreaterThan(1e6);
+      resolveViewport3DOrthographicZoom(
+        {
+          center: [0, 0, 0],
+          radius: 5e-8,
+          size: [1e-7, 1e-7, 1e-8],
+        },
+        { height: 600, width: 800 },
+      ),
+    ).toBeCloseTo(600 / (1e-7 * 1.6));
   });
 
   it("aims the orthographic camera at the active viewport target", () => {

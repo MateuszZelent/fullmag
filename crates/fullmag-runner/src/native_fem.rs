@@ -2920,8 +2920,7 @@ mod tests {
 
     #[test]
     fn native_fem_step_metrics_reuse_effective_field_local_energies() {
-        let source =
-            include_str!("../../../native/backends/fem/cpu/mfem/runtime/step_metrics.cpp");
+        let source = include_str!("../../../native/backends/fem/cpu/mfem/runtime/step_metrics.cpp");
         let start = source
             .find("void fill_common_step_metrics(")
             .expect("fill_common_step_metrics definition");

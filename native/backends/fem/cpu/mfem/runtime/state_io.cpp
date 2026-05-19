@@ -22,15 +22,15 @@ namespace fullmag::fem {
 
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
 {
-    if (!ctx.gpu_state.allocated ||
-        ctx.gpu_state.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
-        ctx.gpu_state.host_state != FemGpuSyncState::HostStale) {
+    if (!ctx.gpu_state.device.allocated ||
+        ctx.gpu_state.device.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
+        ctx.gpu_state.device.host_state != FemGpuSyncState::HostStale) {
         return true;
     }
     if (!gpu_state_download_magnetization_aos(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.state.m_xyz,
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         error = "GPU magnetization readback failed: " + error;
         return false;
@@ -124,7 +124,7 @@ int context_copy_field_f64(
     }
 
     const uint64_t bytes = sizeof(double) * out_len;
-    record_device_to_host(ctx.transfer_audit, bytes);
+    record_device_to_host(ctx.transfer_audit.audit, bytes);
     std::memcpy(out_xyz, source->data(), static_cast<size_t>(bytes));
     return FULLMAG_FEM_OK;
 }
@@ -147,19 +147,19 @@ int context_upload_magnetization_f64(
     }
 
     ctx.state.m_xyz.assign(m_xyz, m_xyz + static_cast<size_t>(len));
-    if (ctx.gpu_state.allocated) {
+    if (ctx.gpu_state.device.allocated) {
         if (!gpu_state_upload_magnetization_aos(
-                ctx.gpu_state,
+                ctx.gpu_state.device,
                 ctx.state.m_xyz.data(),
                 static_cast<uint64_t>(ctx.state.m_xyz.size()),
-                ctx.transfer_audit,
+                ctx.transfer_audit.audit,
                 error)) {
             return FULLMAG_FEM_ERR_INTERNAL;
         }
     } else {
-        record_host_to_device(ctx.transfer_audit, sizeof(double) * len);
+        record_host_to_device(ctx.transfer_audit.audit, sizeof(double) * len);
     }
-    ctx.stepper.fsal_valid = false;
+    ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.demag.cache_valid = false;
     ctx.demag.last_refresh_time = -1.0;
@@ -214,18 +214,18 @@ int context_upload_magnetization_f64(
     ctx.thermal_brown.last_refresh_dt = -1.0;
 
     if (!gpu_state_upload_effective_fields_aos(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.exchange.h_xyz.data(),
             ctx.demag.h_xyz.data(),
             ctx.zeeman.h_ext_xyz.data(),
             ctx.effective_field.h_xyz.data(),
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!gpu_state_upload_local_vector_fields_aos(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.anisotropy.h_uniaxial_xyz.data(),
             ctx.anisotropy.h_cubic_xyz.data(),
             ctx.dmi.h_interfacial_xyz.data(),
@@ -234,7 +234,7 @@ int context_upload_magnetization_f64(
             ctx.thermal_brown.h_xyz.data(),
             ctx.magnetoelastic.h_xyz.data(),
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return FULLMAG_FEM_ERR_INTERNAL;
     }

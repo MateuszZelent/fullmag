@@ -26,6 +26,17 @@ struct TransferAudit {
     void reset_step_violation();
 };
 
+/*
+ * Runtime owner for transfer-audit state embedded in Context.
+ *
+ * TransferAudit owns hot-loop counters, assertion gates, nested scope depth,
+ * and the latched violation message. Context stores that payload through this
+ * runtime owner so transfer-audit storage stays behind the module boundary.
+ */
+struct TransferAuditRuntimeState {
+    mutable TransferAudit audit{};
+};
+
 class TransferAuditScope {
 public:
     TransferAuditScope(TransferAudit &audit, TransferAuditScopeKind kind);

@@ -82,7 +82,7 @@ bool read_scalar_result(
     double &value,
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     if (!cuda_ok(
             cudaMemcpyAsync(
                 &value,
@@ -97,7 +97,7 @@ bool read_scalar_result(
     if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
         return false;
     }
-    record_device_to_host(ctx.transfer_audit, sizeof(double));
+    record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
     return true;
 }
 
@@ -135,7 +135,7 @@ bool download_component_device_to_aos(
     const char *operation,
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     if (src.x == nullptr || src.y == nullptr || src.z == nullptr) {
         reason = std::string(operation) + " requires allocated source component buffers";
         return false;
@@ -182,7 +182,7 @@ bool download_component_device_to_aos(
     if (!cuda_ok(cudaStreamSynchronize(stream), operation, reason)) {
         return false;
     }
-    record_device_to_host(ctx.transfer_audit, static_cast<uint64_t>(component_bytes) * 3ull);
+    record_device_to_host(ctx.transfer_audit.audit, static_cast<uint64_t>(component_bytes) * 3ull);
     return true;
 }
 
@@ -196,7 +196,7 @@ bool compute_hybrid_cpu_demag_for_device_stage(
         return true;
     }
 #if FULLMAG_HAS_MFEM_STACK
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     if (gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
         reason = "GPU RK hybrid CPU demag requires allocated device H_demag buffers";
         return false;
@@ -227,7 +227,7 @@ bool compute_hybrid_cpu_demag_for_device_stage(
         gpu,
         gpu.hybrid_demag_xyz.data(),
         static_cast<uint64_t>(gpu.hybrid_demag_xyz.size()),
-        ctx.transfer_audit,
+        ctx.transfer_audit.audit,
         reason);
 #else
     reason = "GPU RK hybrid CPU demag requires MFEM stack";
@@ -346,7 +346,7 @@ bool compute_adaptive_error_norm_device(
     double &error_norm,
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     if (gpu.scalar_reduce_temp_storage == nullptr ||
         gpu.scalar_reduce_temp_storage_bytes == 0) {
         reason = "GPU RK adaptive error norm requires preallocated CUB reduction temp storage";
@@ -600,10 +600,10 @@ bool compute_rhs_for_magnetization(
     const char *label,
     std::string &reason)
 {
-    if (!compute_legacy_sparse_exchange(ctx.gpu_state, m, stream, reason)) {
+    if (!compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)) {
         return false;
     }
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     auto compute_dmi_field = [&](bool bulk_mode) -> bool {
         if (!gpu.mesh_geometry_uploaded ||
             gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
@@ -1016,10 +1016,10 @@ bool gpu_rk_exchange_only_step(
         return false;
     }
 
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     const int n = static_cast<int>(ctx.mesh.n_nodes);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream);
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
 
     if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH &&
         gpu.device_state == FemGpuSyncState::DeviceClean &&
@@ -1411,14 +1411,14 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state;
+    auto &gpu = ctx.gpu_state.device;
     if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
         gpu.scalar_reduce_result == nullptr ||
         gpu.scalar_reduce_temp_storage == nullptr) {
         return true;
     }
 
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream);
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     double max_rhs = 0.0;
     if (!read_scalar_result(
             ctx,

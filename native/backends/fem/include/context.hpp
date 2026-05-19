@@ -26,7 +26,6 @@
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fullmag_fem.h"
-#include "gpu_state.hpp"
 #include "transfer_audit.hpp"
 
 #include <array>
@@ -100,15 +99,11 @@ struct Context {
     DemagFemBemRuntimeState demag_fem_bem{};
 #endif
 
-    CudaRuntimeState cuda_runtime{};
+    TransferAuditRuntimeState transfer_audit{};
+    GpuStateRuntimeState gpu_state{};
 
-    mutable TransferAudit transfer_audit;
-    FemGpuState gpu_state;
-
-    LegacyGpuExchangeRuntimeState gpu_exchange{};
-
-    // ── Unified RK stepper workspace ──
-    StepperWorkspace stepper;
+    // ── Unified RK stepper runtime workspace ──
+    RkStepperRuntimeState stepper{};
 
     InterruptRuntimeState interrupt{};
 };

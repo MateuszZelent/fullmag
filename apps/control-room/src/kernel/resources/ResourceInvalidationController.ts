@@ -17,6 +17,10 @@ export class ResourceInvalidationController {
   }
 
   invalidate(resourceKey: ResourceKey, revision: ResourceRevision): void {
+    if (this.revisions.get(resourceKey) === revision) {
+      return;
+    }
+
     this.revisions.set(resourceKey, revision);
     this.bus.emit("resource:invalidated", { resourceKey, revision });
 

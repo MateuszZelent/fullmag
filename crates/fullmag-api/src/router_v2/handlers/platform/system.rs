@@ -10,7 +10,7 @@ use crate::error::ApiError;
 use crate::schemas::common::{HealthResponse, RuntimeCapabilityMatrix};
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::logs::EngineLogResource;
-use crate::types::{AppState, GpuTelemetryResponse};
+use crate::types::{AppState, CpuTelemetryResponse, GpuTelemetryResponse};
 
 #[utoipa::path(
     get,
@@ -109,6 +109,44 @@ pub async fn get_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiError>
                 .map(|duration| duration.as_millis())
                 .unwrap_or(0),
             devices: Vec::new(),
+        })),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/diagnostics/cpu",
+    responses(
+        (status = 200, description = "CPU telemetry or degraded unavailable response", body = CpuTelemetryResponse),
+    ),
+    tag = "diagnostics"
+)]
+pub async fn get_cpu_telemetry() -> Result<Json<CpuTelemetryResponse>, ApiError> {
+    let output = tokio::task::spawn_blocking(crate::sample_cpu_telemetry)
+        .await
+        .map_err(|e| ApiError::internal(format!("cpu telemetry task join failed: {e}")))?;
+    match output {
+        Ok(telemetry) => Ok(Json(telemetry)),
+        Err(error) => Ok(Json(CpuTelemetryResponse {
+            status: "unavailable".into(),
+            reason: Some(error.message),
+            sample_time_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+            logical_cpus: std::thread::available_parallelism()
+                .map(|value| value.get() as u32)
+                .unwrap_or(0),
+            utilization_cpu_percent: 0.0,
+            process_cpu_percent: 0.0,
+            memory_used_mb: 0.0,
+            memory_total_mb: 0.0,
+            process_rss_mb: 0.0,
+            process_threads: 0,
+            load_average_1m: None,
+            load_average_5m: None,
+            load_average_15m: None,
+            model_name: None,
         })),
     }
 }

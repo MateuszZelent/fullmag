@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gpu_state.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -37,6 +39,20 @@ struct CudaRuntimeState {
     void *pinned_snapshot[2] = {nullptr, nullptr};
     size_t pinned_snapshot_bytes = 0;
     int active_snapshot_buffer = 0;
+};
+
+/*
+ * Runtime owner for the native FEM GPU-state object.
+ *
+ * The concrete FemGpuState owns device buffers, residency metadata, hybrid
+ * CPU-demag scratch, and sparse exchange device allocations. Legacy sparse
+ * exchange metadata and CUDA stream/snapshot handles remain adjacent to that
+ * device state because GPU planning consumes them together.
+ */
+struct GpuStateRuntimeState {
+    FemGpuState device{};
+    LegacyGpuExchangeRuntimeState legacy_exchange{};
+    CudaRuntimeState cuda{};
 };
 
 /*

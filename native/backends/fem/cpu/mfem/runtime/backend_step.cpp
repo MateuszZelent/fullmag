@@ -37,23 +37,23 @@ int run_backend_step(
     error.clear();
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
-    ctx.transfer_audit.reset_step_violation();
+    ctx.transfer_audit.audit.reset_step_violation();
     const auto &tab = tableau_for_integrator(ctx.base_plan.integrator);
     {
         TransferAuditScope hot_loop(
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             TransferAuditScopeKind::HotLoop);
         ok = context_step_explicit_rk_mfem(
             ctx, tab, dt_seconds, out_stats, error);
     }
-    if (ctx.transfer_audit.hot_loop_violation) {
+    if (ctx.transfer_audit.audit.hot_loop_violation) {
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
             nullptr,
             0.0,
             0.0);
-        error = ctx.transfer_audit.hot_loop_violation_message;
+        error = ctx.transfer_audit.audit.hot_loop_violation_message;
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!ok) {

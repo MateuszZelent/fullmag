@@ -11,7 +11,14 @@ import {
   useMeshSummaryResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  shouldLoadRuntimeMeshBuild,
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+  shouldLoadRuntimeStageExecution,
+  useStageExecutionResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -65,19 +72,29 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const explorer = useExplorerStore();
   const { selection } = useSelection(moduleId);
   const modelTabActive = explorer.activeTab === "model";
+  const sessionStatus = useSessionStatus();
   const modelResource = useSceneResource({ enabled: modelTabActive });
-  const meshSummary = useMeshSummaryResource({ enabled: modelTabActive });
-  const activeBuild = useMeshBuildCurrent({ enabled: modelTabActive });
+  const meshSummary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatus.data),
+  });
+  const activeBuild = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatus.data),
+  });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: modelTabActive,
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
-    enabled: modelTabActive,
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
   });
   const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
-    enabled: modelTabActive,
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
   });
-  const stageExecution = useStageExecutionResource({ enabled: modelTabActive });
+  const stageExecution = useStageExecutionResource({
+    enabled: shouldLoadRuntimeStageExecution(
+      modelTabActive,
+      sessionStatus.data,
+    ),
+  });
 
   const nodes = useMemo(() => {
     const modelSnapshot = modelTreeSnapshotWithStageExecution(

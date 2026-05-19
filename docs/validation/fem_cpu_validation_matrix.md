@@ -17,7 +17,7 @@ can be treated as production-quality. It complements the module contracts under
 |---|---|---|
 | ABI/native create | `fem_contract_validation` | availability lanes, `fe_order = 1`, adaptive config sanity |
 | Interaction docs | `fem_interaction_docs_contract` | required release docs, per-interaction docs, required energy/field-or-torque/units/boundary/discretization/capability/test sections, and ownership-boundary docstrings in every active interaction header |
-| Source facades | `fem_source_facade_contract` | C ABI, private backend-handle storage, Context facade delegation, core Context builder sequencing, legacy MFEM bridge, error, transfer-audit, DMI weak-residual, GPU state/exchange/RK facade source-level docstrings and non-owning boundaries, plus backend-step, backend-lifecycle init/teardown, transfer-audit/GPU-state diagnostic snapshot access, and dense generalized eigensolver runtime ownership outside `api.cpp` |
+| Source facades | `fem_source_facade_contract` | C ABI, private backend-handle storage, Context facade delegation, core Context builder sequencing, legacy MFEM bridge, error, transfer-audit, DMI weak-residual, GPU state/exchange/RK facade source-level docstrings and non-owning boundaries, plus backend-step, backend-lifecycle init/teardown, transfer-audit/GPU-state diagnostic snapshot access, dense generalized eigensolver runtime ownership outside `api.cpp`, and managed runtime export of MFEM/libCEED/Hypre, OpenMPI, and CUDA headers/libs with relocatable MFEM CMake package metadata |
 | Explicit RK | `fem_rk_explicit_contract`, `fem_gpu_rk_plan` | tableau type/dispatch ownership, RK workspace storage/allocation ownership, stage RHS ownership, explicit RK step ownership, GPU RK planning for hybrid CPU-demag upload, integrator source-level docstrings including LLG RHS helpers, integrator header non-ownership docstrings, and Context no longer declaring RK helpers |
 | Fixed-step Heun | `fem_heun_step_contract`, `fem_rk_explicit_contract` | Heun routes through the generic explicit RK path via `heun_tableau()`, the legacy standalone Heun stepper source/header are absent from the build, and Context no longer declares a Heun step entrypoint |
 | Adaptive DT | `fem_adaptive_dt_contract`, `fem_rk_explicit_contract` | adaptive config validation/import ownership, runtime PI-controller state plus active current-dt ownership, componentwise AoS error norm, Context no longer owning flat adaptive dt controller fields or `current_dt`, source-level docstring through the RK explicit gate, and adaptive header non-ownership docstring |
@@ -57,29 +57,69 @@ can be treated as production-quality. It complements the module contracts under
 | Area | Fixture | Required criterion | Status |
 |---|---|---|---|
 | Exchange | uniform state | zero exchange field and energy | local contract only |
-| Exchange | sinusoidal mode | convergence of `H_ex` against analytic Laplacian | runtime-open (requires MFEM stack) |
+| Exchange | sinusoidal mode | convergence of helical `E_ex = A k^2 V` with finite `H_ex` diagnostic | scripted in `tests/fem_exchange_validation/sinusoidal_mode.py`; representative `fullmag --headless` finest-mesh stage passes on managed runtime; full CSV sweep requires a PyO3 `_fullmag_core` built with MFEM/libCEED |
 | Demag Poisson | uniformly magnetized sphere | `H_demag ~= -M/3` inside | covered by `tests/fem_demag_validation/sphere_validation.py` (requires MFEM stack) |
 | Demag Poisson | airbox sweep | convergence with airbox size and boundary mode | covered by `tests/fem_demag_validation/airbox_convergence.py` (requires MFEM stack) |
-| Demag FEM/BEM | body-only sphere or ellipsoid | demag factor agreement | runtime-open (requires MFEM stack) |
+| Demag FEM/BEM | body-only sphere | demag factor agreement | scripted in `tests/fem_demag_validation/fem_bem_body_validation.py`; body-only mesh materializes and source CLI diagnostic passes through Fredkin-Koehler, but active run remains runtime-open until the launcher/PyO3 core reports MFEM/libCEED CPU availability |
 | DMI | directional derivative | finite-difference energy derivative matches weak residual | covered by `fem_dmi_weak_residual` |
 | STT | macrospin CPP | sign and precession direction match reference | covered by `fem_stt_contract` |
 | Thermal | seeded replay | deterministic replay for fixed seed and accepted `(t, dt)` | covered by `fem_thermal_brown_contract` |
 | LLG | damping-only macrospin | energy decreases under relaxation | covered by `fem_llg_rhs_contract` |
-| Periodic FEM | exchange periodic pair fixture | class-consistent field across periodic nodes | partially covered historically |
+| Periodic FEM | exchange periodic pair fixture | class-consistent field across periodic nodes | local class/reduction coverage by `fem_mesh_contract` and `fem_aos_field_contract`; active exchange numerical periodic fixture requires MFEM stack |
 
 ## Environment Boundary
 
 The local no-MFEM contracts are useful regression gates but do not replace
-active MFEM-stack validation. The current local MFEM configure still fails
-before compilation because `MFEMConfig.cmake` references a missing directory:
+active MFEM-stack validation. The managed host runtime at
+`.fullmag/runtimes/fem-gpu-host` has now been regenerated with MFEM/libCEED/Hypre
+headers, OpenMPI headers/runtime components, CUDA headers/libraries referenced
+by MFEM, and relocated `MFEMConfig.cmake` / `MFEMTargets.cmake` metadata. A clean
+`FULLMAG_USE_MFEM_STACK=ON` configure against that prefix now completes.
+
+The currently checked active-MFEM contract slice is:
 
 ```text
-.fullmag/runtimes/fem-gpu-host/include
+cmake -S native -B /tmp/fullmag-native-mfem-check3 \
+  -DFULLMAG_USE_MFEM_STACK=ON \
+  -DFULLMAG_ENABLE_CUDA=OFF \
+  -DCMAKE_PREFIX_PATH=/home/kkingstoun/git/fullmag/fullmag/.fullmag/runtimes/fem-gpu-host
+
+cmake --build /tmp/fullmag-native-mfem-check3 --target \
+  fem_source_facade_contract \
+  fem_demag_poisson_contract \
+  fem_exchange_contract \
+  fem_demag_fem_bem_contract
+
+env LD_LIBRARY_PATH=/home/kkingstoun/git/fullmag/fullmag/.fullmag/runtimes/fem-gpu-host/lib \
+  ctest --test-dir /tmp/fullmag-native-mfem-check3/backends/fem \
+  -R 'fem_(source_facade_contract|demag_poisson_contract|exchange_contract|demag_fem_bem_contract)' \
+  --output-on-failure
 ```
 
-Rows marked `runtime-open (requires MFEM stack)` still lack a concrete gate.
-Rows covered by `tests/fem_demag_validation/*.py` have a scripted runtime gate
-with fail-fast acceptance criteria, but still require an active MFEM stack to
-produce numerical evidence. Until that runtime is repaired and those scripts
-are run, production qualification remains open even when the local no-MFEM
-contract suite is green.
+Result: `4/4` selected MFEM-stack contracts passed. Rows marked
+`runtime-open (requires MFEM stack)` still lack a concrete numerical fixture
+gate. Rows covered by `tests/fem_demag_validation/*.py` have scripted runtime
+gates with fail-fast acceptance criteria, but still require those scripts to be
+run before production qualification can be closed.
+
+Exchange sinusoidal validation now has a scripted runtime gate at
+`tests/fem_exchange_validation/sinusoidal_mode.py`. The managed
+`fullmag --headless` path successfully materializes and runs the representative
+8 nm finest-mesh exchange-only stage through `fem_cpu_native`. The full CSV
+refinement sweep is intentionally a Python entrypoint and needs the PyO3
+`_fullmag_core` to be built with the same MFEM/libCEED CPU stack; the current
+local `.fullmag/local/python` core is importable but reports no native FEM CPU
+availability for time-domain FEM, so it cannot close the CSV acceptance run in
+this checkout yet.
+
+FEM/BEM body-only demag validation now has a scripted runtime gate at
+`tests/fem_demag_validation/fem_bem_body_validation.py`. The script declares a
+Fredkin-Koehler sphere without an airbox for `fullmag --headless` capture and
+runs a CSV refinement sweep from the direct Python entrypoint, converting demag
+energy to an effective sphere factor with `N = 2E/(mu0 Ms^2 V)`. Current source
+CLI materializes the 12 nm body-only mesh and no longer lets the initial
+diagnostic reject `fredkin_koehler`; the next local blocker is runtime
+availability: `cargo run -p fullmag-cli -- --headless ...` and the direct PyO3
+sweep both stop with `RunError: time-domain FEM execution requires the
+MFEM/libCEED runtime stack`. The installed `.fullmag/local/bin/fullmag` binary
+also needs to be rebuilt to pick up the diagnostic pass-through change.

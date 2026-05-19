@@ -35,6 +35,10 @@ export const DIAGNOSTICS_ENGINE_LOG_PATH = openApiV2Path(
   "/v2/sessions/current/diagnostics/engine-log",
 );
 
+export const DIAGNOSTICS_CPU_PATH = openApiV2Path(
+  "/v2/sessions/current/diagnostics/cpu",
+);
+
 export const DIAGNOSTICS_GPU_PATH = openApiV2Path(
   "/v2/sessions/current/diagnostics/gpu",
 );

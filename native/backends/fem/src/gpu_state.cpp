@@ -1107,7 +1107,7 @@ fullmag_fem_gpu_state_info gpu_state_info(const FemGpuState &state)
 
 fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx)
 {
-    return gpu_state_info(ctx.gpu_state);
+    return gpu_state_info(ctx.gpu_state.device);
 }
 
 } // namespace fullmag::fem

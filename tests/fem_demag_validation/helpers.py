@@ -7,11 +7,10 @@ and produce CSV output for convergence analysis.
 from __future__ import annotations
 
 import csv
+import importlib
 import math
 from pathlib import Path
 from typing import Sequence
-
-import fullmag as fm
 
 MU0 = 4.0e-7 * math.pi
 
@@ -24,6 +23,11 @@ def _row_label(row: dict, label_key: str | None, index: int) -> str:
     if label_key and label_key in row:
         return str(row[label_key])
     return f"row {index}"
+
+
+def _fullmag():
+    """Import fullmag only for runtime study builders."""
+    return importlib.import_module("fullmag")
 
 
 def require_finite_metrics(
@@ -100,6 +104,19 @@ def require_grouped_error_improvement(
 
 
 # ── Analytical references ───────────────────────────────────────────────
+
+
+def effective_demag_factor_from_energy(
+    *,
+    e_demag: float,
+    ms: float,
+    volume: float,
+) -> float:
+    """Return the effective demag factor implied by uniform-state energy."""
+    denominator = MU0 * float(ms) * float(ms) * float(volume)
+    if denominator == 0.0 or not math.isfinite(denominator):
+        return float("nan")
+    return 2.0 * float(e_demag) / denominator
 
 
 def sphere_demag_factor() -> float:
@@ -188,6 +205,7 @@ def build_fem_sphere_study(
     m_direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ):
     """Create a FEM study with a sphere geometry for demag validation."""
+    fm = _fullmag()
     fm.reset()
     study = fm.study(problem_name)
     study.engine("fem")
@@ -260,6 +278,7 @@ def build_fem_ellipsoid_study(
     m_direction: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ):
     """Create a FEM study with an ellipsoid geometry for demag validation."""
+    fm = _fullmag()
     fm.reset()
     study = fm.study(problem_name)
     study.engine("fem")

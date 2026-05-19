@@ -6,7 +6,16 @@ describe("mesh quality statistics model", () => {
   it("normalizes backend SICN/gamma histograms and worst elements", () => {
     const statistics = normalizeMeshQualityStatistics({
       global: {
-        edge_length: { max: 4e-9, mean: 2e-9, min: 1e-9, std: 0.5e-9 },
+        edge_length: {
+          histogram: [
+            { count: 6, hi: 2e-9, lo: 1e-9 },
+            { count: 18, hi: 4e-9, lo: 2e-9 },
+          ],
+          max: 4e-9,
+          mean: 2e-9,
+          min: 1e-9,
+          std: 0.5e-9,
+        },
         element_count: 24,
         gamma: {
           below_threshold_count: 2,
@@ -32,7 +41,13 @@ describe("mesh quality statistics model", () => {
           p05: 0.33,
           threshold: 0.1,
         },
-        volume: { ratio: 42 },
+        volume: {
+          histogram: [
+            { count: 4, hi: 2e-27, lo: 1e-27 },
+            { count: 20, hi: 4e-27, lo: 2e-27 },
+          ],
+          ratio: 42,
+        },
         warnings: ["worst 5% SICN below quality target"],
       },
       mesh_name: "shared-domain",
@@ -94,6 +109,18 @@ describe("mesh quality statistics model", () => {
         },
       ],
       qualitySource: "gmsh",
+      sizeDistributions: [
+        {
+          id: "edge_length",
+          max: 4e-9,
+          mean: 2e-9,
+          min: 1e-9,
+        },
+        {
+          id: "volume",
+          ratio: 42,
+        },
+      ],
       volumeRatio: 42,
       warnings: ["worst 5% SICN below quality target"],
       worstElements: [{ centroid: [1, 2, 3], elementIndex: 7, gamma: 0.12, sicn: 0.18 }],
@@ -106,6 +133,10 @@ describe("mesh quality statistics model", () => {
       count: 8,
       fraction: 1,
       label: "0.900 to 1.000",
+    });
+    expect(statistics?.sizeDistributions[0]?.histogram[0]).toMatchObject({
+      count: 6,
+      label: "1.00e-9 to 2.00e-9",
     });
   });
 });

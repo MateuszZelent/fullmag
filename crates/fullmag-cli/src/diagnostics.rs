@@ -276,9 +276,28 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
             None => FemLlgProblem::with_terms_and_demag_airbox(
                 topology, material, dynamics, terms, false, None,
             ),
+            Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) => {
+                let mut diagnostic = diagnose_initial_state(
+                    plan.mesh.nodes.len(),
+                    Some(plan.mesh.boundary_faces.len()),
+                    None,
+                    None,
+                    plan.enable_exchange,
+                    plan.enable_demag,
+                    plan.external_field,
+                    plan.material.damping,
+                    plan.relaxation.as_ref(),
+                    magnetization_is_uniform(&plan.initial_magnetization),
+                )?;
+                diagnostic.warnings.push(
+                    "Initial FEM diagnostic does not evaluate Fredkin-Koehler demag; \
+                     the native FEM/BEM runtime will compute H_demag during execution."
+                        .to_string(),
+                );
+                return Ok(diagnostic);
+            }
             Some(
                 realization @ (fullmag_ir::ResolvedFemDemagIR::Bem
-                | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
                 | fullmag_ir::ResolvedFemDemagIR::Fmm),
             ) => {
                 return Err(anyhow!(

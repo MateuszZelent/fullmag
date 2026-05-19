@@ -4,14 +4,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_ROOT="${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host"
 
-mkdir -p "${RUNTIME_ROOT}/bin" "${RUNTIME_ROOT}/lib"
+mkdir -p "${RUNTIME_ROOT}/bin" "${RUNTIME_ROOT}/lib" "${RUNTIME_ROOT}/include"
 
 cd "${REPO_ROOT}"
 
 docker compose --profile fem-gpu run --rm -T fem-gpu bash -lc '
 set -euo pipefail
 echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
-mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib
+mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .fullmag/runtimes/fem-gpu-host/include
 rm -rf .fullmag/runtimes/fem-gpu-host/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/bin
 echo "[export_fem_gpu_runtime] cleaning stale FDM demag build cache"
@@ -48,6 +48,27 @@ echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 cp -a "$FEM_LIB"/libfullmag_fem.so* .fullmag/runtimes/fem-gpu-host/lib/
 cp -a "$FDM_LIB"/libfullmag_fdm.so* .fullmag/runtimes/fem-gpu-host/lib/
 cp -a /opt/fullmag-deps/lib/* .fullmag/runtimes/fem-gpu-host/lib/
+echo "[export_fem_gpu_runtime] bundling MFEM/libCEED/Hypre host headers"
+cp -a /opt/fullmag-deps/include/. .fullmag/runtimes/fem-gpu-host/include/
+echo "[export_fem_gpu_runtime] bundling OpenMPI headers referenced by MFEM"
+mkdir -p .fullmag/runtimes/fem-gpu-host/include/openmpi
+cp -a /usr/lib/x86_64-linux-gnu/openmpi/include/. .fullmag/runtimes/fem-gpu-host/include/openmpi/
+echo "[export_fem_gpu_runtime] bundling CUDA headers included by MFEM"
+cp -a /usr/local/cuda-12.4/targets/x86_64-linux/include/. .fullmag/runtimes/fem-gpu-host/include/
+echo "[export_fem_gpu_runtime] bundling CUDA shared libraries referenced by MFEMTargets"
+for cuda_lib in \
+  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so* \
+  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so* \
+  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so*; do
+  if [ -e "$cuda_lib" ]; then
+    cp -a "$cuda_lib" .fullmag/runtimes/fem-gpu-host/lib/
+  fi
+done
+echo "[export_fem_gpu_runtime] relocating MFEM CMake package metadata"
+perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${PACKAGE_PREFIX_DIR}/include/openmpi/openmpi#g; s#/usr/lib/x86_64-linux-gnu/openmpi/include#\\\${PACKAGE_PREFIX_DIR}/include/openmpi#g; s#/opt/fullmag-deps/include#\\\${PACKAGE_PREFIX_DIR}/include#g" \
+  .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMConfig.cmake
+perl -0pi -e "s#/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi#\\\${_IMPORT_PREFIX}/include/openmpi/openmpi#g; s#/usr/lib/x86_64-linux-gnu/openmpi/include#\\\${_IMPORT_PREFIX}/include/openmpi#g; s#/opt/fullmag-deps/include#\\\${_IMPORT_PREFIX}/include#g; s#/opt/fullmag-deps/lib/libHYPRE.so#\\\${_IMPORT_PREFIX}/lib/libHYPRE.so#g; s#/opt/fullmag-deps/lib/libceed.so#\\\${_IMPORT_PREFIX}/lib/libceed.so#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so#\\\${_IMPORT_PREFIX}/lib/libmpi_cxx.so.40#g; s#/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so#\\\${_IMPORT_PREFIX}/lib/libmpi.so.40#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so#\\\${_IMPORT_PREFIX}/lib/libcurand.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so#\\\${_IMPORT_PREFIX}/lib/libcublas.so#g; s#/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so#\\\${_IMPORT_PREFIX}/lib/libcusparse.so#g" \
+  .fullmag/runtimes/fem-gpu-host/lib/cmake/mfem/MFEMTargets.cmake
 # Bundle OpenMPI runtime libs so the exported host runtime does not depend
 # on host-installed libmpi/libopen-rte variants.
 shopt -s nullglob

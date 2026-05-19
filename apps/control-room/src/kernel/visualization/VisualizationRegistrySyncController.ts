@@ -60,9 +60,10 @@ export class VisualizationRegistrySyncController {
   private firstPendingAt: number | null = null;
   private flushPromise: Promise<void> | null = null;
   private inflightCameraInvalidationSuppressed = false;
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private snapshot: VisualizationRegistrySyncSnapshot = INITIAL_SNAPSHOT;
+  private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor({
     api,
@@ -109,9 +110,11 @@ export class VisualizationRegistrySyncController {
       elapsedSinceLastChange < this.quietMs &&
       elapsedSinceFirstChange < this.maxLatencyMs
     ) {
+      this.scheduleFlush();
       return Promise.resolve();
     }
 
+    this.clearScheduledFlush();
     return this.flushNow();
   }
 
@@ -179,6 +182,7 @@ export class VisualizationRegistrySyncController {
           this.inflightCameraInvalidationSuppressed = false;
         }
         this.flushPromise = null;
+        this.scheduleFlush();
       });
 
     return this.flushPromise;
@@ -257,13 +261,13 @@ export class VisualizationRegistrySyncController {
     if (!isCameraOnlyPatch(pendingPatch)) {
       this.notify();
     }
+    this.scheduleFlush();
   }
 
   start(): void {
-    if (this.intervalId !== null) return;
-    this.intervalId = setInterval(() => {
-      void this.flushDue();
-    }, this.intervalMs);
+    if (this.started) return;
+    this.started = true;
+    this.scheduleFlush();
   }
 
   shouldSuppressInvalidation(
@@ -286,9 +290,9 @@ export class VisualizationRegistrySyncController {
   }
 
   stop(): void {
-    if (this.intervalId === null) return;
-    clearInterval(this.intervalId);
-    this.intervalId = null;
+    if (!this.started) return;
+    this.started = false;
+    this.clearScheduledFlush();
   }
 
   subscribe(listener: VisualizationRegistrySyncListener): () => void {
@@ -301,6 +305,35 @@ export class VisualizationRegistrySyncController {
       this.snapshot.inflightPatch,
       this.snapshot.pendingPatch,
     );
+  }
+
+  private clearScheduledFlush(): void {
+    if (this.timeoutId === null) return;
+    clearTimeout(this.timeoutId);
+    this.timeoutId = null;
+  }
+
+  private scheduleFlush(): void {
+    if (!this.started || this.timeoutId !== null || !this.snapshot.pendingPatch) {
+      return;
+    }
+
+    const elapsedSinceLastChange =
+      this.snapshot.lastLocalChangedAt === null
+        ? Number.POSITIVE_INFINITY
+        : this.now() - this.snapshot.lastLocalChangedAt;
+    const elapsedSinceFirstChange =
+      this.firstPendingAt === null
+        ? Number.POSITIVE_INFINITY
+        : this.now() - this.firstPendingAt;
+    const quietDelay = Math.max(0, this.quietMs - elapsedSinceLastChange);
+    const latencyDelay = Math.max(0, this.maxLatencyMs - elapsedSinceFirstChange);
+    const delay = Math.min(quietDelay, latencyDelay);
+
+    this.timeoutId = setTimeout(() => {
+      this.timeoutId = null;
+      void this.flushDue();
+    }, delay);
   }
 
   private notify(): void {

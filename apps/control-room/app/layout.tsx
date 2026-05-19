@@ -7,6 +7,10 @@ import { ThemeProvider } from "@/design/theme/ThemeProvider";
 export const metadata: Metadata = {
   title: "Fullmag Control Room",
   description: "Modular Fullmag frontend v2 control room for web and desktop.",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({

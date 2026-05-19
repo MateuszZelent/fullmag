@@ -8,6 +8,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 import fullmag as fm
 
 
@@ -30,6 +32,7 @@ AEX = 10e-12
 ALPHA = 0.1
 KU1 = 0.8e6
 ANIS_U = (0.0, 0.0, 1.0)
+DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 
 study = fm.study("arch_waveguide_relax_50nm")
 
@@ -68,7 +71,7 @@ waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
-waveguide.m = fm.texture.uniform(0.0, 1e-4, 0.9)
+waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
 waveguide.mesh(
     maximum_element_size=6e-9,
     minimum_element_size=1.8e-9,
@@ -106,8 +109,9 @@ study.b_ext(0.0, 0.0, B_EXT_T)
 study.demag(realization="poisson_robin")
 
 # Demag solver tuning: rtol=1e-6 is sufficient for relaxation (tol=1e-4).
-# AMG preconditioner gives O(1) CG iterations; print_level=1 logs convergence.
-fm.fem_demag_solver(rtol=1e-6, max_iterations=200, print_level=1)
+# Keep interactive terminals quiet by default; set FULLMAG_DEMAG_PRINT_LEVEL=1
+# to inspect per-solve Hypre/PCG convergence.
+fm.fem_demag_solver(rtol=1e-6, max_iterations=200, print_level=DEMAG_PRINT_LEVEL)
 
 study.build_domain_mesh()
 

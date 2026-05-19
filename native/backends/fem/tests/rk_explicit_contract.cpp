@@ -40,6 +40,11 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    const std::filesystem::path fem_root = fem_source_root();
+    return fem_root.parent_path().parent_path().parent_path();
+}
+
 void rk_workspace_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
@@ -80,6 +85,18 @@ void rk_workspace_is_owned_by_integrator_module() {
     check(
         rk_workspace.find("struct StepperWorkspace {") != std::string::npos,
         "StepperWorkspace definition must live in rk_stepper_workspace.hpp");
+    check(
+        rk_workspace.find("struct RkStepperRuntimeState") != std::string::npos,
+        "RK stepper workspace header must declare the runtime workspace owner");
+    check(
+        rk_workspace.find("StepperWorkspace workspace") != std::string::npos,
+        "RK stepper runtime state must own the reusable StepperWorkspace");
+    check(
+        context_header.find("RkStepperRuntimeState stepper{}") != std::string::npos,
+        "Context must store RK workspace through the runtime owner");
+    check(
+        context_header.find("StepperWorkspace stepper") == std::string::npos,
+        "Context must not own a flat StepperWorkspace field");
     check(
         rk_workspace.find("Reusable explicit Runge-Kutta stepper workspace") !=
             std::string::npos,
@@ -284,6 +301,23 @@ void workspace_allocates_common_buffers() {
     check(ws.err.size() == 9u, "adaptive error buffer allocated");
 }
 
+void progress_report_marks_integrator_split_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Wydzielic integratory do osobnych modulow | zrobione kontraktowo |") !=
+            std::string::npos,
+        "progress report must mark native FEM integrator split as contract-covered");
+    check(
+        progress.find("`fem_rk_explicit_contract`") != std::string::npos &&
+            progress.find("`fem_adaptive_dt_contract`") != std::string::npos &&
+            progress.find("`fem_heun_step_contract`") != std::string::npos &&
+            progress.find("`fem_llg_rhs_contract`") != std::string::npos,
+        "progress report must cite RK, adaptive, Heun, and LLG RHS integrator gates");
+}
+
 } // namespace
 
 int main() {
@@ -293,5 +327,6 @@ int main() {
     workspace_reallocates_when_stage_count_grows();
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();
+    progress_report_marks_integrator_split_contract_covered();
     return 0;
 }

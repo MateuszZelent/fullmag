@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from helpers import (  # noqa: E402
     ValidationFailure,
+    effective_demag_factor_from_energy,
     require_finite_metrics,
     require_grouped_error_improvement,
     require_relative_error_below,
@@ -20,6 +21,21 @@ from helpers import (  # noqa: E402
 
 
 class DemagValidationAcceptanceTests(unittest.TestCase):
+    def test_effective_demag_factor_from_energy_inverts_uniform_energy(self) -> None:
+        mu0 = 4.0e-7 * math.pi
+        ms = 800e3
+        volume = 4.0e-21
+        expected_n = 1.0 / 3.0
+        e_demag = 0.5 * mu0 * expected_n * ms * ms * volume
+
+        n_eff = effective_demag_factor_from_energy(
+            e_demag=e_demag,
+            ms=ms,
+            volume=volume,
+        )
+
+        self.assertAlmostEqual(n_eff, expected_n, places=14)
+
     def test_finite_metrics_reject_nan_rows(self) -> None:
         rows = [{"case": "bad", "n_rel_error": math.nan}]
 

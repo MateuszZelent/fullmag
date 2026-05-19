@@ -1,7 +1,9 @@
 import type { CSSProperties } from "react";
 
 import type {
+  MeshQualityHistogramBin,
   MeshQualityMetric,
+  MeshSizeDistribution,
   MeshQualityStatistics,
   MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
@@ -9,6 +11,7 @@ import type { MeshQualityRefinementState } from "@/shared/domain/mesh/meshQualit
 
 import {
   formatCount,
+  formatLength,
   formatValue,
   MeshResourceEmpty,
 } from "./MeshResourceView";
@@ -24,6 +27,47 @@ function metricSummary(metric: MeshQualityMetric): string {
 
 function formatPercent(value: number | null): string {
   return value === null ? "unknown" : `${(value * 100).toPrecision(3)}%`;
+}
+
+function formatCountPercent(count: number | null, total: number | null): string {
+  if (count === null || total === null || total <= 0) return "unknown";
+  return formatPercent(count / total);
+}
+
+function histogramTotal(histogram: MeshQualityHistogramBin[]): number | null {
+  const total = histogram.reduce((sum, bin) => sum + bin.count, 0);
+  return total > 0 ? total : null;
+}
+
+function estimateBelowThresholdCount(metric: MeshQualityMetric): number | null {
+  const threshold = metric.threshold;
+  if (threshold === null) return null;
+  const count = metric.histogram.reduce((sum, bin) => {
+    if (bin.lo === null || bin.hi === null) return sum;
+    if (bin.hi <= threshold) return sum + bin.count;
+    if (bin.lo >= threshold) return sum;
+    const width = bin.hi - bin.lo;
+    if (width <= 0) return sum;
+    const overlap = (threshold - bin.lo) / width;
+    return sum + Math.round(bin.count * Math.max(0, Math.min(1, overlap)));
+  }, 0);
+  return count > 0 ? count : null;
+}
+
+function metricTargetSplit(
+  metric: MeshQualityMetric,
+  elementCount: number | null,
+): {
+  belowCount: number | null;
+  meetsCount: number | null;
+  total: number | null;
+} {
+  const total = elementCount ?? histogramTotal(metric.histogram);
+  const belowCount =
+    metric.belowThresholdCount ?? estimateBelowThresholdCount(metric);
+  const meetsCount =
+    belowCount !== null && total !== null ? Math.max(total - belowCount, 0) : null;
+  return { belowCount, meetsCount, total };
 }
 
 function belowThresholdSummary(
@@ -42,6 +86,69 @@ function belowThresholdSummary(
   )} below ${formatValue(metric.threshold)} (${formatPercent(
     metric.belowThresholdFraction,
   )})`;
+}
+
+function formatDistributionValue(
+  distribution: MeshSizeDistribution,
+  value: number | null,
+): string {
+  if (value === null) return "unknown";
+  return distribution.id === "edge_length" ? formatLength(value) : formatValue(value);
+}
+
+function SizeDistributionCard({
+  distribution,
+}: {
+  distribution: MeshSizeDistribution;
+}) {
+  const hasHistogram = distribution.histogram.length > 0;
+  return (
+    <section className="fm-mesh-size-distribution">
+      <div className="fm-mesh-size-distribution__header">
+        <h4>{distribution.label}</h4>
+        <span>
+          min {formatDistributionValue(distribution, distribution.min)} / mean{" "}
+          {formatDistributionValue(distribution, distribution.mean)} / max{" "}
+          {formatDistributionValue(distribution, distribution.max)}
+        </span>
+      </div>
+      <dl className="fm-mesh-size-distribution__stats">
+        <div>
+          <dt>Std</dt>
+          <dd>{formatDistributionValue(distribution, distribution.std)}</dd>
+        </div>
+        {distribution.ratio !== null ? (
+          <div>
+            <dt>Ratio</dt>
+            <dd>{formatValue(distribution.ratio)}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {hasHistogram ? (
+        <div className="fm-mesh-quality-histogram" role="list">
+          {distribution.histogram.map((bin) => (
+            <div
+              className="fm-mesh-quality-histogram__bin"
+              key={`${distribution.id}:${bin.label}`}
+              role="listitem"
+              style={
+                {
+                  "--fm-mesh-quality-bin": `${Math.round(bin.fraction * 100)}%`,
+                } as CSSProperties
+              }
+            >
+              <span>{bin.label}</span>
+              <strong>{bin.count.toLocaleString("en-US")}</strong>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="fm-mesh-size-distribution__empty">
+          No size-bin histogram is published; showing scalar range only.
+        </p>
+      )}
+    </section>
+  );
 }
 
 export function MeshQualityStatisticsView({
@@ -89,6 +196,7 @@ export function MeshQualityStatisticsView({
               metric,
               statistics.elementCount,
             );
+            const split = metricTargetSplit(metric, statistics.elementCount);
             return (
               <section className="fm-mesh-quality-metric" key={metric.id}>
                 <div className="fm-mesh-quality-metric__header">
@@ -110,6 +218,24 @@ export function MeshQualityStatisticsView({
                     </button>
                   ) : null}
                 </div>
+                {split.belowCount !== null || split.meetsCount !== null ? (
+                  <div className="fm-mesh-quality-band-grid">
+                    <div className="fm-mesh-quality-band" data-status="warning">
+                      <span>Below target</span>
+                      <strong>{formatCount(split.belowCount)}</strong>
+                      <small>
+                        {formatCountPercent(split.belowCount, split.total)}
+                      </small>
+                    </div>
+                    <div className="fm-mesh-quality-band" data-status="ready">
+                      <span>Meets target</span>
+                      <strong>{formatCount(split.meetsCount)}</strong>
+                      <small>
+                        {formatCountPercent(split.meetsCount, split.total)}
+                      </small>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="fm-mesh-quality-histogram" role="list">
                   {metric.histogram.map((bin) => (
                     <div
@@ -133,6 +259,23 @@ export function MeshQualityStatisticsView({
         </div>
       ) : (
         <MeshResourceEmpty label="No SICN or gamma histograms are available." />
+      )}
+
+      {statistics.sizeDistributions.length > 0 ? (
+        <section className="fm-mesh-size-distributions">
+          <div className="fm-mesh-size-distributions__header">
+            <h4>Element size distributions</h4>
+            <span>Published edge-length and volume bins from the mesh report.</span>
+          </div>
+          {statistics.sizeDistributions.map((distribution) => (
+            <SizeDistributionCard
+              distribution={distribution}
+              key={distribution.id}
+            />
+          ))}
+        </section>
+      ) : (
+        <MeshResourceEmpty label="No element-size distributions are available." />
       )}
 
       {statistics.warnings.length > 0 ? (

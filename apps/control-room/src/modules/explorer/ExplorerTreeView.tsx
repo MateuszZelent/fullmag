@@ -38,7 +38,7 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import {
   useCommandDetailResource,
-  useStudyRuntimeCommandResourceData,
+  useRuntimeCommandControlResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -125,7 +125,7 @@ export function contextCommandItemsForNode({
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
 }): ExplorerContextCommandItem[] {
-  const context = createCommandContext("menu", kernel, { resourceData });
+  const context = createCommandContext("explorer", kernel, { resourceData });
   return contextCommandsForNode(kernel, node).map((command) => ({
     active: kernel.commands.isActive(command.id, context),
     activeResource:
@@ -315,7 +315,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
             onSelect={() => {
               void kernel.commands.execute(
                 command.id,
-                createCommandContext("menu", kernel, { resourceData }),
+                createCommandContext("explorer", kernel, { resourceData }),
               );
             }}
           >
@@ -372,7 +372,7 @@ export function ExplorerTreeView({
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
-  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const runtimeResourceData = useRuntimeCommandControlResourceData();
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],

@@ -1,6 +1,5 @@
 import type { ModuleManifest } from "@/kernel/types";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import { viewport3dStore } from "./viewport3dStore";
 import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
@@ -119,20 +118,14 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: (context) => {
-          const state = visualizationStateFromContext(context);
-          return state
-            ? state.camera.projection === "orthographic"
-            : viewport3dStore.getSnapshot().widgets.cameraProjection ===
-                "orthographic";
-        },
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.cameraProjection ===
+          "orthographic",
         run: async (context) => {
-          // Determine current projection synchronously — use resource data when
-          // available, fall back to the local store. Do NOT await the API here:
-          // the session endpoint may be unavailable and would throw before the
-          // store update, silently breaking the toggle.
+          // Use the local store for the immediate toggle state. Resource data can
+          // lag behind queued patches, which would make repeated clicks compute
+          // the same "next" projection and leave the button stuck.
           const currentProjection =
-            visualizationStateFromContext(context)?.camera?.projection ??
             viewport3dStore.getSnapshot().widgets.cameraProjection;
           const nextProjection =
             currentProjection === "orthographic" ? "perspective" : "orthographic";
@@ -235,12 +228,3 @@ export const viewport3dManifest: ModuleManifest = {
   emits: ["workspace:selection-changed"],
   listens: ["resource:invalidated", "workspace:selection-changed"],
 };
-
-function visualizationStateFromContext(context: {
-  resourceData?: Readonly<Record<string, unknown>>;
-}): VisualizationStateResource | null {
-  const value = context.resourceData?.[VISUALIZATION_STATE_PATH];
-  return value && typeof value === "object"
-    ? (value as VisualizationStateResource)
-    : null;
-}

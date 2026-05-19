@@ -83,7 +83,7 @@ bool compute_exchange_for_magnetization(
     }
 
     TransferAuditScope exchange_audit_scope(
-        ctx.transfer_audit,
+        ctx.transfer_audit.audit,
         TransferAuditScopeKind::ExchangeInterop);
 
     unpack_aos_to_existing_components(m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);

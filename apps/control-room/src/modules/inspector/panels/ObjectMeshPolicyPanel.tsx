@@ -17,6 +17,7 @@ import {
   useObjectMeshSizeFieldResource,
   useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -32,6 +33,7 @@ import {
   MeshResourceFields,
   recordField,
 } from "./MeshResourceView";
+import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import {
   buildObjectMeshPolicyReplaceRequest,
   defaultObjectMeshPolicyResource,
@@ -323,6 +325,24 @@ function ObjectMeshTopologyQualitySection({
   );
 }
 
+function ObjectMeshQualityStatisticsSection({
+  statistics,
+}: {
+  statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
+}) {
+  return (
+    <InspectorSection
+      value="object-quality-statistics"
+      title="Object Quality Distributions"
+      badge={statistics ? formatCount(statistics.elementCount) : "missing"}
+      collapsible
+      defaultCollapsed={false}
+    >
+      <MeshQualityStatisticsView statistics={statistics} />
+    </InspectorSection>
+  );
+}
+
 function ObjectMeshAdvancedJsonSection({
   draft,
   updateDraft,
@@ -406,8 +426,12 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     }
   }
   const qualityRecord = asRecord(quality.data?.quality);
+  const qualityStatistics = normalizeMeshQualityStatistics(quality.data?.quality);
   const commandContext = useMemo(
-    () => createCommandContext("ribbon", kernel),
+    () =>
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "object-mesh-policy",
+      }),
     [kernel],
   );
 
@@ -458,7 +482,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "override", "semantics", "backend", "manual-size-field", "target", "topology", "transactions"]}
+      defaultValue={["summary", "override", "semantics", "backend", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
     >
       <ObjectMeshPolicySummarySection
         hasConfig={Boolean(resource.config)}
@@ -490,6 +514,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         qualityStatus={quality.status}
         topology={topology}
       />
+      <ObjectMeshQualityStatisticsSection statistics={qualityStatistics} />
       <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshTransactionsSection
         feedback={feedback}

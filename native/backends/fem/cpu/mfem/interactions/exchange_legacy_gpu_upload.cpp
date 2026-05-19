@@ -26,7 +26,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
     mfem::SparseMatrix &exchange_spmat,
     std::string &error)
 {
-    if (!ctx.gpu_state.allocated) {
+    if (!ctx.gpu_state.device.allocated) {
         return true;
     }
     const int height = exchange_spmat.Height();
@@ -83,7 +83,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
     }
 
     return gpu_state_upload_exchange_legacy_sparse(
-        ctx.gpu_state,
+        ctx.gpu_state.device,
         static_cast<uint64_t>(height),
         static_cast<uint64_t>(width),
         row_offsets.data(),
@@ -96,7 +96,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         static_cast<uint64_t>(ctx.integration_weights.mfem_lumped_mass.size()),
         inv_lumped.data(),
         static_cast<uint64_t>(inv_lumped.size()),
-        ctx.transfer_audit,
+        ctx.transfer_audit.audit,
         error);
 }
 #else

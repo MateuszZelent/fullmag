@@ -42,6 +42,10 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    return fem_source_root().parent_path().parent_path().parent_path();
+}
+
 void source_facades_document_module_boundaries() {
     const std::filesystem::path root = fem_source_root();
     const std::string api = read_text_file(root / "src" / "api.cpp");
@@ -107,21 +111,21 @@ void source_facades_document_module_boundaries() {
         "api source file must delegate backend step orchestration to runtime module");
     check(
         api.find("context_from_plan(handle->context") == std::string::npos &&
-            api.find("configure_transfer_audit_from_env(handle->context.transfer_audit)") ==
+            api.find("configure_transfer_audit_from_env(handle->context.transfer_audit.audit)") ==
                 std::string::npos,
         "api source file must not own backend runtime initialization");
     check(
         api.find("fullmag::fem::initialize_backend_runtime(") != std::string::npos,
         "api source file must delegate backend runtime initialization to runtime module");
     check(
-        api.find("gpu_state_destroy(handle->context.gpu_state)") == std::string::npos &&
+        api.find("gpu_state_destroy(handle->context.gpu_state.device)") == std::string::npos &&
             api.find("context_destroy_mfem(handle->context)") == std::string::npos,
         "api source file must not own backend runtime teardown");
     check(
         api.find("fullmag::fem::destroy_backend_runtime(") != std::string::npos,
         "api source file must delegate backend runtime teardown to runtime module");
     check(
-        api.find("transfer_audit_snapshot(handle->context.transfer_audit)") ==
+        api.find("transfer_audit_snapshot(handle->context.transfer_audit.audit)") ==
             std::string::npos,
         "api source file must not read transfer-audit runtime state directly");
     check(
@@ -129,7 +133,7 @@ void source_facades_document_module_boundaries() {
             std::string::npos,
         "api source file must delegate transfer-audit snapshot through owning module");
     check(
-        api.find("gpu_state_info(handle->context.gpu_state)") == std::string::npos,
+        api.find("gpu_state_info(handle->context.gpu_state.device)") == std::string::npos,
         "api source file must not read GPU runtime state directly");
     check(
         api.find("fullmag::fem::gpu_state_info(handle->context)") != std::string::npos,
@@ -214,7 +218,7 @@ void source_facades_document_module_boundaries() {
         gpu_state.find("does not own MFEM device selection, Context construction, exchange operator assembly, integrator execution, or C ABI entrypoints") != std::string::npos,
         "GPU state source file must document its non-owning module boundary");
     check(
-        gpu_state.find("gpu_state_info(ctx.gpu_state)") != std::string::npos,
+        gpu_state.find("gpu_state_info(ctx.gpu_state.device)") != std::string::npos,
         "GPU state source file must own Context-backed GPU info snapshot access");
     check(
         gpu_state_header.find("fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx);") !=
@@ -233,7 +237,7 @@ void source_facades_document_module_boundaries() {
         transfer.find("does not own C ABI calls, Context construction, MFEM device policy, interaction physics, or integrator execution") != std::string::npos,
         "transfer-audit source file must document its non-owning module boundary");
     check(
-        transfer.find("transfer_audit_snapshot(ctx.transfer_audit)") !=
+        transfer.find("transfer_audit_snapshot(ctx.transfer_audit.audit)") !=
             std::string::npos,
         "transfer-audit source file must own Context-backed snapshot access");
     check(
@@ -268,14 +272,14 @@ void source_facades_document_module_boundaries() {
         "backend lifecycle runtime source must own runtime initialization helper");
     check(
         backend_lifecycle.find("context_from_plan(ctx, plan, error)") != std::string::npos &&
-            backend_lifecycle.find("configure_transfer_audit_from_env(ctx.transfer_audit)") !=
+            backend_lifecycle.find("configure_transfer_audit_from_env(ctx.transfer_audit.audit)") !=
                 std::string::npos,
         "backend lifecycle runtime source must own Context construction delegation and transfer-audit env import");
     check(
         backend_lifecycle.find("void destroy_backend_runtime(") != std::string::npos,
         "backend lifecycle runtime source must own runtime teardown helper");
     check(
-        backend_lifecycle.find("gpu_state_destroy(ctx.gpu_state)") != std::string::npos &&
+        backend_lifecycle.find("gpu_state_destroy(ctx.gpu_state.device)") != std::string::npos &&
             backend_lifecycle.find("context_destroy_mfem(ctx)") != std::string::npos,
         "backend lifecycle runtime source must own GPU and MFEM runtime teardown calls");
     check(
@@ -358,10 +362,85 @@ void common_fem_utilities_have_single_header() {
         "FEM CMake source list must not reference removed Heun stepper files");
 }
 
+void managed_runtime_export_keeps_mfem_headers_linkable() {
+    const std::string export_script =
+        read_text_file(repo_root() / "scripts" / "export_fem_gpu_runtime.sh");
+
+    check(
+        export_script.find("${RUNTIME_ROOT}/include") != std::string::npos ||
+            export_script.find(".fullmag/runtimes/fem-gpu-host/include") !=
+                std::string::npos,
+        "FEM runtime export must create a managed include directory");
+    check(
+        export_script.find("/opt/fullmag-deps/include") != std::string::npos,
+        "FEM runtime export must copy MFEM/libCEED/Hypre headers from the container deps prefix");
+    check(
+        export_script.find("relocating MFEM CMake package metadata") !=
+            std::string::npos,
+        "FEM runtime export must rewrite MFEM CMake package metadata for host relocation");
+    check(
+        export_script.find("MFEMConfig.cmake") != std::string::npos &&
+            export_script.find("MFEMTargets.cmake") != std::string::npos,
+        "FEM runtime export must relocate both MFEMConfig and MFEMTargets metadata");
+    check(
+        export_script.find(R"(\\\${PACKAGE_PREFIX_DIR}/include)") !=
+            std::string::npos &&
+            export_script.find(R"(\\\${_IMPORT_PREFIX}/lib)") !=
+                std::string::npos,
+        "FEM runtime export must preserve CMake package variables through shell and Perl escaping");
+    check(
+        export_script.find("/usr/lib/x86_64-linux-gnu/openmpi/include") !=
+            std::string::npos,
+        "FEM runtime export must bundle OpenMPI headers referenced by MFEM package metadata");
+    check(
+        export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so") !=
+            std::string::npos &&
+            export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so") !=
+                std::string::npos &&
+            export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so") !=
+                std::string::npos,
+        "FEM runtime export must bundle CUDA shared libraries referenced by MFEMTargets metadata");
+    check(
+        export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/include") !=
+            std::string::npos,
+        "FEM runtime export must bundle CUDA headers included by MFEM headers");
+}
+
+void progress_report_marks_device_runtime_split_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Wydzielic device/runtime z `mfem_bridge.cpp` | zrobione kontraktowo |") != std::string::npos,
+        "progress report must mark the device/runtime split as contractually covered");
+    check(
+        progress.find("`fem_source_facade_contract`") != std::string::npos &&
+            progress.find("`fem_mfem_context_contract`") != std::string::npos &&
+            progress.find("`fem_mfem_device_contract`") != std::string::npos &&
+            progress.find("`fem_gpu_state_runtime_contract`") != std::string::npos &&
+            progress.find("`fem_state_io_contract`") != std::string::npos &&
+            progress.find("`fem_cpu_threads_contract`") != std::string::npos,
+        "progress report must cite the runtime split contract gates");
+    check(
+        progress.find("backend_lifecycle") != std::string::npos &&
+            progress.find("backend_step") != std::string::npos &&
+            progress.find("eigen_dense") != std::string::npos &&
+            progress.find("interrupt") != std::string::npos &&
+            progress.find("availability") != std::string::npos,
+        "progress report must mention the runtime facade modules");
+    check(
+        progress.find("nie zamyka aktywnej kwalifikacji runtime MFEM/libCEED") !=
+            std::string::npos,
+        "progress report must keep active MFEM/libCEED runtime qualification open");
+}
+
 } // namespace
 
 int main() {
     source_facades_document_module_boundaries();
     common_fem_utilities_have_single_header();
+    managed_runtime_export_keeps_mfem_headers_linkable();
+    progress_report_marks_device_runtime_split_contract_covered();
     return 0;
 }

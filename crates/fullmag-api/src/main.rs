@@ -741,6 +741,196 @@ pub(crate) fn sample_gpu_telemetry() -> Result<GpuTelemetryResponse, ApiError> {
     })
 }
 
+struct CpuSample {
+    idle_ticks: u64,
+    total_ticks: u64,
+    process_ticks: u64,
+}
+
+pub(crate) fn sample_cpu_telemetry() -> Result<crate::types::CpuTelemetryResponse, ApiError> {
+    let first = read_cpu_sample()?;
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let second = read_cpu_sample()?;
+    let total_delta = second.total_ticks.saturating_sub(first.total_ticks);
+    if total_delta == 0 {
+        return Err(ApiError::internal(
+            "CPU telemetry sample had zero elapsed ticks",
+        ));
+    }
+    let idle_delta = second.idle_ticks.saturating_sub(first.idle_ticks);
+    let busy_delta = total_delta.saturating_sub(idle_delta);
+    let logical_cpus = std::thread::available_parallelism()
+        .map(|value| value.get() as u32)
+        .unwrap_or(1);
+    let process_delta = second.process_ticks.saturating_sub(first.process_ticks);
+    let utilization_cpu_percent =
+        (busy_delta as f64 / total_delta as f64 * 100.0).clamp(0.0, 100.0);
+    let process_cpu_percent =
+        (process_delta as f64 / total_delta as f64 * logical_cpus as f64 * 100.0)
+            .clamp(0.0, logical_cpus as f64 * 100.0);
+    let (memory_total_mb, memory_used_mb) = read_memory_mb()?;
+    let (process_rss_mb, process_threads) = read_process_status()?;
+    let (load_average_1m, load_average_5m, load_average_15m) = read_load_average();
+
+    Ok(crate::types::CpuTelemetryResponse {
+        status: "available".into(),
+        reason: None,
+        sample_time_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0),
+        logical_cpus,
+        utilization_cpu_percent,
+        process_cpu_percent,
+        memory_used_mb,
+        memory_total_mb,
+        process_rss_mb,
+        process_threads,
+        load_average_1m,
+        load_average_5m,
+        load_average_15m,
+        model_name: read_cpu_model_name(),
+    })
+}
+
+fn read_cpu_sample() -> Result<CpuSample, ApiError> {
+    let stat = std::fs::read_to_string("/proc/stat")
+        .map_err(|error| ApiError::internal(format!("failed to read /proc/stat: {error}")))?;
+    let cpu_line = stat
+        .lines()
+        .find(|line| line.starts_with("cpu "))
+        .ok_or_else(|| ApiError::internal("failed to find aggregate CPU line in /proc/stat"))?;
+    let values = cpu_line
+        .split_whitespace()
+        .skip(1)
+        .map(|part| {
+            part.parse::<u64>().map_err(|error| {
+                ApiError::internal(format!("failed to parse /proc/stat CPU ticks: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.len() < 5 {
+        return Err(ApiError::internal(
+            "aggregate CPU line in /proc/stat is incomplete",
+        ));
+    }
+    let idle_ticks = values[3].saturating_add(values[4]);
+    let total_ticks = values.iter().copied().sum();
+
+    Ok(CpuSample {
+        idle_ticks,
+        total_ticks,
+        process_ticks: read_process_cpu_ticks()?,
+    })
+}
+
+fn read_process_cpu_ticks() -> Result<u64, ApiError> {
+    let stat = std::fs::read_to_string("/proc/self/stat")
+        .map_err(|error| ApiError::internal(format!("failed to read /proc/self/stat: {error}")))?;
+    let after_comm = stat
+        .rsplit_once(") ")
+        .map(|(_, rest)| rest)
+        .ok_or_else(|| ApiError::internal("failed to parse /proc/self/stat command field"))?;
+    let fields = after_comm.split_whitespace().collect::<Vec<_>>();
+    let utime = fields
+        .get(11)
+        .ok_or_else(|| ApiError::internal("/proc/self/stat is missing utime"))?
+        .parse::<u64>()
+        .map_err(|error| ApiError::internal(format!("failed to parse process utime: {error}")))?;
+    let stime = fields
+        .get(12)
+        .ok_or_else(|| ApiError::internal("/proc/self/stat is missing stime"))?
+        .parse::<u64>()
+        .map_err(|error| ApiError::internal(format!("failed to parse process stime: {error}")))?;
+    Ok(utime.saturating_add(stime))
+}
+
+fn read_memory_mb() -> Result<(f64, f64), ApiError> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo")
+        .map_err(|error| ApiError::internal(format!("failed to read /proc/meminfo: {error}")))?;
+    let total_kb = read_meminfo_kb(&meminfo, "MemTotal")
+        .ok_or_else(|| ApiError::internal("/proc/meminfo is missing MemTotal"))?;
+    let available_kb = read_meminfo_kb(&meminfo, "MemAvailable")
+        .ok_or_else(|| ApiError::internal("/proc/meminfo is missing MemAvailable"))?;
+    let used_kb = total_kb.saturating_sub(available_kb);
+    Ok((kb_to_mb(total_kb), kb_to_mb(used_kb)))
+}
+
+fn read_meminfo_kb(meminfo: &str, key: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name == key).then(|| {
+            value
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse::<u64>().ok())
+        })?
+    })
+}
+
+fn read_process_status() -> Result<(f64, u32), ApiError> {
+    let status = std::fs::read_to_string("/proc/self/status").map_err(|error| {
+        ApiError::internal(format!("failed to read /proc/self/status: {error}"))
+    })?;
+    let rss_kb = read_status_kb(&status, "VmRSS").unwrap_or(0);
+    let process_threads = status
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name == "Threads").then(|| {
+                value
+                    .split_whitespace()
+                    .next()
+                    .and_then(|token| token.parse::<u32>().ok())
+            })?
+        })
+        .unwrap_or(0);
+    Ok((kb_to_mb(rss_kb), process_threads))
+}
+
+fn read_status_kb(status: &str, key: &str) -> Option<u64> {
+    status.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name == key).then(|| {
+            value
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse::<u64>().ok())
+        })?
+    })
+}
+
+fn read_load_average() -> (Option<f64>, Option<f64>, Option<f64>) {
+    let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg") else {
+        return (None, None, None);
+    };
+    let mut parts = loadavg.split_whitespace();
+    (
+        parts.next().and_then(|value| value.parse::<f64>().ok()),
+        parts.next().and_then(|value| value.parse::<f64>().ok()),
+        parts.next().and_then(|value| value.parse::<f64>().ok()),
+    )
+}
+
+fn read_cpu_model_name() -> Option<String> {
+    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    for key in ["model name", "Hardware", "Processor"] {
+        if let Some(value) = cpuinfo.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.trim() == key).then(|| value.trim().to_string())
+        }) {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn kb_to_mb(value: u64) -> f64 {
+    value as f64 / 1024.0
+}
+
 async fn mark_command_dispatched(state: &Arc<AppState>, command: &SessionCommand) {
     let mut ledger = state.current_command_ledger.lock().await;
     if let Some(record) = ledger

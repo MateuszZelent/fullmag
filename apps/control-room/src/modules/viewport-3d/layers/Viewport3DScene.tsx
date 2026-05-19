@@ -120,6 +120,11 @@ interface Viewport3DGridSpec {
   size: number;
 }
 
+interface Viewport3DViewportSize {
+  height: number;
+  width: number;
+}
+
 const FALLBACK_GRID_SIZE = 1e-6;
 const PREFERRED_GRID_CELL_SIZE = 1e-6;
 const GRID_SIZE_UNIVERSE_LIMIT_SCALE = 1.5;
@@ -172,11 +177,16 @@ function resolveViewport3DGridCellSize(maxGridSize: number): number {
 
 export function resolveViewport3DOrthographicZoom(
   bounds: Viewport3DBounds | null,
+  viewportSize: Viewport3DViewportSize,
 ): number {
   const span = bounds
     ? Math.max(...bounds.size, bounds.radius * 2, 1e-12)
     : FALLBACK_GRID_SIZE;
-  return clamp(2 / (span * 1.6), 1e-3, 1e12);
+  const viewportSpan = Math.max(
+    2,
+    Math.min(viewportSize.width, viewportSize.height),
+  );
+  return clamp(viewportSpan / (span * 1.6), 1e-3, 1e12);
 }
 
 export function applyViewport3DOrthographicCameraPose(
@@ -256,11 +266,12 @@ export function Viewport3DScene({
   visualProfileId,
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
+  const viewportSize = useThree((state) => state.size);
   const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
   const cameraFit = useMemo(() => resolveViewport3DCameraFit(bounds), [bounds]);
   const orthographicZoom = useMemo(
-    () => resolveViewport3DOrthographicZoom(bounds),
-    [bounds],
+    () => resolveViewport3DOrthographicZoom(bounds, viewportSize),
+    [bounds, viewportSize],
   );
   const materialProfile = useMemo(
     () =>

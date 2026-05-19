@@ -103,8 +103,8 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
         "visual demag field copy should succeed");
     check(out[0] == 11.0 && out[5] == 16.0, "demag copy must prefer visual field");
     check(
-        ctx.transfer_audit.counters.d2h_bytes == sizeof(out) &&
-            ctx.transfer_audit.counters.host_read_count == 1,
+        ctx.transfer_audit.audit.counters.d2h_bytes == sizeof(out) &&
+            ctx.transfer_audit.audit.counters.host_read_count == 1,
         "observable copy must record D2H transfer audit");
 
     check(
@@ -129,7 +129,7 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     ctx.demag.h_xyz.assign(6, 8.0);
     ctx.effective_field.h_xyz.assign(6, 7.0);
     ctx.thermal_brown.h_xyz.assign(6, 6.0);
-    ctx.stepper.fsal_valid = true;
+    ctx.stepper.workspace.fsal_valid = true;
     ctx.adaptive_dt.prev_error_norm = 0.5;
     ctx.demag.cache_valid = true;
     ctx.demag.last_refresh_time = 4.0;
@@ -147,7 +147,7 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
             FULLMAG_FEM_OK,
         "host-resident magnetization upload should succeed");
     check(ctx.state.m_xyz == std::vector<double>(m_xyz, m_xyz + 6), "magnetization copied");
-    check(!ctx.stepper.fsal_valid, "FSAL cache invalidated");
+    check(!ctx.stepper.workspace.fsal_valid, "FSAL cache invalidated");
     check(ctx.adaptive_dt.prev_error_norm == 1.0, "adaptive previous error reset");
     check(!ctx.demag.cache_valid, "demag cache invalidated");
     check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
@@ -161,8 +161,8 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
         check(value == 0.0, "thermal field zeroed on upload");
     }
     check(
-        ctx.transfer_audit.counters.h2d_bytes == sizeof(m_xyz) &&
-            ctx.transfer_audit.counters.host_write_count == 1,
+        ctx.transfer_audit.audit.counters.h2d_bytes == sizeof(m_xyz) &&
+            ctx.transfer_audit.audit.counters.host_write_count == 1,
         "host-resident upload must record H2D transfer audit");
 }
 

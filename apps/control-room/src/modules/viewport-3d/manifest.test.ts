@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { ALL_MODULES } from "@/modules";
 
 import { viewport3dManifest } from "./manifest";
@@ -106,6 +107,39 @@ describe("viewport3dManifest", () => {
     );
     expect(queuePatch).toHaveBeenCalledWith({
       camera: { projection: "orthographic" },
+    });
+  });
+
+  it("toggles projection from the local store when resource data is stale", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+    const queuePatch = vi.fn();
+    const context = {
+      source: "test",
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: {
+          camera: { projection: "perspective" },
+        },
+      },
+      visualizationSync: { queuePatch },
+    } as never;
+
+    await registry.execute("view-projection", context);
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "orthographic",
+    );
+    expect(registry.isActive("view-projection", context)).toBe(true);
+
+    await registry.execute("view-projection", context);
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "perspective",
+    );
+    expect(registry.isActive("view-projection", context)).toBe(false);
+    expect(queuePatch).toHaveBeenNthCalledWith(1, {
+      camera: { projection: "orthographic" },
+    });
+    expect(queuePatch).toHaveBeenNthCalledWith(2, {
+      camera: { projection: "perspective" },
     });
   });
 

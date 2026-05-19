@@ -154,19 +154,19 @@ int main() {
     ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     ctx.exchange.enabled = true;
     ctx.demag.enabled = false;
-    ctx.gpu_state.initialized = true;
-    ctx.gpu_state.node_count = 8;
-    ctx.gpu_state.dof_len = 24;
-    ctx.gpu_state.stage_count = 2;
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = false;
-    ctx.gpu_exchange.lumped_mass_ready = false;
+    ctx.gpu_state.device.initialized = true;
+    ctx.gpu_state.device.node_count = 8;
+    ctx.gpu_state.device.dof_len = 24;
+    ctx.gpu_state.device.stage_count = 2;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
     std::string reason;
     const auto no_allocation = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(!no_allocation.enabled, "GPU RK must not enable without allocated FemGpuState");
     check(reason.find("FemGpuState") != std::string::npos, "missing FemGpuState rejection reason");
 
-    ctx.gpu_state.allocated = true;
+    ctx.gpu_state.device.allocated = true;
     ctx.demag.enabled = true;
     reason.clear();
     const auto with_demag = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
@@ -196,8 +196,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.dmi.interfacial_enabled = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -210,8 +210,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.dmi.bulk_enabled = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -319,8 +319,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.stt.zhang_li_enabled = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -363,8 +363,8 @@ int main() {
         blocked.magnetoelastic.enabled = true;
         blocked.magnetoelastic.uniform_strain = false;
         blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
-        blocked.gpu_state.mel_strain_uploaded = true;
-        blocked.gpu_state.mel_strain_voigt_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
+        blocked.gpu_state.device.mel_strain_uploaded = true;
+        blocked.gpu_state.device.mel_strain_voigt_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
         reason.clear();
         const auto mel_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -511,10 +511,10 @@ int main() {
         reason.find("legacy sparse exchange metadata") != std::string::npos,
         "MFEM+CUDA build must first require captured legacy sparse exchange metadata");
 
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = true;
-    ctx.gpu_exchange.legacy_sparse_rows = 8;
-    ctx.gpu_exchange.legacy_sparse_cols = 8;
-    ctx.gpu_exchange.legacy_sparse_nnz = 32;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = 8;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = 8;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = 32;
     reason.clear();
     const auto missing_mass_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -524,7 +524,7 @@ int main() {
         reason.find("lumped mass") != std::string::npos,
         "MFEM+CUDA build must require lumped mass metadata before GPU exchange");
 
-    ctx.gpu_exchange.lumped_mass_ready = true;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
     reason.clear();
     const auto runtime_coefficients_blocked_plan =
         fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
@@ -535,7 +535,7 @@ int main() {
         reason.find("runtime coefficients") != std::string::npos,
         "MFEM+CUDA build must require runtime coefficients before GPU exchange");
 
-    ctx.gpu_state.runtime_coefficients_uploaded = true;
+    ctx.gpu_state.device.runtime_coefficients_uploaded = true;
     reason.clear();
     const auto upload_blocked_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -545,11 +545,11 @@ int main() {
         reason.find("device-resident CSR/mass upload") != std::string::npos,
         "MFEM+CUDA build must expose device-resident CSR/mass upload blocker");
 
-    ctx.gpu_state.exchange_legacy_sparse_uploaded = true;
+    ctx.gpu_state.device.exchange_legacy_sparse_uploaded = true;
     reason.clear();
-    ctx.gpu_state.exchange_legacy_sparse_rows = 8;
-    ctx.gpu_state.exchange_legacy_sparse_cols = 8;
-    ctx.gpu_state.exchange_legacy_sparse_nnz = 32;
+    ctx.gpu_state.device.exchange_legacy_sparse_rows = 8;
+    ctx.gpu_state.device.exchange_legacy_sparse_cols = 8;
+    ctx.gpu_state.device.exchange_legacy_sparse_nnz = 32;
     const auto spmv_ready_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
         spmv_ready_plan.stage_exchange_device_resident,

@@ -174,9 +174,9 @@ void validation_matrix_names_mfem_stack_fixture_statuses() {
         read_text_file(root / "docs" / "validation" / "fem_cpu_validation_matrix.md");
 
     check(
-        matrix.find("| Exchange | sinusoidal mode | convergence of `H_ex` against analytic Laplacian | runtime-open (requires MFEM stack) |") !=
+        matrix.find("| Exchange | sinusoidal mode | convergence of helical `E_ex = A k^2 V` with finite `H_ex` diagnostic | scripted in `tests/fem_exchange_validation/sinusoidal_mode.py`; representative `fullmag --headless` finest-mesh stage passes on managed runtime; full CSV sweep requires a PyO3 `_fullmag_core` built with MFEM/libCEED |") !=
             std::string::npos,
-        "validation matrix must keep exchange sinusoidal fixture runtime-open until MFEM stack is available");
+        "validation matrix must map exchange sinusoidal fixture to its scripted runtime gate");
     check(
         matrix.find("| Demag Poisson | uniformly magnetized sphere | `H_demag ~= -M/3` inside | covered by `tests/fem_demag_validation/sphere_validation.py` (requires MFEM stack) |") !=
             std::string::npos,
@@ -186,12 +186,68 @@ void validation_matrix_names_mfem_stack_fixture_statuses() {
             std::string::npos,
         "validation matrix must map Poisson airbox sweep fixture to the scripted runtime gate");
     check(
-        matrix.find("| Demag FEM/BEM | body-only sphere or ellipsoid | demag factor agreement | runtime-open (requires MFEM stack) |") !=
+        matrix.find("| Demag FEM/BEM | body-only sphere | demag factor agreement | scripted in `tests/fem_demag_validation/fem_bem_body_validation.py`; body-only mesh materializes and source CLI diagnostic passes through Fredkin-Koehler, but active run remains runtime-open until the launcher/PyO3 core reports MFEM/libCEED CPU availability |") !=
             std::string::npos,
-        "validation matrix must keep FEM/BEM demag factor fixture runtime-open until MFEM stack is available");
+        "validation matrix must map FEM/BEM demag factor fixture to its scripted runtime gate and runtime blocker");
     check(
-        matrix.find(".fullmag/runtimes/fem-gpu-host/include") != std::string::npos,
-        "validation matrix must name the missing MFEM runtime include blocker");
+        matrix.find("OpenMPI headers/runtime components, CUDA headers/libraries referenced") !=
+            std::string::npos &&
+            matrix.find("relocated `MFEMConfig.cmake` / `MFEMTargets.cmake` metadata") !=
+                std::string::npos,
+        "validation matrix must document the regenerated relocatable MFEM host runtime bundle");
+}
+
+void validation_matrix_names_periodic_fixture_coverage() {
+    const std::filesystem::path root = repo_root();
+    const std::string matrix =
+        read_text_file(root / "docs" / "validation" / "fem_cpu_validation_matrix.md");
+
+    check(
+        matrix.find("| Periodic FEM | exchange periodic pair fixture | class-consistent field across periodic nodes | local class/reduction coverage by `fem_mesh_contract` and `fem_aos_field_contract`; active exchange numerical periodic fixture requires MFEM stack |") !=
+            std::string::npos,
+        "validation matrix must map periodic exchange pair fixture to local class/reduction coverage and active-MFEM blocker");
+}
+
+void progress_report_marks_interaction_docs_gate_closed() {
+    const std::filesystem::path root = repo_root();
+    const std::string progress = read_text_file(
+        root / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Dodac dokumentacje fizyczna u gory plikow solvera | zrobione kontraktowo dla aktywnych interakcji |") !=
+            std::string::npos,
+        "progress report must mark per-interaction physical docs/docstrings as contract-covered");
+    check(
+        progress.find("`fem_interaction_docs_contract`") != std::string::npos &&
+            progress.find("boundary docstring") != std::string::npos,
+        "progress report must cite the interaction docs contract and boundary docstring coverage");
+}
+
+void progress_report_marks_local_interaction_split_contract_covered() {
+    const std::filesystem::path root = repo_root();
+    const std::string progress = read_text_file(
+        root / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Wydzielic lokalne oddzialywania (`anis`, `cubic`, `DMI`, `thermal`, `STT`, `Oersted`) | zrobione kontraktowo |") !=
+            std::string::npos,
+        "progress report must mark local interaction split as contract-covered");
+    check(
+        progress.find("`fem_zeeman_contract`") != std::string::npos &&
+            progress.find("`fem_anisotropy_contract`") != std::string::npos &&
+            progress.find("`fem_dmi_contract`") != std::string::npos &&
+            progress.find("`fem_thermal_brown_contract`") != std::string::npos &&
+            progress.find("`fem_stt_contract`") != std::string::npos &&
+            progress.find("`fem_oersted_contract`") != std::string::npos &&
+            progress.find("`fem_magnetoelastic_contract`") != std::string::npos &&
+            progress.find("`fem_effective_field_contract`") != std::string::npos,
+        "progress report must cite local-interaction contract gates");
+    check(
+        progress.find("dalsza walidacja runtime MFEM-stack i fixture fizyczne pozostaje osobna") !=
+            std::string::npos,
+        "progress report must keep active runtime/fixture validation separate from module split coverage");
 }
 
 void interaction_headers_declare_ownership_boundaries() {
@@ -223,6 +279,9 @@ int main() {
     validation_matrix_names_closed_fixture_owners();
     validation_matrix_names_leaf_header_gate_rows();
     validation_matrix_names_mfem_stack_fixture_statuses();
+    validation_matrix_names_periodic_fixture_coverage();
+    progress_report_marks_interaction_docs_gate_closed();
+    progress_report_marks_local_interaction_split_contract_covered();
     interaction_headers_declare_ownership_boundaries();
     return 0;
 }

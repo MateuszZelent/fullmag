@@ -77,12 +77,12 @@ bool initialize_exchange_operator_mfem(
     exchange_form->Finalize();
 
     const auto &exchange_spmat = exchange_form->SpMat();
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = true;
-    ctx.gpu_exchange.legacy_sparse_rows =
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Height()));
-    ctx.gpu_exchange.legacy_sparse_cols =
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Width()));
-    ctx.gpu_exchange.legacy_sparse_nnz =
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz =
         static_cast<uint64_t>(std::max(0, exchange_spmat.NumNonZeroElems()));
 
     mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
@@ -97,7 +97,7 @@ bool initialize_exchange_operator_mfem(
         *mass_lumped,
         *inv_lumped_mass,
         ctx.integration_weights.mfem_lumped_mass);
-    ctx.gpu_exchange.lumped_mass_ready =
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready =
         ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
 
     const bool has_nonzero_lumped_mass = std::any_of(

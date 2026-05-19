@@ -22,6 +22,7 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
   useVisualizationStateResource,
@@ -427,7 +428,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const sessionStatus = useSessionStatus();
   const scene = useSceneResource({ enabled: Boolean(target) });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: Boolean(target),
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), sessionStatus.data),
   });
   const [feedback, setFeedback] = useState<string | null>(null);
   const pending = false;

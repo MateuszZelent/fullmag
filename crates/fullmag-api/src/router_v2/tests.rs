@@ -347,6 +347,60 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
     }
 }
 
+fn sample_scoped_mesh_statistics() -> serde_json::Value {
+    serde_json::json!({
+        "mesh_name": "scoped-test-mesh",
+        "quality_source": "gmsh",
+        "global": {
+            "element_count": 2,
+            "edge_length": { "min": 1.0e-9, "mean": 2.0e-9, "max": 4.0e-9, "std": 0.5e-9 },
+            "volume": { "min": 1.0e-27, "mean": 2.0e-27, "max": 3.0e-27, "std": 0.2e-27, "ratio": 3.0 },
+            "sicn": { "min": 0.2, "mean": 0.8, "p05": 0.3, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 2 }] },
+            "gamma": { "min": 0.1, "mean": 0.7, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 2 }] }
+        },
+        "scopes": [
+            {
+                "scope_id": "marker:0",
+                "kind": "airbox",
+                "label": "Airbox",
+                "role": "air",
+                "marker": 0,
+                "element_count": 5,
+                "edge_length": { "min": 5.0e-9, "mean": 8.0e-9, "max": 1.0e-8, "std": 1.0e-9 },
+                "volume": { "min": 1.0e-25, "mean": 2.0e-25, "max": 4.0e-25, "std": 0.4e-25, "ratio": 4.0 },
+                "sicn": { "min": 0.5, "mean": 0.85, "p05": 0.55, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 5 }] },
+                "gamma": { "min": 0.4, "mean": 0.9, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 5 }] }
+            },
+            {
+                "scope_id": "marker:7",
+                "kind": "domain",
+                "label": "Domain 7",
+                "role": "domain",
+                "marker": 7,
+                "element_count": 3,
+                "edge_length": { "min": 1.0e-9, "mean": 2.0e-9, "max": 4.0e-9, "std": 0.5e-9 },
+                "volume": { "min": 1.0e-27, "mean": 2.0e-27, "max": 3.0e-27, "std": 0.2e-27, "ratio": 3.0 },
+                "sicn": { "min": 0.2, "mean": 0.8, "p05": 0.3, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 3 }] },
+                "gamma": { "min": 0.1, "mean": 0.7, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 3 }] }
+            }
+        ],
+        "worst_elements": [
+            { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+            { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+        ],
+        "worst_elements_by_metric": {
+            "gamma": [
+                { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+                { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+            ],
+            "sicn": [
+                { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+                { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+            ]
+        }
+    })
+}
+
 /// Minimal `AppState` with no active live session.
 fn test_app_state() -> Arc<AppState> {
     let (control_events_tx, _rx) = watch::channel(0u64);
@@ -3347,6 +3401,94 @@ async fn mesh_summary_returns_current_mesh_workspace() {
     assert_eq!(json["revision"], 11);
     assert_eq!(json["mesh_summary"]["nodes"], 12);
     assert_eq!(json["mesh_quality_summary"]["min_quality"], 0.82);
+}
+
+#[tokio::test]
+async fn mesh_object_quality_returns_normalized_scope_statistics() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_per_object_targets": {
+                "body": { "marker": 7, "maximum_element_size": 2e-9 }
+            },
+            "mesh_statistics": sample_scoped_mesh_statistics()
+        }));
+        snapshot.mesh_revision = 21;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/objects/body/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 21);
+    assert_eq!(json["quality"]["marker"], 7);
+    assert_eq!(json["quality"]["global"]["marker"], 7);
+    assert_eq!(json["quality"]["global"]["element_count"], 3);
+    assert_eq!(
+        json["quality"]["global"]["sicn"]["histogram"][0]["count"],
+        3
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"][0]["scope_label"],
+        "Domain 7"
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn mesh_universe_quality_returns_airbox_scope_statistics() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_airbox_target": { "maximum_element_size": 1e-8 },
+            "mesh_statistics": sample_scoped_mesh_statistics()
+        }));
+        snapshot.mesh_revision = 22;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/universe/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 22);
+    assert_eq!(json["quality"]["global"]["kind"], "airbox");
+    assert_eq!(json["quality"]["global"]["marker"], 0);
+    assert_eq!(json["quality"]["global"]["element_count"], 5);
+    assert_eq!(
+        json["quality"]["global"]["gamma"]["histogram"][0]["count"],
+        5
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"][0]["scope_label"],
+        "Airbox"
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"].as_array().unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -8210,6 +8352,47 @@ async fn gpu_telemetry_endpoint_returns_contract_shape() {
 }
 
 #[tokio::test]
+async fn cpu_telemetry_endpoint_returns_contract_shape() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/cpu")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let status = json["status"]
+        .as_str()
+        .expect("cpu telemetry status should be a string");
+    assert!(
+        matches!(status, "available" | "unavailable"),
+        "unexpected cpu telemetry status: {status}"
+    );
+    assert!(
+        json["sample_time_unix_ms"].as_u64().is_some(),
+        "cpu telemetry should include sample_time_unix_ms"
+    );
+    assert!(
+        json["logical_cpus"].as_u64().is_some(),
+        "cpu telemetry should include logical_cpus"
+    );
+    assert!(
+        json["utilization_cpu_percent"].as_f64().is_some(),
+        "cpu telemetry should include host utilization"
+    );
+    assert!(
+        json["process_cpu_percent"].as_f64().is_some(),
+        "cpu telemetry should include process utilization"
+    );
+}
+
+#[tokio::test]
 async fn artifacts_list_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -10217,6 +10400,7 @@ fn openapi_v2_exposes_professional_session_tree() {
         "/v2/sessions/current/workspace/layout",
         "/v2/sessions/current/analysis/eigenmodes/spectrum",
         "/v2/sessions/current/persistence/imports",
+        "/v2/sessions/current/diagnostics/cpu",
         "/v2/sessions/current/diagnostics/gpu",
     ] {
         assert!(paths.contains_key(path), "OpenAPI v2 missing {path}");

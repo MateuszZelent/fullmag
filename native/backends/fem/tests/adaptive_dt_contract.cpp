@@ -63,6 +63,10 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    return fem_source_root().parent_path().parent_path().parent_path();
+}
+
 void adaptive_dt_controller_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
@@ -251,6 +255,25 @@ void adaptive_plan_import_validates_and_copies_config() {
         "adaptive max_reject error string");
 }
 
+void progress_report_marks_adaptive_validation_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Dodac pelna walidacje adaptive RK | zrobione kontraktowo |") != std::string::npos,
+        "progress report must mark adaptive RK validation as contractually covered");
+    check(
+        progress.find("`fem_adaptive_dt_contract`") != std::string::npos &&
+            progress.find("PI-controllera") != std::string::npos &&
+            progress.find("komponentowej normy bledu") != std::string::npos &&
+            progress.find("plan importu") != std::string::npos,
+        "progress report must cite the adaptive DT gate and covered validation surfaces");
+    check(
+        progress.find("Aktywna runtime kwalifikacja nadal idzie osobnymi fixture/benchmarkami") != std::string::npos,
+        "progress report must keep runtime qualification separate from contract coverage");
+}
+
 } // namespace
 
 int main() {
@@ -260,5 +283,6 @@ int main() {
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_scales_each_aos_component();
     adaptive_plan_import_validates_and_copies_config();
+    progress_report_marks_adaptive_validation_contract_covered();
     return 0;
 }

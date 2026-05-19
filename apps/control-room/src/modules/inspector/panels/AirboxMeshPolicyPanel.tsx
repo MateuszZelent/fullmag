@@ -12,6 +12,9 @@ import {
   useMeshUniverseReportResource,
   useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { shouldLoadRuntimeMeshSummary } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -22,11 +25,13 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   asRecord,
+  formatCount,
   formatLength,
   JsonResourceSection,
   MeshResourceFields,
   recordField,
 } from "./MeshResourceView";
+import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 import {
   AIRBOX_GRADING_MODES,
   buildAirboxMeshPolicyReplaceRequest,
@@ -55,10 +60,17 @@ function errorMessage(error: unknown): string {
 export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   void selection;
   const { api, resources } = useKernel();
+  const sessionStatus = useSessionStatus();
   const policy = useUniverseMeshPolicyResource();
-  const report = useMeshUniverseReportResource();
-  const quality = useMeshUniverseQualityResource();
-  const summary = useMeshSummaryResource();
+  const report = useMeshUniverseReportResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
+  const quality = useMeshUniverseQualityResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
+  const summary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
   const baseDraft = useMemo(
     () => draftFromUniverseMeshPolicyResource(resource),
@@ -74,6 +86,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const effectiveAirbox = asRecord(summary.data?.effective_airbox_target);
   const qualityRecord = asRecord(quality.data?.quality);
+  const qualityStatistics = normalizeMeshQualityStatistics(quality.data?.quality);
 
   function updateDraft(patch: Partial<AirboxMeshPolicyDraft>): void {
     setDraftState((current) => ({
@@ -110,7 +123,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "controls", "target", "transactions"]}
+      defaultValue={["summary", "controls", "target", "quality-statistics", "transactions"]}
     >
       <InspectorSection value="summary" title="Universe / Airbox Mesh Policy" badge={policy.status} collapsible defaultCollapsed={false}>
         <FieldRow label="Revision" value={String(resource.revision)} />
@@ -181,6 +194,16 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
             },
           ]}
         />
+      </InspectorSection>
+
+      <InspectorSection
+        value="quality-statistics"
+        title="Airbox Quality Distributions"
+        badge={qualityStatistics ? formatCount(qualityStatistics.elementCount) : "missing"}
+        collapsible
+        defaultCollapsed={false}
+      >
+        <MeshQualityStatisticsView statistics={qualityStatistics} />
       </InspectorSection>
 
       <InspectorSection value="advanced" title="Advanced JSON" collapsible defaultCollapsed={true}>

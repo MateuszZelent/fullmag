@@ -10,12 +10,13 @@ export interface StatusBarRunReadback {
 export interface StatusBarEngineModel {
   detail: string;
   label: string;
-  state: "pending" | "resolved";
+  state: "active" | "pending" | "resolved";
   title: string;
 }
 
 export function buildStatusBarEngineModel(
   run: StatusBarRunReadback | null | undefined,
+  solverState?: string | null,
 ): StatusBarEngineModel {
   if (!run) {
     return {
@@ -45,7 +46,12 @@ export function buildStatusBarEngineModel(
       : hasResolvedRuntime
         ? "runtime resolved"
         : pendingRuntimeDetail(requestedBackend, requestedDevice));
-  const state = hasResolvedRuntime ? "resolved" : "pending";
+  const state =
+    hasResolvedRuntime && solverState?.toLowerCase() === "running"
+      ? "active"
+      : hasResolvedRuntime
+        ? "resolved"
+        : "pending";
 
   return {
     detail,

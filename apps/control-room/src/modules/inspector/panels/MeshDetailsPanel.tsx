@@ -19,7 +19,13 @@ import {
   useMeshUniverseReportResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import {
+  shouldLoadRuntimeMeshBuild,
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+} from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
@@ -447,6 +453,46 @@ function MeshQualityStatisticsSection({
   );
 }
 
+function formatSizeFieldParam(key: string, value: unknown): string {
+  const normalizedKey = key.toLowerCase();
+  const likelyLength =
+    normalizedKey.includes("size") ||
+    normalizedKey.includes("target") ||
+    normalizedKey.includes("hmin") ||
+    normalizedKey.includes("hmax") ||
+    normalizedKey === "lc" ||
+    normalizedKey.endsWith("_lc") ||
+    normalizedKey.includes("radius") ||
+    normalizedKey.includes("distance") ||
+    normalizedKey.includes("thickness");
+  return `${key} ${likelyLength ? formatLength(value) : formatValue(value)}`;
+}
+
+function sizeFieldParamSummary(params: unknown): string | null {
+  const record = asRecord(params);
+  if (!record) return null;
+  const preferredKeys = [
+    "hmin",
+    "hmax",
+    "target_size",
+    "size",
+    "lc",
+    "min_size",
+    "max_size",
+    "thickness",
+    "distance",
+    "growth_rate",
+  ];
+  const entries = preferredKeys
+    .filter((key) => record[key] !== undefined)
+    .map((key) => formatSizeFieldParam(key, record[key]));
+  if (entries.length > 0) return entries.slice(0, 4).join(" / ");
+  return Object.entries(record)
+    .slice(0, 4)
+    .map(([key, value]) => formatSizeFieldParam(key, value))
+    .join(" / ");
+}
+
 function RealizedSizeFieldsSection({ sizeFields }: { sizeFields: readonly unknown[] }) {
   return (
     <InspectorSection value="size-fields" title="Realized Size Fields" badge={`${sizeFields.length}`} collapsible defaultCollapsed={false}>
@@ -458,6 +504,9 @@ function RealizedSizeFieldsSection({ sizeFields }: { sizeFields: readonly unknow
             const reason = recordField(record, "reason");
             const source = recordField(record, "source");
             const status = recordField(record, "status");
+            const paramSummary = sizeFieldParamSummary(
+              recordField(record, "params"),
+            );
             return (
               <div
                 key={meshDetailKey("size-field", [kind, status, reason, source])}
@@ -466,7 +515,9 @@ function RealizedSizeFieldsSection({ sizeFields }: { sizeFields: readonly unknow
               >
                 <strong>{formatValue(kind)}</strong>
                 <span>{formatValue(status)}</span>
-                <small>{formatValue(reason ?? source ?? "applied")}</small>
+                <small>
+                  {paramSummary ?? formatValue(reason ?? source ?? "applied")}
+                </small>
               </div>
             );
           })}
@@ -560,20 +611,45 @@ function ThinFilmDiagnosticsSection({
 
 export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
+  const sessionStatus = useSessionStatus();
   const scene = useSceneResource();
-  const summary = useMeshSummaryResource();
-  const capabilities = useMeshCapabilitiesResource();
+  const summary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
+  const capabilities = useMeshCapabilitiesResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
   const semantics = useMeshSemanticsResource();
-  const activeBuild = useMeshBuildCurrent();
-  const buildHistory = useMeshBuildHistoryResource();
-  const latestBuild = useMeshBuildLatestSuccessful();
-  const manifest = useMeshSharedDomainManifestResource();
-  const sharedReport = useMeshSharedDomainReportResource();
-  const sharedQuality = useMeshSharedDomainQualityResource();
-  const qualityGates = useMeshSharedDomainQualityGatesResource();
-  const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource();
-  const universeReport = useMeshUniverseReportResource();
-  const universeQuality = useMeshUniverseQualityResource();
+  const activeBuild = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+  });
+  const buildHistory = useMeshBuildHistoryResource({
+    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+  });
+  const latestBuild = useMeshBuildLatestSuccessful({
+    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+  });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const sharedReport = useMeshSharedDomainReportResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const sharedQuality = useMeshSharedDomainQualityResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const qualityGates = useMeshSharedDomainQualityGatesResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const universeReport = useMeshUniverseReportResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
+  const universeQuality = useMeshUniverseQualityResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
 
   const meshSummary = asRecord(summary.data?.mesh_summary);
   const meshStatistics =
@@ -633,7 +709,10 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   ).length;
 
   const buildContext = useMemo(
-    () => createCommandContext("ribbon", kernel),
+    () =>
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "mesh-details",
+      }),
     [kernel],
   );
   const selectWorstElement = useCallback(

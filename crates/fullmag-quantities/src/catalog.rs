@@ -890,7 +890,10 @@ mod tests {
 
         for (id, shape, unit) in expected {
             let spec = quantity_spec(id).expect("mechanical quantity should be catalogued");
-            assert_eq!(normalize_quantity_id(id).expect("known quantity").as_str(), id);
+            assert_eq!(
+                normalize_quantity_id(id).expect("known quantity").as_str(),
+                id
+            );
             assert_eq!(spec.shape, shape);
             assert_eq!(spec.unit, unit);
             assert!(!spec.interactive_preview);

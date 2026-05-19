@@ -14,6 +14,9 @@ class Exchange:
 
 _DEMAG_CANONICAL = frozenset({
     "auto",
+    "bem",
+    "fmm",
+    "fredkin_koehler",
     "poisson_dirichlet",
     "poisson_robin",
 })

@@ -1,4 +1,4 @@
-interface MeshQualityHistogramBin {
+export interface MeshQualityHistogramBin {
   count: number;
   fraction: number;
   label: string;
@@ -28,6 +28,17 @@ export interface MeshWorstElement {
   volume: number | null;
 }
 
+export interface MeshSizeDistribution {
+  histogram: MeshQualityHistogramBin[];
+  id: "edge_length" | "volume";
+  label: string;
+  max: number | null;
+  mean: number | null;
+  min: number | null;
+  ratio: number | null;
+  std: number | null;
+}
+
 export interface MeshQualityStatistics {
   edgeLength: {
     max: number | null;
@@ -39,6 +50,7 @@ export interface MeshQualityStatistics {
   meshName: string | null;
   metrics: MeshQualityMetric[];
   qualitySource: string | null;
+  sizeDistributions: MeshSizeDistribution[];
   volumeRatio: number | null;
   warnings: string[];
   worstElements: MeshWorstElement[];
@@ -74,9 +86,17 @@ function metricLabel(id: "gamma" | "sicn"): string {
   return id === "sicn" ? "SICN" : "Gamma";
 }
 
+function formatBinNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs > 0 && (abs < 1e-3 || abs >= 1e4)) {
+    return value.toExponential(2);
+  }
+  return value.toFixed(3);
+}
+
 function formatBinLabel(lo: number | null, hi: number | null): string {
   if (lo === null || hi === null) return "unbounded";
-  return `${lo.toFixed(3)} to ${hi.toFixed(3)}`;
+  return `${formatBinNumber(lo)} to ${formatBinNumber(hi)}`;
 }
 
 function normalizeHistogram(
@@ -154,6 +174,39 @@ function normalizeMetric(
   };
 }
 
+function normalizeSizeDistribution(
+  id: MeshSizeDistribution["id"],
+  label: string,
+  value: unknown,
+): MeshSizeDistribution | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const min = asNumber(record.min);
+  const max = asNumber(record.max);
+  const histogram = normalizeHistogram(record.histogram, min ?? 0, max ?? 1);
+  const mean = asNumber(record.mean);
+  const std = asNumber(record.std);
+  const ratio = asNumber(record.ratio);
+  const hasDistribution =
+    histogram.length > 0 ||
+    min !== null ||
+    mean !== null ||
+    max !== null ||
+    std !== null ||
+    ratio !== null;
+  if (!hasDistribution) return null;
+  return {
+    histogram,
+    id,
+    label,
+    max,
+    mean,
+    min,
+    ratio,
+    std,
+  };
+}
+
 function normalizeWorstElements(value: unknown): MeshWorstElement[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
@@ -185,6 +238,16 @@ export function normalizeMeshQualityStatistics(
     normalizeMetric("sicn", global.sicn),
     normalizeMetric("gamma", global.gamma),
   ].filter((metric): metric is MeshQualityMetric => metric !== null);
+  const edgeLengthDistribution = normalizeSizeDistribution(
+    "edge_length",
+    "Edge length",
+    global.edge_length,
+  );
+  const volumeDistribution = normalizeSizeDistribution(
+    "volume",
+    "Element volume",
+    global.volume,
+  );
   const warnings = Array.isArray(global.warnings)
     ? global.warnings.flatMap((warning) => {
         const text = asString(warning);
@@ -205,6 +268,13 @@ export function normalizeMeshQualityStatistics(
     meshName: asString(record.mesh_name),
     metrics,
     qualitySource: asString(record.quality_source),
+    sizeDistributions: [
+      edgeLengthDistribution,
+      volumeDistribution,
+    ].filter(
+      (distribution): distribution is MeshSizeDistribution =>
+        distribution !== null,
+    ),
     volumeRatio: asNumber(asRecord(global.volume)?.ratio),
     warnings,
     worstElements: normalizeWorstElements(record.worst_elements),

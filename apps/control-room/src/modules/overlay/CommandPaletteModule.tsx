@@ -208,9 +208,6 @@ export function CommandPaletteView({
 }
 
 export default function CommandPaletteModule({ kernel }: ModuleProps) {
-  const runtimeResourceData = useStudyRuntimeCommandResourceData();
-  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
-  const commandDetail = useCommandDetailResource(selectedCommandId);
   const {
     close,
     isOpen,
@@ -229,13 +226,6 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     },
     [commandVersion, kernel.commands],
   );
-  const commandContext = useMemo(
-    () =>
-      createCommandContext("palette", kernel, {
-        resourceData: runtimeResourceData,
-      }),
-    [kernel, runtimeResourceData],
-  );
 
   useEffect(() => {
     return kernel.bus.on("command:submitted", ({ commandId }) => {
@@ -247,10 +237,52 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
 
   return (
     <>
+      {isOpen ? (
+        <OpenCommandPalette
+          close={close}
+          commands={commands}
+          kernel={kernel}
+          query={query}
+          setQuery={setQuery}
+        />
+      ) : null}
+      <MeshBuildDialog kernel={kernel} />
+      <Viewport3DSettingsDialog />
+    </>
+  );
+}
+
+function OpenCommandPalette({
+  close,
+  commands,
+  kernel,
+  query,
+  setQuery,
+}: {
+  close: () => void;
+  commands: readonly CommandContribution[];
+  kernel: ModuleProps["kernel"];
+  query: string;
+  setQuery: (query: string) => void;
+}) {
+  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const commandDetail = useCommandDetailResource(selectedCommandId);
+  const commandContext = useMemo(
+    () =>
+      createCommandContext("palette", kernel, {
+        resourceData: runtimeResourceData,
+        sourceDetail: "command-palette",
+      }),
+    [kernel, runtimeResourceData],
+  );
+
+  return (
+    <>
       <CommandPaletteView
         commandContext={commandContext}
         commands={commands}
-        isOpen={isOpen}
+        isOpen
         query={query}
         onClose={close}
         onOpenCommandDetail={setSelectedCommandId}
@@ -270,8 +302,6 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
           if (!open) setSelectedCommandId(null);
         }}
       />
-      <MeshBuildDialog kernel={kernel} />
-      <Viewport3DSettingsDialog />
     </>
   );
 }

@@ -77,12 +77,12 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
-    if (!ctx.gpu_state.allocated) {
+    if (!ctx.gpu_state.device.allocated) {
         reason = "GPU RK exchange-only path requires allocated FemGpuState";
         return plan;
     }
-    if (ctx.gpu_state.node_count != ctx.mesh.n_nodes ||
-        ctx.gpu_state.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
+    if (ctx.gpu_state.device.node_count != ctx.mesh.n_nodes ||
+        ctx.gpu_state.device.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
         reason = "GPU RK exchange-only path requires FemGpuState dimensions to match Context";
         return plan;
     }
@@ -91,8 +91,8 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
         return plan;
     }
     if ((ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) &&
-        (!ctx.gpu_state.mesh_geometry_uploaded ||
-            ctx.gpu_state.mesh_element_count != ctx.mesh.n_elements)) {
+        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
+            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK exchange-only path requires device-resident mesh geometry for DMI";
         return plan;
     }
@@ -108,8 +108,8 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
             return plan;
         }
         if (!ctx.magnetoelastic.uniform_strain &&
-            (!ctx.gpu_state.mel_strain_uploaded ||
-                ctx.gpu_state.mel_strain_voigt_len != per_node_strain_len)) {
+            (!ctx.gpu_state.device.mel_strain_uploaded ||
+                ctx.gpu_state.device.mel_strain_voigt_len != per_node_strain_len)) {
             reason = "GPU RK exchange-only path requires device-resident per-node magnetoelastic strain";
             return plan;
         }
@@ -123,8 +123,8 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
         return plan;
     }
     if (ctx.stt.zhang_li_enabled &&
-        (!ctx.gpu_state.mesh_geometry_uploaded ||
-            ctx.gpu_state.mesh_element_count != ctx.mesh.n_elements)) {
+        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
+            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK exchange-only path requires device-resident mesh geometry for Zhang-Li STT";
         return plan;
     }

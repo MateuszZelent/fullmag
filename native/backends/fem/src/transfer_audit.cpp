@@ -207,7 +207,7 @@ fullmag_fem_transfer_audit transfer_audit_snapshot(const TransferAudit &audit)
 
 fullmag_fem_transfer_audit transfer_audit_snapshot(const Context &ctx)
 {
-    return transfer_audit_snapshot(ctx.transfer_audit);
+    return transfer_audit_snapshot(ctx.transfer_audit.audit);
 }
 
 void configure_transfer_audit_from_env(TransferAudit &audit)

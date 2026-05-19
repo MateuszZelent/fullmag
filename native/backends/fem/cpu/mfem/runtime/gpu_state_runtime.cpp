@@ -34,19 +34,19 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     allocate_gpu_state = ctx.mfem_device.device_info_cache.is_gpu_enabled != 0;
 #endif
     if (!gpu_state_initialize(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.mesh.n_nodes,
             ctx.base_plan.integrator,
             allocate_gpu_state,
             ctx.demag.enabled,
             ctx.state.m_xyz.data(),
             static_cast<uint64_t>(ctx.state.m_xyz.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
     if (!gpu_state_upload_runtime_coefficients(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.mesh.node_volumes.data(),
             static_cast<uint64_t>(ctx.mesh.node_volumes.size()),
             ctx.material_fields.Ms_field.data(),
@@ -78,29 +78,29 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.mesh.periodic_reduced_node.size()),
             ctx.mesh.periodic_representative_nodes.data(),
             static_cast<uint64_t>(ctx.mesh.periodic_representative_nodes.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
     if (ctx.magnetoelastic.enabled && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
-                ctx.gpu_state,
+                ctx.gpu_state.device,
                 ctx.magnetoelastic.strain_voigt.data(),
                 static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()),
-                ctx.transfer_audit,
+                ctx.transfer_audit.audit,
                 error)) {
             return gpu_bootstrap_failed(ctx);
         }
     }
     if (!gpu_state_upload_mesh_geometry(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.mesh.nodes_xyz.data(),
             static_cast<uint64_t>(ctx.mesh.nodes_xyz.size()),
             ctx.mesh.elements.data(),
             static_cast<uint64_t>(ctx.mesh.elements.size()),
             ctx.mesh.magnetic_element_mask.data(),
             static_cast<uint64_t>(ctx.mesh.magnetic_element_mask.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
@@ -111,18 +111,18 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
 #endif
     if (!gpu_state_upload_effective_fields_aos(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.exchange.h_xyz.data(),
             ctx.demag.h_xyz.data(),
             ctx.zeeman.h_ext_xyz.data(),
             ctx.effective_field.h_xyz.data(),
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
     if (!gpu_state_upload_local_vector_fields_aos(
-            ctx.gpu_state,
+            ctx.gpu_state.device,
             ctx.anisotropy.h_uniaxial_xyz.data(),
             ctx.anisotropy.h_cubic_xyz.data(),
             ctx.dmi.h_interfacial_xyz.data(),
@@ -131,7 +131,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             ctx.thermal_brown.h_xyz.data(),
             ctx.magnetoelastic.h_xyz.data(),
             static_cast<uint64_t>(ctx.effective_field.h_xyz.size()),
-            ctx.transfer_audit,
+            ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx);
     }

@@ -5,6 +5,7 @@ import type {
   CommandId,
   CommandResult,
 } from "./commandTypes";
+import type { CommandDiagnosticsController } from "./CommandDiagnosticsController";
 
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -14,10 +15,15 @@ export class CommandRegistry {
   private readonly listeners = new Set<() => void>();
   private version = 0;
   private bus: EventBus<KernelEventMap> | null = null;
+  private diagnostics: CommandDiagnosticsController | null = null;
 
   /** Attach bus for event emission. Called once during kernel init. */
   attach(bus: EventBus<KernelEventMap>): void {
     this.bus = bus;
+  }
+
+  attachDiagnostics(diagnostics: CommandDiagnosticsController): void {
+    this.diagnostics = diagnostics;
   }
 
   register(command: CommandContribution): void {
@@ -79,6 +85,13 @@ export class CommandRegistry {
   ): Promise<CommandResult> {
     const cmd = this.commands.get(id);
     if (!cmd) {
+      this.diagnostics?.record({
+        commandId: id,
+        message: `Unknown command: ${id}`,
+        source: context.source,
+        sourceDetail: context.sourceDetail,
+        status: "missing",
+      });
       return { status: "failed", message: `Unknown command: ${id}` };
     }
     const commandContext =
@@ -89,17 +102,39 @@ export class CommandRegistry {
             input,
           };
     if (cmd.isEnabled && !cmd.isEnabled(commandContext)) {
+      const disabledReason =
+        cmd.disabledReason?.(commandContext) ?? `Command disabled: ${id}`;
+      this.diagnostics?.record({
+        commandId: id,
+        disabledReason,
+        message: disabledReason,
+        source: commandContext.source,
+        sourceDetail: commandContext.sourceDetail,
+        status: "disabled",
+      });
       return {
         status: "failed",
-        message:
-          cmd.disabledReason?.(commandContext) ?? `Command disabled: ${id}`,
+        message: disabledReason,
       };
     }
 
+    this.diagnostics?.record({
+      commandId: id,
+      source: commandContext.source,
+      sourceDetail: commandContext.sourceDetail,
+      status: "submitted",
+    });
     this.bus?.emit("command:submitted", { commandId: id });
 
     try {
       const result = await cmd.run(commandContext);
+      this.diagnostics?.record({
+        commandId: id,
+        message: result.message,
+        source: commandContext.source,
+        sourceDetail: commandContext.sourceDetail,
+        status: result.status,
+      });
       this.bus?.emit("command:completed", {
         commandId: id,
         status: result.status,
@@ -111,6 +146,13 @@ export class CommandRegistry {
         error instanceof Error ? error.message : "Unknown error";
       this.bus?.emit("command:completed", {
         commandId: id,
+        status: "failed",
+      });
+      this.diagnostics?.record({
+        commandId: id,
+        message,
+        source: commandContext.source,
+        sourceDetail: commandContext.sourceDetail,
         status: "failed",
       });
       this.notify();

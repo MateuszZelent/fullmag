@@ -91,8 +91,8 @@ bool context_step_explicit_rk_mfem(
     ctx.adaptive_dt.current_dt = dt_seconds;
 
     const size_t dof_len = ctx.state.m_xyz.size();
-    stepper_workspace_allocate(ctx.stepper, dof_len, tab.stages);
-    auto &ws = ctx.stepper;
+    stepper_workspace_allocate(ctx.stepper.workspace, dof_len, tab.stages);
+    auto &ws = ctx.stepper.workspace;
 
     const bool adaptive = (tab.order_est > 0) && ctx.adaptive_dt.enabled;
     double dt = dt_seconds;

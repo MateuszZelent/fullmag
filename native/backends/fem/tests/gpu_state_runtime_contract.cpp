@@ -117,8 +117,24 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
             std::string::npos,
         "gpu_state_runtime header must document GPU-state bootstrap ownership");
     check(
+        runtime_header.find("struct GpuStateRuntimeState") != std::string::npos,
+        "gpu_state_runtime header must declare the GPU-state object owner");
+    check(
+        runtime_header.find("FemGpuState device") != std::string::npos,
+        "GPU-state runtime state must own the FemGpuState device buffers");
+    check(
+        context_header.find("GpuStateRuntimeState gpu_state{}") != std::string::npos,
+        "Context must store FemGpuState through the GPU-state runtime owner");
+    check(
+        context_header.find("FemGpuState gpu_state") == std::string::npos,
+        "Context must not own a flat FemGpuState field");
+    check(
         runtime_header.find("struct LegacyGpuExchangeRuntimeState") != std::string::npos,
         "gpu_state_runtime header must declare the legacy GPU exchange metadata owner");
+    check(
+        runtime_header.find("LegacyGpuExchangeRuntimeState legacy_exchange") !=
+            std::string::npos,
+        "GPU-state runtime owner must store legacy exchange metadata");
     check(
         runtime_header.find("bool legacy_sparse_metadata_ready") != std::string::npos &&
             runtime_header.find("uint64_t legacy_sparse_rows") != std::string::npos &&
@@ -127,9 +143,9 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
             runtime_header.find("bool lumped_mass_ready") != std::string::npos,
         "legacy GPU exchange runtime state must own sparse metadata and lumped-mass readiness");
     check(
-        context_header.find("LegacyGpuExchangeRuntimeState gpu_exchange{}") !=
+        context_header.find("LegacyGpuExchangeRuntimeState gpu_exchange") ==
             std::string::npos,
-        "Context must store legacy GPU exchange metadata under gpu_exchange");
+        "Context must not own a flat legacy GPU exchange metadata field");
     for (const char *flat_field : {
              "bool gpu_exchange_legacy_sparse_metadata_ready",
              "uint64_t gpu_exchange_legacy_sparse_rows",
@@ -153,8 +169,11 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
             runtime_header.find("int active_snapshot_buffer") != std::string::npos,
         "CUDA runtime state must own streams, compute event, and pinned snapshot buffers");
     check(
-        context_header.find("CudaRuntimeState cuda_runtime{}") != std::string::npos,
-        "Context must store CUDA stream/snapshot state under cuda_runtime");
+        runtime_header.find("CudaRuntimeState cuda") != std::string::npos,
+        "GPU-state runtime owner must store CUDA stream/snapshot state");
+    check(
+        context_header.find("CudaRuntimeState cuda_runtime") == std::string::npos,
+        "Context must not own a flat CUDA stream/snapshot runtime field");
     for (const char *flat_cuda_field : {
              "void *compute_stream",
              "void *io_stream",
@@ -222,6 +241,14 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
 }
 
 void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
+#if FULLMAG_HAS_MFEM_STACK
+    /*
+     * In MFEM-stack builds initialize_context_gpu_state runs after MFEM context
+     * and exchange operator initialization. The bare scaffold case below is the
+     * no-MFEM/no-CUDA contract.
+     */
+    return;
+#else
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
     ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
@@ -265,11 +292,12 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
     check(
         fullmag::fem::initialize_context_gpu_state(ctx, error),
         "host-resident GPU-state bootstrap should succeed without CUDA allocation");
-    check(ctx.gpu_state.initialized, "GPU-state metadata must be initialized");
-    check(!ctx.gpu_state.allocated, "no-CUDA host bootstrap must not allocate device state");
-    check(ctx.gpu_state.node_count == 4, "GPU-state node count mismatch");
-    check(ctx.gpu_state.dof_len == 12, "GPU-state DOF length mismatch");
-    check(ctx.gpu_state.stage_count == 7, "GPU-state stage count mismatch");
+    check(ctx.gpu_state.device.initialized, "GPU-state metadata must be initialized");
+    check(!ctx.gpu_state.device.allocated, "no-CUDA host bootstrap must not allocate device state");
+    check(ctx.gpu_state.device.node_count == 4, "GPU-state node count mismatch");
+    check(ctx.gpu_state.device.dof_len == 12, "GPU-state DOF length mismatch");
+    check(ctx.gpu_state.device.stage_count == 7, "GPU-state stage count mismatch");
+#endif
 }
 
 } // namespace

@@ -37,6 +37,12 @@ import type {
   SessionImportInspectResponse,
 } from "@/kernel/api/apiTypes";
 import {
+  shouldLoadRuntimeCurrentRun,
+  shouldLoadRuntimeMeshBuild,
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+  shouldLoadRuntimeScalars,
+  shouldLoadRuntimeStageExecution,
   useCommandQueueResource,
   useCommandDetailResource,
   useCheckpointCatalogResource,
@@ -232,20 +238,37 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     studyInspectorPanelReducer,
     STUDY_INSPECTOR_INITIAL_STATE,
   );
+  const sessionStatus = useSessionStatus();
   const scene = useSceneResource();
-  const currentRun = useCurrentRunResource();
-  const stageExecution = useStageExecutionResource();
+  const currentRun = useCurrentRunResource({
+    enabled: shouldLoadRuntimeCurrentRun(true, sessionStatus.data),
+  });
+  const stageExecution = useStageExecutionResource({
+    enabled: shouldLoadRuntimeStageExecution(true, sessionStatus.data),
+  });
   const solverStatus = useSolverStatusResource();
   const commandQueue = useCommandQueueResource();
   const checkpointCatalog = useCheckpointCatalogResource();
   const geometryValidation = useGeometryValidationResource();
-  const meshBuildCurrent = useMeshBuildCurrent();
-  const meshBuildLatest = useMeshBuildLatestSuccessful();
-  const meshManifest = useMeshSharedDomainManifestResource();
-  const meshSummary = useMeshSummaryResource();
-  const sessionStatus = useSessionStatus();
-  const energyCurrent = useSolverEnergyCurrentResource();
-  const energyHistory = useSolverEnergyHistoryResource(120);
+  const meshBuildCurrent = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+  });
+  const meshBuildLatest = useMeshBuildLatestSuccessful({
+    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+  });
+  const meshManifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+  });
+  const meshSummary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+  });
+  const energyCurrent = useSolverEnergyCurrentResource({
+    enabled: shouldLoadRuntimeScalars(true, sessionStatus.data),
+  });
+  const energyHistory = useSolverEnergyHistoryResource(
+    120,
+    { enabled: shouldLoadRuntimeScalars(true, sessionStatus.data) },
+  );
   const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];
   const latestCheckpoint = checkpoints[0] ?? null;
@@ -266,7 +289,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     stageExecution: stageExecution.data,
   });
   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
-  const commandContext = createCommandContext("ribbon", kernel, {
+  const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
@@ -281,6 +304,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
       [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
     },
+    sourceDetail: "study",
   });
   const runCommand = (commandId: string, input?: unknown) => {
     void kernel.commands.execute(commandId, commandContext, input);

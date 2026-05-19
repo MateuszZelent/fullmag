@@ -134,11 +134,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             cudaStream_t ios{};
             cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
             cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
-            ctx.cuda_runtime.compute_stream = reinterpret_cast<void *>(cs);
-            ctx.cuda_runtime.io_stream = reinterpret_cast<void *>(ios);
+            ctx.gpu_state.cuda.compute_stream = reinterpret_cast<void *>(cs);
+            ctx.gpu_state.cuda.io_stream = reinterpret_cast<void *>(ios);
             cudaEvent_t ev{};
             cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
-            ctx.cuda_runtime.compute_event = reinterpret_cast<void *>(ev);
+            ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
         } else {
             configure_cpu_openmp_runtime(ctx);
             const char *host_device = (device_config != nullptr && *device_config != '\0')
@@ -337,32 +337,32 @@ void context_destroy_mfem(Context &ctx)
     ctx.mfem_context.mesh = nullptr;
     ctx.mfem_context.ready = false;
     ctx.exchange.mfem.ready = false;
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = false;
-    ctx.gpu_exchange.legacy_sparse_rows = 0;
-    ctx.gpu_exchange.legacy_sparse_cols = 0;
-    ctx.gpu_exchange.legacy_sparse_nnz = 0;
-    ctx.gpu_exchange.lumped_mass_ready = false;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = 0;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = 0;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = 0;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-    if (ctx.cuda_runtime.compute_stream != nullptr) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream));
-        ctx.cuda_runtime.compute_stream = nullptr;
+    if (ctx.gpu_state.cuda.compute_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
+        ctx.gpu_state.cuda.compute_stream = nullptr;
     }
-    if (ctx.cuda_runtime.io_stream != nullptr) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.io_stream));
-        ctx.cuda_runtime.io_stream = nullptr;
+    if (ctx.gpu_state.cuda.io_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.io_stream));
+        ctx.gpu_state.cuda.io_stream = nullptr;
     }
-    if (ctx.cuda_runtime.compute_event != nullptr) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.cuda_runtime.compute_event));
-        ctx.cuda_runtime.compute_event = nullptr;
+    if (ctx.gpu_state.cuda.compute_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.gpu_state.cuda.compute_event));
+        ctx.gpu_state.cuda.compute_event = nullptr;
     }
-    for (auto &buf : ctx.cuda_runtime.pinned_snapshot) {
+    for (auto &buf : ctx.gpu_state.cuda.pinned_snapshot) {
         if (buf != nullptr) {
             cudaFreeHost(buf);
             buf = nullptr;
         }
     }
-    ctx.cuda_runtime.pinned_snapshot_bytes = 0;
+    ctx.gpu_state.cuda.pinned_snapshot_bytes = 0;
 #endif
 }
 #endif

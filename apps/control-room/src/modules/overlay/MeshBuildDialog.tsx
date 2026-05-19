@@ -8,7 +8,13 @@ import {
   useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useEngineLogResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  shouldLoadRuntimeMeshBuild,
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+  useEngineLogResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import type { EngineLogResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import {
@@ -269,10 +275,19 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     lastCommandStatus: "pending",
     open: false,
   });
-  const activeBuild = useMeshBuildCurrent();
-  const latestBuild = useMeshBuildLatestSuccessful();
-  const summary = useMeshSummaryResource();
-  const manifest = useMeshSharedDomainManifestResource();
+  const sessionStatus = useSessionStatus();
+  const activeBuild = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(state.open, sessionStatus.data),
+  });
+  const latestBuild = useMeshBuildLatestSuccessful({
+    enabled: shouldLoadRuntimeMeshBuild(state.open, sessionStatus.data),
+  });
+  const summary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(state.open, sessionStatus.data),
+  });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(state.open, sessionStatus.data),
+  });
   const engineLog = useEngineLogResource({ enabled: state.open });
   const activeRecord = asRecord(activeBuild.data?.active_build);
   const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);

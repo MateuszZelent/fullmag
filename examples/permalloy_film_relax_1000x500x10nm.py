@@ -37,6 +37,7 @@ AIR_HMAX = float(os.environ.get("PERMALLOY_AIR_HMAX", "120e-9"))
 AIR_HMIN = float(os.environ.get("PERMALLOY_AIR_HMIN", "30e-9"))
 DEVICE = os.environ.get("PERMALLOY_DEVICE", "cpu")
 CPU_THREADS = os.environ.get("FULLMAG_CPU_THREADS")
+DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 
 print("[permalloy] FEM film relaxation benchmark", file=sys.stderr)
 print(f"[permalloy]   film_size = {LENGTH:.3e} x {WIDTH:.3e} x {THICKNESS:.3e} m", file=sys.stderr)
@@ -104,7 +105,7 @@ fm.fem_demag_solver(
     preconditioner="AMG",
     rtol=1e-6,
     max_iterations=200,
-    print_level=1,
+    print_level=DEMAG_PRINT_LEVEL,
 )
 
 study.build_domain_mesh()

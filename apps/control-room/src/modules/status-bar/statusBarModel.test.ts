@@ -24,6 +24,26 @@ describe("statusBarModel", () => {
     expect(model.title).toContain("resolved_engine_id=fem_cpu_native");
   });
 
+  it("marks the resolved engine as active while the solver is running", () => {
+    const model = buildStatusBarEngineModel(
+      {
+        requested_backend: "fem",
+        requested_device: "cpu",
+        resolved_backend: "fem",
+        resolved_device: "cpu",
+        resolved_engine_id: "fem_cpu_native",
+        resolved_runtime_family: "fem-cpu-native",
+      },
+      "running",
+    );
+
+    expect(model).toMatchObject({
+      detail: "native MFEM/hypre",
+      label: "FEM CPU",
+      state: "active",
+    });
+  });
+
   it("falls back to requested execution while a run is unresolved", () => {
     const model = buildStatusBarEngineModel({
       requested_backend: "fem",
