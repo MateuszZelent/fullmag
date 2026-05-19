@@ -27,7 +27,8 @@ bool demag_poisson_hypre_has_warm_start(const Context &ctx);
 bool solve_demag_poisson_hypre(
     Context &ctx,
     const mfem::Vector &rhs,
-    mfem::Vector &solution,
+    const mfem::Vector &warm_start_solution,
+    const mfem::Vector *&solved_solution,
     std::string &error);
 
 void destroy_demag_poisson_hypre_workspace(Context &ctx);

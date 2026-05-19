@@ -43,7 +43,7 @@ double effective_magnetic_thickness_along_axis(const Context &ctx, const Vec3 &a
     double min_proj = std::numeric_limits<double>::infinity();
     double max_proj = -std::numeric_limits<double>::infinity();
     bool any = false;
-    for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(ctx.mesh.n_nodes); ++i) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
             continue;
         }
@@ -56,9 +56,9 @@ double effective_magnetic_thickness_along_axis(const Context &ctx, const Vec3 &a
         any = true;
     }
     if (!any) {
-        return std::max(ctx.hmax, 1e-30);
+        return std::max(ctx.base_plan.hmax, 1e-30);
     }
-    return std::max(max_proj - min_proj, std::max(ctx.hmax, 1e-30));
+    return std::max(max_proj - min_proj, std::max(ctx.base_plan.hmax, 1e-30));
 }
 
 } // namespace
@@ -68,7 +68,7 @@ void add_slonczewski_stt_rhs_aos(
     const std::vector<double> &m_xyz,
     std::vector<double> &rhs_xyz)
 {
-    if (!ctx.has_slonczewski_stt) {
+    if (!ctx.stt.slonczewski_enabled) {
         return;
     }
 
@@ -76,9 +76,9 @@ void add_slonczewski_stt_rhs_aos(
     constexpr double E_CHARGE = 1.60217662e-19;
 
     const Vec3 current_density = {
-        ctx.stt_current_density_am2[0],
-        ctx.stt_current_density_am2[1],
-        ctx.stt_current_density_am2[2],
+        ctx.stt.current_density_am2[0],
+        ctx.stt.current_density_am2[1],
+        ctx.stt.current_density_am2[2],
     };
     const double j_mag = vector_norm3(
         current_density[0],
@@ -88,13 +88,13 @@ void add_slonczewski_stt_rhs_aos(
         return;
     }
     const Vec3 axis = scale3(current_density, 1.0 / j_mag);
-    const double thickness = ctx.stt_free_layer_thickness > 0.0
-        ? ctx.stt_free_layer_thickness
+    const double thickness = ctx.stt.free_layer_thickness > 0.0
+        ? ctx.stt.free_layer_thickness
         : effective_magnetic_thickness_along_axis(ctx, axis);
-    const double lambda = ctx.stt_lambda;
+    const double lambda = ctx.stt.lambda;
     const double lambda_sq = lambda * lambda;
-    const double degree = ctx.stt_degree > 0.0 ? ctx.stt_degree : 1.0;
-    const Vec3 p = ctx.stt_spin_polarization;
+    const double degree = ctx.stt.degree > 0.0 ? ctx.stt.degree : 1.0;
+    const Vec3 p = ctx.stt.spin_polarization;
 
     const size_t n = m_xyz.size() / 3u;
     for (size_t i = 0; i < n; ++i) {
@@ -106,12 +106,12 @@ void add_slonczewski_stt_rhs_aos(
         const double ms = scalar_field_value(
             ctx.material_fields.Ms_field,
             i,
-            ctx.material.saturation_magnetisation);
+            ctx.material_fields.material.saturation_magnetisation);
         if (!(ms > 0.0)) {
             continue;
         }
         const double prefactor =
-            (ctx.stt_current_sign * j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
+            (ctx.stt.current_sign * j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
         const double m_dot_p = dot3(m, p);
         const double g = (degree * lambda_sq) /
             ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
@@ -120,9 +120,9 @@ void add_slonczewski_stt_rhs_aos(
         const Vec3 m_cross_p = cross3(m, p);
         const Vec3 m_cross_m_cross_p = cross3(m, m_cross_p);
         const Vec3 torque = {
-            beta_stt * (m_cross_m_cross_p[0] + ctx.stt_epsilon_prime * m_cross_p[0]),
-            beta_stt * (m_cross_m_cross_p[1] + ctx.stt_epsilon_prime * m_cross_p[1]),
-            beta_stt * (m_cross_m_cross_p[2] + ctx.stt_epsilon_prime * m_cross_p[2]),
+            beta_stt * (m_cross_m_cross_p[0] + ctx.stt.epsilon_prime * m_cross_p[0]),
+            beta_stt * (m_cross_m_cross_p[1] + ctx.stt.epsilon_prime * m_cross_p[1]),
+            beta_stt * (m_cross_m_cross_p[2] + ctx.stt.epsilon_prime * m_cross_p[2]),
         };
         rhs_xyz[base + 0] += torque[0];
         rhs_xyz[base + 1] += torque[1];

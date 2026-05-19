@@ -17,10 +17,10 @@ void compute_cubic_anisotropy_field(
     std::vector<double> &h_cub_xyz,
     double *cubic_energy)
 {
-    const size_t n = ctx.n_nodes;
+    const size_t n = ctx.mesh.n_nodes;
     h_cub_xyz.assign(n * 3u, 0.0);
-    if (!ctx.enable_cubic_anisotropy ||
-        (ctx.cubic_Kc1 == 0.0 && ctx.cubic_Kc2 == 0.0 && ctx.cubic_Kc3 == 0.0 &&
+    if (!ctx.anisotropy.cubic_enabled ||
+        (ctx.anisotropy.cubic_Kc1 == 0.0 && ctx.anisotropy.cubic_Kc2 == 0.0 && ctx.anisotropy.cubic_Kc3 == 0.0 &&
          ctx.material_fields.Kc1_field.empty() && ctx.material_fields.Kc2_field.empty() && ctx.material_fields.Kc3_field.empty())) {
         if (cubic_energy != nullptr) {
             *cubic_energy = 0.0;
@@ -28,17 +28,17 @@ void compute_cubic_anisotropy_field(
         return;
     }
 
-    const double c1x = ctx.cubic_axis1[0], c1y = ctx.cubic_axis1[1], c1z = ctx.cubic_axis1[2];
-    const double c2x = ctx.cubic_axis2[0], c2y = ctx.cubic_axis2[1], c2z = ctx.cubic_axis2[2];
+    const double c1x = ctx.anisotropy.cubic_axis1[0], c1y = ctx.anisotropy.cubic_axis1[1], c1z = ctx.anisotropy.cubic_axis1[2];
+    const double c2x = ctx.anisotropy.cubic_axis2[0], c2y = ctx.anisotropy.cubic_axis2[1], c2z = ctx.anisotropy.cubic_axis2[2];
     const double c3x = c1y * c2z - c1z * c2y;
     const double c3y = c1z * c2x - c1x * c2z;
     const double c3z = c1x * c2y - c1y * c2x;
 
     const double inv_mu0 = 1.0 / kMu0;
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
-    const double uniform_Kc1 = ctx.cubic_Kc1;
-    const double uniform_Kc2 = ctx.cubic_Kc2;
-    const double uniform_Kc3 = ctx.cubic_Kc3;
+    const double uniform_Ms = ctx.material_fields.material.saturation_magnetisation;
+    const double uniform_Kc1 = ctx.anisotropy.cubic_Kc1;
+    const double uniform_Kc2 = ctx.anisotropy.cubic_Kc2;
+    const double uniform_Kc3 = ctx.anisotropy.cubic_Kc3;
     double energy = 0.0;
 
     for (size_t i = 0; i < n; ++i) {
@@ -71,13 +71,13 @@ void compute_cubic_anisotropy_field(
         double g2 = pf1 * m2 * (m1sq + m3sq);
         double g3 = pf1 * m3 * (m1sq + m2sq);
 
-        if (ctx.cubic_Kc2 != 0.0 || !ctx.material_fields.Kc2_field.empty()) {
+        if (ctx.anisotropy.cubic_Kc2 != 0.0 || !ctx.material_fields.Kc2_field.empty()) {
             g1 += pf2 * m1 * m2sq * m3sq;
             g2 += pf2 * m1sq * m2 * m3sq;
             g3 += pf2 * m1sq * m2sq * m3;
         }
 
-        if (ctx.cubic_Kc3 != 0.0 || !ctx.material_fields.Kc3_field.empty()) {
+        if (ctx.anisotropy.cubic_Kc3 != 0.0 || !ctx.material_fields.Kc3_field.empty()) {
             g1 += pf3 * sigma * m1 * (m2sq + m3sq);
             g2 += pf3 * sigma * m2 * (m1sq + m3sq);
             g3 += pf3 * sigma * m3 * (m1sq + m2sq);

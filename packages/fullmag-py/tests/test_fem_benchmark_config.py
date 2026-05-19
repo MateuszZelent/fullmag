@@ -3029,9 +3029,9 @@ def test_gpu_rk_plan_supports_per_node_damping_on_device():
     ).read_text(encoding="utf-8")
 
     assert "per-node damping yet" not in rk_source
-    assert "ctx.material.damping" in cuda_source
+    assert "ctx.material_fields.material.damping" in cuda_source
     assert "gpu.alpha" in cuda_source
-    assert "!ctx.alpha_field.empty()" in cuda_source
+    assert "!ctx.material_fields.alpha_field.empty()" in cuda_source
     assert "const fem_real_t *alpha_field" in kernel_header
     assert "bool use_alpha_field" in kernel_header
     assert "use_alpha_field ? alpha_field[i] : uniform_alpha" in kernel_source

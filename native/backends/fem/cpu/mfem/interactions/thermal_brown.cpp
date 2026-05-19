@@ -15,8 +15,8 @@ void initialize_thermal_brown_plan_fields(
     Context &ctx,
     const fullmag_fem_plan_desc &plan)
 {
-    ctx.temperature = plan.temperature;
-    ctx.thermal_seed = plan.thermal_seed;
+    ctx.thermal_brown.temperature = plan.temperature;
+    ctx.thermal_brown.seed = plan.thermal_seed;
     initialize_thermal_brown_field(ctx);
 }
 

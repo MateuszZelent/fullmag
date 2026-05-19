@@ -7,6 +7,8 @@
 
 namespace fullmag::fem {
 
+struct Context;
+
 enum class TransferAuditScopeKind {
     HotLoop,
     ExchangeInterop,
@@ -22,6 +24,17 @@ struct TransferAudit {
     int exchange_interop_depth = 0;
 
     void reset_step_violation();
+};
+
+/*
+ * Runtime owner for transfer-audit state embedded in Context.
+ *
+ * TransferAudit owns hot-loop counters, assertion gates, nested scope depth,
+ * and the latched violation message. Context stores that payload through this
+ * runtime owner so transfer-audit storage stays behind the module boundary.
+ */
+struct TransferAuditRuntimeState {
+    mutable TransferAudit audit{};
 };
 
 class TransferAuditScope {
@@ -52,6 +65,15 @@ void record_mfem_host_read_write(uint64_t bytes);
  * public counter struct.
  */
 fullmag_fem_transfer_audit transfer_audit_snapshot(const TransferAudit &audit);
+
+/*
+ * Return the current transfer-audit public counters for a backend Context.
+ *
+ * Keeps C ABI snapshot entrypoints from reaching into Context storage directly;
+ * this module owns the transfer-audit read boundary even when the audit state
+ * is embedded in the compatibility Context facade.
+ */
+fullmag_fem_transfer_audit transfer_audit_snapshot(const Context &ctx);
 
 /*
  * Configure transfer-audit assertion gates from environment.

@@ -40,6 +40,7 @@ int main()
 {
     const std::filesystem::path root = fem_source_root();
     const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string transfer_header = read_text_file(root / "include" / "transfer_audit.hpp");
     const std::string transfer_impl = read_text_file(root / "src" / "transfer_audit.cpp");
     check(
@@ -51,7 +52,7 @@ int main()
             std::string::npos,
         "C ABI API must not parse transfer-audit compute-sync env gate");
     check(
-        api.find("*out_audit = handle->context.transfer_audit.counters;") ==
+        api.find("*out_audit = handle->context.transfer_audit.audit.counters;") ==
             std::string::npos,
         "C ABI API must not read transfer-audit counters directly");
     check(
@@ -77,6 +78,19 @@ int main()
         transfer_header.find("fullmag_fem_transfer_audit transfer_audit_snapshot(") !=
             std::string::npos,
         "transfer audit header must declare snapshot helper");
+    check(
+        transfer_header.find("struct TransferAuditRuntimeState") != std::string::npos,
+        "transfer audit header must declare the runtime audit-state owner");
+    check(
+        transfer_header.find("TransferAudit audit") != std::string::npos,
+        "transfer audit runtime state must own the TransferAudit payload");
+    check(
+        context_header.find("TransferAuditRuntimeState transfer_audit{}") !=
+            std::string::npos,
+        "Context must store transfer audit through the runtime owner");
+    check(
+        context_header.find("TransferAudit transfer_audit") == std::string::npos,
+        "Context must not own a flat TransferAudit field");
 
     unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
     unsetenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");

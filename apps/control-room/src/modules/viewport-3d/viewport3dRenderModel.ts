@@ -71,12 +71,24 @@ export interface Viewport3DFieldRenderModel {
 
 export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
+  fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
+  fullVectorSurfaceOffsetScale?: number;
+  partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScales?: ReadonlyMap<string, number>;
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
+  partVectorSurfaceOffsetScales?: ReadonlyMap<string, number>;
   scalarColorModes?: ReadonlySet<string>;
   scalarColorsVisible?: boolean;
   vectorColorMode?: string;
+}
+
+export type Viewport3DVectorAnchorMode = "center" | "tail";
+
+export interface Viewport3DVectorSegmentOptions {
+  anchorMode?: Viewport3DVectorAnchorMode;
+  surfaceOffsetScale?: number;
+  surfaceTriangleIndices?: ArrayLike<number> | null;
 }
 
 export interface Viewport3DVectorBudgetTarget {
@@ -194,6 +206,8 @@ export function buildViewport3DFieldRenderModel(
         ? partModel.surfaceNodeSelection ?? partModel.part
         : partModel.part;
     const partScale = options.partVectorScales?.get(partId) ?? 1;
+    const surfaceOffsetScale =
+      options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
     partVectorSegments.set(
       partId,
       buildCachedPartVectorSegments(
@@ -204,6 +218,12 @@ export function buildViewport3DFieldRenderModel(
         vectorScope,
         scale * partScale,
         partBudget,
+        {
+          anchorMode: options.partVectorAnchorModes?.get(partId) ?? "center",
+          surfaceOffsetScale,
+          surfaceTriangleIndices:
+            surfaceOffsetScale > 0 ? partModel.surfaceIndices : null,
+        },
       ),
     );
   }
@@ -217,6 +237,11 @@ export function buildViewport3DFieldRenderModel(
       fieldVector,
       scale,
       fullVectorBudget,
+      {
+        anchorMode: options.fullVectorAnchorMode ?? "center",
+        surfaceOffsetScale: options.fullVectorSurfaceOffsetScale ?? 0,
+        surfaceTriangleIndices: topology.fallbackSurfaceIndices,
+      },
     ),
     partVectorSegments,
     scalarColors,
@@ -250,20 +275,24 @@ function buildCachedFullVectorSegments(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   budget: number,
+  vectorOptions: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (!fieldVector || budget <= 0) return null;
 
+  const anchorMode = vectorOptions.anchorMode ?? "center";
+  const surfaceOffsetScale = vectorOptions.surfaceOffsetScale ?? 0;
   return getCachedNestedFieldValue(
     fullVectorSegmentCache,
     topology,
     fieldVector,
-    `${scale}:${budget}`,
+    `${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsFromPositions(
         topology,
         fieldVector,
         scale,
         budget,
+        vectorOptions,
       ),
   );
 }
@@ -276,14 +305,17 @@ function buildCachedPartVectorSegments(
   vectorScope: "surface" | "full",
   scale: number,
   budget: number,
+  vectorOptions: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (!fieldVector || budget <= 0) return null;
 
+  const anchorMode = vectorOptions.anchorMode ?? "center";
+  const surfaceOffsetScale = vectorOptions.surfaceOffsetScale ?? 0;
   return getCachedNestedFieldValue(
     partVectorSegmentCache,
     partModel,
     fieldVector,
-    `${vectorScope}:${scale}:${budget}`,
+    `${vectorScope}:${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsForNodeSelectionFromPositions(
         topology,
@@ -291,6 +323,7 @@ function buildCachedPartVectorSegments(
         vectorSelection,
         scale,
         budget,
+        vectorOptions,
       ),
   );
 }
@@ -776,6 +809,7 @@ export function buildVectorLineSegments(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   maxVectors = 2048,
+  options: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (!topology) return null;
   return buildVectorLineSegmentsFromPositions(
@@ -783,6 +817,11 @@ export function buildVectorLineSegments(
     fieldVector,
     scale,
     maxVectors,
+    {
+      ...options,
+      surfaceTriangleIndices:
+        options.surfaceTriangleIndices ?? topology.boundaryFaces,
+    },
   );
 }
 
@@ -849,6 +888,7 @@ function buildVectorLineSegmentsFromPositions(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   maxVectors = 2048,
+  options: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (
     !fieldVector ||
@@ -881,6 +921,16 @@ function buildVectorLineSegmentsFromPositions(
   }
   const scaleMag = Math.max(maxMag, 1e-12);
   const effectiveScale = resolveViewport3DVectorSegmentScale(topology, scale);
+  const anchorMode = options.anchorMode ?? "center";
+  const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
+  const surfaceNormals =
+    surfaceOffsetScale > 0
+      ? buildAveragedSurfaceNodeNormals(
+          topology,
+          options.surfaceTriangleIndices,
+        )
+      : null;
+  const surfaceOffsetDistance = effectiveScale * surfaceOffsetScale;
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
@@ -900,13 +950,30 @@ function buildVectorLineSegmentsFromPositions(
     const uy = vy / length;
     const uz = vz / length;
     const halfScale = effectiveScale / 2;
+    const [ax, ay, az] = offsetVectorAnchor(
+      x,
+      y,
+      z,
+      pointIndex,
+      surfaceNormals,
+      surfaceOffsetDistance,
+    );
 
-    segments[target] = x - ux * halfScale;
-    segments[target + 1] = y - uy * halfScale;
-    segments[target + 2] = z - uz * halfScale;
-    segments[target + 3] = x + ux * halfScale;
-    segments[target + 4] = y + uy * halfScale;
-    segments[target + 5] = z + uz * halfScale;
+    if (anchorMode === "tail") {
+      segments[target] = ax;
+      segments[target + 1] = ay;
+      segments[target + 2] = az;
+      segments[target + 3] = ax + ux * effectiveScale;
+      segments[target + 4] = ay + uy * effectiveScale;
+      segments[target + 5] = az + uz * effectiveScale;
+    } else {
+      segments[target] = ax - ux * halfScale;
+      segments[target + 1] = ay - uy * halfScale;
+      segments[target + 2] = az - uz * halfScale;
+      segments[target + 3] = ax + ux * halfScale;
+      segments[target + 4] = ay + uy * halfScale;
+      segments[target + 5] = az + uz * halfScale;
+    }
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 
@@ -919,6 +986,7 @@ export function buildVectorLineSegmentsForNodeSelection(
   nodeSelection: Viewport3DNodeSelection | null | undefined,
   scale: number,
   maxVectors = 2048,
+  options: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (!topology) return null;
   return buildVectorLineSegmentsForNodeSelectionFromPositions(
@@ -927,6 +995,11 @@ export function buildVectorLineSegmentsForNodeSelection(
     nodeSelection,
     scale,
     maxVectors,
+    {
+      ...options,
+      surfaceTriangleIndices:
+        options.surfaceTriangleIndices ?? topology.boundaryFaces,
+    },
   );
 }
 
@@ -936,6 +1009,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   nodeSelection: Viewport3DNodeSelection | null | undefined,
   scale: number,
   maxVectors = 2048,
+  options: Viewport3DVectorSegmentOptions = {},
 ): Float32Array | null {
   if (
     !fieldVector ||
@@ -972,6 +1046,16 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     scale,
     nodeSelection,
   );
+  const anchorMode = options.anchorMode ?? "center";
+  const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
+  const surfaceNormals =
+    surfaceOffsetScale > 0
+      ? buildAveragedSurfaceNodeNormals(
+          topology,
+          options.surfaceTriangleIndices,
+        )
+      : null;
+  const surfaceOffsetDistance = effectiveScale * surfaceOffsetScale;
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
@@ -1002,17 +1086,119 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     const uy = vy / length;
     const uz = vz / length;
     const halfScale = effectiveScale / 2;
+    const [ax, ay, az] = offsetVectorAnchor(
+      x,
+      y,
+      z,
+      pointIndex,
+      surfaceNormals,
+      surfaceOffsetDistance,
+    );
 
-    segments[target] = x - ux * halfScale;
-    segments[target + 1] = y - uy * halfScale;
-    segments[target + 2] = z - uz * halfScale;
-    segments[target + 3] = x + ux * halfScale;
-    segments[target + 4] = y + uy * halfScale;
-    segments[target + 5] = z + uz * halfScale;
+    if (anchorMode === "tail") {
+      segments[target] = ax;
+      segments[target + 1] = ay;
+      segments[target + 2] = az;
+      segments[target + 3] = ax + ux * effectiveScale;
+      segments[target + 4] = ay + uy * effectiveScale;
+      segments[target + 5] = az + uz * effectiveScale;
+    } else {
+      segments[target] = ax - ux * halfScale;
+      segments[target + 1] = ay - uy * halfScale;
+      segments[target + 2] = az - uz * halfScale;
+      segments[target + 3] = ax + ux * halfScale;
+      segments[target + 4] = ay + uy * halfScale;
+      segments[target + 5] = az + uz * halfScale;
+    }
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 
   return segments;
+}
+
+function buildAveragedSurfaceNodeNormals(
+  topology: Viewport3DPositionSource,
+  triangleIndices: ArrayLike<number> | null | undefined,
+): Float32Array | null {
+  if (!triangleIndices || triangleIndices.length < 3) return null;
+
+  const normals = new Float32Array(topology.nodeCount * 3);
+  for (let index = 0; index + 2 < triangleIndices.length; index += 3) {
+    const a = triangleIndices[index] ?? 0;
+    const b = triangleIndices[index + 1] ?? 0;
+    const c = triangleIndices[index + 2] ?? 0;
+    if (
+      a >= topology.nodeCount ||
+      b >= topology.nodeCount ||
+      c >= topology.nodeCount
+    ) {
+      continue;
+    }
+
+    const ao = a * 3;
+    const bo = b * 3;
+    const co = c * 3;
+    const ax = topology.positions[ao] ?? 0;
+    const ay = topology.positions[ao + 1] ?? 0;
+    const az = topology.positions[ao + 2] ?? 0;
+    const abx = (topology.positions[bo] ?? 0) - ax;
+    const aby = (topology.positions[bo + 1] ?? 0) - ay;
+    const abz = (topology.positions[bo + 2] ?? 0) - az;
+    const acx = (topology.positions[co] ?? 0) - ax;
+    const acy = (topology.positions[co + 1] ?? 0) - ay;
+    const acz = (topology.positions[co + 2] ?? 0) - az;
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+    const length = Math.hypot(nx, ny, nz);
+    if (length <= 0) continue;
+
+    const ux = nx / length;
+    const uy = ny / length;
+    const uz = nz / length;
+    for (const point of [a, b, c]) {
+      const offset = point * 3;
+      normals[offset] += ux;
+      normals[offset + 1] += uy;
+      normals[offset + 2] += uz;
+    }
+  }
+
+  let hasNormal = false;
+  for (let point = 0; point < topology.nodeCount; point += 1) {
+    const offset = point * 3;
+    const nx = normals[offset] ?? 0;
+    const ny = normals[offset + 1] ?? 0;
+    const nz = normals[offset + 2] ?? 0;
+    const length = Math.hypot(nx, ny, nz);
+    if (length <= 0) continue;
+    normals[offset] = nx / length;
+    normals[offset + 1] = ny / length;
+    normals[offset + 2] = nz / length;
+    hasNormal = true;
+  }
+
+  return hasNormal ? normals : null;
+}
+
+function offsetVectorAnchor(
+  x: number,
+  y: number,
+  z: number,
+  pointIndex: number,
+  surfaceNormals: Float32Array | null,
+  surfaceOffsetDistance: number,
+): [number, number, number] {
+  if (!surfaceNormals || surfaceOffsetDistance <= 0) {
+    return [x, y, z];
+  }
+
+  const offset = pointIndex * 3;
+  return [
+    x + (surfaceNormals[offset] ?? 0) * surfaceOffsetDistance,
+    y + (surfaceNormals[offset + 1] ?? 0) * surfaceOffsetDistance,
+    z + (surfaceNormals[offset + 2] ?? 0) * surfaceOffsetDistance,
+  ];
 }
 
 function boundsFromMinMax(

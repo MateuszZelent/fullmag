@@ -5,7 +5,7 @@
  * error synchronization for the native FEM C ABI. It does not own backend creation, Context construction, solver execution, availability policy, or transfer auditing.
  */
 
-#include "context.hpp"
+#include "backend_handle.hpp"
 
 #include <string>
 

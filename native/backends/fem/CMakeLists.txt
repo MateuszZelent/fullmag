@@ -12,6 +12,7 @@ set(FEM_PUBLIC_HEADERS
 
 set(FEM_SOURCES
     core/fem_field_buffers.cpp
+    core/fem_context_builder.cpp
     core/fem_material_fields.cpp
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
@@ -84,7 +85,10 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
     cpu/mfem/runtime/availability.cpp
+    cpu/mfem/runtime/backend_lifecycle.cpp
+    cpu/mfem/runtime/backend_step.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
     cpu/mfem/runtime/gpu_state_runtime.cpp
     cpu/mfem/runtime/interrupt.cpp
@@ -132,12 +136,12 @@ target_include_directories(fullmag_fem
 )
 
 if(FULLMAG_USE_MFEM_STACK)
-    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_MFEM_STACK=1)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=1)
     if(FULLMAG_ENABLE_CUDA)
-        target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_CUDA_RUNTIME=1)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=1)
         target_link_libraries(fullmag_fem PRIVATE CUDA::cudart)
     else()
-        target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_CUDA_RUNTIME=0)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
     endif()
     if(TARGET MFEM::mfem)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
@@ -145,8 +149,8 @@ if(FULLMAG_USE_MFEM_STACK)
         target_link_libraries(fullmag_fem PRIVATE mfem)
     endif()
 else()
-    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_MFEM_STACK=0)
-    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_HAS_CUDA_RUNTIME=0)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=0)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
 endif()
 
 set_target_properties(fullmag_fem PROPERTIES

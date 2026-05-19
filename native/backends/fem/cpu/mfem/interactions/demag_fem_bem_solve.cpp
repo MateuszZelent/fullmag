@@ -18,8 +18,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
-
-#include <chrono>
+#include "fem_common.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -28,19 +27,6 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
-} // namespace
-
 bool context_compute_demag_fem_bem(
     Context &ctx,
     const std::vector<double> &m_xyz,
@@ -51,7 +37,7 @@ bool context_compute_demag_fem_bem(
     std::string &error)
 {
     auto *workspace = demag_fem_bem_workspace(ctx);
-    if (!ctx.demag_fem_bem_ready || workspace == nullptr) {
+    if (!ctx.demag_fem_bem.ready || workspace == nullptr) {
         error = "FEM/BEM demag requested before initialization";
         return false;
     }
@@ -59,7 +45,7 @@ bool context_compute_demag_fem_bem(
         return false;
     }
 
-    const auto assemble_start = SteadyClock::now();
+    const auto assemble_start = FemSteadyClock::now();
     mfem::Vector *rhs = nullptr;
     if (!assemble_demag_poisson_rhs(ctx, m_xyz, rhs, error)) {
         return false;
@@ -74,8 +60,8 @@ bool context_compute_demag_fem_bem(
     }
     const uint64_t assemble_ns = elapsed_ns(assemble_start);
 
-    const auto solve_start = SteadyClock::now();
-    const auto u1_solve_start = SteadyClock::now();
+    const auto solve_start = FemSteadyClock::now();
+    const auto u1_solve_start = FemSteadyClock::now();
     if (!solve_demag_fem_bem_sparse_system(
             ctx,
             *workspace->neumann_op,
@@ -116,7 +102,7 @@ bool context_compute_demag_fem_bem(
         return false;
     }
 
-    const auto u2_solve_start = SteadyClock::now();
+    const auto u2_solve_start = FemSteadyClock::now();
     if (!solve_demag_fem_bem_sparse_system(
             ctx,
             *workspace->dirichlet_op,
@@ -142,7 +128,7 @@ bool context_compute_demag_fem_bem(
     }
 
     uint64_t energy_ns = 0;
-    const auto recover_start = SteadyClock::now();
+    const auto recover_start = FemSteadyClock::now();
     if (!recover_demag_poisson_field(
             ctx,
             *workspace->total_potential,

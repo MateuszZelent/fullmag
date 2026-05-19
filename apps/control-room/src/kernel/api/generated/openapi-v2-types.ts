@@ -596,6 +596,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/diagnostics/cpu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_cpu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/diagnostics/engine-log": {
         parameters: {
             query?: never;
@@ -2171,6 +2187,32 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        CpuTelemetryResponse: {
+            /** Format: double */
+            load_average_15m?: number | null;
+            /** Format: double */
+            load_average_1m?: number | null;
+            /** Format: double */
+            load_average_5m?: number | null;
+            /** Format: int32 */
+            logical_cpus: number;
+            /** Format: double */
+            memory_total_mb: number;
+            /** Format: double */
+            memory_used_mb: number;
+            model_name?: string | null;
+            /** Format: double */
+            process_cpu_percent: number;
+            /** Format: double */
+            process_rss_mb: number;
+            /** Format: int32 */
+            process_threads: number;
+            reason?: string | null;
+            sample_time_unix_ms: number;
+            status: string;
+            /** Format: double */
+            utilization_cpu_percent: number;
+        };
         CurrentRunResource: {
             /** Format: int32 */
             active_stage_index?: number | null;
@@ -6157,6 +6199,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScalarWindow"];
+                };
+            };
+        };
+    };
+    diagnostics_get_sessions_current_diagnostics_cpu: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CPU telemetry or degraded unavailable response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CpuTelemetryResponse"];
                 };
             };
         };

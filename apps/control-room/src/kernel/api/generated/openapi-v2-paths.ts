@@ -37,6 +37,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
   "/v2/sessions/current/data/quantities",
   "/v2/sessions/current/data/scalars",
+  "/v2/sessions/current/diagnostics/cpu",
   "/v2/sessions/current/diagnostics/engine-log",
   "/v2/sessions/current/diagnostics/gpu",
   "/v2/sessions/current/diagnostics/solver-profile",

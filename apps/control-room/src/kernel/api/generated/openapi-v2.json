@@ -1485,6 +1485,92 @@
         ],
         "type": "string"
       },
+      "CpuTelemetryResponse": {
+        "properties": {
+          "load_average_15m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "load_average_1m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "load_average_5m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "logical_cpus": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_total_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "memory_used_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "model_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "process_rss_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "process_threads": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_time_unix_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "utilization_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "sample_time_unix_ms",
+          "logical_cpus",
+          "utilization_cpu_percent",
+          "process_cpu_percent",
+          "memory_used_mb",
+          "memory_total_mb",
+          "process_rss_mb",
+          "process_threads"
+        ],
+        "type": "object"
+      },
       "CurrentRunResource": {
         "properties": {
           "active_stage_index": {
@@ -13860,6 +13946,26 @@
         },
         "tags": [
           "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/cpu": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_cpu",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CpuTelemetryResponse"
+                }
+              }
+            },
+            "description": "CPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
         ]
       }
     },

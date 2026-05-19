@@ -25,6 +25,24 @@ describe("ResourceInvalidationController", () => {
     });
   });
 
+  it("does not notify subscribers for duplicate resource revisions", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const eventListener = vi.fn();
+    const resourceListener = vi.fn();
+
+    bus.on("resource:invalidated", eventListener);
+    controller.subscribe("session:status", resourceListener);
+
+    controller.invalidate("session:status", 3);
+    controller.invalidate("session:status", 3);
+    controller.invalidate("session:status", 4);
+
+    expect(resourceListener).toHaveBeenCalledTimes(2);
+    expect(eventListener).toHaveBeenCalledTimes(2);
+    expect(controller.getRevision("session:status")).toBe(4);
+  });
+
   it("invalidates subscribed child resources by prefix", () => {
     const bus = new EventBus<KernelEventMap>();
     const controller = new ResourceInvalidationController(bus);

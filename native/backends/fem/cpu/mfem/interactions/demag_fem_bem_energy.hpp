@@ -9,6 +9,8 @@ struct Context;
 /*
  * Compute demag energy for a FEM/BEM recovered field.
  *
+ * This module owns FEM/BEM demag energy integration for an already recovered
+ * field.
  * FEM/BEM and Poisson demag share the same energy convention:
  *
  *   E_d = -0.5 mu0 integral_Omega_m Ms m.H_demag dV.

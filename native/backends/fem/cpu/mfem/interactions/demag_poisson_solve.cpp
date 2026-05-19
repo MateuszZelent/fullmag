@@ -72,12 +72,12 @@ bool context_compute_demag_poisson(
     PhaseTimings *timings,
     std::string &error)
 {
-    if (!ctx.poisson_ready) {
+    if (!ctx.poisson_demag.ready) {
         error = "Poisson demag requested before initialization";
         return false;
     }
     debug_checkpoint("context_compute_demag_poisson:enter");
-    const uint64_t demag_call_index = ++ctx.demag_call_count;
+    const uint64_t demag_call_index = ++ctx.demag.call_count;
 
     const auto assemble_wall_start = FemSteadyClock::now();
     mfem::Vector *rhs = nullptr;
@@ -96,7 +96,7 @@ bool context_compute_demag_poisson(
     }
 
     if (demag_periodic_poisson_reduction_requested(ctx) &&
-        ctx.poisson_periodic_reduced_ready) {
+        ctx.poisson_demag.periodic_reduced_ready) {
         mfem::Vector *full_solution = nullptr;
         uint64_t solve_wall_time_ns_pbc = 0;
         if (!solve_demag_periodic_poisson_reduced(
@@ -144,7 +144,7 @@ bool context_compute_demag_poisson(
         }
 
         auto *gf_potential_pbc =
-            static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+            static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
         gf_potential_pbc->SetFromTrueDofs(*full_solution);
 
         log_demag_poisson_call_profile(
@@ -158,18 +158,18 @@ bool context_compute_demag_poisson(
             timings != nullptr ? &timings->demag : nullptr,
             assemble_wall_time_ns,
             solve_wall_time_ns_pbc,
-            ctx.poisson_last_setup_wall_time_ns,
-            ctx.poisson_last_solver_apply_wall_time_ns,
-            ctx.poisson_last_solver_setup_reused,
+            ctx.poisson_demag.last_setup_wall_time_ns,
+            ctx.poisson_demag.last_solver_apply_wall_time_ns,
+            ctx.poisson_demag.last_solver_setup_reused,
             recover_wall_time_ns_pbc,
             energy_wall_time_ns_pbc);
-        ctx.demag_solves_current_step += 1;
+        ctx.poisson_demag.solves_current_step += 1;
         return true;
     }
 
-    auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
-    auto *solution = static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec);
+    auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+    auto *solution = static_cast<mfem::Vector *>(ctx.poisson_demag.solution_vec);
     if (gf_potential == nullptr || fes == nullptr || solution == nullptr) {
         error = "Poisson solution workspace is null during non-PBC demag solve";
         return false;
@@ -181,7 +181,12 @@ bool context_compute_demag_poisson(
 
     const auto solve_wall_start = FemSteadyClock::now();
     debug_checkpoint("context_compute_demag_poisson:solve_enter_hypre");
-    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, error)) {
+    const mfem::Vector *solved_solution = nullptr;
+    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, solved_solution, error)) {
+        return false;
+    }
+    if (solved_solution == nullptr) {
+        error = "Poisson Hypre solve returned a null solved vector";
         return false;
     }
     debug_checkpoint("context_compute_demag_poisson:solve_done_hypre");
@@ -196,7 +201,7 @@ bool context_compute_demag_poisson(
     debug_checkpoint("context_compute_demag_poisson:recover_enter");
     if (!recover_demag_poisson_field(
             ctx,
-            *solution,
+            *solved_solution,
             h_demag_xyz,
             demag_energy,
             m_xyz,
@@ -214,7 +219,7 @@ bool context_compute_demag_poisson(
         return false;
     }
 
-    gf_potential->SetFromTrueDofs(*solution);
+    gf_potential->SetFromTrueDofs(*solved_solution);
     log_demag_poisson_call_profile(
         ctx,
         demag_call_index,
@@ -226,12 +231,12 @@ bool context_compute_demag_poisson(
         timings != nullptr ? &timings->demag : nullptr,
         assemble_wall_time_ns,
         solve_wall_time_ns,
-        ctx.poisson_last_setup_wall_time_ns,
-        ctx.poisson_last_solver_apply_wall_time_ns,
-        ctx.poisson_last_solver_setup_reused,
+        ctx.poisson_demag.last_setup_wall_time_ns,
+        ctx.poisson_demag.last_solver_apply_wall_time_ns,
+        ctx.poisson_demag.last_solver_setup_reused,
         recover_wall_time_ns,
         energy_wall_time_ns);
-    ctx.demag_solves_current_step += 1;
+    ctx.poisson_demag.solves_current_step += 1;
 
     return true;
 }

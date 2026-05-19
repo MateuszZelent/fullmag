@@ -82,7 +82,7 @@ pub(crate) fn reconcile_dispatched_command_ledger_from_snapshot(
 
         changed |= set_command_lifecycle(
             record,
-            CommandLifecycleState::Completed,
+            command_lifecycle_for_completion(completion_status),
             Some(completion_status),
             Some(completed_at_unix_ms),
         );
@@ -95,10 +95,43 @@ fn infer_dispatched_command_completion(
     snapshot: &SessionStateResponse,
 ) -> Option<CommandCompletionState> {
     match record.command.kind.as_str() {
-        "compute_fields" if snapshot.latest_fields.len() > 0 => {
+        "compute_fields" if command_has_terminal_log(record, snapshot, "Compute fields failed") => {
+            Some(CommandCompletionState::Failed)
+        }
+        "compute_fields"
+            if command_has_terminal_log(record, snapshot, "Field snapshots computed")
+                || snapshot_has_field_readback(snapshot) =>
+        {
             Some(CommandCompletionState::Completed)
         }
-        "compute_energies" if !snapshot.scalar_rows.is_empty() => {
+        "compute_energies"
+            if command_has_terminal_log(record, snapshot, "Compute energies failed") =>
+        {
+            Some(CommandCompletionState::Failed)
+        }
+        "compute_energies"
+            if command_has_terminal_log(record, snapshot, "Energies computed")
+                || !snapshot.scalar_rows.is_empty() =>
+        {
+            Some(CommandCompletionState::Completed)
+        }
+        "set_solver_profile"
+            if command_has_terminal_log(record, snapshot, "Solver profiler command rejected") =>
+        {
+            Some(CommandCompletionState::Failed)
+        }
+        "set_solver_profile" if solver_profile_command_applied(record, snapshot) => {
+            Some(CommandCompletionState::Completed)
+        }
+        "remesh" => remesh_command_completion(record, snapshot),
+        "load_state"
+            if command_has_terminal_log(record, snapshot, "Failed to load workspace state") =>
+        {
+            Some(CommandCompletionState::Failed)
+        }
+        "load_state"
+            if command_has_terminal_log(record, snapshot, "Loaded workspace state from") =>
+        {
             Some(CommandCompletionState::Completed)
         }
         "pause" if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Paused) => {
@@ -111,8 +144,79 @@ fn infer_dispatched_command_completion(
         "stop" if snapshot_runtime_is_terminal_or_idle(snapshot) => {
             Some(CommandCompletionState::Completed)
         }
+        "close" if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Completed) => {
+            Some(CommandCompletionState::Completed)
+        }
         _ => None,
     }
+}
+
+fn command_lifecycle_for_completion(
+    completion_status: CommandCompletionState,
+) -> CommandLifecycleState {
+    match completion_status {
+        CommandCompletionState::Failed => CommandLifecycleState::Failed,
+        CommandCompletionState::Rejected => CommandLifecycleState::Rejected,
+        _ => CommandLifecycleState::Completed,
+    }
+}
+
+fn command_has_terminal_log(
+    record: &TrackedCommandRecord,
+    snapshot: &SessionStateResponse,
+    marker: &str,
+) -> bool {
+    let min_timestamp = record
+        .dispatched_at_unix_ms
+        .unwrap_or(record.command.created_at_unix_ms);
+    snapshot
+        .engine_log
+        .iter()
+        .any(|entry| entry.timestamp_unix_ms >= min_timestamp && entry.message.contains(marker))
+}
+
+fn snapshot_has_field_readback(snapshot: &SessionStateResponse) -> bool {
+    snapshot.latest_fields.len() > 0 || snapshot.preview_cache.iter().next().is_some()
+}
+
+fn solver_profile_command_applied(
+    record: &TrackedCommandRecord,
+    snapshot: &SessionStateResponse,
+) -> bool {
+    if !command_has_terminal_log(record, snapshot, "Solver profiler ") {
+        return false;
+    }
+
+    let Some(profile) = record.command.profile.clone() else {
+        return false;
+    };
+    let Ok(requested) = serde_json::from_value::<fullmag_runner::SolverProfileConfig>(profile)
+        .map(fullmag_runner::SolverProfileConfig::normalized)
+    else {
+        return false;
+    };
+    let actual = &snapshot.solver_profile.config;
+    snapshot.solver_profile.revision > 0
+        && actual.enabled == requested.enabled
+        && actual.sample_every == requested.sample_every
+        && actual.max_samples == requested.max_samples
+        && actual.emit_engine_log == requested.emit_engine_log
+        && actual.persist_artifact == requested.persist_artifact
+}
+
+fn remesh_command_completion(
+    record: &TrackedCommandRecord,
+    snapshot: &SessionStateResponse,
+) -> Option<CommandCompletionState> {
+    if command_has_terminal_log(record, snapshot, "Remesh failed")
+        || command_has_terminal_log(record, snapshot, "Cannot remesh")
+    {
+        return Some(CommandCompletionState::Failed);
+    }
+    if command_has_terminal_log(record, snapshot, "Remesh complete") {
+        return Some(CommandCompletionState::Completed);
+    }
+    None
 }
 
 fn snapshot_runtime_is(snapshot: &SessionStateResponse, expected: RuntimeLifecycleState) -> bool {
@@ -1067,6 +1171,136 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_reconciliation_marks_compute_fields_terminal_from_preview_cache() {
+        let mut current = test_current_snapshot();
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+
+        let mut ledger = VecDeque::from([tracked_command("cmd-fields", "compute_fields")]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        let record = ledger.front().expect("ledger record should remain");
+        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            record.completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_local_commands_terminal() {
+        let mut current = test_current_snapshot();
+        current.session.status = "completed".to_string();
+        current.solver_profile.revision = 1;
+        current.solver_profile.config = crate::schemas::diagnostics::SolverProfileCommandConfig {
+            enabled: true,
+            sample_every: 2,
+            max_samples: 7,
+            emit_engine_log: true,
+            persist_artifact: false,
+        };
+        current.mesh_workspace = Some(json!({
+            "active_build": null,
+            "last_build_summary": {
+                "mesh_target": "study_domain",
+                "mesh_reason": "user_requested",
+                "n_nodes": 16,
+                "n_elements": 8
+            }
+        }));
+        current.engine_log = vec![
+            engine_log(
+                1_700_000_000_600,
+                "system",
+                "Solver profiler enabled (sample_every=2, max_samples=7)",
+            ),
+            engine_log(
+                1_700_000_000_700,
+                "success",
+                "Remesh complete - 16 nodes, 8 elements",
+            ),
+            engine_log(
+                1_700_000_000_800,
+                "success",
+                "Loaded workspace state from state.h5 (16 vectors)",
+            ),
+        ];
+
+        let mut profile_command = session_command("cmd-profile", "set_solver_profile");
+        profile_command.profile = Some(json!({
+            "enabled": true,
+            "sample_every": 2,
+            "max_samples": 7,
+            "emit_engine_log": true,
+            "persist_artifact": false
+        }));
+        let mut ledger = VecDeque::from([
+            TrackedCommandRecord {
+                command: profile_command,
+                request_id: None,
+                status: CommandLifecycleState::Dispatched,
+                dispatched_at_unix_ms: Some(1_700_000_000_500),
+                completed_at_unix_ms: None,
+                completion_status: None,
+                error: None,
+            },
+            tracked_command("cmd-remesh", "remesh"),
+            tracked_command("cmd-load", "load_state"),
+            tracked_command("cmd-close", "close"),
+        ]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        for record in ledger {
+            assert_eq!(record.status, CommandLifecycleState::Completed);
+            assert_eq!(
+                record.completion_status,
+                Some(CommandCompletionState::Completed)
+            );
+            assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+        }
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_local_command_failures_terminal() {
+        let mut current = test_current_snapshot();
+        current.mesh_workspace = Some(json!({
+            "active_build": null,
+            "last_build_error": "gmsh exited non-zero"
+        }));
+        current.engine_log = vec![engine_log(
+            1_700_000_000_700,
+            "error",
+            "Remesh failed: gmsh exited non-zero",
+        )];
+
+        let mut ledger = VecDeque::from([tracked_command("cmd-remesh", "remesh")]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        let record = ledger.front().expect("ledger record should remain");
+        assert_eq!(record.status, CommandLifecycleState::Failed);
+        assert_eq!(
+            record.completion_status,
+            Some(CommandCompletionState::Failed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    #[test]
     fn snapshot_reconciliation_marks_runtime_control_commands_terminal() {
         let mut paused = test_current_snapshot();
         paused.stage_execution = Some(test_stage_execution(
@@ -1288,6 +1522,35 @@ mod tests {
             completed_at_unix_ms: None,
             completion_status: None,
             error: None,
+        }
+    }
+
+    fn preview_field(quantity: &str) -> LivePreviewField {
+        LivePreviewField {
+            active_mask: None,
+            applied_layer_stride: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            auto_downscale_message: None,
+            auto_downscaled: false,
+            config_revision: 1,
+            original_grid: [1, 1, 1],
+            preview_grid: [1, 1, 1],
+            quantity: quantity.to_string(),
+            quantity_domain: "cell".to_string(),
+            spatial_kind: "vector".to_string(),
+            unit: "A/m".to_string(),
+            vector_field_values: vec![1.0, 0.0, 0.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+        }
+    }
+
+    fn engine_log(timestamp_unix_ms: u128, level: &str, message: &str) -> EngineLogEntry {
+        EngineLogEntry {
+            timestamp_unix_ms,
+            level: level.to_string(),
+            message: message.to_string(),
         }
     }
 

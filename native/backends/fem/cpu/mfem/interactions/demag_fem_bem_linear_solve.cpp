@@ -61,10 +61,10 @@ bool solve_demag_fem_bem_sparse_system(
     }
 
     std::unique_ptr<mfem::HypreSolver> preconditioner;
-    switch (ctx.demag_solver.preconditioner) {
+    switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG: {
         auto amg = std::make_unique<mfem::HypreBoomerAMG>(*A_par);
-        amg->SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+        amg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
         preconditioner = std::move(amg);
         break;
     }
@@ -82,17 +82,17 @@ bool solve_demag_fem_bem_sparse_system(
         return false;
     }
 
-    if (ctx.demag_solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
+    if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         mfem::HypreGMRES solver(MPI_COMM_WORLD);
         solver.iterative_mode = true;
-        solver.SetTol(ctx.demag_solver.relative_tolerance);
-        if (ctx.demag_solver.has_absolute_tolerance &&
-            ctx.demag_solver.absolute_tolerance > 0.0) {
-            solver.SetAbsTol(ctx.demag_solver.absolute_tolerance);
+        solver.SetTol(ctx.demag.solver.relative_tolerance);
+        if (ctx.demag.solver.has_absolute_tolerance &&
+            ctx.demag.solver.absolute_tolerance > 0.0) {
+            solver.SetAbsTol(ctx.demag.solver.absolute_tolerance);
         }
-        solver.SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+        solver.SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         solver.SetKDim(50);
-        solver.SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+        solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
         solver.SetOperator(*A_par);
         solver.SetPreconditioner(*preconditioner);
         solver.Mult(b_par, x_par);
@@ -103,13 +103,13 @@ bool solve_demag_fem_bem_sparse_system(
     } else {
         mfem::HyprePCG solver(MPI_COMM_WORLD);
         solver.iterative_mode = true;
-        solver.SetTol(ctx.demag_solver.relative_tolerance);
-        if (ctx.demag_solver.has_absolute_tolerance &&
-            ctx.demag_solver.absolute_tolerance > 0.0) {
-            solver.SetAbsTol(ctx.demag_solver.absolute_tolerance);
+        solver.SetTol(ctx.demag.solver.relative_tolerance);
+        if (ctx.demag.solver.has_absolute_tolerance &&
+            ctx.demag.solver.absolute_tolerance > 0.0) {
+            solver.SetAbsTol(ctx.demag.solver.absolute_tolerance);
         }
-        solver.SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
-        solver.SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+        solver.SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
+        solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
         solver.SetOperator(*A_par);
         solver.SetPreconditioner(*preconditioner);
         solver.Mult(b_par, x_par);

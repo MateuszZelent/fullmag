@@ -1202,6 +1202,15 @@ fn command_resource_invalidations(
                 state,
             );
         }
+        "set_solver_profile" => {
+            push_command_invalidation(
+                &mut resources,
+                "diagnostics/solver-profile",
+                snapshot.solver_profile.revision,
+                "solver profiler configuration",
+                state,
+            );
+        }
         _ => {}
     }
 

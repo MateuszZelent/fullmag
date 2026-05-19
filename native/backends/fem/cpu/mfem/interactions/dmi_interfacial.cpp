@@ -32,9 +32,9 @@ bool compute_interfacial_dmi_field(
     double *dmi_energy,
     std::string &error)
 {
-    const size_t n = ctx.n_nodes;
+    const size_t n = ctx.mesh.n_nodes;
     h_dmi_xyz.assign(n * 3u, 0.0);
-    if (!ctx.enable_dmi || (ctx.dmi_D == 0.0 && ctx.material_fields.Dind_field.empty())) {
+    if (!ctx.dmi.interfacial_enabled || (ctx.dmi.interfacial_D == 0.0 && ctx.material_fields.Dind_field.empty())) {
         if (dmi_energy != nullptr) {
             *dmi_energy = 0.0;
         }
@@ -42,29 +42,29 @@ bool compute_interfacial_dmi_field(
     }
 
 #if FULLMAG_HAS_MFEM_STACK
-    if (!ctx.mfem_ready) {
+    if (!ctx.mfem_context.ready) {
         error = "MFEM context not ready for DMI computation";
         return false;
     }
 
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_fes);
-    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
+    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
     if (fes == nullptr || mesh == nullptr) {
         error = "MFEM FE space or mesh is null during DMI computation";
         return false;
     }
 
-    const double uniform_D = ctx.dmi_D;
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
+    const double uniform_D = ctx.dmi.interfacial_D;
+    const double uniform_Ms = ctx.material_fields.material.saturation_magnetisation;
     double energy = 0.0;
 
     auto *dmi_workspace = dmi_element_workspace(ctx);
 
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
+    unpack_aos_to_existing_components(m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
 
-    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
-    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
-    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
+    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
+    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);
+    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mz);
 
     int dmi_threads = 1;
 #ifdef _OPENMP
@@ -125,9 +125,9 @@ bool compute_interfacial_dmi_field(
                 dmi_workspace->dshape_by_thread[static_cast<size_t>(thread_index)];
             fe->CalcPhysDShape(*T, dshape);
 
-            const double nx = ctx.dmi_n_hat[0];
-            const double ny = ctx.dmi_n_hat[1];
-            const double nz = ctx.dmi_n_hat[2];
+            const double nx = ctx.dmi.interface_normal[0];
+            const double ny = ctx.dmi.interface_normal[1];
+            const double nz = ctx.dmi.interface_normal[2];
 
             double dm[3][3] = {};
             for (int i = 0; i < local_ndof; ++i) {
@@ -162,7 +162,7 @@ bool compute_interfacial_dmi_field(
                 dmi_workspace->residual_xyz_by_thread[static_cast<size_t>(thread_index)];
             for (int i = 0; i < local_ndof; ++i) {
                 const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
+                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
                     continue;
                 }
                 const double sign = dofs[i] >= 0 ? 1.0 : -1.0;

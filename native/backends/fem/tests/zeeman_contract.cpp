@@ -139,11 +139,11 @@ void zeeman_responsibilities_are_owned_by_separate_modules() {
             std::string::npos,
         "Zeeman energy header must document its non-owning field boundary");
     check(
-        context_cpp.find("ctx.has_external_field = plan.has_external_field != 0;") ==
+        context_cpp.find("ctx.zeeman.has_external_field = plan.has_external_field != 0;") ==
             std::string::npos,
         "context_from_plan must delegate Zeeman enable import to zeeman.cpp");
     check(
-        context_cpp.find("ctx.external_field_am = {\n        plan.external_field_am[0]") ==
+        context_cpp.find("ctx.zeeman.external_field_am = {\n        plan.external_field_am[0]") ==
             std::string::npos,
         "context_from_plan must delegate Zeeman field import to zeeman.cpp");
 }
@@ -201,11 +201,25 @@ void zeeman_runtime_state_is_owned_by_aggregate_module() {
         zeeman_header.find("std::vector<double> h_ext_xyz") != std::string::npos,
         "Zeeman runtime state must own the nodal H_ext field buffer");
     check(
+        zeeman_header.find("bool has_external_field") != std::string::npos,
+        "Zeeman runtime state must own the external-field enable flag");
+    check(
+        zeeman_header.find("std::array<double, 3> external_field_am") !=
+            std::string::npos,
+        "Zeeman runtime state must own the uniform external-field vector");
+    check(
         context_header.find("ZeemanRuntimeState zeeman") != std::string::npos,
         "Context must store Zeeman runtime output through the Zeeman owner");
     check(
         context_header.find("std::vector<double> h_ext_xyz") == std::string::npos,
         "Context must not own a flat Zeeman field buffer");
+    check(
+        context_header.find("bool has_external_field") == std::string::npos,
+        "Context must not own a flat Zeeman enable flag");
+    check(
+        context_header.find("std::array<double, 3> external_field_am") ==
+            std::string::npos,
+        "Context must not own a flat Zeeman external-field vector");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -222,8 +236,8 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 2;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.Ms_field = {800e3, 1.0e6};
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27};
     return ctx;
@@ -231,8 +245,8 @@ fullmag::fem::Context make_context() {
 
 void plan_fields_are_imported_by_zeeman_module() {
     fullmag::fem::Context ctx;
-    ctx.has_external_field = false;
-    ctx.external_field_am = {-1.0, -2.0, -3.0};
+    ctx.zeeman.has_external_field = false;
+    ctx.zeeman.external_field_am = {-1.0, -2.0, -3.0};
 
     fullmag_fem_plan_desc plan{};
     plan.has_external_field = 1;
@@ -242,10 +256,10 @@ void plan_fields_are_imported_by_zeeman_module() {
 
     fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
 
-    check(ctx.has_external_field, "Zeeman plan import enables external field");
-    check_near(ctx.external_field_am[0], 11.0, 0.0, "Zeeman plan Hx import");
-    check_near(ctx.external_field_am[1], 22.0, 0.0, "Zeeman plan Hy import");
-    check_near(ctx.external_field_am[2], 33.0, 0.0, "Zeeman plan Hz import");
+    check(ctx.zeeman.has_external_field, "Zeeman plan import enables external field");
+    check_near(ctx.zeeman.external_field_am[0], 11.0, 0.0, "Zeeman plan Hx import");
+    check_near(ctx.zeeman.external_field_am[1], 22.0, 0.0, "Zeeman plan Hy import");
+    check_near(ctx.zeeman.external_field_am[2], 33.0, 0.0, "Zeeman plan Hz import");
 
     plan.has_external_field = 0;
     plan.external_field_am[0] = 44.0;
@@ -254,16 +268,16 @@ void plan_fields_are_imported_by_zeeman_module() {
 
     fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
 
-    check(!ctx.has_external_field, "Zeeman plan import disables external field");
-    check_near(ctx.external_field_am[0], 44.0, 0.0, "disabled Zeeman plan still imports Hx");
-    check_near(ctx.external_field_am[1], 55.0, 0.0, "disabled Zeeman plan still imports Hy");
-    check_near(ctx.external_field_am[2], 66.0, 0.0, "disabled Zeeman plan still imports Hz");
+    check(!ctx.zeeman.has_external_field, "Zeeman plan import disables external field");
+    check_near(ctx.zeeman.external_field_am[0], 44.0, 0.0, "disabled Zeeman plan still imports Hx");
+    check_near(ctx.zeeman.external_field_am[1], 55.0, 0.0, "disabled Zeeman plan still imports Hy");
+    check_near(ctx.zeeman.external_field_am[2], 66.0, 0.0, "disabled Zeeman plan still imports Hz");
 }
 
 void disabled_zeeman_is_zero() {
     auto ctx = make_context();
-    ctx.has_external_field = false;
-    ctx.external_field_am = {10.0, 20.0, 30.0};
+    ctx.zeeman.has_external_field = false;
+    ctx.zeeman.external_field_am = {10.0, 20.0, 30.0};
 
     fullmag::fem::initialize_uniform_zeeman_field(ctx);
 
@@ -291,8 +305,8 @@ void disabled_zeeman_is_zero() {
 
 void uniform_field_is_broadcast_added_and_integrated() {
     auto ctx = make_context();
-    ctx.has_external_field = true;
-    ctx.external_field_am = {100.0, 200.0, 300.0};
+    ctx.zeeman.has_external_field = true;
+    ctx.zeeman.external_field_am = {100.0, 200.0, 300.0};
 
     fullmag::fem::initialize_uniform_zeeman_field(ctx);
 

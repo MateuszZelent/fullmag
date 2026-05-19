@@ -8,6 +8,8 @@
 
 #include "gpu_state.hpp"
 
+#include "context.hpp"
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "kernels.h"
 #endif
@@ -194,6 +196,9 @@ void reset_metadata(FemGpuState &state)
     state.mel_strain_uploaded = false;
     state.mesh_element_count = 0;
     state.mesh_geometry_uploaded = false;
+    state.hybrid_stage_m_xyz.clear();
+    state.hybrid_demag_xyz.clear();
+    state.hybrid_demag_energy_joules = 0.0;
 }
 
 } // namespace
@@ -234,28 +239,24 @@ bool gpu_state_upload_magnetization_aos(
     }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-    const size_t node_count = static_cast<size_t>(state.node_count);
     size_t component_bytes = 0;
     if (!checked_node_bytes(state.node_count, component_bytes, error)) {
         return false;
     }
-
-    std::vector<double> mx(node_count);
-    std::vector<double> my(node_count);
-    std::vector<double> mz(node_count);
-    for (size_t node = 0; node < node_count; ++node) {
-        const size_t base = node * 3u;
-        mx[node] = m_xyz[base + 0u];
-        my[node] = m_xyz[base + 1u];
-        mz[node] = m_xyz[base + 2u];
+    if (state.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = "FemGpuState magnetization upload node count exceeds CUDA kernel range";
+        return false;
     }
 
-    if (!cuda_ok(cudaMemcpy(state.m.x, mx.data(), component_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState m.x host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.m.y, my.data(), component_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState m.y host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.m.z, mz.data(), component_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState m.z host->device", error)) {
+    fullmag_cuda_upload_aos_to_soa(
+        m_xyz,
+        state.m.x,
+        state.m.y,
+        state.m.z,
+        static_cast<int>(state.node_count),
+        nullptr);
+    if (!cuda_ok(cudaStreamSynchronize(nullptr),
+            "fullmag_cuda_upload_aos_to_soa FemGpuState m host->device", error)) {
         return false;
     }
     record_host_to_device(audit, static_cast<uint64_t>(component_bytes) * 3ull);
@@ -286,31 +287,28 @@ bool gpu_state_download_magnetization_aos(
     }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-    const size_t node_count = static_cast<size_t>(state.node_count);
     size_t component_bytes = 0;
     if (!checked_node_bytes(state.node_count, component_bytes, error)) {
         return false;
     }
-
-    std::vector<double> mx(node_count);
-    std::vector<double> my(node_count);
-    std::vector<double> mz(node_count);
-    if (!cuda_ok(cudaMemcpy(mx.data(), state.m.x, component_bytes, cudaMemcpyDeviceToHost),
-            "cudaMemcpy FemGpuState m.x device->host", error) ||
-        !cuda_ok(cudaMemcpy(my.data(), state.m.y, component_bytes, cudaMemcpyDeviceToHost),
-            "cudaMemcpy FemGpuState m.y device->host", error) ||
-        !cuda_ok(cudaMemcpy(mz.data(), state.m.z, component_bytes, cudaMemcpyDeviceToHost),
-            "cudaMemcpy FemGpuState m.z device->host", error)) {
+    if (state.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = "FemGpuState magnetization download node count exceeds CUDA kernel range";
         return false;
     }
 
     out_m_xyz.resize(static_cast<size_t>(state.dof_len));
-    for (size_t node = 0; node < node_count; ++node) {
-        const size_t base = node * 3u;
-        out_m_xyz[base + 0u] = mx[node];
-        out_m_xyz[base + 1u] = my[node];
-        out_m_xyz[base + 2u] = mz[node];
+    fullmag_cuda_download_soa_to_aos(
+        state.m.x,
+        state.m.y,
+        state.m.z,
+        out_m_xyz.data(),
+        static_cast<int>(state.node_count),
+        nullptr);
+    if (!cuda_ok(cudaStreamSynchronize(nullptr),
+            "fullmag_cuda_download_soa_to_aos FemGpuState m device->host", error)) {
+        return false;
     }
+
     record_device_to_host(audit, static_cast<uint64_t>(component_bytes) * 3ull);
     state.host_state = FemGpuSyncState::HostClean;
     return true;
@@ -343,29 +341,27 @@ bool gpu_state_upload_component_aos(
     }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-    const size_t node_count = static_cast<size_t>(state.node_count);
     size_t component_bytes = 0;
     if (!checked_node_bytes(state.node_count, component_bytes, error)) {
         return false;
     }
-
-    std::vector<double> x(node_count);
-    std::vector<double> y(node_count);
-    std::vector<double> z(node_count);
-    for (size_t node = 0; node < node_count; ++node) {
-        const size_t base = node * 3u;
-        x[node] = xyz[base + 0u];
-        y[node] = xyz[base + 1u];
-        z[node] = xyz[base + 2u];
+    if (state.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = std::string("FemGpuState ") + label +
+            " upload node count exceeds CUDA kernel range";
+        return false;
     }
 
     const std::string op_prefix = std::string("cudaMemcpy FemGpuState ") + label;
-    if (!cuda_ok(cudaMemcpy(field.x, x.data(), component_bytes, cudaMemcpyHostToDevice),
-            (op_prefix + ".x host->device").c_str(), error) ||
-        !cuda_ok(cudaMemcpy(field.y, y.data(), component_bytes, cudaMemcpyHostToDevice),
-            (op_prefix + ".y host->device").c_str(), error) ||
-        !cuda_ok(cudaMemcpy(field.z, z.data(), component_bytes, cudaMemcpyHostToDevice),
-            (op_prefix + ".z host->device").c_str(), error)) {
+    fullmag_cuda_upload_aos_to_soa(
+        xyz,
+        field.x,
+        field.y,
+        field.z,
+        static_cast<int>(state.node_count),
+        nullptr);
+    if (!cuda_ok(cudaStreamSynchronize(nullptr),
+            (op_prefix + " fullmag_cuda_upload_aos_to_soa host->device").c_str(),
+            error)) {
         return false;
     }
     record_host_to_device(audit, static_cast<uint64_t>(component_bytes) * 3ull);
@@ -403,6 +399,23 @@ bool gpu_state_upload_effective_fields_aos(
     }
     state.device_state = FemGpuSyncState::DeviceClean;
     return true;
+}
+
+bool gpu_state_upload_demag_field_aos(
+    FemGpuState &state,
+    const double *h_demag_xyz,
+    uint64_t len,
+    TransferAudit &audit,
+    std::string &error)
+{
+    return gpu_state_upload_component_aos(
+        state,
+        state.h_demag,
+        h_demag_xyz,
+        len,
+        "h_demag",
+        audit,
+        error);
 }
 
 bool gpu_state_upload_optional_component_aos(
@@ -873,6 +886,7 @@ bool gpu_state_initialize(
     uint64_t node_count,
     fullmag_fem_integrator integrator,
     bool allocate_device,
+    bool allocate_demag_workspace,
     const double *initial_magnetization_xyz,
     uint64_t initial_magnetization_len,
     TransferAudit &audit,
@@ -954,10 +968,15 @@ bool gpu_state_initialize(
         !allocate_double(state.mel_strain_voigt, mel_strain_values, device_bytes, error) ||
         !allocate_u8(state.magnetic_node_mask, node_count, device_bytes, error) ||
         !allocate_u32(state.periodic_reduced_node, node_count, device_bytes, error) ||
-        !allocate_u32(state.periodic_representative_nodes, node_count, device_bytes, error) ||
-        !allocate_double(state.poisson_rhs, node_count, device_bytes, error) ||
-        !allocate_double(state.poisson_solution, node_count, device_bytes, error) ||
-        !allocate_component(state.poisson_gradient, node_count, device_bytes, error)) {
+        !allocate_u32(state.periodic_representative_nodes, node_count, device_bytes, error)) {
+        gpu_state_destroy(state);
+        return false;
+    }
+
+    if (allocate_demag_workspace &&
+        (!allocate_double(state.poisson_rhs, node_count, device_bytes, error) ||
+            !allocate_double(state.poisson_solution, node_count, device_bytes, error) ||
+            !allocate_component(state.poisson_gradient, node_count, device_bytes, error))) {
         gpu_state_destroy(state);
         return false;
     }
@@ -1084,6 +1103,11 @@ fullmag_fem_gpu_state_info gpu_state_info(const FemGpuState &state)
     info.reduction_workspace_bytes = state.reduction_workspace_bytes;
     info.source_of_truth = state.source_of_truth;
     return info;
+}
+
+fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx)
+{
+    return gpu_state_info(ctx.gpu_state.device);
 }
 
 } // namespace fullmag::fem

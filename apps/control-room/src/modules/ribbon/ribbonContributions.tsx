@@ -215,6 +215,32 @@ const homeTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         { id: "ws-3d",      icon: icon(Box),       label: "3D",      shortcut: "1", active: true, iconColor: "text-indigo-400", menu: radioMenu("home-workspace", "Workspace mode", "3d", [["3d", "3D viewport"], ["2d", "2D slice"], ["analysis", "Analysis"]]) },
+        {
+          id: "home-camera-rotation",
+          icon: icon(Camera),
+          label: "Camera",
+          iconColor: "text-sky-300",
+          menu: [
+            {
+              type: "radio-group",
+              id: "home-camera:rotation-mode",
+              label: "Rotation mode",
+              value: "camera",
+              items: [
+                {
+                  commandId: "viewport-3d.rotation-camera",
+                  label: "Free camera",
+                  value: "camera",
+                },
+                {
+                  commandId: "viewport-3d.rotation-object",
+                  label: "Object orbit",
+                  value: "object",
+                },
+              ],
+            },
+          ],
+        },
         { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2",               iconColor: C.sky },
         { id: "ws-analyze", icon: icon(BarChart3), label: "Analyze",                               iconColor: C.green },
         { id: "ws-panel",   icon: icon(PanelRight),label: "Panel",   shortcut: "Ctrl+B", menu: menu("home-panels", "Panels", ["Explorer", "Inspector", "Bottom dock", "Reset layout"]) },
@@ -227,10 +253,10 @@ const homeTab: RibbonTabContent = {
       subtitle: "runtime",
       tone: "compute",
       actions: [
-        { id: "run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, splitButton: true, iconColor: "text-cyan-400", menu: [...statusMenu("home-runtime", "Runtime", "No session"), separator("home-runtime:sep"), ...radioMenu("home-target", "Execution target", "auto", [["auto", "Auto"], ["cpu", "CPU"], ["gpu", "GPU"]])] },
-        { id: "pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  disabled: true, iconColor: C.yellow },
-        { id: "stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   disabled: true, iconColor: C.red },
-        { id: "skip",  icon: icon(SkipForward),                           label: "Skip",                   disabled: true, iconColor: C.peach },
+        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
+        { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
+        { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
+        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
       ],
     },
   ],
@@ -468,6 +494,15 @@ const viewTab: RibbonTabContent = {
             { type: "label",    id: "vectors:header",   label: "Field arrows",                badge: "off" },
             { type: "checkbox", id: "vectors:visible",  label: "Show vectors / field arrows", checked: false },
             { type: "slider",   id: "vectors:density",  label: "Vector glyph budget",         value: 1200, min: 8, max: 4096, step: 8 },
+            {
+              type: "submenu",
+              id: "vectors:placement",
+              label: "Arrow placement",
+              nodes: [
+                { type: "checkbox", id: "vectors:centered-anchor", label: "Center arrows on mesh nodes", checked: true },
+                { type: "checkbox", id: "vectors:surface-offset",  label: "Lift surface arrows",         checked: false },
+              ],
+            },
             { type: "radio-group", id: "vectors:component", label: "Vector component", value: "3D", items: VECTOR_COMPONENT_ITEMS },
             {
               type: "submenu",
@@ -1422,7 +1457,7 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
-        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
+        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
@@ -1563,6 +1598,17 @@ export function buildRibbonTabContent(
   if (!content) return undefined;
   let resolvedContent = content;
 
+  if (tabId === "home" && context) {
+    resolvedContent = {
+      ...content,
+      groups: content.groups.map((group) =>
+        group.id === "workspace"
+          ? buildHomeWorkspaceGroup(group, context)
+          : group,
+      ),
+    };
+  }
+
   if (tabId === "view" && context) {
     resolvedContent = {
       ...content,
@@ -1587,6 +1633,20 @@ export function buildRibbonTabContent(
   return context?.commands
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
+}
+
+function buildHomeWorkspaceGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: group.actions.map((action) =>
+      action.id === "home-camera-rotation"
+        ? buildCameraRotationModeAction(context)
+        : action,
+    ),
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -2149,6 +2209,45 @@ function buildHslReferenceAction({
   };
 }
 
+function buildCameraRotationModeAction({
+  commandContext = { source: "ribbon" },
+  commands,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const rotationMode =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.rotation-camera", "camera"],
+      ["viewport-3d.rotation-object", "object"],
+    ]) ?? "camera";
+
+  return {
+    id: "home-camera-rotation",
+    icon: icon(Camera),
+    label: "Camera",
+    active: rotationMode === "camera",
+    iconColor: "text-sky-300",
+    menu: [
+      {
+        type: "radio-group",
+        id: "home-camera:rotation-mode",
+        label: "Rotation mode",
+        value: rotationMode,
+        items: [
+          {
+            commandId: "viewport-3d.rotation-camera",
+            label: "Free camera",
+            value: "camera",
+          },
+          {
+            commandId: "viewport-3d.rotation-object",
+            label: "Object orbit",
+            value: "object",
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function activeCommandValue(
   commands: CommandRegistry | undefined,
   commandContext: CommandContext,
@@ -2528,6 +2627,51 @@ function buildVectorsAction(
           visualizationDefaultsCommandInput({
             geometryScope: value as VisualizationGeometryScope,
           }),
+      },
+      {
+        type: "submenu",
+        id: "vectors:placement",
+        label: "Arrow placement",
+        disabled: !context.api,
+        nodes: [
+          {
+            type: "checkbox",
+            id: "vectors:centered-anchor",
+            label: "Center arrows on mesh nodes",
+            checked: objectVectorSettings.vectorCenteringEnabled,
+            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            commandInput: (checked: boolean) =>
+              visualizationDefaultsCommandInput({
+                vectorCenteringEnabled: checked,
+              }),
+          },
+          {
+            type: "checkbox",
+            id: "vectors:surface-offset",
+            label: "Lift surface arrows",
+            checked: objectVectorSettings.vectorSurfaceOffsetEnabled,
+            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            commandInput: (checked: boolean) =>
+              visualizationDefaultsCommandInput({
+                vectorSurfaceOffsetEnabled: checked,
+              }),
+          },
+          {
+            type: "slider",
+            id: "vectors:surface-offset-scale",
+            label: "Surface lift amount",
+            value: objectVectorSettings.vectorSurfaceOffsetScale,
+            min: 0.01,
+            max: 1,
+            step: 0.01,
+            disabled: !context.api || !objectVectorSettings.vectorSurfaceOffsetEnabled,
+            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            commandInput: (value: number) =>
+              visualizationDefaultsCommandInput({
+                vectorSurfaceOffsetScale: value,
+              }),
+          },
+        ],
       },
       {
         type: "radio-group",

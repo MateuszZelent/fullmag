@@ -129,6 +129,12 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "demag", "realization": "fredkin_koehler"},
         )
 
+    def test_demag_fredkin_koehler_realization_round_trip_lowers_to_ir(self) -> None:
+        self.assertEqual(
+            fm.Demag(realization="fredkin_koehler").to_ir(),
+            {"kind": "demag", "realization": "fredkin_koehler"},
+        )
+
     def test_waveguide_geometries_export_canonical_ir(self) -> None:
         sin_geometry = fm.SinWaveguide(
             length=400e-9,
@@ -761,7 +767,8 @@ class ProblemApiTests(unittest.TestCase):
 
     def test_arch_waveguide_example_uses_public_mesh_control_contract(self) -> None:
         example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_waveguide_relax_50nm.py"
-        loaded = load_problem_from_script(example_path, lightweight_assets=True)
+        with patch.dict(os.environ, {"FULLMAG_DEMAG_PRINT_LEVEL": "0"}):
+            loaded = load_problem_from_script(example_path, lightweight_assets=True)
 
         self.assertEqual(loaded.entrypoint_kind, "flat_workspace")
         self.assertEqual(len(loaded.stages), 1)
@@ -785,6 +792,9 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(params["core_maximum_element_size"], 6e-9)
         self.assertEqual(params["surface_maximum_element_size"], 2e-9)
         self.assertEqual(params["edge_maximum_element_size"], 1.8e-9)
+        demag_solver = loaded.problem.discretization.fem.demag_solver_policy
+        self.assertIsNotNone(demag_solver)
+        self.assertEqual(demag_solver.print_level, 0)
         draft = export_builder_draft(loaded)
         scene = build_scene_document_from_builder(draft)
         object_mesh = scene["objects"][0]["object_mesh"]

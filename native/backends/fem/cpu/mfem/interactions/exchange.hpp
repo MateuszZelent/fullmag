@@ -49,10 +49,12 @@ struct ExchangeMfemRuntimeState {
  * The exchange field buffer is stored in AOS-3 order as H_ex in A/m and is
  * consumed by effective-field composition, observable state I/O, snapshots,
  * and GPU runtime bootstrap. MFEM-specific exchange workspace is grouped
- * under mfem so the compatibility Context does not own exchange operator
- * internals directly.
+ * under mfem. The exchange enablement flag is stored here as plan-owned
+ * runtime state so the compatibility Context does not own exchange plan fields
+ * or operator internals directly.
  */
 struct ExchangeRuntimeState {
+    bool enabled = true;
     std::vector<double> h_xyz;
     ExchangeMfemRuntimeState mfem{};
 };

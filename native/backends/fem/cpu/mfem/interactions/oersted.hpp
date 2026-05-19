@@ -4,6 +4,8 @@
 #include "cpu/mfem/interactions/oersted_explicit.hpp"
 #include "fullmag_fem.h"
 
+#include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -12,13 +14,25 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Materialized Oersted field realization shared by explicit and cylinder paths.
+ * Oersted runtime state shared by explicit and cylinder paths.
  *
- * Plan-level realization parameters stay in Context compatibility storage,
- * while this state owns the AoS-3 H_oe buffer after explicit import or
- * analytical-cylinder precomputation.
+ * Owns plan-level realization selection, analytical-cylinder parameters,
+ * current/time-envelope configuration, and the AoS-3 H_oe buffer after
+ * explicit import or analytical-cylinder precomputation.
  */
 struct OerstedRuntimeState {
+    bool has_cylinder = false;
+    bool has_explicit_field = false;
+    double current = 0.0;
+    double radius = 0.0;
+    std::array<double, 3> center{0.0, 0.0, 0.0};
+    std::array<double, 3> axis{0.0, 0.0, 1.0};
+    uint32_t time_dep_kind = 0;
+    double time_dep_freq = 0.0;
+    double time_dep_phase = 0.0;
+    double time_dep_offset = 0.0;
+    double time_dep_t_on = 0.0;
+    double time_dep_t_off = 0.0;
     std::vector<double> h_xyz;
 };
 
@@ -26,8 +40,8 @@ struct OerstedRuntimeState {
  * Initialize Oersted plan fields.
  *
  * Copies either an analytical-cylinder realization or an explicit nodal
- * Oersted field from the ABI plan into Context compatibility storage. The
- * function validates mutually exclusive realizations, explicit field length,
+ * Oersted field from the ABI plan into OerstedRuntimeState. The function
+ * validates mutually exclusive realizations, explicit field length,
  * cylinder-axis normalization, and precomputes the unit-current cylinder field.
  */
 bool initialize_oersted_plan_fields(

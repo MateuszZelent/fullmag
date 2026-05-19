@@ -15,6 +15,7 @@ export function createCommandContext(
     resourceData: patch.resourceData,
     resources: kernel.resources,
     selection: kernel.selection,
+    sourceDetail: patch.sourceDetail,
     visualization: kernel.visualization,
     visualizationSync: kernel.visualizationSync,
   };

@@ -1,9 +1,10 @@
 /*
  * Demag dispatcher source contract.
  *
- * This source owns demag plan-field import, cached/fresh field-update decision
- * policy, and the dispatch wrapper that chooses cached field reuse, fresh
- * Poisson demag, or fresh Fredkin-Koehler FEM/BEM demag. It does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry.
+ * This source owns demag plan-field import, demag runtime initialization
+ * dispatch, cached/fresh field-update decision policy, and the dispatch wrapper
+ * that chooses cached field reuse, fresh Poisson demag, or fresh
+ * Fredkin-Koehler FEM/BEM demag. It does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry.
  */
 
 #include "cpu/mfem/interactions/demag.hpp"
@@ -20,16 +21,50 @@ namespace fullmag::fem {
 
 void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
-    ctx.enable_demag = plan.enable_demag != 0;
-    ctx.demag_solver = plan.demag_solver;
+    ctx.demag.enabled = plan.enable_demag != 0;
+    ctx.demag.solver = plan.demag_solver;
 
 #if FULLMAG_HAS_MFEM_STACK
-    ctx.demag_realization = static_cast<int>(plan.demag_realization);
-    ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
-    ctx.robin_beta_mode = plan.robin_beta_mode;
-    ctx.robin_beta_factor = plan.robin_beta_factor;
+    ctx.demag.realization = static_cast<int>(plan.demag_realization);
+    ctx.poisson_demag.boundary_marker = plan.poisson_boundary_marker;
+    ctx.poisson_demag.robin_beta_mode = plan.robin_beta_mode;
+    ctx.poisson_demag.robin_beta_factor = plan.robin_beta_factor;
 #endif
 }
+
+#if FULLMAG_HAS_MFEM_STACK
+bool initialize_demag_runtime(Context &ctx, std::string &error)
+{
+    if (!ctx.demag.enabled) {
+        return true;
+    }
+
+    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
+        ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
+        return context_initialize_poisson(ctx, error);
+    }
+
+    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+        return context_initialize_demag_fem_bem(ctx, error);
+    }
+
+    error = "unsupported native FEM demag realization";
+    return false;
+}
+
+bool plan_demag_field_update(
+    const Context &ctx,
+    DemagFieldUpdateDecision &decision,
+    std::string &error)
+{
+    DemagFieldUpdateInputs inputs{};
+    inputs.refresh_field = demag_poisson_should_refresh_field(ctx);
+    inputs.demag_realization = ctx.demag.realization;
+    inputs.poisson_ready = ctx.poisson_demag.ready;
+    inputs.fem_bem_ready = ctx.demag_fem_bem.ready;
+    return plan_demag_field_update(inputs, decision, error);
+}
+#endif
 
 bool plan_demag_field_update(
     const DemagFieldUpdateInputs &inputs,
@@ -68,19 +103,6 @@ bool plan_demag_field_update(
 }
 
 #if FULLMAG_HAS_MFEM_STACK
-bool plan_demag_field_update(
-    const Context &ctx,
-    DemagFieldUpdateDecision &decision,
-    std::string &error)
-{
-    DemagFieldUpdateInputs inputs{};
-    inputs.refresh_field = demag_poisson_should_refresh_field(ctx);
-    inputs.demag_realization = ctx.demag_realization;
-    inputs.poisson_ready = ctx.poisson_ready;
-    inputs.fem_bem_ready = ctx.demag_fem_bem_ready;
-    return plan_demag_field_update(inputs, decision, error);
-}
-
 bool compute_demag_field_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

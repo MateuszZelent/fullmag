@@ -366,6 +366,35 @@ describe("study runtime command contributions", () => {
     expect(objectMetricsListener).toHaveBeenCalledWith("cmd-energies");
   });
 
+  it("submits the Compute Study command as a solve request", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-solve",
+      error: null,
+    }));
+
+    const result = await registry.execute("study.run", {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData(),
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Study compute command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "solve",
+        reason: "user_requested",
+        target: { kind: "study" },
+      }),
+    );
+  });
+
   it("reports a clear disabled reason when the API facade is unavailable", () => {
     const registry = registryWithStudyRuntimeCommands();
     const context = { source: "test" as const };

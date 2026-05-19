@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
@@ -10,7 +12,7 @@ import {
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
-import { resolveRibbonIconColor } from "./RibbonGroupsRow";
+import { resolveRibbonIconColor, RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
 import {
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -161,6 +163,34 @@ describe("ribbon structure", () => {
     expect(source).toContain("-webkit-line-clamp: 2");
     expect(source).toContain("overflow-wrap: anywhere");
     expect(source).toContain(".fm-ribbon-group::before");
+  });
+
+  it("renders disabled ribbon action reasons on a hoverable shell", () => {
+    const html = renderToStaticMarkup(
+      createElement(RibbonGroupsRow, {
+        groups: [
+          {
+            id: "control",
+            title: "Control",
+            actions: [
+              {
+                id: "study.run",
+                icon: null,
+                label: "Compute",
+                disabled: true,
+                tooltip:
+                  "Build a shared-domain mesh before running FEM runtime commands.",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("fm-ribbon-action-shell");
+    expect(html).toContain(
+      'title="Build a shared-domain mesh before running FEM runtime commands."',
+    );
   });
 
   it("enables selected display controls from the object visualization registry", async () => {
@@ -1185,21 +1215,42 @@ describe("ribbon structure", () => {
       (node) =>
         node.type === "radio-group" && node.id === "vectors:geometry-scope",
     );
+    const placementNode = vectorsAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "vectors:placement",
+    );
+    const centeringNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:centered-anchor",
+        )
+      : undefined;
+    const surfaceOffsetNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:surface-offset",
+        )
+      : undefined;
 
     expect(visibleNode).toMatchObject({ checked: false });
     expect(densityNode).toMatchObject({ value: 58 });
     expect(scopeNode).toMatchObject({ value: "full" });
+    expect(centeringNode).toMatchObject({ checked: true });
+    expect(surfaceOffsetNode).toMatchObject({ checked: false });
     if (
       visibleNode?.type !== "checkbox" ||
       densityNode?.type !== "slider" ||
-      scopeNode?.type !== "radio-group"
+      scopeNode?.type !== "radio-group" ||
+      centeringNode?.type !== "checkbox" ||
+      surfaceOffsetNode?.type !== "checkbox"
     ) {
-      throw new Error("Expected vector visibility, density and scope controls");
+      throw new Error("Expected vector visibility, density, scope and placement controls");
     }
 
     await runRibbonNode(visibleNode, true, context);
     await runRibbonNode(densityNode, 2048, context);
     await runRibbonNode(scopeNode, "surface", context);
+    await runRibbonNode(centeringNode, false, context);
+    await runRibbonNode(surfaceOffsetNode, true, context);
 
     expect(patches).toEqual([
       {
@@ -1214,9 +1265,13 @@ describe("ribbon structure", () => {
     ]);
     expect(context.visualization.getDefaultSettings("object")).toMatchObject({
       geometryScope: "surface",
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getDefaultSettings("part")).toMatchObject({
       geometryScope: "surface",
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
     });
   });
 
@@ -1309,6 +1364,22 @@ describe("ribbon structure", () => {
       run: () => ({ status: "completed" }),
     });
     commands.register({
+      id: "viewport-3d.rotation-camera",
+      title: "Use Free Camera Rotation",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => true,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.rotation-object",
+      title: "Use Object Rotation",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
       id: "viewport-3d.capture-frame",
       title: "Capture 3D Frame",
       group: "viewport-3d",
@@ -1371,6 +1442,29 @@ describe("ribbon structure", () => {
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
     });
+    const homeContent = buildRibbonTabContent("home", {
+      commands,
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const workspaceGroup = homeContent?.groups.find(
+      (group) => group.id === "workspace",
+    );
+    const homeCameraAction = workspaceGroup?.actions.find(
+      (action) => action.id === "home-camera-rotation",
+    );
+    const homeRotationNode = homeCameraAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "home-camera:rotation-mode",
+    );
     const orientationGroup = content?.groups.find(
       (group) => group.id === "view-orientation-tools",
     );
@@ -1469,6 +1563,23 @@ describe("ribbon structure", () => {
       commandId: "viewport-3d.open-camera-dialog",
       label: "Camera parameters",
     });
+    expect(homeCameraAction).toMatchObject({
+      active: true,
+      label: "Camera",
+    });
+    expect(homeRotationNode).toMatchObject({
+      value: "camera",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.rotation-camera",
+          value: "camera",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.rotation-object",
+          value: "object",
+        }),
+      ],
+    });
   });
 
   it("mirrors command registry disabled state into ribbon actions", () => {
@@ -1508,7 +1619,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("exposes compute fields through the Study control group command", () => {
+  it("exposes study compute commands through the Study control group", () => {
     const commands = new CommandRegistry();
     for (const command of STUDY_RUNTIME_COMMANDS) {
       commands.register(command);
@@ -1559,10 +1670,150 @@ describe("ribbon structure", () => {
     const computeFieldsAction = content?.groups
       .find((group) => group.id === "control")
       ?.actions.find((action) => action.id === "study.compute-fields");
+    const computeAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.run");
 
     expect(computeFieldsAction).toMatchObject({
       disabled: false,
       label: "Compute Fields",
+    });
+    expect(computeAction).toMatchObject({
+      disabled: false,
+      label: "Compute",
+    });
+    expect(computeAction?.splitButton).toBeUndefined();
+    expect(computeAction?.menu).toBeUndefined();
+  });
+
+  it("wires the Home Compute group to the study runtime command registry", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+
+    const content = buildRibbonTabContent("home", {
+      commands,
+      commandContext: {
+        api: { commands: { submit: vi.fn() } } as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              explicit_topology: false,
+            },
+            domain: {
+              discretization: "fdm",
+            },
+            resources: {
+              mesh_revision: 0,
+              scene_revision: 1,
+            },
+          },
+          [SIMULATION_COMMANDS_PATH]: { commands: [] },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: null,
+            revision: 1,
+            runtime_state: "idle",
+            stages: [],
+          },
+        },
+        source: "test" as const,
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const computeGroup = content?.groups.find((group) => group.id === "compute");
+    const computeAction = computeGroup?.actions.find(
+      (action) => action.id === "study.run",
+    );
+
+    expect(computeGroup?.actions.some((action) => action.id === "run")).toBe(
+      false,
+    );
+    expect(computeAction).toMatchObject({
+      disabled: false,
+      label: "Compute",
+    });
+    expect(computeAction?.splitButton).toBeUndefined();
+    expect(computeAction?.menu).toBeUndefined();
+  });
+
+  it("shows FEM mesh readiness reason on disabled Home and Study Compute actions", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+    const commandContext = {
+      api: { commands: { submit: vi.fn() } } as never,
+      resourceData: {
+        [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: {
+            binary_fields: true,
+            explicit_topology: false,
+          },
+          domain: {
+            discretization: "fem",
+          },
+          resources: {
+            mesh_revision: 0,
+            scene_revision: 1,
+          },
+        },
+        [SIMULATION_COMMANDS_PATH]: { commands: [] },
+        [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+        [SIMULATION_STAGES_EXECUTION_PATH]: {
+          active_stage_index: null,
+          revision: 1,
+          runtime_state: "idle",
+          stages: [],
+        },
+      },
+      source: "test" as const,
+    };
+    const context = {
+      commands,
+      commandContext,
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    };
+
+    const homeContent = buildRibbonTabContent("home", context);
+    const studyContent = buildRibbonTabContent("study", context);
+    const homeComputeAction = homeContent?.groups
+      .find((group) => group.id === "compute")
+      ?.actions.find((action) => action.id === "study.run");
+    const studyComputeAction = studyContent?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.run");
+
+    expect(homeComputeAction).toMatchObject({
+      disabled: true,
+      tooltip: "Build a shared-domain mesh before running FEM runtime commands.",
+    });
+    expect(studyComputeAction).toMatchObject({
+      disabled: true,
+      tooltip: "Build a shared-domain mesh before running FEM runtime commands.",
     });
   });
 

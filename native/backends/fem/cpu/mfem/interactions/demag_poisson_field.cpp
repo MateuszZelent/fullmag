@@ -19,7 +19,7 @@ void finalize_demag_poisson_recovered_field(
 {
     if (!ctx.mesh.periodic_reduced_node.empty()) {
         const uint32_t n_nodes =
-            std::min(ctx.n_nodes, static_cast<uint32_t>(h_demag_xyz.size() / 3u));
+            std::min(ctx.mesh.n_nodes, static_cast<uint32_t>(h_demag_xyz.size() / 3u));
         for (uint32_t node = 0; node < n_nodes; ++node) {
             if (static_cast<size_t>(node) >= ctx.mesh.periodic_reduced_node.size()) {
                 continue;

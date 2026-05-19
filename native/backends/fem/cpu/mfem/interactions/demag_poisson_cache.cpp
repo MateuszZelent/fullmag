@@ -13,29 +13,29 @@ namespace fullmag::fem {
 
 bool demag_poisson_should_refresh_field(const Context &ctx)
 {
-    if (ctx.field_refresh.has_demag_interval_s == 0) {
+    if (ctx.demag.field_refresh.has_demag_interval_s == 0) {
         return true;
     }
     if (!ctx.demag.cache_valid) {
         return true;
     }
-    if (!(ctx.field_refresh.demag_interval_s > 0.0)) {
+    if (!(ctx.demag.field_refresh.demag_interval_s > 0.0)) {
         return true;
     }
-    const double elapsed = ctx.current_time - ctx.demag.last_refresh_time;
-    return elapsed + 1e-30 >= ctx.field_refresh.demag_interval_s;
+    const double elapsed = ctx.state.current_time - ctx.demag.last_refresh_time;
+    return elapsed + 1e-30 >= ctx.demag.field_refresh.demag_interval_s;
 }
 
 void demag_poisson_store_refreshed_field_cache(
     Context &ctx,
     const std::vector<double> &h_demag_xyz)
 {
-    if (ctx.field_refresh.has_demag_interval_s == 0) {
+    if (ctx.demag.field_refresh.has_demag_interval_s == 0) {
         return;
     }
     ctx.demag.cached_xyz = h_demag_xyz;
     ctx.demag.cached_visual_xyz = ctx.demag.h_visual_xyz;
-    ctx.demag.last_refresh_time = ctx.current_time;
+    ctx.demag.last_refresh_time = ctx.state.current_time;
     ctx.demag.cache_valid = true;
 }
 

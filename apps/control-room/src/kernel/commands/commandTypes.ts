@@ -12,13 +12,21 @@ type CommandGroupId = string;
 export type CommandCategory = string;
 
 export interface CommandContext {
-  source: "menu" | "ribbon" | "shortcut" | "palette" | "test";
+  source:
+    | "explorer"
+    | "inspector"
+    | "menu"
+    | "palette"
+    | "ribbon"
+    | "shortcut"
+    | "test";
   api?: ControlRoomApi;
   input?: unknown;
   layout?: LayoutController;
   resourceData?: Readonly<Record<string, unknown>>;
   resources?: ResourceInvalidationController;
   selection?: SelectionController;
+  sourceDetail?: string;
   visualization?: ObjectVisualizationController;
   visualizationSync?: VisualizationRegistrySyncController;
 }

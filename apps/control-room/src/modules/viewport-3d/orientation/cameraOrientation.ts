@@ -23,7 +23,32 @@ export function snapCameraToDirection(
       current.target[2] + normalized[2] * distance,
     ],
     target: current.target,
-    up: current.up,
+    up: resolveCameraUpForDirection(normalized),
+  };
+}
+
+export function freeCameraTargetForDirection(
+  current: Viewport3DCameraState,
+  direction: Direction3,
+): Viewport3DCameraState {
+  const normalized = normalizeDirection(direction);
+  const distance = Math.max(
+    Math.hypot(
+      current.position[0] - current.target[0],
+      current.position[1] - current.target[1],
+      current.position[2] - current.target[2],
+    ),
+    1e-9,
+  );
+
+  return {
+    position: current.position,
+    target: [
+      current.position[0] - normalized[0] * distance,
+      current.position[1] - normalized[1] * distance,
+      current.position[2] - normalized[2] * distance,
+    ],
+    up: resolveCameraUpForDirection(normalized),
   };
 }
 
@@ -60,6 +85,29 @@ export function orbitCameraAroundTarget(
   );
 }
 
+export function rotateFreeCameraTarget(
+  current: Viewport3DCameraState,
+  deltaX: number,
+  sensitivity: number,
+): Viewport3DCameraState {
+  const x = current.target[0] - current.position[0];
+  const y = current.target[1] - current.position[1];
+  const z = current.target[2] - current.position[2];
+  const radians = -deltaX * sensitivity;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return {
+    position: current.position,
+    target: [
+      current.position[0] + x * cos - y * sin,
+      current.position[1] + x * sin + y * cos,
+      current.position[2] + z,
+    ],
+    up: current.up,
+  };
+}
+
 export function normalizeDirection(direction: Direction3): Direction3 {
   const length = Math.hypot(direction[0], direction[1], direction[2]);
   if (length === 0) {
@@ -71,4 +119,9 @@ export function normalizeDirection(direction: Direction3): Direction3 {
     direction[1] / length,
     direction[2] / length,
   ];
+}
+
+export function resolveCameraUpForDirection(direction: Direction3): Direction3 {
+  const normalized = normalizeDirection(direction);
+  return Math.abs(normalized[2]) > 0.98 ? [0, 1, 0] : [0, 0, 1];
 }

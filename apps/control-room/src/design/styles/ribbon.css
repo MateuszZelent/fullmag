@@ -182,6 +182,14 @@
 }
 
 /* ── Ribbon action button ── */
+.fm-ribbon-action-shell {
+  display: inline-flex;
+  width: var(--fm-ribbon-action-width);
+  min-width: var(--fm-ribbon-action-width);
+  flex-shrink: 0;
+  align-items: stretch;
+}
+
 .fm-ribbon-action {
   --fm-ribbon-icon-color: currentColor;
   position: relative;
@@ -245,6 +253,11 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
+}
+
+.fm-ribbon-action-stack .fm-ribbon-action-shell {
+  width: auto;
+  min-width: 0;
 }
 
 .fm-ribbon-action-detail {

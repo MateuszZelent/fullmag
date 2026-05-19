@@ -1179,11 +1179,13 @@ describe("ControlRoomApi", () => {
     });
 
     await api.diagnostics.engineLog();
+    await api.diagnostics.cpuTelemetry();
     await api.diagnostics.gpuTelemetry();
     await api.diagnostics.solverProfile();
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/engine-log",
+      "http://127.0.0.1:8765/v2/sessions/current/diagnostics/cpu",
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/gpu",
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/solver-profile",
     ]);

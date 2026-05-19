@@ -103,6 +103,7 @@ function RibbonActionButton({
   const style = resolvedIconColor
     ? ({ "--fm-ribbon-icon-color": resolvedIconColor } as CSSProperties)
     : undefined;
+  const tooltipText = tooltip ?? label;
   const runAction = () => {
     if (!isTriggerDisabled) {
       onAction?.(id);
@@ -140,7 +141,7 @@ function RibbonActionButton({
       data-disabled={isTriggerDisabled}
       disabled={isTriggerDisabled}
       style={style}
-      title={tooltip ?? label}
+      title={tooltipText}
       type="button"
       onClick={hasMenu && splitButton ? undefined : runAction}
       onKeyDownCapture={hasMenu && splitButton ? runMenuActionFromKeyboard : undefined}
@@ -181,14 +182,19 @@ function RibbonActionButton({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+  const wrappedContent = (
+    <span className="fm-ribbon-action-shell" title={tooltipText}>
+      {content}
+    </span>
+  );
 
   return detailButton ? (
     <div className="fm-ribbon-action-stack">
-      {content}
+      {wrappedContent}
       {detailButton}
     </div>
   ) : (
-    content
+    wrappedContent
   );
 }
 

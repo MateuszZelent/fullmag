@@ -16,17 +16,17 @@ void compute_magnetoelastic_field(
     Context &ctx,
     const std::vector<double> &m_xyz)
 {
-    const size_t n = ctx.n_nodes;
+    const size_t n = ctx.mesh.n_nodes;
     ctx.magnetoelastic.h_xyz.assign(n * 3u, 0.0);
     ctx.magnetoelastic.energy_joules = 0.0;
 
-    if (!ctx.enable_magnetoelastic || ctx.mel_strain_voigt.empty()) {
+    if (!ctx.magnetoelastic.enabled || ctx.magnetoelastic.strain_voigt.empty()) {
         return;
     }
 
-    const double b1 = ctx.mel_b1;
-    const double b2 = ctx.mel_b2;
-    const double uniform_ms = ctx.material.saturation_magnetisation;
+    const double b1 = ctx.magnetoelastic.b1;
+    const double b2 = ctx.magnetoelastic.b2;
+    const double uniform_ms = ctx.material_fields.material.saturation_magnetisation;
     double energy = 0.0;
 
     for (size_t i = 0; i < n; ++i) {
@@ -40,9 +40,9 @@ void compute_magnetoelastic_field(
         }
         const double inv_mu0_ms = -1.0 / (kMu0 * ms_i);
 
-        const double *eps = ctx.mel_uniform_strain
-            ? ctx.mel_strain_voigt.data()
-            : ctx.mel_strain_voigt.data() + i * 6u;
+        const double *eps = ctx.magnetoelastic.uniform_strain
+            ? ctx.magnetoelastic.strain_voigt.data()
+            : ctx.magnetoelastic.strain_voigt.data() + i * 6u;
         const double e11 = eps[0];
         const double e22 = eps[1];
         const double e33 = eps[2];

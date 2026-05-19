@@ -28,6 +28,10 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
+  shouldLoadRuntimeMeshBuild,
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+  shouldLoadRuntimeStageExecution,
   useCommandQueueResource,
   useCommandDetailResource,
   useCheckpointCatalogResource,
@@ -44,6 +48,7 @@ import { useVisualizationStateResource } from "@/kernel/visualization/useVisuali
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 
 import { buildRibbonTabContent } from "./ribbonContributions";
+import { ribbonTabNeedsRuntimeResources } from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
@@ -57,7 +62,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const activeTab = layout.activeModuleTab;
   const needsGeometryResources =
     activeTab === "geometry" || activeTab === "mesh";
-  const needsRuntimeResources = activeTab === "study";
+  const needsRuntimeResources = ribbonTabNeedsRuntimeResources(activeTab);
   const needsMeshResources = activeTab === "mesh" || needsRuntimeResources;
   const needsVisualizationResources = activeTab === "view";
   const visualizationState = useVisualizationStateResource({
@@ -69,18 +74,28 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const geometryValidation = useGeometryValidationResource({
     enabled: needsGeometryResources || needsRuntimeResources,
   });
-  const meshBuildCurrent = useMeshBuildCurrent({ enabled: needsMeshResources });
+  const sessionStatus = useSessionStatus();
+  const meshBuildCurrent = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatus.data),
+  });
   const meshBuildLatest = useMeshBuildLatestSuccessful({
-    enabled: needsMeshResources,
+    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatus.data),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
-    enabled: needsMeshResources,
+    enabled: shouldLoadRuntimeMeshManifest(
+      needsMeshResources,
+      sessionStatus.data,
+    ),
   });
-  const meshSummary = useMeshSummaryResource({ enabled: needsMeshResources });
+  const meshSummary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(
+      needsMeshResources,
+      sessionStatus.data,
+    ),
+  });
   const meshSemantics = useMeshSemanticsResource({
     enabled: needsMeshResources,
   });
-  const sessionStatus = useSessionStatus();
   const commandQueue = useCommandQueueResource({
     enabled: needsRuntimeResources,
   });
@@ -88,7 +103,10 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
     enabled: needsRuntimeResources,
   });
   const stageExecution = useStageExecutionResource({
-    enabled: needsRuntimeResources,
+    enabled: shouldLoadRuntimeStageExecution(
+      needsRuntimeResources,
+      sessionStatus.data,
+    ),
   });
   const checkpointCatalog = useCheckpointCatalogResource({
     enabled: needsRuntimeResources,
@@ -127,8 +145,10 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
             : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
+        sourceDetail: activeTab,
       }),
     [
+      activeTab,
       geometryCapabilities.data,
       geometryValidation.data,
       kernel,

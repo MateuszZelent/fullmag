@@ -338,9 +338,7 @@ class Ellipsoid(_GeometryOps):
         return {
             "name": self.name,
             "kind": "ellipsoid",
-            "rx": self.rx,
-            "ry": self.ry,
-            "rz": self.rz,
+            "radii": [self.rx, self.ry, self.rz],
         }
 
 

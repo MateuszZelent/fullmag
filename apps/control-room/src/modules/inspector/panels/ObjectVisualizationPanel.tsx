@@ -22,6 +22,7 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
   useVisualizationStateResource,
@@ -90,6 +91,16 @@ type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promis
 type SectionDisabled = (
   id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
 ) => boolean;
+
+function remoteVisualizationTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  const remotePatch = { ...patch };
+  delete remotePatch.vectorCenteringEnabled;
+  delete remotePatch.vectorSurfaceOffsetEnabled;
+  delete remotePatch.vectorSurfaceOffsetScale;
+  return remotePatch;
+}
 
 function VisualizationDisplayPassesSection({
   displaySettings,
@@ -241,7 +252,7 @@ function VisualizationVectorsSection({
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
-    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorThickness",
+    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorSurfaceOffsetScale" | "vectorThickness",
     value: number,
   ) => void;
   pending: boolean;
@@ -269,6 +280,32 @@ function VisualizationVectorsSection({
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow budget" max={4096} min={8} step={8} value={settings.vectorBudget} onChange={(value) => patchNumber("vectorBudget", value)} />
+      <div className="fm-visualization-toggle-grid">
+        <ToggleButton
+          active={settings.vectorCenteringEnabled}
+          disabled={pending || sectionDisabled("vectors")}
+          label="Centered arrows"
+          onClick={() =>
+            void patch({
+              vectorCenteringEnabled: !settings.vectorCenteringEnabled,
+            })
+          }
+        />
+        <ToggleButton
+          active={settings.vectorSurfaceOffsetEnabled}
+          disabled={pending || sectionDisabled("vectors")}
+          label="Surface lift"
+          onClick={() =>
+            void patch({
+              vectorSurfaceOffsetEnabled:
+                !settings.vectorSurfaceOffsetEnabled,
+            })
+          }
+        />
+      </div>
+      {settings.vectorSurfaceOffsetEnabled ? (
+        <NumberField disabled={pending || sectionDisabled("vectors")} label="Surface lift amount" max={1} min={0.01} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
+      ) : null}
       <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
         {GEOMETRY_SCOPES.map((scope) => (
           <Button
@@ -391,7 +428,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const sessionStatus = useSessionStatus();
   const scene = useSceneResource({ enabled: Boolean(target) });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: Boolean(target),
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), sessionStatus.data),
   });
   const [feedback, setFeedback] = useState<string | null>(null);
   const pending = false;
@@ -448,13 +485,16 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    visualizationSync.queuePatch({
-      overrides: mergeVisualizationStateTargetOverride(
-        visualizationState.data.overrides ?? [],
-        target,
-        patchValue,
-      ),
-    });
+    const remotePatch = remoteVisualizationTargetPatch(patchValue);
+    if (Object.keys(remotePatch).length > 0) {
+      visualizationSync.queuePatch({
+        overrides: mergeVisualizationStateTargetOverride(
+          visualizationState.data.overrides ?? [],
+          target,
+          remotePatch,
+        ),
+      });
+    }
     // Keep the patch locally for immediate inspector/ribbon feedback until the
     // revision-driven resource refetch lands.
     visualization.patchTarget(target, patchValue);
@@ -515,6 +555,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       | "vectorAlphaPercent"
       | "vectorBudget"
       | "vectorLengthScale"
+      | "vectorSurfaceOffsetScale"
       | "vectorThickness"
       | "wireframeOpacityPercent",
     value: number,
@@ -529,6 +570,10 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     }
     if (field === "vectorLengthScale") {
       void patch({ vectorLengthScale: value });
+      return;
+    }
+    if (field === "vectorSurfaceOffsetScale") {
+      void patch({ vectorSurfaceOffsetScale: value });
       return;
     }
     if (field === "vectorThickness") {

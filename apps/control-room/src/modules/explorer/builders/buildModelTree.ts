@@ -319,6 +319,16 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
         contextCommands: ["mesh.open-quality"],
       },
       {
+        id: "model:mesh:airbox-quality",
+        kind: "airbox.mesh",
+        label: "Airbox Quality",
+        parentId: "model:mesh",
+        badge: "airbox",
+        icon: "gauge",
+        status,
+        contextCommands: ["mesh.open-quality"],
+      },
+      {
         id: "model:mesh:size-fields",
         kind: "mesh.size-fields",
         label: "Realized Size Fields",

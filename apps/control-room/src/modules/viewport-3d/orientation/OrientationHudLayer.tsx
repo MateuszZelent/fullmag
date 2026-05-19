@@ -14,15 +14,15 @@ import {
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
-import type { Viewport3DCameraState } from "../viewport3dStore";
+import type {
+  Viewport3DCameraState,
+  Viewport3DRotationMode,
+} from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import {
-  applyViewport3DWorldUp,
-  VIEWPORT_3D_WORLD_UP,
-} from "../layers/CameraControls";
-
-import {
+  freeCameraTargetForDirection,
   orbitCameraAroundTarget,
+  rotateFreeCameraTarget,
   snapCameraToDirection,
   type Direction3,
 } from "./cameraOrientation";
@@ -43,6 +43,7 @@ interface OrientationHudLayerProps {
   colors: Viewport3DColors;
   hslReferenceVisible: boolean;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  rotationMode: Viewport3DRotationMode;
   viewCubeVisible: boolean;
 }
 
@@ -58,6 +59,7 @@ export function OrientationHudLayer({
   colors,
   hslReferenceVisible,
   onCameraChange,
+  rotationMode,
   viewCubeVisible,
 }: OrientationHudLayerProps) {
   const camera = useThree((state) => state.camera);
@@ -79,19 +81,18 @@ export function OrientationHudLayer({
   const snapToDirection = useCallback(
     (direction: Direction3) => {
       const target = getTarget();
+      const currentCamera = {
+        position: camera.position.toArray() as [number, number, number],
+        target: target.toArray() as [number, number, number],
+        up: camera.up.toArray() as [number, number, number],
+      };
       const nextCamera = {
-        ...snapCameraToDirection(
-          {
-            position: camera.position.toArray() as [number, number, number],
-            target: target.toArray() as [number, number, number],
-            up: VIEWPORT_3D_WORLD_UP,
-          },
-          direction,
-        ),
-        up: VIEWPORT_3D_WORLD_UP,
+        ...(rotationMode === "camera"
+          ? freeCameraTargetForDirection(currentCamera, direction)
+          : snapCameraToDirection(currentCamera, direction)),
       };
 
-      applyViewport3DWorldUp(camera);
+      camera.up.set(...nextCamera.up);
       camera.position.set(...nextCamera.position);
       camera.lookAt(...nextCamera.target);
       camera.updateProjectionMatrix();
@@ -101,26 +102,24 @@ export function OrientationHudLayer({
       commitCameraChange(nextCamera);
       invalidate();
     },
-    [camera, commitCameraChange, controls, getTarget, invalidate],
+    [camera, commitCameraChange, controls, getTarget, invalidate, rotationMode],
   );
 
   const onOrbit = useCallback(
     (deltaX: number) => {
       const target = getTarget();
+      const currentCamera = {
+        position: camera.position.toArray() as [number, number, number],
+        target: target.toArray() as [number, number, number],
+        up: camera.up.toArray() as [number, number, number],
+      };
       const nextCamera = {
-        ...orbitCameraAroundTarget(
-          {
-            position: camera.position.toArray() as [number, number, number],
-            target: target.toArray() as [number, number, number],
-            up: VIEWPORT_3D_WORLD_UP,
-          },
-          deltaX,
-          ORBIT_SENSITIVITY,
-        ),
-        up: VIEWPORT_3D_WORLD_UP,
+        ...(rotationMode === "camera"
+          ? rotateFreeCameraTarget(currentCamera, deltaX, ORBIT_SENSITIVITY)
+          : orbitCameraAroundTarget(currentCamera, deltaX, ORBIT_SENSITIVITY)),
       };
 
-      applyViewport3DWorldUp(camera);
+      camera.up.set(...nextCamera.up);
       camera.position.set(nextCamera.position[0], nextCamera.position[1], nextCamera.position[2]);
       camera.lookAt(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
       camera.updateProjectionMatrix();
@@ -130,7 +129,7 @@ export function OrientationHudLayer({
       pendingOrbitCameraRef.current = nextCamera;
       invalidate();
     },
-    [camera, controls, getTarget, invalidate],
+    [camera, controls, getTarget, invalidate, rotationMode],
   );
   const commitOrbit = useCallback(() => {
     const nextCamera = pendingOrbitCameraRef.current;

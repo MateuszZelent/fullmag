@@ -37,7 +37,7 @@ bool compute_exchange_for_magnetization(
     std::string &error)
 {
     const size_t field_size =
-        !m_xyz.empty() ? m_xyz.size() : static_cast<size_t>(ctx.n_nodes) * 3u;
+        !m_xyz.empty() ? m_xyz.size() : static_cast<size_t>(ctx.mesh.n_nodes) * 3u;
     h_ex_xyz.assign(field_size, 0.0);
     if (h_eff_xyz != nullptr) {
         *h_eff_xyz = h_ex_xyz;
@@ -45,7 +45,7 @@ bool compute_exchange_for_magnetization(
     if (exchange_energy != nullptr) {
         *exchange_energy = 0.0;
     }
-    if (!ctx.enable_exchange || ctx.material.exchange_stiffness == 0.0) {
+    if (!ctx.exchange.enabled || ctx.material_fields.material.exchange_stiffness == 0.0) {
         return true;
     }
     error = "Native FEM exchange requires the MFEM stack";

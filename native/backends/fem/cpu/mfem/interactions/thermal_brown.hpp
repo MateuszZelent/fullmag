@@ -12,8 +12,8 @@ struct Context;
 /*
  * Initialize Brown thermal plan fields.
  *
- * Copies the thermal temperature and RNG seed from the ABI plan into Context
- * compatibility storage and sizes the AoS-3 Brown field buffer. Stochastic
+ * Copies the thermal temperature and RNG seed from the ABI plan into the Brown
+ * sampler runtime owner and sizes the AoS-3 Brown field buffer. Stochastic
  * sampling remains owned by thermal_brown_sampler.*.
  */
 void initialize_thermal_brown_plan_fields(

@@ -152,6 +152,36 @@ describe("viewport3dRenderModel", () => {
     ]);
   });
 
+  it("can anchor vector line segments by their tail for comparison with centered arrows", () => {
+    const segments = buildVectorLineSegments(
+      topologyFixture(),
+      fieldVectorFixture(),
+      0.5,
+      2,
+      { anchorMode: "tail" },
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      0, 0, 0, 0.5, 0, 0, 1,
+      0, 1, 0, 0, 1, 0.5, 1,
+    ]);
+  });
+
+  it("can lift selected surface vector anchors along averaged boundary normals", () => {
+    const segments = buildVectorLineSegmentsForNodeSelection(
+      topologyFixture(),
+      fieldVectorFixture(),
+      { nodeIndices: [0] },
+      0.5,
+      1,
+      { surfaceOffsetScale: 0.1 },
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      -0.25, 0, expect.closeTo(0.05), 0.25, 0, expect.closeTo(0.05), 1,
+    ]);
+  });
+
   it("builds part surface indices from manifest surface faces", () => {
     expect(
       Array.from(

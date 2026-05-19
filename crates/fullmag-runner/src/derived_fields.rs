@@ -50,7 +50,7 @@ pub(crate) fn max_torque_residual_apm_from_field(
         })
 }
 
-#[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) fn max_vector_norm(vectors: &[[f64; 3]]) -> f64 {
     vectors.iter().fold(0.0, |acc, v| {
         acc.max((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())

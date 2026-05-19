@@ -35,4 +35,15 @@ struct StepperWorkspace {
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
 };
 
+/*
+ * Runtime owner for the reusable explicit RK workspace.
+ *
+ * Context stores this owner rather than a flat StepperWorkspace so the
+ * integrator subsystem remains the boundary for RK storage. It does not
+ * evaluate stages, choose tableaus, advance time, or own adaptive policy.
+ */
+struct RkStepperRuntimeState {
+    StepperWorkspace workspace{};
+};
+
 } // namespace fullmag::fem

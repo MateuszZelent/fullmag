@@ -172,6 +172,29 @@ pub(crate) struct GpuTelemetryResponse {
     pub devices: Vec<GpuTelemetryDevice>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub(crate) struct CpuTelemetryResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub sample_time_unix_ms: u128,
+    pub logical_cpus: u32,
+    pub utilization_cpu_percent: f64,
+    pub process_cpu_percent: f64,
+    pub memory_used_mb: f64,
+    pub memory_total_mb: f64,
+    pub process_rss_mb: f64,
+    pub process_threads: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_average_1m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_average_5m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_average_15m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct SessionManifest {
     pub session_id: String,

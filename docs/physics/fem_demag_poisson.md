@@ -88,6 +88,11 @@ still in `mfem_bridge.cpp`.
   helpers.
 - Non-periodic demag uses the extracted Hypre-backed solve helper when the MFEM
   runtime is MPI/Hypre-enabled.
+- The Hypre solve helper returns the solved workspace vector directly to
+  recovery and potential-cache update, avoiding the previous final host copy
+  from `x_par` back into the generic solution buffer. RHS transfer into
+  `b_par` and first-use warm-start transfer into `x_par` remain explicit,
+  audited host transfers.
 - Field recovery uses the extracted `recover_demag_poisson_field(...)` helper
   for both periodic lifted potentials and non-periodic Hypre solutions.
 - Recovered periodic demag fields are finalized by
@@ -139,12 +144,20 @@ Current gate:
 - Local non-MFEM builds compile the public energy contract. The MFEM RHS,
   boundary-policy, periodic-reduction, Hypre-solve, and recovery code are
   guarded by `FULLMAG_HAS_MFEM_STACK`.
+- `tests/fem_demag_validation/sphere_validation.py` is the scripted MFEM-stack
+  gate for the uniformly magnetized sphere reference. It writes
+  `tests/fem_demag_validation/results/sphere_convergence.csv` and exits
+  nonzero if any required metric is non-finite or the finest Robin run exceeds
+  5% relative error in the effective demag factor.
+- `tests/fem_demag_validation/airbox_convergence.py` is the scripted MFEM-stack
+  gate for airbox convergence. It writes
+  `tests/fem_demag_validation/results/airbox_convergence.csv` and exits
+  nonzero if any required metric is non-finite or any boundary-condition group
+  fails to improve from the smallest to largest airbox scale.
 
 Required before production qualification:
 
-- sphere `H=-M/3`;
 - ellipsoid or rectangular-prism reference;
-- airbox convergence;
 - Robin vs Dirichlet comparison;
 - RHS assembly fixture for magnetic/nonmagnetic element masks;
 - boundary marker fixture for Dirichlet/Robin/seam exclusion;

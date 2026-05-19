@@ -44,6 +44,8 @@ export type GeometryRealizationResource =
   components["schemas"]["GeometryRealizationSnapshot"];
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
+export type CpuTelemetryResource =
+  components["schemas"]["CpuTelemetryResponse"];
 export type GpuTelemetryResource =
   components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];

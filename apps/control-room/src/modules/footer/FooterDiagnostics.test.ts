@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { SolverProfileResource } from "@/kernel/api/apiTypes";
+import type {
+  CpuTelemetryResource,
+  SolverProfileResource,
+} from "@/kernel/api/apiTypes";
 
-import { buildSolverProfilePanelModel } from "./FooterDiagnostics";
+import {
+  buildCpuTelemetryPanelModel,
+  buildSolverProfilePanelModel,
+} from "./FooterDiagnostics";
 
 const profile: SolverProfileResource = {
   aggregates: {
@@ -78,6 +84,45 @@ const profile: SolverProfileResource = {
 };
 
 describe("FooterDiagnostics", () => {
+  it("builds CPU telemetry rows from host and process samples", () => {
+    const cpu: CpuTelemetryResource = {
+      logical_cpus: 40,
+      memory_total_mb: 32000,
+      memory_used_mb: 12000,
+      model_name: "AMD Ryzen Threadripper",
+      process_cpu_percent: 385.2,
+      process_rss_mb: 512,
+      process_threads: 44,
+      sample_time_unix_ms: 1,
+      status: "available",
+      utilization_cpu_percent: 62.4,
+    };
+
+    const model = buildCpuTelemetryPanelModel(cpu);
+
+    expect(model.status).toBe("available");
+    expect(model.rows).toEqual([
+      {
+        id: "host",
+        label: "AMD Ryzen Threadripper",
+        memory: "12000 / 32000 MB",
+        utilization: "62%",
+      },
+      {
+        id: "process",
+        label: "Fullmag API",
+        memory: "512 MB RSS",
+        utilization: "385%",
+      },
+      {
+        id: "threads",
+        label: "Threads",
+        memory: "44 process",
+        utilization: "40 logical",
+      },
+    ]);
+  });
+
   it("builds solver profile rows and warns when OpenMP is effectively single-threaded", () => {
     const model = buildSolverProfilePanelModel(profile);
 
@@ -93,6 +138,28 @@ describe("FooterDiagnostics", () => {
       step: "12",
       total: "5.0 ms",
     });
+  });
+
+  it("uses unique row identities when profiler samples share the same step", () => {
+    const duplicateStepProfile: SolverProfileResource = {
+      ...profile,
+      aggregates: {
+        ...profile.aggregates,
+        sample_count: 2,
+      },
+      latest_samples: [
+        profile.latest_samples[0],
+        {
+          ...profile.latest_samples[0],
+          time: 2e-12,
+          total_ns: 6_000_000,
+        },
+      ],
+    };
+    const model = buildSolverProfilePanelModel(duplicateStepProfile);
+
+    expect(model.rows.map((row) => row.step)).toEqual(["12", "12"]);
+    expect(new Set(model.rows.map((row) => row.id)).size).toBe(2);
   });
 
   it("keeps the profiler panel idle when the resource is missing", () => {

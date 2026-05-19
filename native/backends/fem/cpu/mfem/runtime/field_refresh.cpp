@@ -21,7 +21,7 @@ bool initialize_field_refresh_plan_fields(
         return false;
     }
 
-    ctx.field_refresh = policy;
+    ctx.demag.field_refresh = policy;
     ctx.demag.cache_valid = false;
     ctx.demag.last_refresh_time = -1.0;
     ctx.demag.cached_robin_boundary_energy = 0.0;

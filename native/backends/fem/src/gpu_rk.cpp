@@ -26,16 +26,16 @@ uint32_t gpu_rk_stage_count(fullmag_fem_integrator integrator)
 
 double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
 {
-    if (ctx.stt_free_layer_thickness > 0.0 &&
-        std::isfinite(ctx.stt_free_layer_thickness)) {
-        return ctx.stt_free_layer_thickness;
+    if (ctx.stt.free_layer_thickness > 0.0 &&
+        std::isfinite(ctx.stt.free_layer_thickness)) {
+        return ctx.stt.free_layer_thickness;
     }
 
-    const double jx = ctx.stt_current_density_am2[0];
-    const double jy = ctx.stt_current_density_am2[1];
-    const double jz = ctx.stt_current_density_am2[2];
+    const double jx = ctx.stt.current_density_am2[0];
+    const double jy = ctx.stt.current_density_am2[1];
+    const double jz = ctx.stt.current_density_am2[2];
     const double j_norm = std::sqrt(jx * jx + jy * jy + jz * jz);
-    const size_t expected_coord_len = static_cast<size_t>(ctx.n_nodes) * 3u;
+    const size_t expected_coord_len = static_cast<size_t>(ctx.mesh.n_nodes) * 3u;
     if (!(j_norm > 0.0) || !std::isfinite(j_norm) ||
         ctx.mesh.nodes_xyz.size() != expected_coord_len) {
         return 0.0;
@@ -47,7 +47,7 @@ double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
     double min_proj = std::numeric_limits<double>::infinity();
     double max_proj = -std::numeric_limits<double>::infinity();
     bool any = false;
-    for (size_t node = 0; node < static_cast<size_t>(ctx.n_nodes); ++node) {
+    for (size_t node = 0; node < static_cast<size_t>(ctx.mesh.n_nodes); ++node) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;
         }
@@ -65,7 +65,7 @@ double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
     }
 
     const double hmax_floor =
-        ctx.hmax > 0.0 && std::isfinite(ctx.hmax) ? ctx.hmax : 1.0e-30;
+        ctx.base_plan.hmax > 0.0 && std::isfinite(ctx.base_plan.hmax) ? ctx.base_plan.hmax : 1.0e-30;
     if (!any) {
         return std::max(hmax_floor, 1.0e-30);
     }
@@ -75,72 +75,68 @@ double gpu_rk_resolve_slonczewski_thickness(const Context &ctx)
 GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
 {
     GpuRkPlan plan{};
-    plan.stage_count = gpu_rk_stage_count(ctx.integrator);
+    plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
-    if (!ctx.gpu_state.allocated) {
+    if (!ctx.gpu_state.device.allocated) {
         reason = "GPU RK exchange-only path requires allocated FemGpuState";
         return plan;
     }
-    if (ctx.gpu_state.node_count != ctx.n_nodes ||
-        ctx.gpu_state.dof_len != static_cast<uint64_t>(ctx.n_nodes) * 3ull) {
+    if (ctx.gpu_state.device.node_count != ctx.mesh.n_nodes ||
+        ctx.gpu_state.device.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
         reason = "GPU RK exchange-only path requires FemGpuState dimensions to match Context";
         return plan;
     }
-    if (!ctx.enable_exchange) {
+    if (!ctx.exchange.enabled) {
         reason = "GPU RK exchange-only path requires enable_exchange=true";
         return plan;
     }
-    if (ctx.enable_demag) {
-        reason = "GPU RK exchange-only path does not support demag yet";
-        return plan;
-    }
-    if ((ctx.enable_dmi || ctx.enable_bulk_dmi) &&
-        (!ctx.gpu_state.mesh_geometry_uploaded ||
-            ctx.gpu_state.mesh_element_count != ctx.n_elements)) {
+    if ((ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) &&
+        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
+            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK exchange-only path requires device-resident mesh geometry for DMI";
         return plan;
     }
-    if (ctx.enable_magnetoelastic) {
-        const uint64_t per_node_strain_len = static_cast<uint64_t>(ctx.n_nodes) * 6ull;
-        if (ctx.mel_uniform_strain && ctx.mel_strain_voigt.size() < 6u) {
+    if (ctx.magnetoelastic.enabled) {
+        const uint64_t per_node_strain_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
+        if (ctx.magnetoelastic.uniform_strain && ctx.magnetoelastic.strain_voigt.size() < 6u) {
             reason = "GPU RK exchange-only path requires magnetoelastic strain data";
             return plan;
         }
-        if (!ctx.mel_uniform_strain &&
-            static_cast<uint64_t>(ctx.mel_strain_voigt.size()) != per_node_strain_len) {
+        if (!ctx.magnetoelastic.uniform_strain &&
+            static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()) != per_node_strain_len) {
             reason = "GPU RK exchange-only path requires 6 magnetoelastic strain Voigt values per node";
             return plan;
         }
-        if (!ctx.mel_uniform_strain &&
-            (!ctx.gpu_state.mel_strain_uploaded ||
-                ctx.gpu_state.mel_strain_voigt_len != per_node_strain_len)) {
+        if (!ctx.magnetoelastic.uniform_strain &&
+            (!ctx.gpu_state.device.mel_strain_uploaded ||
+                ctx.gpu_state.device.mel_strain_voigt_len != per_node_strain_len)) {
             reason = "GPU RK exchange-only path requires device-resident per-node magnetoelastic strain";
             return plan;
         }
     }
-    if ((ctx.has_oersted_cylinder || ctx.has_oersted_field) && ctx.oersted.h_xyz.empty()) {
+    if ((ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field) && ctx.oersted.h_xyz.empty()) {
         reason = "GPU RK exchange-only path requires precomputed Oersted field data";
         return plan;
     }
-    if (ctx.temperature > 0.0 && ctx.thermal_seed == 0) {
+    if (ctx.thermal_brown.temperature > 0.0 && ctx.thermal_brown.seed == 0) {
         reason = "GPU RK exchange-only path requires deterministic thermal seed for device thermal field";
         return plan;
     }
-    if (ctx.has_zhang_li_stt &&
-        (!ctx.gpu_state.mesh_geometry_uploaded ||
-            ctx.gpu_state.mesh_element_count != ctx.n_elements)) {
+    if (ctx.stt.zhang_li_enabled &&
+        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
+            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK exchange-only path requires device-resident mesh geometry for Zhang-Li STT";
         return plan;
     }
-    if (ctx.has_slonczewski_stt && gpu_rk_resolve_slonczewski_thickness(ctx) <= 0.0) {
+    if (ctx.stt.slonczewski_enabled && gpu_rk_resolve_slonczewski_thickness(ctx) <= 0.0) {
         reason = "GPU RK exchange-only path requires explicit or geometry-derived Slonczewski free-layer thickness";
         return plan;
     }
     const bool integrator_supported =
-        ctx.integrator == FULLMAG_FEM_INTEGRATOR_HEUN ||
-        ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK4 ||
-        ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ||
-        ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54;
+        ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_HEUN ||
+        ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK4 ||
+        ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ||
+        ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54;
     if (!integrator_supported) {
         reason = "GPU RK exchange-only path currently supports Heun, RK4, RK23, and RK45 only";
         return plan;

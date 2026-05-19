@@ -10,6 +10,16 @@ describe("MeshQualityStatisticsView", () => {
   it("renders quality histograms and worst elements without raw JSON", () => {
     const statistics = normalizeMeshQualityStatistics({
       global: {
+        edge_length: {
+          histogram: [
+            { count: 7, hi: 2e-9, lo: 1e-9 },
+            { count: 17, hi: 4e-9, lo: 2e-9 },
+          ],
+          max: 4e-9,
+          mean: 2e-9,
+          min: 1e-9,
+          std: 0.5e-9,
+        },
         element_count: 24,
         gamma: {
           below_threshold_count: 2,
@@ -28,6 +38,10 @@ describe("MeshQualityStatisticsView", () => {
           p05: 0.33,
           threshold: 0.1,
         },
+        volume: {
+          histogram: [{ count: 24, hi: 4e-27, lo: 1e-27 }],
+          ratio: 42,
+        },
       },
       worst_elements: [{ element_index: 7, gamma: 0.12, scope_label: "Domain 1", sicn: 0.18 }],
     });
@@ -40,8 +54,13 @@ describe("MeshQualityStatisticsView", () => {
     expect(html).toContain("Gamma");
     expect(html).toContain("Worst elements");
     expect(html).toContain("Below target");
+    expect(html).toContain("Meets target");
     expect(html).toContain("3 / 24");
     expect(html).toContain("2 / 24");
+    expect(html).toContain("Element size distributions");
+    expect(html).toContain("Edge length");
+    expect(html).toContain("Element volume");
+    expect(html).toContain("1.00e-9 to 2.00e-9");
     expect(html).toContain("Element 7");
     expect(html).toContain("Domain 1");
     expect(html).not.toContain("worst_elements");

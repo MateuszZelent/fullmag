@@ -77,7 +77,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/builds/latest-successful` | last successful build reference or artifact summary plus mesh provenance (`source_scene_revision`, `geometry_realization_revision`) |
 | `meshing/semantics` | solver-domain mesh semantics: universe/shared-domain/object configs and solver mesh identity |
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
-| `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
+| `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
 
 Transitional duplicate fields in meshing schemas are allowed only for current frontend adapters and
@@ -177,9 +177,10 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/builds/current` | `GET` | Read the active/current mesh build projection. |
 | `/v2/sessions/current/meshing/builds/latest-successful` | `GET` | Read the latest successful mesh build projection. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element` | `GET` | Read binary `FMMQ` per-element quality arrays for heatmap overlays. |
+| `/v2/sessions/current/meshing/meshes/universe/quality` | `GET` | Read universe/airbox mesh quality diagnostics; when the airbox scope exists, `quality.global` is the airbox quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/topology` | `GET` | Read object-scoped binary topology when available. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |
-| `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics. |
+| `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics; when the object marker is known, `quality.global` is the object's mesh-quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field` | `GET` | Read object realized size-field projection. |
 
 Required field sample scopes:

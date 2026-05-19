@@ -6,8 +6,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
 
 static void check(bool condition, const char *msg) {
     if (!condition) {
@@ -16,7 +21,68 @@ static void check(bool condition, const char *msg) {
     }
 }
 
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string gpu_rk_plan =
+        read_text_file(root / "src" / "gpu_rk.cpp");
+    const std::string gpu_rk_cuda =
+        read_text_file(root / "src" / "gpu_rk.cu");
+    const std::string kernels =
+        read_text_file(root / "src" / "kernels.cu");
+    const std::string kernels_header =
+        read_text_file(root / "include" / "kernels.h");
+
+    check(
+        gpu_rk_plan.find("does not support demag yet") == std::string::npos,
+        "GPU RK plan must not hard-block demag now that hybrid CPU-demag upload is supported");
+    check(
+        gpu_rk_cuda.find("compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
+        "GPU RK CUDA path must compute demag through the documented CPU-Hypre hybrid stage path");
+    check(
+        gpu_rk_cuda.find("gpu_state_upload_demag_field_aos") != std::string::npos,
+        "GPU RK CUDA path must upload freshly solved CPU H_demag before RHS accumulation");
+    check(
+        gpu_rk_cuda.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+            gpu_rk_cuda.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
+        "GPU RK must call the parallel DMI kernel wrapper, not the serial placeholder");
+    check(
+        kernels_header.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+            kernels_header.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
+        "CUDA headers must expose only the parallel DMI field/energy wrapper");
+    check(
+        kernels.find("dmi_field_energy_serial_kernel") == std::string::npos &&
+            kernels.find("<<<1, 1") == std::string::npos,
+        "CUDA DMI implementation must not contain the one-thread serial element-loop kernel");
+    check(
+        kernels.find("dmi_element_residual_kernel") != std::string::npos &&
+            kernels.find("atomic_add_double(&residual_x") != std::string::npos,
+        "CUDA DMI implementation must use per-element parallel residual accumulation with atomics");
+}
+
+} // namespace
+
 int main() {
+    gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible();
+
     {
         fullmag::fem::FemGpuState unallocated;
         fullmag::fem::TransferAudit audit;
@@ -49,6 +115,7 @@ int main() {
                 2,
                 FULLMAG_FEM_INTEGRATOR_HEUN,
                 true,
+                false,
                 initial_m,
                 6,
                 audit,
@@ -83,30 +150,32 @@ int main() {
 #endif
 
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 8;
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
-    ctx.enable_exchange = true;
-    ctx.enable_demag = false;
-    ctx.gpu_state.initialized = true;
-    ctx.gpu_state.node_count = 8;
-    ctx.gpu_state.dof_len = 24;
-    ctx.gpu_state.stage_count = 2;
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = false;
-    ctx.gpu_exchange.lumped_mass_ready = false;
+    ctx.mesh.n_nodes = 8;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    ctx.exchange.enabled = true;
+    ctx.demag.enabled = false;
+    ctx.gpu_state.device.initialized = true;
+    ctx.gpu_state.device.node_count = 8;
+    ctx.gpu_state.device.dof_len = 24;
+    ctx.gpu_state.device.stage_count = 2;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
     std::string reason;
     const auto no_allocation = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(!no_allocation.enabled, "GPU RK must not enable without allocated FemGpuState");
     check(reason.find("FemGpuState") != std::string::npos, "missing FemGpuState rejection reason");
 
-    ctx.gpu_state.allocated = true;
-    ctx.enable_demag = true;
+    ctx.gpu_state.device.allocated = true;
+    ctx.demag.enabled = true;
     reason.clear();
     const auto with_demag = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
-    check(!with_demag.enabled, "GPU RK exchange-only path must reject demag");
-    check(reason.find("demag") != std::string::npos, "missing demag rejection reason");
+    check(!with_demag.enabled, "GPU RK with demag must remain blocked until exchange/demag prerequisites are ready");
+    check(
+        reason.find("does not support demag yet") == std::string::npos,
+        "GPU RK must not reject demag as unsupported after hybrid CPU-demag upload support");
 
-    ctx.enable_demag = false;
+    ctx.demag.enabled = false;
     auto require_blocked = [&](const fullmag::fem::Context &blocked_ctx,
                                const char *reason_fragment,
                                const char *message) {
@@ -118,7 +187,7 @@ int main() {
 
     {
         auto blocked = ctx;
-        blocked.enable_dmi = true;
+        blocked.dmi.interfacial_enabled = true;
         require_blocked(
             blocked,
             "device-resident mesh geometry",
@@ -126,9 +195,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_dmi = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.n_elements;
+        blocked.dmi.interfacial_enabled = true;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -140,9 +209,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_bulk_dmi = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.n_elements;
+        blocked.dmi.bulk_enabled = true;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -154,7 +223,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_external_field = true;
+        blocked.zeeman.has_external_field = true;
         reason.clear();
         const auto external_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -166,8 +235,8 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_anisotropy = true;
-        blocked.anisotropy_Ku = 1.0;
+        blocked.anisotropy.uniaxial_enabled = true;
+        blocked.anisotropy.uniaxial_Ku = 1.0;
         reason.clear();
         const auto anisotropy_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -179,8 +248,8 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_cubic_anisotropy = true;
-        blocked.cubic_Kc1 = 1.0;
+        blocked.anisotropy.cubic_enabled = true;
+        blocked.anisotropy.cubic_Kc1 = 1.0;
         reason.clear();
         const auto cubic_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -192,9 +261,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_slonczewski_stt = true;
-        blocked.stt_current_density_am2 = {1.0e11, 0.0, 0.0};
-        blocked.stt_spin_polarization = {0.0, 0.0, 1.0};
+        blocked.stt.slonczewski_enabled = true;
+        blocked.stt.current_density_am2 = {1.0e11, 0.0, 0.0};
+        blocked.stt.spin_polarization = {0.0, 0.0, 1.0};
         blocked.mesh.nodes_xyz.assign({
             0.0, 0.0, 0.0,
             2.0e-9, 0.0, 0.0,
@@ -205,7 +274,7 @@ int main() {
             0.0, 1.0e-9, 1.0e-9,
             2.0e-9, 1.0e-9, 1.0e-9,
         });
-        blocked.hmax = 0.5e-9;
+        blocked.base_plan.hmax = 0.5e-9;
         reason.clear();
         const auto geometric_slonczewski_plan =
             fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
@@ -218,7 +287,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_slonczewski_stt = true;
+        blocked.stt.slonczewski_enabled = true;
         require_blocked(
             blocked,
             "free-layer thickness",
@@ -226,10 +295,10 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_slonczewski_stt = true;
-        blocked.stt_current_density_am2 = {1.0e11, 0.0, 0.0};
-        blocked.stt_spin_polarization = {0.0, 0.0, 1.0};
-        blocked.stt_free_layer_thickness = 1.0e-9;
+        blocked.stt.slonczewski_enabled = true;
+        blocked.stt.current_density_am2 = {1.0e11, 0.0, 0.0};
+        blocked.stt.spin_polarization = {0.0, 0.0, 1.0};
+        blocked.stt.free_layer_thickness = 1.0e-9;
         reason.clear();
         const auto slonczewski_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -241,7 +310,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_zhang_li_stt = true;
+        blocked.stt.zhang_li_enabled = true;
         require_blocked(
             blocked,
             "device-resident mesh geometry",
@@ -249,9 +318,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_zhang_li_stt = true;
-        blocked.gpu_state.mesh_geometry_uploaded = true;
-        blocked.gpu_state.mesh_element_count = ctx.n_elements;
+        blocked.stt.zhang_li_enabled = true;
+        blocked.gpu_state.device.mesh_geometry_uploaded = true;
+        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -263,13 +332,13 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.has_oersted_field = true;
+        blocked.oersted.has_explicit_field = true;
         require_blocked(blocked, "Oersted", "GPU RK exchange-only path must reject Oersted field");
     }
     {
         auto blocked = ctx;
-        blocked.has_oersted_field = true;
-        blocked.oersted.h_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+        blocked.oersted.has_explicit_field = true;
+        blocked.oersted.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
         reason.clear();
         const auto oersted_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -281,9 +350,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_magnetoelastic = true;
-        blocked.mel_uniform_strain = false;
-        blocked.mel_strain_voigt.assign(static_cast<size_t>(ctx.n_nodes) * 6u, 0.0);
+        blocked.magnetoelastic.enabled = true;
+        blocked.magnetoelastic.uniform_strain = false;
+        blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
         require_blocked(
             blocked,
             "device-resident per-node magnetoelastic strain",
@@ -291,11 +360,11 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_magnetoelastic = true;
-        blocked.mel_uniform_strain = false;
-        blocked.mel_strain_voigt.assign(static_cast<size_t>(ctx.n_nodes) * 6u, 0.0);
-        blocked.gpu_state.mel_strain_uploaded = true;
-        blocked.gpu_state.mel_strain_voigt_len = static_cast<uint64_t>(ctx.n_nodes) * 6ull;
+        blocked.magnetoelastic.enabled = true;
+        blocked.magnetoelastic.uniform_strain = false;
+        blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
+        blocked.gpu_state.device.mel_strain_uploaded = true;
+        blocked.gpu_state.device.mel_strain_voigt_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
         reason.clear();
         const auto mel_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -307,9 +376,9 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_magnetoelastic = true;
-        blocked.mel_uniform_strain = true;
-        blocked.mel_strain_voigt.assign(6u, 0.0);
+        blocked.magnetoelastic.enabled = true;
+        blocked.magnetoelastic.uniform_strain = true;
+        blocked.magnetoelastic.strain_voigt.assign(6u, 0.0);
         reason.clear();
         const auto mel_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -321,7 +390,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.temperature = 300.0;
+        blocked.thermal_brown.temperature = 300.0;
         require_blocked(
             blocked,
             "thermal seed",
@@ -329,8 +398,8 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.temperature = 300.0;
-        blocked.thermal_seed = 1234;
+        blocked.thermal_brown.temperature = 300.0;
+        blocked.thermal_brown.seed = 1234;
         reason.clear();
         const auto thermal_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -343,8 +412,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.material_fields.alpha_field.assign(
-            static_cast<size_t>(ctx.n_nodes),
-            ctx.material.damping);
+            static_cast<size_t>(ctx.mesh.n_nodes),
+            ctx.material_fields.material.damping);
         reason.clear();
         const auto damping_plan = fullmag::fem::gpu_rk_plan_exchange_only(blocked, reason);
         check(
@@ -356,7 +425,7 @@ int main() {
     }
     {
         auto blocked = ctx;
-        blocked.enable_magnetoelastic = true;
+        blocked.magnetoelastic.enabled = true;
         require_blocked(blocked, "magnetoelastic", "GPU RK exchange-only path must reject magnetoelastic field");
     }
     {
@@ -380,7 +449,7 @@ int main() {
     }
 #endif
 
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
     reason.clear();
     const auto rk4_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
     check(rk4_plan.stage_count == 4, "RK4 should request four GPU RK stages");
@@ -389,7 +458,7 @@ int main() {
         "GPU RK plan must not reject RK4 as a Heun-only integrator");
     check(!rk4_plan.enabled, "RK4 GPU RK must stay blocked until device stage exchange is ready");
 
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK23_BS;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK23_BS;
     ctx.adaptive_dt.enabled = false;
     reason.clear();
     const auto rk23_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
@@ -411,7 +480,7 @@ int main() {
         check(!adaptive_rk23_plan.enabled, "adaptive RK23 GPU RK must stay blocked until device stage exchange is ready");
     }
 
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
     ctx.adaptive_dt.enabled = true;
     reason.clear();
     const auto adaptive_rk45_plan = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
@@ -430,7 +499,7 @@ int main() {
         "GPU RK plan must not reject fixed-step RK45 as a Heun-only integrator");
     check(!rk45_plan.enabled, "fixed-step RK45 GPU RK must stay blocked until device stage exchange is ready");
 
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
     ctx.adaptive_dt.enabled = false;
     const auto exchange_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -442,10 +511,10 @@ int main() {
         reason.find("legacy sparse exchange metadata") != std::string::npos,
         "MFEM+CUDA build must first require captured legacy sparse exchange metadata");
 
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = true;
-    ctx.gpu_exchange.legacy_sparse_rows = 8;
-    ctx.gpu_exchange.legacy_sparse_cols = 8;
-    ctx.gpu_exchange.legacy_sparse_nnz = 32;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = 8;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = 8;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = 32;
     reason.clear();
     const auto missing_mass_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -455,7 +524,7 @@ int main() {
         reason.find("lumped mass") != std::string::npos,
         "MFEM+CUDA build must require lumped mass metadata before GPU exchange");
 
-    ctx.gpu_exchange.lumped_mass_ready = true;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
     reason.clear();
     const auto runtime_coefficients_blocked_plan =
         fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
@@ -466,7 +535,7 @@ int main() {
         reason.find("runtime coefficients") != std::string::npos,
         "MFEM+CUDA build must require runtime coefficients before GPU exchange");
 
-    ctx.gpu_state.runtime_coefficients_uploaded = true;
+    ctx.gpu_state.device.runtime_coefficients_uploaded = true;
     reason.clear();
     const auto upload_blocked_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
@@ -476,11 +545,11 @@ int main() {
         reason.find("device-resident CSR/mass upload") != std::string::npos,
         "MFEM+CUDA build must expose device-resident CSR/mass upload blocker");
 
-    ctx.gpu_state.exchange_legacy_sparse_uploaded = true;
+    ctx.gpu_state.device.exchange_legacy_sparse_uploaded = true;
     reason.clear();
-    ctx.gpu_state.exchange_legacy_sparse_rows = 8;
-    ctx.gpu_state.exchange_legacy_sparse_cols = 8;
-    ctx.gpu_state.exchange_legacy_sparse_nnz = 32;
+    ctx.gpu_state.device.exchange_legacy_sparse_rows = 8;
+    ctx.gpu_state.device.exchange_legacy_sparse_cols = 8;
+    ctx.gpu_state.device.exchange_legacy_sparse_nnz = 32;
     const auto spmv_ready_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
         spmv_ready_plan.stage_exchange_device_resident,
@@ -497,7 +566,7 @@ int main() {
     check(rk4_ready_plan.stage_count == 4, "RK4 ready plan should keep four GPU RK stages");
 #endif
 
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     reason.clear();
     const auto maybe_supported = fullmag::fem::gpu_rk_plan_exchange_only(ctx, reason);
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK

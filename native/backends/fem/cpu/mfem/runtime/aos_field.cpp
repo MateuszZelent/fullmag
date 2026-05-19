@@ -70,7 +70,7 @@ void project_static_periodic_aos(
     if (ctx.mesh.periodic_reduced_node.empty()) {
         return;
     }
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         const uint32_t representative =
             ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];

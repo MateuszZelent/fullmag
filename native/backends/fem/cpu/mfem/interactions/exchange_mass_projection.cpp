@@ -145,13 +145,13 @@ bool apply_periodic_consistent_mass_component(
         return false;
     }
 
-    std::vector<double> reduced_ms(static_cast<size_t>(n_reduced), ctx.material.saturation_magnetisation);
+    std::vector<double> reduced_ms(static_cast<size_t>(n_reduced), ctx.material_fields.material.saturation_magnetisation);
     for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
         const uint32_t representative = ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
         reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
             ctx.material_fields.Ms_field,
             static_cast<size_t>(representative),
-            ctx.material.saturation_magnetisation);
+            ctx.material_fields.material.saturation_magnetisation);
     }
     double *h_host = audited_host_write(h_component);
     for (int i = 0; i < ndofs; ++i) {
@@ -243,14 +243,14 @@ bool apply_exchange_component_mass_projection(
 
         std::vector<double> reduced_ms(
             static_cast<size_t>(n_reduced),
-            ctx->material.saturation_magnetisation);
+            ctx->material_fields.material.saturation_magnetisation);
         for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
             const uint32_t representative =
                 ctx->mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
             reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
                 ctx->material_fields.Ms_field,
                 static_cast<size_t>(representative),
-                ctx->material.saturation_magnetisation);
+                ctx->material_fields.material.saturation_magnetisation);
         }
         double *h_host = audited_host_write(h_component);
         for (int i = 0; i < ndofs; ++i) {

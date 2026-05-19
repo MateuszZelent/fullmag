@@ -11,7 +11,7 @@ import {
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import { useKernel } from "@/kernel/KernelContext";
-import { useStudyRuntimeCommandResourceData } from "@/kernel/resources/studyRuntimeResources";
+import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
@@ -407,7 +407,7 @@ export function AppMenuBar() {
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const [registryOpen, setRegistryOpen] = useState(false);
   const { snapshot: visualizationSnapshot } = useObjectVisualizationRegistry();
-  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const runtimeResourceData = useRuntimeCommandControlResourceData();
   const visualizationState = useVisualizationStateResource({ enabled: true });
   const visualizationSyncSnapshot = useSyncExternalStore(
     (onStoreChange) => kernel.visualizationSync.subscribe(onStoreChange),
@@ -438,6 +438,7 @@ export function AppMenuBar() {
   };
   const commandContext = createCommandContext("menu", kernel, {
     resourceData: runtimeResourceData,
+    sourceDetail: "app-menu",
   });
   const runCommand = (commandId: string, input?: unknown) => {
     if (commandId === "tools.registry-inspector") {

@@ -26,12 +26,13 @@ struct AdaptiveResult {
  * Runtime state for the native FEM adaptive PI time-step controller.
  *
  * The controller owns tolerance bounds, PI gains, growth/shrink clamps, the
- * rejection budget, and the scalar history used to choose the next explicit RK
- * step. Global step timestamps and committed `dt_seconds` remain in Context's
- * compatibility facade.
+ * active step dt, rejection budget, and scalar history used to choose the next
+ * explicit RK step. Accepted step timestamps live with FEM state, while the
+ * committed/proposed `dt_seconds` lives in the base-plan runtime state.
  */
 struct AdaptiveDtRuntimeState {
     bool enabled = false;
+    double current_dt = 1e-13;
     double dt_min = 1e-16;
     double dt_max = 1e-10;
     double atol = 1e-6;

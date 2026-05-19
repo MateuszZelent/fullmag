@@ -14,7 +14,7 @@ namespace fullmag::fem {
 
 void add_thermal_brown_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if (ctx.temperature <= 0.0 || ctx.thermal_brown.h_xyz.empty()) {
+    if (ctx.thermal_brown.temperature <= 0.0 || ctx.thermal_brown.h_xyz.empty()) {
         return;
     }
 

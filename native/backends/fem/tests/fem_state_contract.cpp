@@ -64,8 +64,11 @@ void state_plan_initialization_is_owned_by_core_module() {
         context_from_plan.find("ctx.state.m_xyz.assign(") == std::string::npos,
         "Context construction must not copy initial magnetization directly");
     check(
-        context_from_plan.find("ctx.step_count = 0;") == std::string::npos,
+        context_from_plan.find("ctx.state.step_count = 0;") == std::string::npos,
         "Context construction must not reset step count directly");
+    check(
+        context_from_plan.find("ctx.state.current_time = 0.0;") == std::string::npos,
+        "Context construction must not reset current time directly");
     check(
         state.find("bool initialize_state_plan_fields(") != std::string::npos,
         "FEM state plan initialization must be defined in core/fem_state.cpp");
@@ -85,11 +88,29 @@ void state_plan_initialization_is_owned_by_core_module() {
         state_header.find("std::vector<double> m_xyz") != std::string::npos,
         "FemState runtime state must own the AoS magnetization buffer");
     check(
+        state_header.find("uint64_t step_count") != std::string::npos,
+        "FemState runtime state must own the accepted step counter");
+    check(
+        state_header.find("double current_time") != std::string::npos,
+        "FemState runtime state must own the accepted simulation time");
+    check(
         context_header.find("FemStateRuntimeState state{}") != std::string::npos,
         "Context must store FEM runtime magnetization under state");
     check(
         context_header.find("std::vector<double> m_xyz;") == std::string::npos,
         "Context must not own a flat magnetization buffer");
+    check(
+        context_header.find("uint64_t step_count") == std::string::npos,
+        "Context must not own a flat accepted step counter");
+    check(
+        context_header.find("double current_time") == std::string::npos,
+        "Context must not own a flat accepted simulation time");
+    check(
+        state.find("ctx.state.step_count = 0;") != std::string::npos,
+        "FemState initialization must reset the accepted step counter on the state owner");
+    check(
+        state.find("ctx.state.current_time = 0.0;") != std::string::npos,
+        "FemState initialization must reset accepted simulation time on the state owner");
     check(
         state_header.find(
             "It does not own mesh topology, material coefficients, field buffers, runtime") !=
@@ -101,9 +122,9 @@ void state_plan_initialization_is_owned_by_core_module() {
 
 void state_plan_initialization_validates_copies_projects_and_resets_time() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.step_count = 9;
-    ctx.current_time = 4.0;
+    ctx.mesh.n_nodes = 2;
+    ctx.state.step_count = 9;
+    ctx.state.current_time = 4.0;
     ctx.mesh.periodic_node_pairs = {0u, 1u};
     ctx.mesh.periodic_reduced_node = {0u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u};
@@ -125,8 +146,8 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
         1.0, 0.0, 0.0,
     };
     check(ctx.state.m_xyz == projected, "initial magnetization copied and periodic-projected");
-    check(ctx.step_count == 0u, "step count reset");
-    check(ctx.current_time == 0.0, "current time reset");
+    check(ctx.state.step_count == 0u, "step count reset");
+    check(ctx.state.current_time == 0.0, "current time reset");
 
     plan.initial_magnetization_xyz = nullptr;
     check(

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, State};
+use axum::Json;
 use serde_json::Value;
 
 use crate::error::ApiError;
@@ -19,12 +19,12 @@ use crate::schemas::authoring::{
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use fullmag_authoring::{
-    GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
-    GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryValidationResource,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
-    SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
+    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
+    GeometryRealizationSnapshot, GeometryValidationResource, MagnetizationAsset, SceneDocument,
+    SceneGeometry, SceneMaterialAsset, SceneObject, SceneRegionOverride,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderUniverseState, Transform3D,
 };
 
 #[utoipa::path(

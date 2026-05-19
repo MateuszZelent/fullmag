@@ -2,6 +2,7 @@
 target/
 dist/
 build/
+native/build*/
 *.o
 *.so
 *.a

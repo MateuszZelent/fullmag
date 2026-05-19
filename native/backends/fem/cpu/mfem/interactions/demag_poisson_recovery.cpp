@@ -9,9 +9,9 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -51,46 +51,26 @@ struct DemagRecoveryWorkspace {
         }
     }
 
-    void prepare(size_t node_count, size_t field_len, int recover_threads, bool parallel_recover) {
+    void prepare(size_t node_count, int recover_threads, bool parallel_recover) {
         reset_vector(node_weight, node_count);
         if (!parallel_recover) {
             return;
         }
 
         const size_t thread_count = static_cast<size_t>(recover_threads);
-        field_partials.resize(thread_count);
-        weight_partials.resize(thread_count);
         while (thread_scratch.size() < thread_count) {
             thread_scratch.emplace_back(std::make_unique<Scratch>());
-        }
-        for (size_t tid = 0; tid < thread_count; ++tid) {
-            reset_vector(field_partials[tid], field_len);
-            reset_vector(weight_partials[tid], node_count);
         }
     }
 
     mfem::GridFunction potential;
     std::vector<double> node_weight;
-    std::vector<std::vector<double>> field_partials;
-    std::vector<std::vector<double>> weight_partials;
     Scratch serial_scratch;
     std::vector<std::unique_ptr<Scratch>> thread_scratch;
     mfem::Vector robin_boundary_tmp;
 };
 
 namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
 
 void zero_non_magnetic_nodes_aos(
     std::vector<double> &field_xyz,
@@ -118,7 +98,7 @@ bool initialize_demag_poisson_recovery_workspace(
     std::string &error)
 {
     try {
-        ctx.mfem_demag_recovery_workspace =
+        ctx.poisson_demag.recovery_workspace =
             new DemagRecoveryWorkspace(&fes);
         return true;
     } catch (const std::exception &ex) {
@@ -127,14 +107,14 @@ bool initialize_demag_poisson_recovery_workspace(
     } catch (...) {
         error = "Poisson demag recovery workspace initialization failed with an unknown error";
     }
-    ctx.mfem_demag_recovery_workspace = nullptr;
+    ctx.poisson_demag.recovery_workspace = nullptr;
     return false;
 }
 
 void destroy_demag_poisson_recovery_workspace(Context &ctx)
 {
-    delete static_cast<DemagRecoveryWorkspace *>(ctx.mfem_demag_recovery_workspace);
-    ctx.mfem_demag_recovery_workspace = nullptr;
+    delete static_cast<DemagRecoveryWorkspace *>(ctx.poisson_demag.recovery_workspace);
+    ctx.poisson_demag.recovery_workspace = nullptr;
 }
 
 /// Recover H_demag = -grad(u) from the scalar potential solution.
@@ -148,14 +128,14 @@ bool recover_demag_poisson_field(
     uint64_t *energy_wall_time_ns,
     std::string &error)
 {
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
-    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
     if (fes == nullptr || mesh == nullptr) {
         error = "Poisson FE space or mesh is null during H_demag recovery";
         return false;
     }
 
-    const size_t node_count = static_cast<size_t>(ctx.n_nodes);
+    const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
     const size_t field_len = node_count * 3u;
     h_demag_xyz.assign(field_len, 0.0);
 
@@ -166,7 +146,8 @@ bool recover_demag_poisson_field(
                                   mfem::Array<int> &dofs,
                                   mfem::Vector &u_elem,
                                   mfem::DenseMatrix &dshape,
-                                  mfem::Vector &shape) {
+                                  mfem::Vector &shape,
+                                  bool atomic_updates) {
         const mfem::FiniteElement *fe = fes->GetFE(elem);
         mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
 
@@ -201,16 +182,30 @@ bool recover_demag_poisson_field(
             fe->CalcShape(ip, shape);
             for (int i = 0; i < local_ndof; ++i) {
                 const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
+                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
                     continue;
                 }
                 const double phi_w = std::abs(shape(i)) * w;
                 const size_t node = static_cast<size_t>(gdof);
                 const size_t base = node * 3u;
-                field_accum[base + 0] += -grad_u[0] * phi_w;
-                field_accum[base + 1] += -grad_u[1] * phi_w;
-                field_accum[base + 2] += -grad_u[2] * phi_w;
-                weight_accum[node] += phi_w;
+                const double hx = -grad_u[0] * phi_w;
+                const double hy = -grad_u[1] * phi_w;
+                const double hz = -grad_u[2] * phi_w;
+                if (atomic_updates) {
+#pragma omp atomic update
+                    field_accum[base + 0] += hx;
+#pragma omp atomic update
+                    field_accum[base + 1] += hy;
+#pragma omp atomic update
+                    field_accum[base + 2] += hz;
+#pragma omp atomic update
+                    weight_accum[node] += phi_w;
+                } else {
+                    field_accum[base + 0] += hx;
+                    field_accum[base + 1] += hy;
+                    field_accum[base + 2] += hz;
+                    weight_accum[node] += phi_w;
+                }
             }
         }
     };
@@ -229,14 +224,13 @@ bool recover_demag_poisson_field(
     const bool parallel_recover = recover_threads > 1 && mesh->GetNE() >= 2000;
 
     auto *demag_recovery_workspace =
-        static_cast<DemagRecoveryWorkspace *>(ctx.mfem_demag_recovery_workspace);
+        static_cast<DemagRecoveryWorkspace *>(ctx.poisson_demag.recovery_workspace);
     if (demag_recovery_workspace == nullptr) {
         error = "Demag recovery workspace is null during H_demag recovery";
         return false;
     }
     demag_recovery_workspace->prepare(
         node_count,
-        field_len,
         recover_threads,
         parallel_recover);
     mfem::GridFunction &gf_u = demag_recovery_workspace->potential;
@@ -245,14 +239,9 @@ bool recover_demag_poisson_field(
 
     if (parallel_recover) {
 #ifdef _OPENMP
-        auto &field_partials = demag_recovery_workspace->field_partials;
-        auto &weight_partials = demag_recovery_workspace->weight_partials;
-
 #pragma omp parallel num_threads(recover_threads)
         {
             const int tid = omp_get_thread_num();
-            auto &field_local = field_partials[static_cast<size_t>(tid)];
-            auto &weight_local = weight_partials[static_cast<size_t>(tid)];
             auto &scratch =
                 *demag_recovery_workspace->thread_scratch[static_cast<size_t>(tid)];
 
@@ -260,36 +249,25 @@ bool recover_demag_poisson_field(
             for (int elem = 0; elem < mesh->GetNE(); ++elem) {
                 accumulate_element(
                     elem,
-                    field_local,
-                    weight_local,
+                    h_demag_xyz,
+                    node_weight,
                     gf_u,
                     scratch.dofs,
                     scratch.u_elem,
                     scratch.dshape,
-                    scratch.shape);
+                    scratch.shape,
+                    true);
             }
         }
 
 #pragma omp parallel for schedule(static) num_threads(recover_threads)
         for (int node = 0; node < static_cast<int>(node_count); ++node) {
-            double weight_sum = 0.0;
-            double hx = 0.0;
-            double hy = 0.0;
-            double hz = 0.0;
             const size_t base = static_cast<size_t>(node) * 3u;
-            for (int tid = 0; tid < recover_threads; ++tid) {
-                const auto &field_local = field_partials[static_cast<size_t>(tid)];
-                const auto &weight_local = weight_partials[static_cast<size_t>(tid)];
-                hx += field_local[base + 0];
-                hy += field_local[base + 1];
-                hz += field_local[base + 2];
-                weight_sum += weight_local[static_cast<size_t>(node)];
-            }
-            node_weight[static_cast<size_t>(node)] = weight_sum;
-            if (weight_sum > 0.0) {
-                h_demag_xyz[base + 0] = hx / weight_sum;
-                h_demag_xyz[base + 1] = hy / weight_sum;
-                h_demag_xyz[base + 2] = hz / weight_sum;
+            const double weight = node_weight[static_cast<size_t>(node)];
+            if (weight > 0.0) {
+                h_demag_xyz[base + 0] /= weight;
+                h_demag_xyz[base + 1] /= weight;
+                h_demag_xyz[base + 2] /= weight;
             }
         }
 #endif
@@ -304,7 +282,8 @@ bool recover_demag_poisson_field(
                 scratch.dofs,
                 scratch.u_elem,
                 scratch.dshape,
-                scratch.shape);
+                scratch.shape,
+                false);
         }
 
 #ifdef _OPENMP
@@ -331,7 +310,7 @@ bool recover_demag_poisson_field(
         return false;
     }
 
-    const auto energy_wall_start = SteadyClock::now();
+    const auto energy_wall_start = FemSteadyClock::now();
     demag_energy = demag_poisson_energy_from_field(
         ctx,
         m_xyz,
@@ -340,17 +319,17 @@ bool recover_demag_poisson_field(
 
     // Robin BC correction: E_bdr = (mu0/2) * beta * integral_Gamma u^2 dS.
     ctx.demag.cached_robin_boundary_energy = 0.0;
-    if (ctx.demag_realization == 2 /* AIRBOX_ROBIN */ &&
-        ctx.robin_effective_beta > 0.0 &&
-        ctx.mfem_boundary_mass != nullptr) {
+    if (ctx.demag.realization == 2 /* AIRBOX_ROBIN */ &&
+        ctx.poisson_demag.robin_effective_beta > 0.0 &&
+        ctx.poisson_demag.robin_boundary_mass != nullptr) {
         auto *bdr_mass =
-            static_cast<mfem::BilinearForm *>(ctx.mfem_boundary_mass);
+            static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
         mfem::Vector &robin_boundary_tmp =
             demag_recovery_workspace->robin_boundary_tmp;
         robin_boundary_tmp.SetSize(gf_u.Size());
         bdr_mass->SpMat().Mult(gf_u, robin_boundary_tmp);
         ctx.demag.cached_robin_boundary_energy =
-            0.5 * kMu0 * ctx.robin_effective_beta * (gf_u * robin_boundary_tmp);
+            0.5 * kMu0 * ctx.poisson_demag.robin_effective_beta * (gf_u * robin_boundary_tmp);
         demag_energy += ctx.demag.cached_robin_boundary_energy;
     }
     if (energy_wall_time_ns != nullptr) {

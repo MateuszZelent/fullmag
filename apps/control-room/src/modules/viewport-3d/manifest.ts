@@ -1,6 +1,5 @@
 import type { ModuleManifest } from "@/kernel/types";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import { viewport3dStore } from "./viewport3dStore";
 import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
@@ -119,22 +118,19 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: (context) => {
-          const state = visualizationStateFromContext(context);
-          return state
-            ? state.camera.projection === "orthographic"
-            : viewport3dStore.getSnapshot().widgets.cameraProjection ===
-                "orthographic";
-        },
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.cameraProjection ===
+          "orthographic",
         run: async (context) => {
-          const current =
-            visualizationStateFromContext(context) ??
-            (context.api ? await context.api.visualization.state() : null);
+          // Use the local store for the immediate toggle state. Resource data can
+          // lag behind queued patches, which would make repeated clicks compute
+          // the same "next" projection and leave the button stuck.
           const currentProjection =
-            current?.camera?.projection ??
             viewport3dStore.getSnapshot().widgets.cameraProjection;
           const nextProjection =
             currentProjection === "orthographic" ? "perspective" : "orthographic";
+          // Update the local store immediately so the viewport responds without
+          // waiting for the backend round-trip.
           viewport3dStore.setCameraProjection(nextProjection);
           if (context.visualizationSync) {
             context.visualizationSync.queuePatch({
@@ -145,8 +141,6 @@ export const viewport3dManifest: ModuleManifest = {
               camera: { projection: nextProjection },
             });
             context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-          } else {
-            viewport3dStore.toggleCameraProjection();
           }
           return { status: "completed" };
         },
@@ -190,6 +184,32 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      {
+        id: "viewport-3d.rotation-camera",
+        title: "Use Free Camera Rotation",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.rotationMode === "camera",
+        run: () => {
+          viewport3dStore.setRotationMode("camera");
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.rotation-object",
+        title: "Use Object-Bound Rotation",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.rotationMode === "object",
+        run: () => {
+          viewport3dStore.setRotationMode("object");
+          return { status: "completed" };
+        },
+      },
       ...VISUAL_PROFILE_COMMANDS.map((command) => ({
         id: command.id,
         title: command.title,
@@ -208,12 +228,3 @@ export const viewport3dManifest: ModuleManifest = {
   emits: ["workspace:selection-changed"],
   listens: ["resource:invalidated", "workspace:selection-changed"],
 };
-
-function visualizationStateFromContext(context: {
-  resourceData?: Readonly<Record<string, unknown>>;
-}): VisualizationStateResource | null {
-  const value = context.resourceData?.[VISUALIZATION_STATE_PATH];
-  return value && typeof value === "object"
-    ? (value as VisualizationStateResource)
-    : null;
-}

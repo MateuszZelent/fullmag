@@ -45,11 +45,15 @@ export function useViewport3DFieldRenderOptions({
     }
 
     const partVectorBudgets = new Map<string, number>();
+    const partVectorAnchorModes = new Map<string, "center" | "tail">();
     const partVectorScopes = new Map<string, "surface" | "full">();
     const partVectorScales = new Map<string, number>();
+    const partVectorSurfaceOffsetScales = new Map<string, number>();
     const scalarColorModes = new Set<string>();
     let scalarColorsVisible = false;
     let fullVectorBudget = 0;
+    let fullVectorAnchorMode: "center" | "tail" = "center";
+    let fullVectorSurfaceOffsetScale = 0;
     const magneticVectorsAllowed = vectorDomain !== "airbox_only";
     const airboxVectorsAllowed =
       vectorDomain !== "magnetic_only" &&
@@ -74,6 +78,12 @@ export function useViewport3DFieldRenderOptions({
           }
         }
         partVectorScopes.set(partId, settings.geometryScope);
+        if (!settings.vectorCenteringEnabled) {
+          partVectorAnchorModes.set(partId, "tail");
+        }
+        if (settings.vectorSurfaceOffsetEnabled) {
+          partVectorSurfaceOffsetScales.set(partId, settings.vectorSurfaceOffsetScale);
+        }
         if (visible && settings.vectorBudget > 0) {
           partVectorBudgets.set(partId, settings.vectorBudget);
         }
@@ -98,6 +108,11 @@ export function useViewport3DFieldRenderOptions({
         magneticVectorsAllowed &&
         fallbackSettings.visible &&
         fallbackSettings.vectorsVisible;
+      fullVectorAnchorMode = fallbackSettings.vectorCenteringEnabled
+        ? "center"
+        : "tail";
+      fullVectorSurfaceOffsetScale =
+        fallbackSettings.vectorSurfaceOffsetEnabled ? fallbackSettings.vectorSurfaceOffsetScale : 0;
       if (fallbackVisible) {
         fullVectorBudget = fallbackSettings.vectorBudget;
       }
@@ -115,6 +130,12 @@ export function useViewport3DFieldRenderOptions({
         }
       }
       partVectorScopes.set(partId, airboxSettings.geometryScope);
+      if (!airboxSettings.vectorCenteringEnabled) {
+        partVectorAnchorModes.set(partId, "tail");
+      }
+      if (airboxSettings.vectorSurfaceOffsetEnabled) {
+        partVectorSurfaceOffsetScales.set(partId, airboxSettings.vectorSurfaceOffsetScale);
+      }
       const airboxVisible =
         airboxVectorsAllowed &&
         airboxSettings.visible &&
@@ -129,16 +150,27 @@ export function useViewport3DFieldRenderOptions({
 
     return retainViewport3DFieldRenderOptions(topologyRenderModel, {
       fullVectorBudget,
+      fullVectorAnchorMode,
+      fullVectorSurfaceOffsetScale,
+      partVectorAnchorModes:
+        partVectorAnchorModes.size > 0 ? partVectorAnchorModes : undefined,
       partVectorBudgets,
       partVectorScales: partVectorScales.size > 0 ? partVectorScales : undefined,
       partVectorScopes,
+      partVectorSurfaceOffsetScales:
+        partVectorSurfaceOffsetScales.size > 0
+          ? partVectorSurfaceOffsetScales
+          : undefined,
       scalarColorModes,
       scalarColorsVisible,
       vectorColorMode,
     });
   }, [
     airboxSettings.vectorBudget,
+    airboxSettings.vectorCenteringEnabled,
     airboxSettings.vectorLengthScale,
+    airboxSettings.vectorSurfaceOffsetEnabled,
+    airboxSettings.vectorSurfaceOffsetScale,
     airboxSettings.vectorsVisible,
     airboxSettings.geometryScope,
     airboxSettings.surfaceColorSource,
@@ -147,6 +179,9 @@ export function useViewport3DFieldRenderOptions({
     fallbackSettings.surfaceColorSource,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorBudget,
+    fallbackSettings.vectorCenteringEnabled,
+    fallbackSettings.vectorSurfaceOffsetEnabled,
+    fallbackSettings.vectorSurfaceOffsetScale,
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,
@@ -174,11 +209,19 @@ export function sameViewport3DFieldRenderOptions(
 ): boolean {
   return (
     (left.fullVectorBudget ?? 0) === (right.fullVectorBudget ?? 0) &&
+    (left.fullVectorAnchorMode ?? "") === (right.fullVectorAnchorMode ?? "") &&
+    (left.fullVectorSurfaceOffsetScale ?? 0) ===
+      (right.fullVectorSurfaceOffsetScale ?? 0) &&
     Boolean(left.scalarColorsVisible) === Boolean(right.scalarColorsVisible) &&
     (left.vectorColorMode ?? "") === (right.vectorColorMode ?? "") &&
+    sameStringMap(left.partVectorAnchorModes, right.partVectorAnchorModes) &&
     sameNumberMap(left.partVectorBudgets, right.partVectorBudgets) &&
     sameNumberMap(left.partVectorScales, right.partVectorScales) &&
     sameStringMap(left.partVectorScopes, right.partVectorScopes) &&
+    sameNumberMap(
+      left.partVectorSurfaceOffsetScales,
+      right.partVectorSurfaceOffsetScales,
+    ) &&
     sameStringSet(left.scalarColorModes, right.scalarColorModes)
   );
 }

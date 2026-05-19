@@ -114,7 +114,7 @@ void add_zhang_li_stt_rhs_aos(
     std::vector<double> &rhs_xyz)
 {
     ZhangLiSttWorkspace workspace;
-    prepare_zhang_li_stt_workspace(workspace, rhs_xyz.size(), static_cast<size_t>(ctx.n_nodes));
+    prepare_zhang_li_stt_workspace(workspace, rhs_xyz.size(), static_cast<size_t>(ctx.mesh.n_nodes));
     add_zhang_li_stt_rhs_aos(ctx, m_xyz, rhs_xyz, workspace);
 }
 
@@ -124,7 +124,7 @@ void add_zhang_li_stt_rhs_aos(
     std::vector<double> &rhs_xyz,
     ZhangLiSttWorkspace &workspace)
 {
-    if (!ctx.has_zhang_li_stt) {
+    if (!ctx.stt.zhang_li_enabled) {
         return;
     }
 
@@ -132,18 +132,18 @@ void add_zhang_li_stt_rhs_aos(
     constexpr double E_CHARGE = 1.60217662e-19;
 
     if (workspace.rhs_xyz.size() != rhs_xyz.size() ||
-        workspace.node_weight.size() != static_cast<size_t>(ctx.n_nodes)) {
+        workspace.node_weight.size() != static_cast<size_t>(ctx.mesh.n_nodes)) {
         prepare_zhang_li_stt_workspace(
             workspace,
             rhs_xyz.size(),
-            static_cast<size_t>(ctx.n_nodes));
+            static_cast<size_t>(ctx.mesh.n_nodes));
     }
     std::fill(workspace.rhs_xyz.begin(), workspace.rhs_xyz.end(), 0.0);
     std::fill(workspace.node_weight.begin(), workspace.node_weight.end(), 0.0);
 
-    const double beta = ctx.stt_beta;
+    const double beta = ctx.stt.beta;
 
-    for (size_t element_index = 0; element_index < static_cast<size_t>(ctx.n_elements); ++element_index) {
+    for (size_t element_index = 0; element_index < static_cast<size_t>(ctx.mesh.n_elements); ++element_index) {
         if (!ctx.mesh.magnetic_element_mask.empty() && ctx.mesh.magnetic_element_mask[element_index] == 0u) {
             continue;
         }
@@ -170,7 +170,7 @@ void add_zhang_li_stt_rhs_aos(
             elem_ms += scalar_field_value(
                 ctx.material_fields.Ms_field,
                 nodes[local],
-                ctx.material.saturation_magnetisation);
+                ctx.material_fields.material.saturation_magnetisation);
         }
         elem_ms /= 4.0;
         if (!(elem_ms > 0.0)) {
@@ -178,8 +178,8 @@ void add_zhang_li_stt_rhs_aos(
         }
 
         const double drift_prefactor =
-            (ctx.stt_degree * MU_B) / (E_CHARGE * elem_ms * (1.0 + beta * beta));
-        const Vec3 u = scale3(ctx.stt_current_density_am2, drift_prefactor);
+            (ctx.stt.degree * MU_B) / (E_CHARGE * elem_ms * (1.0 + beta * beta));
+        const Vec3 u = scale3(ctx.stt.current_density_am2, drift_prefactor);
 
         Vec3 grad_m[3] = {};
         for (int local = 0; local < 4; ++local) {
@@ -212,7 +212,7 @@ void add_zhang_li_stt_rhs_aos(
         }
     }
 
-    for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(ctx.mesh.n_nodes); ++i) {
         if (!(workspace.node_weight[i] > kGeomEps)) {
             continue;
         }

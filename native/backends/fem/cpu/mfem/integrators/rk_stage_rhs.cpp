@@ -46,7 +46,7 @@ bool evaluate_rk_stage_rhs(
     {
         ScopedPhaseTimer timer(timings != nullptr ? &timings->rhs_wall_time_ns : nullptr);
         llg_rhs_aos(m_state, ws.h_eff_tmp,
-                    ctx.material.gyromagnetic_ratio, ctx.material.damping,
+                    ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
                     ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     out_k, max_rhs);
         add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt);

@@ -10,6 +10,8 @@
 
 namespace fullmag::fem {
 
+struct Context;
+
 static constexpr uint32_t FEM_GPU_MAX_RK_STAGES = 7;
 
 enum class FemGpuSyncState {
@@ -93,6 +95,9 @@ struct FemGpuState {
     double *poisson_rhs = nullptr;
     double *poisson_solution = nullptr;
     FemGpuComponentField poisson_gradient;
+    std::vector<double> hybrid_stage_m_xyz;
+    std::vector<double> hybrid_demag_xyz;
+    double hybrid_demag_energy_joules = 0.0;
 
     bool exchange_legacy_sparse_uploaded = false;
     uint64_t exchange_legacy_sparse_rows = 0;
@@ -113,6 +118,7 @@ bool gpu_state_initialize(
     uint64_t node_count,
     fullmag_fem_integrator integrator,
     bool allocate_device,
+    bool allocate_demag_workspace,
     const double *initial_magnetization_xyz,
     uint64_t initial_magnetization_len,
     TransferAudit &audit,
@@ -137,6 +143,13 @@ bool gpu_state_upload_effective_fields_aos(
     const double *h_demag_xyz,
     const double *h_ext_xyz,
     const double *h_eff_xyz,
+    uint64_t len,
+    TransferAudit &audit,
+    std::string &error);
+
+bool gpu_state_upload_demag_field_aos(
+    FemGpuState &state,
+    const double *h_demag_xyz,
     uint64_t len,
     TransferAudit &audit,
     std::string &error);
@@ -228,5 +241,14 @@ bool gpu_state_upload_exchange_legacy_sparse(
 void gpu_state_destroy(FemGpuState &state);
 
 fullmag_fem_gpu_state_info gpu_state_info(const FemGpuState &state);
+
+/*
+ * Return public GPU-state diagnostics for a backend Context.
+ *
+ * Keeps C ABI diagnostics entrypoints from reaching into Context storage
+ * directly; this module owns the GPU-state info read boundary even when the
+ * state is embedded in the compatibility Context facade.
+ */
+fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx);
 
 } // namespace fullmag::fem

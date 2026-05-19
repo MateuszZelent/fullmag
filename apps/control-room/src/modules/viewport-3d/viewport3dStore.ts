@@ -27,14 +27,16 @@ export interface Viewport3DCommandState {
 type Viewport3DListener = () => void;
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
+export type Viewport3DRotationMode = "camera" | "object";
 
-interface Viewport3DWidgetState {
+export interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
   cameraProjection: Viewport3DCameraProjection;
   effectAmbientOcclusion: boolean;
   effectAntialias: boolean;
   effectBloom: boolean;
   hslReferenceMode: Viewport3DHslReferenceMode;
+  rotationMode: Viewport3DRotationMode;
   settingsDialogOpen: boolean;
   viewCubeVisible: boolean;
 }
@@ -61,6 +63,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     effectAntialias: true,
     effectBloom: false,
     hslReferenceMode: "auto",
+    rotationMode: "camera",
     settingsDialogOpen: false,
     viewCubeVisible: true,
   },
@@ -127,6 +130,18 @@ class Viewport3DStore {
       widgets: {
         ...this.snapshot.widgets,
         hslReferenceMode: mode,
+      },
+    };
+    this.notify();
+  }
+
+  setRotationMode(mode: Viewport3DRotationMode): void {
+    if (this.snapshot.widgets.rotationMode === mode) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        rotationMode: mode,
       },
     };
     this.notify();

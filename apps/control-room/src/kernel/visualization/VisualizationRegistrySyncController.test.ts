@@ -201,6 +201,27 @@ function createController({
 }
 
 describe("VisualizationRegistrySyncController", () => {
+  it("does not start an idle recurring timer when there are no pending patches", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const { controller } = createController({ now: () => 0 });
+
+    controller.start();
+    controller.stop();
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+    expect(clearTimeoutSpy).not.toHaveBeenCalled();
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
+  });
+
   it("coalesces camera changes and flushes only the latest patch after the quiet window", async () => {
     let time = 0;
     const { controller, patchSpy } = createController({ now: () => time });

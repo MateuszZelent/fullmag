@@ -2,7 +2,7 @@
  * DMI workspace source contract.
  *
  * This source owns lazy allocation, reset, local-buffer sizing, and teardown for
- * shared DMI element-loop scratch stored on Context.
+ * shared DMI element-loop scratch stored on DmiRuntimeState.
  * It does not choose DMI energy density, assemble residuals, project H_DMI, or
  * report energy.
  */
@@ -68,10 +68,10 @@ void DmiElementWorkspace::reduce_thread_residuals(size_t field_len) {
 }
 
 DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
-    auto *workspace = static_cast<DmiElementWorkspace *>(ctx.mfem_dmi_workspace);
+    auto *workspace = ctx.dmi.workspace;
     if (workspace == nullptr) {
         workspace = new DmiElementWorkspace();
-        ctx.mfem_dmi_workspace = workspace;
+        ctx.dmi.workspace = workspace;
     }
     return workspace;
 }
@@ -80,8 +80,8 @@ DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
 void destroy_dmi_workspace(Context &ctx)
 {
 #if FULLMAG_HAS_MFEM_STACK
-    delete static_cast<DmiElementWorkspace *>(ctx.mfem_dmi_workspace);
-    ctx.mfem_dmi_workspace = nullptr;
+    delete ctx.dmi.workspace;
+    ctx.dmi.workspace = nullptr;
 #else
     (void) ctx;
 #endif

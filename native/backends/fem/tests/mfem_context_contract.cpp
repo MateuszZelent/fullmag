@@ -85,15 +85,50 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
             runtime_header.find("mfem::Device *device") != std::string::npos,
         "MFEM context runtime state must own typed MFEM device selection");
     check(
+        runtime.find("std::once_flag") == std::string::npos &&
+            runtime.find("std::call_once") == std::string::npos,
+        "MFEM context initialization must not use one-shot global device assignment for per-context device state");
+    check(
+        runtime.find("delete ctx.mfem_context.device") != std::string::npos,
+        "MFEM context destruction must release the per-context mfem::Device handle");
+    check(
+        runtime_header.find("std::vector<double> m_x") != std::string::npos &&
+            runtime_header.find("std::vector<double> m_y") != std::string::npos &&
+            runtime_header.find("std::vector<double> m_z") != std::string::npos &&
+            runtime_header.find("mfem::Mesh *mesh") != std::string::npos &&
+            runtime_header.find("mfem::FiniteElementCollection *fec") != std::string::npos &&
+            runtime_header.find("mfem::FiniteElementSpace *fes") != std::string::npos &&
+            runtime_header.find("mfem::GridFunction *gf_mx") != std::string::npos &&
+            runtime_header.find("mfem::GridFunction *gf_my") != std::string::npos &&
+            runtime_header.find("mfem::GridFunction *gf_mz") != std::string::npos &&
+            runtime_header.find("mfem::GridFunction *gf_a") != std::string::npos &&
+            runtime_header.find("mfem::GridFunction *gf_ms") != std::string::npos &&
+            runtime_header.find("mfem::Coefficient *a_coeff") != std::string::npos &&
+            runtime_header.find("bool ready") != std::string::npos,
+        "MFEM context runtime state must own mesh/FES/GridFunction lifecycle handles and component buffers");
+    check(
         context_header.find("MfemContextRuntimeState mfem_context{}") != std::string::npos,
         "Context must store actual MFEM context runtime state under mfem_context");
     for (const char *flat_field : {
              "int mfem_selected_device_index",
              "void *mfem_device",
+             "std::vector<double> mfem_mx",
+             "std::vector<double> mfem_my",
+             "std::vector<double> mfem_mz",
+             "mfem::Mesh *mfem_mesh",
+             "mfem::FiniteElementCollection *mfem_fec",
+             "mfem::FiniteElementSpace *mfem_fes",
+             "mfem::GridFunction *mfem_gf_mx",
+             "mfem::GridFunction *mfem_gf_my",
+             "mfem::GridFunction *mfem_gf_mz",
+             "mfem::GridFunction *mfem_gf_a",
+             "mfem::GridFunction *mfem_gf_ms",
+             "mfem::Coefficient *mfem_a_coeff",
+             "bool mfem_ready",
          }) {
         check(
             context_header.find(flat_field) == std::string::npos,
-            "Context must not own flat actual MFEM device runtime fields");
+            "Context must not own flat MFEM context lifecycle fields");
     }
 }
 
@@ -104,6 +139,8 @@ void mfem_runtime_pointers_are_typed() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.hpp");
     const std::string mfem_context_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.hpp");
+    const std::string poisson_runtime_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_runtime.hpp");
 
     for (const char *needle : {
              "void *mfem_mesh",
@@ -122,15 +159,15 @@ void mfem_runtime_pointers_are_typed() {
             "Context MFEM-owned pointers must be typed, not void pointers");
     }
     check(
-        context_header.find("mfem::Mesh *mfem_mesh") != std::string::npos,
-        "Context must expose typed MFEM mesh pointer under MFEM guard");
+        mfem_context_header.find("mfem::Mesh *mesh") != std::string::npos,
+        "MFEM context runtime state must expose typed MFEM mesh pointer");
     check(
-        context_header.find("mfem::FiniteElementSpace *mfem_fes") != std::string::npos,
-        "Context must expose typed MFEM FE space pointer under MFEM guard");
+        mfem_context_header.find("mfem::FiniteElementSpace *fes") != std::string::npos,
+        "MFEM context runtime state must expose typed MFEM FE space pointer");
     check(
-        context_header.find("PoissonHypreWorkspace *mfem_poisson_hypre_workspace") !=
+        poisson_runtime_header.find("PoissonHypreWorkspace *hypre_workspace") !=
             std::string::npos,
-        "Context must expose typed Poisson Hypre workspace pointer");
+        "Poisson demag runtime state must expose typed Poisson Hypre workspace pointer");
     check(
         exchange_header.find("void *exchange_form") == std::string::npos &&
             exchange_header.find("mfem::BilinearForm *exchange_form") != std::string::npos,

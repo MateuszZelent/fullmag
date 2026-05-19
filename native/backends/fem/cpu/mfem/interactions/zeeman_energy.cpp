@@ -17,7 +17,7 @@ double zeeman_energy_from_field(
     const Context &ctx,
     const std::vector<double> &m_xyz)
 {
-    if (!ctx.has_external_field) {
+    if (!ctx.zeeman.has_external_field) {
         return 0.0;
     }
 
@@ -32,7 +32,7 @@ double zeeman_energy_from_field(
         const double Ms_i = scalar_field_value(
             ctx.material_fields.Ms_field,
             i,
-            ctx.material.saturation_magnetisation);
+            ctx.material_fields.material.saturation_magnetisation);
         energy += -kMu0 * Ms_i * mdoth * ctx.integration_weights.mfem_lumped_mass[i];
     }
     return energy;

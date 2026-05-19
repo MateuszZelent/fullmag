@@ -9,8 +9,12 @@ import {
   Timer,
 } from "lucide-react";
 
-import type { SolverProfileResource } from "@/kernel/api/apiTypes";
+import type {
+  CpuTelemetryResource,
+  SolverProfileResource,
+} from "@/kernel/api/apiTypes";
 import {
+  useCpuTelemetryResource,
   useEngineLogResource,
   useGpuTelemetryResource,
   useSolverProfileResource,
@@ -25,6 +29,7 @@ interface SolverProfilePhaseBar {
 interface SolverProfileRow {
   demag: string;
   exchange: string;
+  id: string;
   missing: string;
   phases: SolverProfilePhaseBar[];
   rhs: string;
@@ -40,11 +45,26 @@ export interface SolverProfilePanelModel {
   threadSummary: string;
 }
 
+interface CpuTelemetryRow {
+  id: string;
+  label: string;
+  memory: string;
+  utilization: string;
+}
+
+export interface CpuTelemetryPanelModel {
+  reason: string | null;
+  rows: CpuTelemetryRow[];
+  status: string;
+}
+
 export function FooterDiagnostics() {
   const engineLog = useEngineLogResource();
+  const cpu = useCpuTelemetryResource();
   const gpu = useGpuTelemetryResource();
   const solverProfile = useSolverProfileResource();
   const latestEntries = engineLog.data?.entries.slice(-5).reverse() ?? [];
+  const cpuModel = buildCpuTelemetryPanelModel(cpu.data);
   const gpuDevices = gpu.data?.devices ?? [];
   const gpuStatus = gpu.data?.status ?? "pending";
   const profileModel = buildSolverProfilePanelModel(solverProfile.data);
@@ -122,11 +142,11 @@ export function FooterDiagnostics() {
                 <span role="columnheader">RHS</span>
                 <span role="columnheader">Missing</span>
               </div>
-              {profileModel.rows.map((row, index) => (
+              {profileModel.rows.map((row) => (
                 <div
                   className="fm-footer-diagnostics__profile-row"
                   role="row"
-                  key={index}
+                  key={row.id}
                 >
                   <span role="cell">{row.step}</span>
                   <span role="cell">{row.total}</span>
@@ -152,6 +172,43 @@ export function FooterDiagnostics() {
         ) : (
           <div className="fm-footer__empty" role="status">
             Solver profiler is inactive.
+          </div>
+        )}
+      </section>
+
+      <section
+        className="fm-footer-diagnostics__panel"
+        aria-label="CPU telemetry"
+      >
+        <div className="fm-footer-diagnostics__heading">
+          <Cpu size={14} aria-hidden="true" />
+          <span>CPU</span>
+          <span className="fm-footer-diagnostics__meta">
+            {titleCase(cpuModel.status)}
+          </span>
+        </div>
+        {cpuModel.rows.length > 0 ? (
+          <div className="fm-footer-diagnostics__cpu-list">
+            {cpuModel.rows.map((row) => (
+              <div className="fm-footer-diagnostics__cpu" key={row.id}>
+                <span>
+                  <Server size={13} aria-hidden="true" />
+                  {row.label}
+                </span>
+                <span>
+                  <Cpu size={13} aria-hidden="true" />
+                  {row.utilization}
+                </span>
+                <span>
+                  <HardDrive size={13} aria-hidden="true" />
+                  {row.memory}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="fm-footer__empty" role="status">
+            {cpuModel.reason ?? "CPU telemetry pending."}
           </div>
         )}
       </section>
@@ -199,10 +256,59 @@ export function FooterDiagnostics() {
   );
 }
 
+export function buildCpuTelemetryPanelModel(
+  cpu: CpuTelemetryResource | null | undefined,
+): CpuTelemetryPanelModel {
+  if (!cpu) {
+    return { reason: null, rows: [], status: "pending" };
+  }
+
+  if (cpu.status !== "available") {
+    return {
+      reason: cpu.reason ?? null,
+      rows: [],
+      status: cpu.status,
+    };
+  }
+
+  return {
+    reason: null,
+    rows: [
+      {
+        id: "host",
+        label: cpu.model_name ?? "Host CPU",
+        memory: formatMemory(cpu.memory_used_mb, cpu.memory_total_mb),
+        utilization: formatPercent(cpu.utilization_cpu_percent),
+      },
+      {
+        id: "process",
+        label: "Fullmag API",
+        memory: `${Math.round(cpu.process_rss_mb)} MB RSS`,
+        utilization: formatPercent(cpu.process_cpu_percent),
+      },
+      {
+        id: "threads",
+        label: "Threads",
+        memory: `${cpu.process_threads} process`,
+        utilization: `${cpu.logical_cpus} logical`,
+      },
+    ],
+    status: cpu.status,
+  };
+}
+
 export function buildSolverProfilePanelModel(
   profile: SolverProfileResource | null | undefined,
 ): SolverProfilePanelModel {
-  const rows = (profile?.latest_samples ?? []).slice(-5).reverse().map((sample) => {
+  const latestSamples = profile?.latest_samples ?? [];
+  const visibleSamples = latestSamples
+    .slice(-5)
+    .map((sample, index, samples) => ({
+      sample,
+      sourceIndex: latestSamples.length - samples.length + index,
+    }))
+    .reverse();
+  const rows = visibleSamples.map(({ sample, sourceIndex }) => {
     const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
     const phases = sample.phases.reduce<SolverProfilePhaseBar[]>((items, phase) => {
       if (phase.wall_time_ns > 0) {
@@ -217,6 +323,7 @@ export function buildSolverProfilePanelModel(
     return {
       demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
       exchange: formatNs(phaseById.get("exchange")?.wall_time_ns ?? 0),
+      id: `${sample.step}:${sample.time}:${sourceIndex}`,
       missing: formatNs(sample.missing_ns),
       phases,
       rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),

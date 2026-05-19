@@ -360,7 +360,7 @@ export function useMeshSummaryResource(options: ResourceHookOptions = {}) {
   });
 }
 
-export function useMeshCapabilitiesResource() {
+export function useMeshCapabilitiesResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -369,6 +369,7 @@ export function useMeshCapabilitiesResource() {
   );
 
   return useResource<MeshCapabilitiesResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_CAPABILITIES_RESOURCE_KEY,
@@ -424,7 +425,9 @@ export function useMeshSharedDomainPolicyResource() {
   });
 }
 
-export function useMeshSharedDomainReportResource() {
+export function useMeshSharedDomainReportResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -433,13 +436,16 @@ export function useMeshSharedDomainReportResource() {
   );
 
   return useResource<MeshSharedDomainReportResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_SHARED_DOMAIN_REPORT_RESOURCE_KEY,
   });
 }
 
-export function useMeshSharedDomainQualityResource() {
+export function useMeshSharedDomainQualityResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -448,6 +454,7 @@ export function useMeshSharedDomainQualityResource() {
   );
 
   return useResource<MeshSharedDomainQualityResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY,
@@ -510,7 +517,9 @@ export function useMeshSharedDomainRealizedSizeFieldsResource(
   });
 }
 
-export function useMeshUniverseReportResource() {
+export function useMeshUniverseReportResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -519,13 +528,16 @@ export function useMeshUniverseReportResource() {
   );
 
   return useResource<MeshUniverseReportResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_UNIVERSE_REPORT_RESOURCE_KEY,
   });
 }
 
-export function useMeshUniverseQualityResource() {
+export function useMeshUniverseQualityResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -534,6 +546,7 @@ export function useMeshUniverseQualityResource() {
   );
 
   return useResource<MeshUniverseQualityResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_UNIVERSE_QUALITY_RESOURCE_KEY,

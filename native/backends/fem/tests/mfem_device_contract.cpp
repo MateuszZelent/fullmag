@@ -159,9 +159,15 @@ void device_info_population_sets_scaffold_metadata_without_mfem_stack() {
     fullmag::fem::context_populate_device_info(ctx);
 
     check(ctx.mfem_device.device_info_valid, "device info marked valid");
+#if FULLMAG_HAS_MFEM_STACK
+    check(
+        std::strcmp(ctx.mfem_device.device_info_cache.name, "mfem_stack_uninitialized") == 0,
+        "MFEM-stack device info reports uninitialized runtime before context setup");
+#else
     check(
         std::strcmp(ctx.mfem_device.device_info_cache.name, "native_fem_scaffold") == 0,
         "no-MFEM device info uses scaffold backend name");
+#endif
     check(ctx.mfem_device.device_info_cache.is_gpu_enabled == 0, "no-MFEM device info reports CPU scaffold");
 }
 

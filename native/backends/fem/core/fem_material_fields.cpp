@@ -30,10 +30,10 @@ bool check_field_len(
     const char *name,
     std::string &error)
 {
-    if (!field.empty() && field.size() != static_cast<size_t>(ctx.n_nodes)) {
+    if (!field.empty() && field.size() != static_cast<size_t>(ctx.mesh.n_nodes)) {
         error = std::string("per-node field '") + name + "' has length " +
                 std::to_string(field.size()) + " but n_nodes=" +
-                std::to_string(ctx.n_nodes);
+                std::to_string(ctx.mesh.n_nodes);
         return false;
     }
     return true;
@@ -69,7 +69,7 @@ bool validate_field_values(
 } // namespace
 
 void initialize_material_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
-    ctx.material = plan.material;
+    ctx.material_fields.material = plan.material;
     copy_plan_material_fields(ctx, plan);
 }
 
@@ -111,22 +111,22 @@ bool validate_material_fields(const Context &ctx, std::string &error) {
         !validate_field_values(ctx.material_fields.Kc3_field, "Kc3_field", false, true, error)) {
         return false;
     }
-    if (!std::isfinite(ctx.material.saturation_magnetisation) ||
-        ctx.material.saturation_magnetisation <= 0.0) {
+    if (!std::isfinite(ctx.material_fields.material.saturation_magnetisation) ||
+        ctx.material_fields.material.saturation_magnetisation <= 0.0) {
         error = "material.saturation_magnetisation must be finite and > 0";
         return false;
     }
-    if (!std::isfinite(ctx.material.exchange_stiffness) ||
-        ctx.material.exchange_stiffness < 0.0) {
+    if (!std::isfinite(ctx.material_fields.material.exchange_stiffness) ||
+        ctx.material_fields.material.exchange_stiffness < 0.0) {
         error = "material.exchange_stiffness must be finite and >= 0";
         return false;
     }
-    if (!std::isfinite(ctx.material.damping) || ctx.material.damping < 0.0) {
+    if (!std::isfinite(ctx.material_fields.material.damping) || ctx.material_fields.material.damping < 0.0) {
         error = "material.damping must be finite and >= 0";
         return false;
     }
-    if (!std::isfinite(ctx.material.gyromagnetic_ratio) ||
-        ctx.material.gyromagnetic_ratio <= 0.0) {
+    if (!std::isfinite(ctx.material_fields.material.gyromagnetic_ratio) ||
+        ctx.material_fields.material.gyromagnetic_ratio <= 0.0) {
         error = "material.gyromagnetic_ratio must be finite and > 0; native FEM expects gamma_mu0 in m/(A s), not gamma in rad/(T s)";
         return false;
     }

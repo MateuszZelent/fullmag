@@ -2,6 +2,7 @@
 
 #include "fullmag_fem.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,14 +16,21 @@ struct PhaseTimings;
  *
  * `h_xyz` is the magnetic-domain H_demag buffer used by LLG and step metrics.
  * `h_visual_xyz` preserves full-domain recovered demag for observables and
- * visualization. The cached buffers, timestamp, validity flag, and Robin
- * boundary energy support frozen-field Poisson-demag reuse between refreshes.
+ * visualization. Enablement, solver config, realization, and field-refresh
+ * policy select the concrete demag solve/cache path. The cached buffers,
+ * timestamp, validity flag, and Robin boundary energy support frozen-field
+ * Poisson-demag reuse between refreshes.
  */
 struct DemagRuntimeState {
+    bool enabled = false;
+    uint64_t call_count = 0;
     std::vector<double> h_xyz;
     std::vector<double> h_visual_xyz;
     std::vector<double> cached_xyz;
     std::vector<double> cached_visual_xyz;
+    fullmag_fem_solver_config solver{};
+    fullmag_fem_field_refresh_policy field_refresh{};
+    int realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     bool cache_valid = false;
     double last_refresh_time = -1.0;
     double cached_robin_boundary_energy = 0.0;
@@ -31,16 +39,28 @@ struct DemagRuntimeState {
 /*
  * Initialize native FEM demag plan fields.
  *
- * Copies the ABI plan's demag enable flag, solver configuration, and MFEM-stack
- * realization settings into Context compatibility storage. Runtime output and
- * cache storage live on the demag owner, while solver lifecycle, RHS assembly,
- * potential solves, recovery, cache policy, and telemetry remain in dedicated
- * demag modules.
+ * Copies the ABI plan's demag enable flag plus solver/realization settings
+ * into the demag runtime owner. Runtime output and cache storage live on the
+ * demag owner, while solver lifecycle, RHS
+ * assembly, potential solves, recovery, cache policy, and
+ * telemetry remain in dedicated demag modules.
  *
  * This dispatcher surface does not assemble Poisson RHS, run Fredkin-Koehler internals, recover fields, compute fresh demag energy formulas, or publish solver telemetry. Concrete ownership stays in the demag_poisson.* and
  * demag_fem_bem.* module families.
  */
 void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+#if FULLMAG_HAS_MFEM_STACK
+/*
+ * Initialize requested native FEM demag runtime.
+ *
+ * The demag dispatcher owns the realization-level decision: no demag, airbox
+ * Poisson lifecycle, Fredkin-Koehler FEM/BEM lifecycle, or unsupported
+ * realization error. It does not own Poisson lifecycle internals or Fredkin-Koehler workspace construction; those stay in demag_poisson_* and
+ * demag_fem_bem_* owner modules.
+ */
+bool initialize_demag_runtime(Context &ctx, std::string &error);
+#endif
 
 /*
  * Native FEM demag field-update action selected for one effective-field call.

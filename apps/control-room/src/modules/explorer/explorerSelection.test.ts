@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
+import { CommandDiagnosticsController } from "@/kernel/commands/CommandDiagnosticsController";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -27,6 +28,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     bus,
+    commandDiagnostics: new CommandDiagnosticsController(),
     commands,
     diagnostics: new RequestDiagnosticsController(),
     layout: new LayoutController(bus),

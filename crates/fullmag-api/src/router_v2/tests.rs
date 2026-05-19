@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use tokio::sync::{Mutex, RwLock, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
@@ -345,6 +345,60 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
         generation_id: Some("42".to_string()),
         per_domain_quality: Default::default(),
     }
+}
+
+fn sample_scoped_mesh_statistics() -> serde_json::Value {
+    serde_json::json!({
+        "mesh_name": "scoped-test-mesh",
+        "quality_source": "gmsh",
+        "global": {
+            "element_count": 2,
+            "edge_length": { "min": 1.0e-9, "mean": 2.0e-9, "max": 4.0e-9, "std": 0.5e-9 },
+            "volume": { "min": 1.0e-27, "mean": 2.0e-27, "max": 3.0e-27, "std": 0.2e-27, "ratio": 3.0 },
+            "sicn": { "min": 0.2, "mean": 0.8, "p05": 0.3, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 2 }] },
+            "gamma": { "min": 0.1, "mean": 0.7, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 2 }] }
+        },
+        "scopes": [
+            {
+                "scope_id": "marker:0",
+                "kind": "airbox",
+                "label": "Airbox",
+                "role": "air",
+                "marker": 0,
+                "element_count": 5,
+                "edge_length": { "min": 5.0e-9, "mean": 8.0e-9, "max": 1.0e-8, "std": 1.0e-9 },
+                "volume": { "min": 1.0e-25, "mean": 2.0e-25, "max": 4.0e-25, "std": 0.4e-25, "ratio": 4.0 },
+                "sicn": { "min": 0.5, "mean": 0.85, "p05": 0.55, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 5 }] },
+                "gamma": { "min": 0.4, "mean": 0.9, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 5 }] }
+            },
+            {
+                "scope_id": "marker:7",
+                "kind": "domain",
+                "label": "Domain 7",
+                "role": "domain",
+                "marker": 7,
+                "element_count": 3,
+                "edge_length": { "min": 1.0e-9, "mean": 2.0e-9, "max": 4.0e-9, "std": 0.5e-9 },
+                "volume": { "min": 1.0e-27, "mean": 2.0e-27, "max": 3.0e-27, "std": 0.2e-27, "ratio": 3.0 },
+                "sicn": { "min": 0.2, "mean": 0.8, "p05": 0.3, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 3 }] },
+                "gamma": { "min": 0.1, "mean": 0.7, "histogram": [{ "lo": 0.0, "hi": 1.0, "count": 3 }] }
+            }
+        ],
+        "worst_elements": [
+            { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+            { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+        ],
+        "worst_elements_by_metric": {
+            "gamma": [
+                { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+                { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+            ],
+            "sicn": [
+                { "element_index": 1, "marker": 7, "scope_label": "Domain 7", "sicn": 0.2, "gamma": 0.1 },
+                { "element_index": 2, "marker": 0, "scope_label": "Airbox", "sicn": 0.5, "gamma": 0.4 }
+            ]
+        }
+    })
 }
 
 /// Minimal `AppState` with no active live session.
@@ -1077,6 +1131,17 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("response body is not valid JSON")
 }
 
+fn is_iso_calendar_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
 // ─── system endpoints ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1372,6 +1437,17 @@ async fn status_returns_200_with_live_session() {
 
     let json = body_json(response).await;
     assert_eq!(json["api_contract_version"], "1.0.0");
+    assert_ne!(
+        json["runtime_bundle_version"], "1.0.0",
+        "runtime_bundle_version must describe the backend build, not the API/session protocol"
+    );
+    let runtime_bundle = json["runtime_bundle_version"]
+        .as_str()
+        .expect("runtime_bundle_version should be a string");
+    assert!(
+        is_iso_calendar_date(runtime_bundle),
+        "runtime_bundle_version should expose the backend build date as YYYY-MM-DD, got {runtime_bundle}"
+    );
     assert!(json["session"].is_object());
     assert_eq!(json["session"]["session_id"], "test-session");
     assert!(json["solver"].is_object());
@@ -3328,6 +3404,94 @@ async fn mesh_summary_returns_current_mesh_workspace() {
 }
 
 #[tokio::test]
+async fn mesh_object_quality_returns_normalized_scope_statistics() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_per_object_targets": {
+                "body": { "marker": 7, "maximum_element_size": 2e-9 }
+            },
+            "mesh_statistics": sample_scoped_mesh_statistics()
+        }));
+        snapshot.mesh_revision = 21;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/objects/body/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 21);
+    assert_eq!(json["quality"]["marker"], 7);
+    assert_eq!(json["quality"]["global"]["marker"], 7);
+    assert_eq!(json["quality"]["global"]["element_count"], 3);
+    assert_eq!(
+        json["quality"]["global"]["sicn"]["histogram"][0]["count"],
+        3
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"][0]["scope_label"],
+        "Domain 7"
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn mesh_universe_quality_returns_airbox_scope_statistics() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_airbox_target": { "maximum_element_size": 1e-8 },
+            "mesh_statistics": sample_scoped_mesh_statistics()
+        }));
+        snapshot.mesh_revision = 22;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/universe/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 22);
+    assert_eq!(json["quality"]["global"]["kind"], "airbox");
+    assert_eq!(json["quality"]["global"]["marker"], 0);
+    assert_eq!(json["quality"]["global"]["element_count"], 5);
+    assert_eq!(
+        json["quality"]["global"]["gamma"]["histogram"][0]["count"],
+        5
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"][0]["scope_label"],
+        "Airbox"
+    );
+    assert_eq!(
+        json["quality"]["worst_elements"].as_array().unwrap().len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn mesh_summary_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -3514,8 +3678,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
+            ["body"]["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -3527,7 +3691,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -4675,8 +4840,8 @@ async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_buil
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary()
- {
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
+) {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 94;
@@ -5230,12 +5395,10 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(
-        json["source"]
-            .as_str()
-            .expect("source string")
-            .contains("from fullmag import *")
-    );
+    assert!(json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("from fullmag import *"));
 }
 
 #[tokio::test]
@@ -5372,27 +5535,21 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
-    );
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
-    );
-    assert!(
-        json["csg_capabilities"]
-            .as_array()
-            .expect("csg capabilities")
-            .iter()
-            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
-    );
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
+    assert!(json["csg_capabilities"]
+        .as_array()
+        .expect("csg capabilities")
+        .iter()
+        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
 }
 
 #[tokio::test]
@@ -5508,13 +5665,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(
-        created_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(created_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -5578,13 +5733,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(
-        !delete_json["committed_scene"]["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "box_001")
-    );
+    assert!(!delete_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "box_001"));
 }
 
 #[tokio::test]
@@ -5689,13 +5842,11 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(
-        json["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
-    );
+    assert!(json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
 }
 
 #[tokio::test]
@@ -5791,12 +5942,10 @@ async fn authoring_regions_returns_object_derived_regions() {
     assert_eq!(json["regions"][0]["name"], "free_layer");
     assert_eq!(json["regions"][0]["source"], "object");
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
-    assert!(
-        json["regions"][0]["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(json["regions"][0]["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
     assert_eq!(
         json["regions"][0]["mesh_part_ids"]
             .as_array()
@@ -5840,13 +5989,11 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(
-        object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 }
 
 #[tokio::test]
@@ -6110,13 +6257,11 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(
-        create_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(create_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 
     let patch_response = app
         .clone()
@@ -6147,13 +6292,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(
-        patched_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(patched_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 
     let delete_response = app
         .oneshot(
@@ -6167,13 +6310,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(
-        !delete_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(!delete_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 }
 
 #[tokio::test]
@@ -7669,11 +7810,9 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(
-        json["fms_base64"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["fms_base64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -7825,11 +7964,9 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .as_str()
         .expect("checkpoint artifact_ref should be present")
         .to_string();
-    assert!(
-        json["checkpoint"]["checksum"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["checkpoint"]["checksum"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 
     let stage_after_create_response = app
         .clone()
@@ -7852,13 +7989,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         stage_after_create["stages"][1]["state_transition"],
         "preserved"
     );
-    assert!(
-        stage_after_create["stages"][1]["artifact_refs"]
-            .as_array()
-            .expect("stage artifact_refs should be an array")
-            .iter()
-            .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str()))
-    );
+    assert!(stage_after_create["stages"][1]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact_refs should be an array")
+        .iter()
+        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
 
     let detail_response = app
         .clone()
@@ -8197,7 +8332,7 @@ async fn gpu_telemetry_endpoint_returns_contract_shape() {
         .as_str()
         .expect("gpu telemetry status should be a string");
     assert!(
-        matches!(status, "ok" | "unavailable"),
+        matches!(status, "available" | "ok" | "unavailable"),
         "unexpected gpu telemetry status: {status}"
     );
     assert!(
@@ -8214,6 +8349,47 @@ async fn gpu_telemetry_endpoint_returns_contract_shape() {
             "unavailable gpu telemetry should include reason"
         );
     }
+}
+
+#[tokio::test]
+async fn cpu_telemetry_endpoint_returns_contract_shape() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/cpu")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let status = json["status"]
+        .as_str()
+        .expect("cpu telemetry status should be a string");
+    assert!(
+        matches!(status, "available" | "unavailable"),
+        "unexpected cpu telemetry status: {status}"
+    );
+    assert!(
+        json["sample_time_unix_ms"].as_u64().is_some(),
+        "cpu telemetry should include sample_time_unix_ms"
+    );
+    assert!(
+        json["logical_cpus"].as_u64().is_some(),
+        "cpu telemetry should include logical_cpus"
+    );
+    assert!(
+        json["utilization_cpu_percent"].as_f64().is_some(),
+        "cpu telemetry should include host utilization"
+    );
+    assert!(
+        json["process_cpu_percent"].as_f64().is_some(),
+        "cpu telemetry should include process utilization"
+    );
 }
 
 #[tokio::test]
@@ -9579,11 +9755,9 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -9614,11 +9788,9 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
 }
 
 #[tokio::test]
@@ -10228,6 +10400,7 @@ fn openapi_v2_exposes_professional_session_tree() {
         "/v2/sessions/current/workspace/layout",
         "/v2/sessions/current/analysis/eigenmodes/spectrum",
         "/v2/sessions/current/persistence/imports",
+        "/v2/sessions/current/diagnostics/cpu",
         "/v2/sessions/current/diagnostics/gpu",
     ] {
         assert!(paths.contains_key(path), "OpenAPI v2 missing {path}");

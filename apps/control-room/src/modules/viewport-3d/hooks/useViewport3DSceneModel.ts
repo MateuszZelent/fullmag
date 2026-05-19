@@ -238,9 +238,10 @@ export function useViewport3DSceneModel({
       ),
     [primitiveModel],
   );
-  const topologyBounds = topologyCurrent
-    ? resolveTopologyBounds(topology.data)
-    : null;
+  const topologyBounds = useMemo(
+    () => (topologyCurrent ? resolveTopologyBounds(topology.data) : null),
+    [topology.data, topologyCurrent],
+  );
   const resourceBounds =
     topologyBounds ??
     resolveDomainBounds(domainMeta.data) ??

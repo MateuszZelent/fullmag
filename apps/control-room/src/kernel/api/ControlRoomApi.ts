@@ -5,6 +5,7 @@ import {
   DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
   DATA_SCALARS_PATH,
+  DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
@@ -82,6 +83,7 @@ import type {
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
+  CpuTelemetryResource,
   CurrentRunResource,
   DomainMetaResource,
   EngineLogResource,
@@ -265,6 +267,8 @@ export class ControlRoomApi {
         DIAGNOSTICS_ENGINE_LOG_PATH,
         options,
       ),
+    cpuTelemetry: (options?: RequestOptions) =>
+      this.requestJson<CpuTelemetryResource>(DIAGNOSTICS_CPU_PATH, options),
     gpuTelemetry: (options?: RequestOptions) =>
       this.requestJson<GpuTelemetryResource>(DIAGNOSTICS_GPU_PATH, options),
     solverProfile: (options?: RequestOptions) =>

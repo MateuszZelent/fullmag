@@ -4,7 +4,12 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
-import type { AxesHelper, GridHelper, Material } from "three";
+import type {
+  AxesHelper,
+  GridHelper,
+  Material,
+  OrthographicCamera as ThreeOrthographicCamera,
+} from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -30,6 +35,7 @@ import type {
 import type {
   Viewport3DCameraProjection,
   Viewport3DCameraState,
+  Viewport3DRotationMode,
 } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -93,6 +99,7 @@ interface Viewport3DSceneProps {
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   resourceFrameKey: string;
+  rotationMode: Viewport3DRotationMode;
   selectionBounds: Viewport3DBounds | null;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
@@ -111,6 +118,11 @@ interface Viewport3DGridSpec {
   center: [number, number, number];
   divisions: number;
   size: number;
+}
+
+interface Viewport3DViewportSize {
+  height: number;
+  width: number;
 }
 
 const FALLBACK_GRID_SIZE = 1e-6;
@@ -165,11 +177,32 @@ function resolveViewport3DGridCellSize(maxGridSize: number): number {
 
 export function resolveViewport3DOrthographicZoom(
   bounds: Viewport3DBounds | null,
+  viewportSize: Viewport3DViewportSize,
 ): number {
   const span = bounds
     ? Math.max(...bounds.size, bounds.radius * 2, 1e-12)
     : FALLBACK_GRID_SIZE;
-  return clamp(2 / (span * 1.6), 1e-3, 1e12);
+  const viewportSpan = Math.max(
+    2,
+    Math.min(viewportSize.width, viewportSize.height),
+  );
+  return clamp(viewportSpan / (span * 1.6), 1e-3, 1e12);
+}
+
+export function applyViewport3DOrthographicCameraPose(
+  camera: ThreeOrthographicCamera,
+  cameraState: Viewport3DCameraState,
+  near: number,
+  far: number,
+): void {
+  camera.up.set(...cameraState.up);
+  camera.position.set(...cameraState.position);
+  camera.lookAt(...cameraState.target);
+  camera.near = near;
+  camera.far = far;
+  camera.updateProjectionMatrix();
+  camera.updateMatrix();
+  camera.updateMatrixWorld();
 }
 
 function niceGridStep(value: number): number {
@@ -219,6 +252,7 @@ export function Viewport3DScene({
   primitiveModel,
   resetCameraRevision,
   resourceFrameKey,
+  rotationMode,
   selectionBounds,
   tracker,
   topologyFreshness,
@@ -232,11 +266,12 @@ export function Viewport3DScene({
   visualProfileId,
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
+  const viewportSize = useThree((state) => state.size);
   const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
   const cameraFit = useMemo(() => resolveViewport3DCameraFit(bounds), [bounds]);
   const orthographicZoom = useMemo(
-    () => resolveViewport3DOrthographicZoom(bounds),
-    [bounds],
+    () => resolveViewport3DOrthographicZoom(bounds, viewportSize),
+    [bounds, viewportSize],
   );
   const materialProfile = useMemo(
     () =>
@@ -286,6 +321,14 @@ export function Viewport3DScene({
           far={cameraFit.far}
           position={cameraState.position}
           up={VIEWPORT_3D_WORLD_UP}
+          onUpdate={(camera) =>
+            applyViewport3DOrthographicCameraPose(
+              camera,
+              cameraState,
+              cameraFit.near,
+              cameraFit.far,
+            )
+          }
         />
       )}
       <DomainBoxLayer
@@ -364,12 +407,14 @@ export function Viewport3DScene({
       <OrbitCameraControls
         cameraState={cameraState}
         onCameraChange={onCameraChange}
+        rotationMode={rotationMode}
         tracker={tracker}
       />
       <OrientationHudLayer
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
         onCameraChange={onCameraChange}
+        rotationMode={rotationMode}
         viewCubeVisible={viewCubeVisible}
       />
       <PostProcessingLayer />

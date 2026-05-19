@@ -40,14 +40,14 @@ void fill_demag_poisson_solver_stats(
     fullmag_fem_step_stats &stats)
 {
 #if FULLMAG_HAS_MFEM_STACK
-    if (ctx.enable_demag &&
-        (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
-         ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
-         ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER)) {
-        stats.demag_solve_count = ctx.demag_solves_current_step;
+    if (ctx.demag.enabled &&
+        (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
+         ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
+         ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER)) {
+        stats.demag_solve_count = ctx.poisson_demag.solves_current_step;
         stats.demag_linear_iterations =
-            static_cast<uint32_t>(std::max(ctx.poisson_last_iterations, 0));
-        stats.demag_linear_residual = ctx.poisson_last_residual;
+            static_cast<uint32_t>(std::max(ctx.poisson_demag.last_iterations, 0));
+        stats.demag_linear_residual = ctx.poisson_demag.last_residual;
         return;
     }
 #else
@@ -157,16 +157,16 @@ void log_demag_poisson_call_profile(
         return;
     }
     DemagPoissonCallProfile profile{};
-    profile.step = ctx.step_count;
+    profile.step = ctx.state.step_count;
     profile.call = demag_call_index;
-    profile.dt_seconds = ctx.current_dt;
+    profile.dt_seconds = ctx.adaptive_dt.current_dt;
     profile.assemble_wall_time_ns = assemble_wall_time_ns;
     profile.solve_wall_time_ns = solve_wall_time_ns;
     profile.recover_wall_time_ns = recover_wall_time_ns;
     profile.energy_wall_time_ns = energy_wall_time_ns;
 #if FULLMAG_HAS_MFEM_STACK
-    profile.linear_iterations = ctx.poisson_last_iterations;
-    profile.linear_residual = ctx.poisson_last_residual;
+    profile.linear_iterations = ctx.poisson_demag.last_iterations;
+    profile.linear_residual = ctx.poisson_demag.last_residual;
 #endif
     const std::string line = demag_poisson_call_profile_line(profile);
     std::fputs(line.c_str(), stderr);

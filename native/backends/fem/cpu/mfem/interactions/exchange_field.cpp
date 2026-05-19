@@ -58,17 +58,17 @@ bool compute_exchange_for_magnetization(
     bool allow_interrupt,
     std::string &error)
 {
-    if (!ctx.mfem_ready) {
+    if (!ctx.mfem_context.ready) {
         error = "MFEM exchange requested before MFEM context initialization";
         return false;
     }
 
     auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
     auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
-    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
-    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
-    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
-    auto *gf_ms = static_cast<mfem::GridFunction *>(ctx.mfem_gf_ms);
+    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
+    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);
+    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mz);
+    auto *gf_ms = static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_ms);
     auto *inv_lumped_mass = static_cast<mfem::Vector *>(ctx.exchange.mfem.inv_lumped_mass);
     auto *tmp_vec = static_cast<mfem::Vector *>(ctx.exchange.mfem.tmp_vec);
     auto *out_vec = static_cast<mfem::Vector *>(ctx.exchange.mfem.out_vec);
@@ -83,13 +83,13 @@ bool compute_exchange_for_magnetization(
     }
 
     TransferAuditScope exchange_audit_scope(
-        ctx.transfer_audit,
+        ctx.transfer_audit.audit,
         TransferAuditScopeKind::ExchangeInterop);
 
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
-    copy_host_vector_to_mfem(ctx.mfem_mx, *gf_mx);
-    copy_host_vector_to_mfem(ctx.mfem_my, *gf_my);
-    copy_host_vector_to_mfem(ctx.mfem_mz, *gf_mz);
+    unpack_aos_to_existing_components(m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
+    copy_host_vector_to_mfem(ctx.mfem_context.m_x, *gf_mx);
+    copy_host_vector_to_mfem(ctx.mfem_context.m_y, *gf_my);
+    copy_host_vector_to_mfem(ctx.mfem_context.m_z, *gf_mz);
 
     double exchange_energy_accum = 0.0;
     double component_energy = 0.0;
@@ -174,7 +174,7 @@ bool compute_exchange_for_magnetization(
 
     if (h_eff_xyz != nullptr) {
         h_eff_xyz->resize(h_ex_xyz.size());
-        if (ctx.has_external_field) {
+        if (ctx.zeeman.has_external_field) {
             for (size_t i = 0; i < h_ex_xyz.size(); ++i) {
                 (*h_eff_xyz)[i] = h_ex_xyz[i] + ctx.zeeman.h_ext_xyz[i];
             }

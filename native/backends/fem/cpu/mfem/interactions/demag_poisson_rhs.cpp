@@ -87,7 +87,7 @@ public:
             mz += sign * shape(i) * (*m_xyz_)[base + 2];
         }
 
-        double Ms = ctx_.material.saturation_magnetisation;
+        double Ms = ctx_.material_fields.material.saturation_magnetisation;
         if (!ctx_.material_fields.Ms_field.empty()) {
             Ms = 0.0;
             for (int i = 0; i < ndof; ++i) {
@@ -96,7 +96,7 @@ public:
                     scalar_field_value(
                         ctx_.material_fields.Ms_field,
                         static_cast<size_t>(global_dof),
-                        ctx_.material.saturation_magnetisation);
+                        ctx_.material_fields.material.saturation_magnetisation);
             }
         }
         V(0) = Ms * mx;
@@ -135,27 +135,27 @@ bool initialize_demag_poisson_rhs_workspace(
 {
     try {
         auto *rhs_workspace = new PoissonRhsWorkspace(ctx, &fes);
-        ctx.mfem_poisson_rhs_workspace = rhs_workspace;
-        ctx.mfem_poisson_rhs = &rhs_workspace->rhs_form;
-        ctx.mfem_poisson_rhs_vec = &rhs_workspace->rhs_true;
+        ctx.poisson_demag.rhs_workspace = rhs_workspace;
+        ctx.poisson_demag.rhs_form = &rhs_workspace->rhs_form;
+        ctx.poisson_demag.rhs_vec = &rhs_workspace->rhs_true;
         return true;
     } catch (const std::exception &ex) {
         error = std::string("Poisson RHS workspace initialization failed: ") + ex.what();
     } catch (...) {
         error = "Poisson RHS workspace initialization failed with an unknown error";
     }
-    ctx.mfem_poisson_rhs_workspace = nullptr;
-    ctx.mfem_poisson_rhs = nullptr;
-    ctx.mfem_poisson_rhs_vec = nullptr;
+    ctx.poisson_demag.rhs_workspace = nullptr;
+    ctx.poisson_demag.rhs_form = nullptr;
+    ctx.poisson_demag.rhs_vec = nullptr;
     return false;
 }
 
 void destroy_demag_poisson_rhs_workspace(Context &ctx)
 {
-    delete static_cast<PoissonRhsWorkspace *>(ctx.mfem_poisson_rhs_workspace);
-    ctx.mfem_poisson_rhs_workspace = nullptr;
-    ctx.mfem_poisson_rhs = nullptr;
-    ctx.mfem_poisson_rhs_vec = nullptr;
+    delete static_cast<PoissonRhsWorkspace *>(ctx.poisson_demag.rhs_workspace);
+    ctx.poisson_demag.rhs_workspace = nullptr;
+    ctx.poisson_demag.rhs_form = nullptr;
+    ctx.poisson_demag.rhs_vec = nullptr;
 }
 
 bool assemble_demag_poisson_rhs(
@@ -164,17 +164,17 @@ bool assemble_demag_poisson_rhs(
     mfem::Vector *&rhs,
     std::string &error)
 {
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
     if (fes == nullptr) {
         error = "Poisson FE space is null during RHS assembly";
         return false;
     }
 
     auto *workspace =
-        static_cast<PoissonRhsWorkspace *>(ctx.mfem_poisson_rhs_workspace);
+        static_cast<PoissonRhsWorkspace *>(ctx.poisson_demag.rhs_workspace);
     if (workspace == nullptr ||
-        ctx.mfem_poisson_rhs == nullptr ||
-        ctx.mfem_poisson_rhs_vec == nullptr) {
+        ctx.poisson_demag.rhs_form == nullptr ||
+        ctx.poisson_demag.rhs_vec == nullptr) {
         error = "Poisson RHS workspace is null during RHS assembly";
         return false;
     }

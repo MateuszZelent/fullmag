@@ -1,9 +1,10 @@
 /*
  * FEM plan-fields core source contract.
  *
- * This source owns base native FEM plan validation and scalar runtime import:
- * mesh cardinalities, P1-only fe_order policy, timestep, hmax, precision,
- * airbox factor, and explicit integrator selection. It does not import mesh geometry, material fields, state vectors, field buffers, runtime devices, or interactions.
+ * This source owns base native FEM plan validation, scalar base-plan runtime
+ * import, and mesh cardinality import into FemMeshRuntimeState: P1-only
+ * fe_order policy, timestep, hmax, precision, airbox factor, and explicit
+ * integrator selection. It does not import mesh geometry, material fields, state vectors, field buffers, runtime devices, or interactions.
  */
 
 #include "core/fem_plan_fields.hpp"
@@ -64,16 +65,16 @@ bool initialize_base_plan_fields(
         return false;
     }
 
-    ctx.n_nodes = plan.mesh.n_nodes;
-    ctx.n_elements = plan.mesh.n_elements;
-    ctx.n_boundary_faces = plan.mesh.n_boundary_faces;
-    ctx.fe_order = plan.fe_order;
-    ctx.hmax = plan.hmax;
-    ctx.dt_seconds = plan.dt_seconds;
-    ctx.current_dt = plan.dt_seconds;
-    ctx.air_box_factor = plan.air_box_factor;
-    ctx.precision = plan.precision;
-    ctx.integrator = plan.integrator;
+    ctx.mesh.n_nodes = plan.mesh.n_nodes;
+    ctx.mesh.n_elements = plan.mesh.n_elements;
+    ctx.mesh.n_boundary_faces = plan.mesh.n_boundary_faces;
+    ctx.base_plan.fe_order = plan.fe_order;
+    ctx.base_plan.hmax = plan.hmax;
+    ctx.base_plan.dt_seconds = plan.dt_seconds;
+    ctx.adaptive_dt.current_dt = plan.dt_seconds;
+    ctx.base_plan.air_box_factor = plan.air_box_factor;
+    ctx.base_plan.precision = plan.precision;
+    ctx.base_plan.integrator = plan.integrator;
     return true;
 }
 

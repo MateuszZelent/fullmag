@@ -173,7 +173,11 @@ impl LocalLiveWorkspace {
                 "system",
                 format!(
                     "Solver profiler {} (sample_every={}, max_samples={})",
-                    if snapshot.config.enabled { "enabled" } else { "disabled" },
+                    if snapshot.config.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
                     snapshot.config.sample_every,
                     snapshot.config.max_samples,
                 ),

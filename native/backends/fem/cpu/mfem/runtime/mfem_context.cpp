@@ -29,7 +29,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -102,7 +101,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 {
     try {
         debug_checkpoint("context_initialize_mfem:enter");
-        static std::once_flag s_mfem_device_once;
 #if FULLMAG_HAS_CUDA_RUNTIME
         const char *device_config = configured_mfem_device_string(ctx);
         const bool use_gpu_device = is_gpu_device_string(device_config);
@@ -126,9 +124,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
                         cudaGetErrorString(cuda_err);
                 return false;
             }
-            std::call_once(s_mfem_device_once, [&, device_config]() {
-                ctx.mfem_context.device = new mfem::Device(device_config);
-            });
+            ctx.mfem_context.device = new mfem::Device(device_config);
             ctx.mfem_context.selected_device_index = selected_device;
 
             int low_priority = 0;
@@ -138,40 +134,36 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             cudaStream_t ios{};
             cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
             cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
-            ctx.cuda_runtime.compute_stream = reinterpret_cast<void *>(cs);
-            ctx.cuda_runtime.io_stream = reinterpret_cast<void *>(ios);
+            ctx.gpu_state.cuda.compute_stream = reinterpret_cast<void *>(cs);
+            ctx.gpu_state.cuda.io_stream = reinterpret_cast<void *>(ios);
             cudaEvent_t ev{};
             cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
-            ctx.cuda_runtime.compute_event = reinterpret_cast<void *>(ev);
+            ctx.gpu_state.cuda.compute_event = reinterpret_cast<void *>(ev);
         } else {
             configure_cpu_openmp_runtime(ctx);
             const char *host_device = (device_config != nullptr && *device_config != '\0')
                 ? device_config : "cpu";
-            std::call_once(s_mfem_device_once, [&ctx, host_device]() {
-                ctx.mfem_context.device = new mfem::Device(host_device);
-            });
+            ctx.mfem_context.device = new mfem::Device(host_device);
             ctx.mfem_context.selected_device_index = -1;
             log_cpu_runtime_selection(ctx);
         }
 #else
         configure_cpu_openmp_runtime(ctx);
-        std::call_once(s_mfem_device_once, [&ctx]() {
-            ctx.mfem_context.device = new mfem::Device("cpu");
-        });
+        ctx.mfem_context.device = new mfem::Device("cpu");
         ctx.mfem_context.selected_device_index = -1;
         log_cpu_runtime_selection(ctx);
 #endif
 
         debug_checkpoint("context_initialize_mfem:device_ready");
-        auto *mesh = new mfem::Mesh(3, static_cast<int>(ctx.n_nodes), static_cast<int>(ctx.n_elements),
-                                    static_cast<int>(ctx.n_boundary_faces), 3);
+        auto *mesh = new mfem::Mesh(3, static_cast<int>(ctx.mesh.n_nodes), static_cast<int>(ctx.mesh.n_elements),
+                                    static_cast<int>(ctx.mesh.n_boundary_faces), 3);
 
-        for (uint32_t i = 0; i < ctx.n_nodes; ++i) {
+        for (uint32_t i = 0; i < ctx.mesh.n_nodes; ++i) {
             const double *coords = ctx.mesh.nodes_xyz.data() + static_cast<size_t>(i) * 3u;
             mesh->AddVertex(coords);
         }
 
-        for (uint32_t i = 0; i < ctx.n_elements; ++i) {
+        for (uint32_t i = 0; i < ctx.mesh.n_elements; ++i) {
             const uint32_t *tet = ctx.mesh.elements.data() + static_cast<size_t>(i) * 4u;
             const int vi[4] = {
                 static_cast<int>(tet[0]),
@@ -187,7 +179,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             mesh->AddTet(vi, attr);
         }
 
-        for (uint32_t i = 0; i < ctx.n_boundary_faces; ++i) {
+        for (uint32_t i = 0; i < ctx.mesh.n_boundary_faces; ++i) {
             const uint32_t *tri = ctx.mesh.boundary_faces.data() + static_cast<size_t>(i) * 3u;
             const int vi[3] = {
                 static_cast<int>(tri[0]),
@@ -204,11 +196,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         mesh->Finalize(false, true);
         debug_checkpoint("context_initialize_mfem:mesh_ready");
 
-        auto *fec = new mfem::H1_FECollection(static_cast<int>(ctx.fe_order), mesh->Dimension());
+        auto *fec = new mfem::H1_FECollection(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
         auto *fes = new mfem::FiniteElementSpace(mesh, fec);
         debug_checkpoint("context_initialize_mfem:fes_ready");
 
-        if (fes->GetNDofs() != static_cast<int>(ctx.n_nodes)) {
+        if (fes->GetNDofs() != static_cast<int>(ctx.mesh.n_nodes)) {
             error = "MFEM H1 P1 space DOF count does not match node count";
             delete fes;
             delete fec;
@@ -216,7 +208,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             return false;
         }
 
-        unpack_aos_to_components(ctx.state.m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
+        unpack_aos_to_components(ctx.state.m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
         auto *gf_mx = new mfem::GridFunction(fes);
         auto *gf_my = new mfem::GridFunction(fes);
         auto *gf_mz = new mfem::GridFunction(fes);
@@ -234,17 +226,17 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         double *a_host = audited_host_write(*gf_a);
         double *ms_host = audited_host_write(*gf_ms);
         for (int i = 0; i < fes->GetNDofs(); ++i) {
-            mx_host[i] = ctx.mfem_mx[static_cast<size_t>(i)];
-            my_host[i] = ctx.mfem_my[static_cast<size_t>(i)];
-            mz_host[i] = ctx.mfem_mz[static_cast<size_t>(i)];
+            mx_host[i] = ctx.mfem_context.m_x[static_cast<size_t>(i)];
+            my_host[i] = ctx.mfem_context.m_y[static_cast<size_t>(i)];
+            mz_host[i] = ctx.mfem_context.m_z[static_cast<size_t>(i)];
             a_host[i] = scalar_field_value(
                 ctx.material_fields.A_field,
                 static_cast<size_t>(i),
-                ctx.material.exchange_stiffness);
+                ctx.material_fields.material.exchange_stiffness);
             ms_host[i] = scalar_field_value(
                 ctx.material_fields.Ms_field,
                 static_cast<size_t>(i),
-                ctx.material.saturation_magnetisation);
+                ctx.material_fields.material.saturation_magnetisation);
         }
 
         if (!initialize_exchange_operator_mfem(ctx, *mesh, *fes, *a_coeff, error)) {
@@ -260,16 +252,16 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             return false;
         }
         debug_checkpoint("context_initialize_mfem:exchange_operator_ready");
-        ctx.mfem_mesh = mesh;
-        ctx.mfem_fec = fec;
-        ctx.mfem_fes = fes;
-        ctx.mfem_gf_mx = gf_mx;
-        ctx.mfem_gf_my = gf_my;
-        ctx.mfem_gf_mz = gf_mz;
-        ctx.mfem_gf_a = gf_a;
-        ctx.mfem_gf_ms = gf_ms;
-        ctx.mfem_a_coeff = a_coeff;
-        ctx.mfem_ready = true;
+        ctx.mfem_context.mesh = mesh;
+        ctx.mfem_context.fec = fec;
+        ctx.mfem_context.fes = fes;
+        ctx.mfem_context.gf_mx = gf_mx;
+        ctx.mfem_context.gf_my = gf_my;
+        ctx.mfem_context.gf_mz = gf_mz;
+        ctx.mfem_context.gf_a = gf_a;
+        ctx.mfem_context.gf_ms = gf_ms;
+        ctx.mfem_context.a_coeff = a_coeff;
+        ctx.mfem_context.ready = true;
         debug_checkpoint("context_initialize_mfem:done");
         return true;
     } catch (const std::exception &ex) {
@@ -284,7 +276,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
 
 bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
 {
-    if (!ctx.mfem_ready) {
+    if (!ctx.mfem_context.ready) {
         error = "legacy sparse exchange GPU upload requested before MFEM context initialization";
         return false;
     }
@@ -309,7 +301,7 @@ void context_destroy_mfem(Context &ctx)
     context_destroy_poisson(ctx);
     destroy_dmi_workspace(ctx);
 
-    delete static_cast<mfem::Coefficient *>(ctx.mfem_a_coeff);
+    delete static_cast<mfem::Coefficient *>(ctx.mfem_context.a_coeff);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.out_vec);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.tmp_vec);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.inv_lumped_mass);
@@ -317,59 +309,60 @@ void context_destroy_mfem(Context &ctx)
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.mass_ones);
     delete static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
     delete static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_ms);
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_a);
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
-    delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_fes);
-    delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_fec);
-    delete static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_ms);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_a);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mz);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_my);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_mx);
+    delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_context.fes);
+    delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_context.fec);
+    delete static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
+    delete ctx.mfem_context.device;
     ctx.mfem_context.device = nullptr;
     ctx.exchange.mfem.mass_form = nullptr;
     ctx.exchange.mfem.exchange_form = nullptr;
-    ctx.mfem_a_coeff = nullptr;
+    ctx.mfem_context.a_coeff = nullptr;
     ctx.exchange.mfem.out_vec = nullptr;
     ctx.exchange.mfem.tmp_vec = nullptr;
     ctx.exchange.mfem.inv_lumped_mass = nullptr;
     ctx.exchange.mfem.mass_lumped = nullptr;
     ctx.exchange.mfem.mass_ones = nullptr;
-    ctx.mfem_gf_ms = nullptr;
-    ctx.mfem_gf_a = nullptr;
-    ctx.mfem_gf_mz = nullptr;
-    ctx.mfem_gf_my = nullptr;
-    ctx.mfem_gf_mx = nullptr;
-    ctx.mfem_fes = nullptr;
-    ctx.mfem_fec = nullptr;
-    ctx.mfem_mesh = nullptr;
-    ctx.mfem_ready = false;
+    ctx.mfem_context.gf_ms = nullptr;
+    ctx.mfem_context.gf_a = nullptr;
+    ctx.mfem_context.gf_mz = nullptr;
+    ctx.mfem_context.gf_my = nullptr;
+    ctx.mfem_context.gf_mx = nullptr;
+    ctx.mfem_context.fes = nullptr;
+    ctx.mfem_context.fec = nullptr;
+    ctx.mfem_context.mesh = nullptr;
+    ctx.mfem_context.ready = false;
     ctx.exchange.mfem.ready = false;
-    ctx.gpu_exchange.legacy_sparse_metadata_ready = false;
-    ctx.gpu_exchange.legacy_sparse_rows = 0;
-    ctx.gpu_exchange.legacy_sparse_cols = 0;
-    ctx.gpu_exchange.legacy_sparse_nnz = 0;
-    ctx.gpu_exchange.lumped_mass_ready = false;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = 0;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = 0;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = 0;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-    if (ctx.cuda_runtime.compute_stream != nullptr) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.compute_stream));
-        ctx.cuda_runtime.compute_stream = nullptr;
+    if (ctx.gpu_state.cuda.compute_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
+        ctx.gpu_state.cuda.compute_stream = nullptr;
     }
-    if (ctx.cuda_runtime.io_stream != nullptr) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.cuda_runtime.io_stream));
-        ctx.cuda_runtime.io_stream = nullptr;
+    if (ctx.gpu_state.cuda.io_stream != nullptr) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.io_stream));
+        ctx.gpu_state.cuda.io_stream = nullptr;
     }
-    if (ctx.cuda_runtime.compute_event != nullptr) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.cuda_runtime.compute_event));
-        ctx.cuda_runtime.compute_event = nullptr;
+    if (ctx.gpu_state.cuda.compute_event != nullptr) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.gpu_state.cuda.compute_event));
+        ctx.gpu_state.cuda.compute_event = nullptr;
     }
-    for (auto &buf : ctx.cuda_runtime.pinned_snapshot) {
+    for (auto &buf : ctx.gpu_state.cuda.pinned_snapshot) {
         if (buf != nullptr) {
             cudaFreeHost(buf);
             buf = nullptr;
         }
     }
-    ctx.cuda_runtime.pinned_snapshot_bytes = 0;
+    ctx.gpu_state.cuda.pinned_snapshot_bytes = 0;
 #endif
 }
 #endif

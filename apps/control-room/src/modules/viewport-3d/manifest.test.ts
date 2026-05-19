@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { ALL_MODULES } from "@/modules";
 
 import { viewport3dManifest } from "./manifest";
@@ -62,6 +63,8 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.hsl-reference-auto")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-on")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-off")).toBeDefined();
+    expect(registry.get("viewport-3d.rotation-camera")).toBeDefined();
+    expect(registry.get("viewport-3d.rotation-object")).toBeDefined();
     expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
 
     await registry.execute("viewport-3d.toggle-viewcube", { source: "test" });
@@ -77,6 +80,13 @@ describe("viewport3dManifest", () => {
     await registry.execute("viewport-3d.hsl-reference-off", { source: "test" });
     expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("off");
     expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
+      .toBe(true);
+
+    expect(registry.isActive("viewport-3d.rotation-camera", { source: "test" }))
+      .toBe(true);
+    await registry.execute("viewport-3d.rotation-object", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
+    expect(registry.isActive("viewport-3d.rotation-object", { source: "test" }))
       .toBe(true);
   });
 
@@ -97,6 +107,39 @@ describe("viewport3dManifest", () => {
     );
     expect(queuePatch).toHaveBeenCalledWith({
       camera: { projection: "orthographic" },
+    });
+  });
+
+  it("toggles projection from the local store when resource data is stale", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+    const queuePatch = vi.fn();
+    const context = {
+      source: "test",
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: {
+          camera: { projection: "perspective" },
+        },
+      },
+      visualizationSync: { queuePatch },
+    } as never;
+
+    await registry.execute("view-projection", context);
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "orthographic",
+    );
+    expect(registry.isActive("view-projection", context)).toBe(true);
+
+    await registry.execute("view-projection", context);
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "perspective",
+    );
+    expect(registry.isActive("view-projection", context)).toBe(false);
+    expect(queuePatch).toHaveBeenNthCalledWith(1, {
+      camera: { projection: "orthographic" },
+    });
+    expect(queuePatch).toHaveBeenNthCalledWith(2, {
+      camera: { projection: "perspective" },
     });
   });
 

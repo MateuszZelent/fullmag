@@ -97,8 +97,8 @@ void field_buffer_helpers_are_owned_by_core_module() {
 
 void field_buffer_initialization_contract() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.has_external_field = true;
+    ctx.mesh.n_nodes = 2;
+    ctx.zeeman.has_external_field = true;
     ctx.zeeman.h_ext_xyz = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
 
     fullmag::fem::initialize_context_field_buffers(ctx);
@@ -113,7 +113,7 @@ void field_buffer_initialization_contract() {
     check(ctx.magnetoelastic.h_xyz == zeros, "magnetoelastic field buffer initialized to zero");
     check(ctx.effective_field.h_xyz == ctx.zeeman.h_ext_xyz, "effective field seeded from external field");
 
-    ctx.has_external_field = false;
+    ctx.zeeman.has_external_field = false;
     ctx.effective_field.h_xyz = {9.0, 9.0, 9.0};
     fullmag::fem::initialize_context_field_buffers(ctx);
     check(ctx.effective_field.h_xyz == zeros, "effective field zeroed when no external field exists");

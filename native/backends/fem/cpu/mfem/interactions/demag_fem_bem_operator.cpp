@@ -156,7 +156,7 @@ double boundary_node_solid_angle_sum(
     uint32_t node)
 {
     double sum = 0.0;
-    for (uint32_t elem = 0; elem < ctx.n_elements; ++elem) {
+    for (uint32_t elem = 0; elem < ctx.mesh.n_elements; ++elem) {
         if (!ctx.mesh.magnetic_element_mask.empty() &&
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;

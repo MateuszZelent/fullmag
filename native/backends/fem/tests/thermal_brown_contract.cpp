@@ -86,10 +86,10 @@ void thermal_brown_responsibilities_are_owned_by_separate_modules() {
         aggregate.find(add_symbol) == std::string::npos,
         "Brown H_eff addition must not be defined in thermal_brown.cpp");
     check(
-        context.find("ctx.temperature = plan.temperature") == std::string::npos,
+        context.find("ctx.thermal_brown.temperature = plan.temperature") == std::string::npos,
         "Context must not own Brown temperature plan import");
     check(
-        context.find("ctx.thermal_seed = plan.thermal_seed") == std::string::npos,
+        context.find("ctx.thermal_brown.seed = plan.thermal_seed") == std::string::npos,
         "Context must not own Brown thermal seed plan import");
     check(
         aggregate.find(plan_symbol) != std::string::npos,
@@ -224,6 +224,12 @@ void thermal_brown_runtime_state_is_owned_by_sampler_module() {
         sampler_header.find("struct ThermalBrownRuntimeState") != std::string::npos,
         "Brown thermal runtime state must be declared by thermal_brown_sampler.hpp");
     check(
+        sampler_header.find("double temperature") != std::string::npos,
+        "Brown thermal runtime state must own the temperature plan field");
+    check(
+        sampler_header.find("uint64_t seed") != std::string::npos,
+        "Brown thermal runtime state must own the RNG seed plan field");
+    check(
         sampler_header.find("double sigma") != std::string::npos,
         "Brown thermal runtime state must own the sigma diagnostic");
     check(
@@ -250,6 +256,12 @@ void thermal_brown_runtime_state_is_owned_by_sampler_module() {
     check(
         context_header.find("h_therm_xyz") == std::string::npos,
         "Context must not own flat Brown thermal field buffer");
+    check(
+        context_header.find("double temperature") == std::string::npos,
+        "Context must not own a flat Brown temperature plan field");
+    check(
+        context_header.find("uint64_t thermal_seed") == std::string::npos,
+        "Context must not own a flat Brown RNG seed plan field");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -306,14 +318,14 @@ void sigma_formula_matches_brown_field_contract() {
 
 fullmag::fem::Context make_thermal_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.temperature = 300.0;
-    ctx.current_dt = 2.0e-12;
-    ctx.current_time = 5.0e-9;
-    ctx.thermal_seed = 1234;
-    ctx.material.damping = 0.1;
-    ctx.material.gyromagnetic_ratio = 2.211e5;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 2;
+    ctx.thermal_brown.temperature = 300.0;
+    ctx.adaptive_dt.current_dt = 2.0e-12;
+    ctx.state.current_time = 5.0e-9;
+    ctx.thermal_brown.seed = 1234;
+    ctx.material_fields.material.damping = 0.1;
+    ctx.material_fields.material.gyromagnetic_ratio = 2.211e5;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.mesh.node_volumes = {1.0e-27, 4.0e-27};
     ctx.material_fields.alpha_field = {0.1, 0.2};
     ctx.material_fields.Ms_field = {800e3, 400e3};
@@ -330,19 +342,19 @@ void refresh_uses_per_node_sigma_mask_and_cache() {
     fullmag::fem::refresh_thermal_brown_field(ctx);
 
     const double expected_sigma = fullmag::fem::thermal_brown_sigma(
-        ctx.temperature,
+        ctx.thermal_brown.temperature,
         ctx.material_fields.alpha_field[0],
-        ctx.material.gyromagnetic_ratio,
+        ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.Ms_field[0],
         ctx.mesh.node_volumes[0],
-        ctx.current_dt);
+        ctx.adaptive_dt.current_dt);
     check_near(
         ctx.thermal_brown.sigma,
         expected_sigma,
         expected_sigma * 1e-12,
         "thermal sigma diagnostic stores max active-node sigma");
-    check_near(ctx.thermal_brown.last_refresh_time, ctx.current_time, 0.0, "thermal time cache");
-    check_near(ctx.thermal_brown.last_refresh_dt, ctx.current_dt, 0.0, "thermal dt cache");
+    check_near(ctx.thermal_brown.last_refresh_time, ctx.state.current_time, 0.0, "thermal time cache");
+    check_near(ctx.thermal_brown.last_refresh_dt, ctx.adaptive_dt.current_dt, 0.0, "thermal dt cache");
 
     check_near(ctx.thermal_brown.h_xyz[3], 0.0, 0.0, "nonmagnetic thermal Hx");
     check_near(ctx.thermal_brown.h_xyz[4], 0.0, 0.0, "nonmagnetic thermal Hy");
@@ -372,9 +384,9 @@ void seeded_replay_is_deterministic_for_same_time_and_dt() {
 
 void disabled_or_invalid_state_clears_thermal_field() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
-    ctx.temperature = 0.0;
-    ctx.current_dt = 1.0e-12;
+    ctx.mesh.n_nodes = 1;
+    ctx.thermal_brown.temperature = 0.0;
+    ctx.adaptive_dt.current_dt = 1.0e-12;
     ctx.thermal_brown.h_xyz = {1.0, 2.0, 3.0};
 
     fullmag::fem::refresh_thermal_brown_field(ctx);
@@ -387,8 +399,8 @@ void disabled_or_invalid_state_clears_thermal_field() {
 
 void thermal_field_adds_to_effective_field() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
-    ctx.temperature = 300.0;
+    ctx.mesh.n_nodes = 1;
+    ctx.thermal_brown.temperature = 300.0;
     ctx.thermal_brown.h_xyz = {1.0, 2.0, 3.0};
 
     std::vector<double> h_eff = {10.0, 20.0, 30.0};
@@ -398,22 +410,22 @@ void thermal_field_adds_to_effective_field() {
     check_near(h_eff[1], 22.0, 0.0, "thermal Hy added");
     check_near(h_eff[2], 33.0, 0.0, "thermal Hz added");
 
-    ctx.temperature = 0.0;
+    ctx.thermal_brown.temperature = 0.0;
     fullmag::fem::add_thermal_brown_field(ctx, h_eff);
     check_near(h_eff[0], 11.0, 0.0, "disabled thermal add skipped");
 }
 
 void thermal_plan_import_sets_temperature_seed_and_initializes_buffer() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
+    ctx.mesh.n_nodes = 2;
     fullmag_fem_plan_desc plan{};
     plan.temperature = 300.0;
     plan.thermal_seed = 987654321ull;
 
     fullmag::fem::initialize_thermal_brown_plan_fields(ctx, plan);
 
-    check_near(ctx.temperature, 300.0, 0.0, "Brown temperature copied from plan");
-    check(ctx.thermal_seed == 987654321ull, "Brown thermal seed copied from plan");
+    check_near(ctx.thermal_brown.temperature, 300.0, 0.0, "Brown temperature copied from plan");
+    check(ctx.thermal_brown.seed == 987654321ull, "Brown thermal seed copied from plan");
     check(ctx.thermal_brown.h_xyz == std::vector<double>({0.0, 0.0, 0.0, 0.0, 0.0, 0.0}),
           "Brown plan import initializes thermal field buffer");
 }

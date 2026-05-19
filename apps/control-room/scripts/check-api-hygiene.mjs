@@ -30,7 +30,7 @@ const checks = [
   {
     args: [
       "-i",
-      "/v1/live/current|bootstrap|poll|preview[-/]",
+      "/v1/live/current|\\bbootstrap\\b|\\bpoll\\b|preview[-/]",
       "src",
       "--glob",
       "!src/kernel/api/generated/**",

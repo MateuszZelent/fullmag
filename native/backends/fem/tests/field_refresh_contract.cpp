@@ -48,6 +48,9 @@ void field_refresh_policy_is_owned_by_runtime_module() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "field_refresh.cpp");
     const std::string field_refresh_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "field_refresh.hpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string demag_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.hpp");
     const std::string context_from_plan =
         context.substr(0, context.find("int context_upload_magnetization_f64("));
 
@@ -68,12 +71,24 @@ void field_refresh_policy_is_owned_by_runtime_module() {
         field_refresh_header.find("Initialize native FEM field-refresh plan fields") !=
             std::string::npos,
         "field_refresh header must document plan-field initialization ownership");
+    check(
+        field_refresh_header.find("stores it on the demag runtime owner") !=
+            std::string::npos,
+        "field_refresh header must document demag-owner policy storage");
+    check(
+        demag_header.find("fullmag_fem_field_refresh_policy field_refresh") !=
+            std::string::npos,
+        "demag runtime state must own the demag field-refresh policy");
+    check(
+        context_header.find("fullmag_fem_field_refresh_policy field_refresh") ==
+            std::string::npos,
+        "Context must not own a flat field-refresh policy");
 }
 
 void field_refresh_plan_import_validates_policy_and_resets_cache() {
     fullmag::fem::Context ctx;
-    ctx.field_refresh.has_demag_interval_s = 1;
-    ctx.field_refresh.demag_interval_s = 9.0;
+    ctx.demag.field_refresh.has_demag_interval_s = 1;
+    ctx.demag.field_refresh.demag_interval_s = 9.0;
     ctx.demag.cache_valid = true;
     ctx.demag.last_refresh_time = 4.0;
     ctx.demag.cached_robin_boundary_energy = 3.0;
@@ -88,8 +103,8 @@ void field_refresh_plan_import_validates_policy_and_resets_cache() {
     check(
         fullmag::fem::initialize_field_refresh_plan_fields(ctx, policy, error),
         error.c_str());
-    check(ctx.field_refresh.has_demag_interval_s == 1, "field refresh flag copied");
-    check(ctx.field_refresh.demag_interval_s == 2.5, "field refresh interval copied");
+    check(ctx.demag.field_refresh.has_demag_interval_s == 1, "field refresh flag copied");
+    check(ctx.demag.field_refresh.demag_interval_s == 2.5, "field refresh interval copied");
     check(!ctx.demag.cache_valid, "demag cache validity reset");
     check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
     check(ctx.demag.cached_robin_boundary_energy == 0.0, "cached Robin boundary energy reset");

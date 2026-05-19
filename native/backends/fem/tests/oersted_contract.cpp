@@ -84,7 +84,7 @@ void oersted_realizations_are_owned_by_separate_modules() {
         context.find("plan.oersted_field_xyz") == std::string::npos,
         "Context must not own explicit Oersted field plan import");
     check(
-        context.find("ctx.oersted_current = plan.oersted_current") == std::string::npos,
+        context.find("ctx.oersted.current = plan.oersted_current") == std::string::npos,
         "Context must not own Oersted cylinder plan import");
     check(
         aggregate.find(plan_symbol) != std::string::npos,
@@ -177,15 +177,113 @@ void oersted_runtime_state_is_owned_by_aggregate_module() {
     const std::string aggregate_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted.hpp");
 
+    fullmag::fem::OerstedRuntimeState runtime;
+    runtime.has_cylinder = true;
+    runtime.has_explicit_field = false;
+    runtime.current = 4.0;
+    runtime.radius = 5.0;
+    runtime.center = {1.0, 2.0, 3.0};
+    runtime.axis = {0.0, 1.0, 0.0};
+    runtime.time_dep_kind = 2;
+    runtime.time_dep_freq = 6.0;
+    runtime.time_dep_phase = 7.0;
+    runtime.time_dep_offset = 8.0;
+    runtime.time_dep_t_on = 9.0;
+    runtime.time_dep_t_off = 10.0;
+    check(runtime.has_cylinder, "Oersted runtime state owns analytical-cylinder enablement");
+    check(!runtime.has_explicit_field, "Oersted runtime state owns explicit-field enablement");
+    check(runtime.current == 4.0, "Oersted runtime state owns current");
+    check(runtime.radius == 5.0, "Oersted runtime state owns radius");
+    check(runtime.center[2] == 3.0, "Oersted runtime state owns center");
+    check(runtime.axis[1] == 1.0, "Oersted runtime state owns axis");
+    check(runtime.time_dep_kind == 2u, "Oersted runtime state owns time-dependency kind");
+    check(runtime.time_dep_freq == 6.0, "Oersted runtime state owns time-dependency frequency");
+    check(runtime.time_dep_phase == 7.0, "Oersted runtime state owns time-dependency phase");
+    check(runtime.time_dep_offset == 8.0, "Oersted runtime state owns time-dependency offset");
+    check(runtime.time_dep_t_on == 9.0, "Oersted runtime state owns pulse start");
+    check(runtime.time_dep_t_off == 10.0, "Oersted runtime state owns pulse stop");
+
     check(
         aggregate_header.find("struct OerstedRuntimeState") != std::string::npos,
         "Oersted realized-field state must be declared by oersted.hpp");
+    check(
+        aggregate_header.find("bool has_cylinder") != std::string::npos,
+        "Oersted runtime state must own analytical-cylinder enablement");
+    check(
+        aggregate_header.find("bool has_explicit_field") != std::string::npos,
+        "Oersted runtime state must own explicit-field enablement");
+    check(
+        aggregate_header.find("double current") != std::string::npos,
+        "Oersted runtime state must own current");
+    check(
+        aggregate_header.find("double radius") != std::string::npos,
+        "Oersted runtime state must own cylinder radius");
+    check(
+        aggregate_header.find("std::array<double, 3> center") != std::string::npos,
+        "Oersted runtime state must own cylinder center");
+    check(
+        aggregate_header.find("std::array<double, 3> axis") != std::string::npos,
+        "Oersted runtime state must own cylinder axis");
+    check(
+        aggregate_header.find("uint32_t time_dep_kind") != std::string::npos,
+        "Oersted runtime state must own time-dependency kind");
+    check(
+        aggregate_header.find("double time_dep_freq") != std::string::npos,
+        "Oersted runtime state must own time-dependency frequency");
+    check(
+        aggregate_header.find("double time_dep_phase") != std::string::npos,
+        "Oersted runtime state must own time-dependency phase");
+    check(
+        aggregate_header.find("double time_dep_offset") != std::string::npos,
+        "Oersted runtime state must own time-dependency offset");
+    check(
+        aggregate_header.find("double time_dep_t_on") != std::string::npos,
+        "Oersted runtime state must own pulse start");
+    check(
+        aggregate_header.find("double time_dep_t_off") != std::string::npos,
+        "Oersted runtime state must own pulse stop");
     check(
         aggregate_header.find("std::vector<double> h_xyz") != std::string::npos,
         "Oersted realized-field state must own the materialized H field buffer");
     check(
         context_header.find("OerstedRuntimeState oersted") != std::string::npos,
         "Context must store Oersted realized-field state through the Oersted owner");
+    check(
+        context_header.find("bool has_oersted_cylinder") == std::string::npos,
+        "Context must not own flat Oersted analytical-cylinder enablement");
+    check(
+        context_header.find("bool has_oersted_field") == std::string::npos,
+        "Context must not own flat Oersted explicit-field enablement");
+    check(
+        context_header.find("double oersted_current") == std::string::npos,
+        "Context must not own flat Oersted current");
+    check(
+        context_header.find("double oersted_radius") == std::string::npos,
+        "Context must not own flat Oersted radius");
+    check(
+        context_header.find("std::array<double, 3> oersted_center") == std::string::npos,
+        "Context must not own flat Oersted center");
+    check(
+        context_header.find("std::array<double, 3> oersted_axis") == std::string::npos,
+        "Context must not own flat Oersted axis");
+    check(
+        context_header.find("uint32_t oersted_time_dep_kind") == std::string::npos,
+        "Context must not own flat Oersted time-dependency kind");
+    check(
+        context_header.find("double oersted_time_dep_freq") == std::string::npos,
+        "Context must not own flat Oersted time-dependency frequency");
+    check(
+        context_header.find("double oersted_time_dep_phase") == std::string::npos,
+        "Context must not own flat Oersted time-dependency phase");
+    check(
+        context_header.find("double oersted_time_dep_offset") == std::string::npos,
+        "Context must not own flat Oersted time-dependency offset");
+    check(
+        context_header.find("double oersted_time_dep_t_on") == std::string::npos,
+        "Context must not own flat Oersted pulse start");
+    check(
+        context_header.find("double oersted_time_dep_t_off") == std::string::npos,
+        "Context must not own flat Oersted pulse stop");
     check(
         context_header.find("h_oe_xyz") == std::string::npos,
         "Context must not own a flat Oersted field buffer");
@@ -205,18 +303,18 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 fullmag::fem::Context make_cylinder_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 4;
+    ctx.mesh.n_nodes = 4;
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         0.5, 0.0, 0.0,
         2.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
     };
-    ctx.has_oersted_cylinder = true;
-    ctx.oersted_current = 3.0;
-    ctx.oersted_radius = 1.0;
-    ctx.oersted_center = {0.0, 0.0, 0.0};
-    ctx.oersted_axis = {0.0, 0.0, 2.0};
+    ctx.oersted.has_cylinder = true;
+    ctx.oersted.current = 3.0;
+    ctx.oersted.radius = 1.0;
+    ctx.oersted.center = {0.0, 0.0, 0.0};
+    ctx.oersted.axis = {0.0, 0.0, 2.0};
     return ctx;
 }
 
@@ -232,7 +330,7 @@ void analytical_cylinder_is_precomputed_for_unit_current() {
         "Oersted cylinder initialization succeeds");
 
     check(ctx.oersted.h_xyz.size() == 12u, "Oersted field buffer size");
-    check_near(ctx.oersted_axis[2], 1.0, 0.0, "Oersted axis normalized");
+    check_near(ctx.oersted.axis[2], 1.0, 0.0, "Oersted axis normalized");
 
     check_near(ctx.oersted.h_xyz[0], 0.0, 0.0, "axis node Hx");
     check_near(ctx.oersted.h_xyz[1], 0.0, 0.0, "axis node Hy");
@@ -265,7 +363,7 @@ void analytical_cylinder_is_precomputed_for_unit_current() {
 
 void invalid_axis_is_rejected() {
     auto ctx = make_cylinder_context();
-    ctx.oersted_axis = {0.0, 0.0, 0.0};
+    ctx.oersted.axis = {0.0, 0.0, 0.0};
     std::string error;
 
     check(
@@ -277,28 +375,28 @@ void invalid_axis_is_rejected() {
 void time_modulation_scales_cylinder_current() {
     auto ctx = make_cylinder_context();
 
-    ctx.oersted_time_dep_kind = 1;
-    ctx.oersted_time_dep_freq = 1.0;
-    ctx.oersted_time_dep_phase = 0.0;
-    ctx.oersted_time_dep_offset = 0.5;
-    ctx.current_time = 0.25;
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.time_dep_freq = 1.0;
+    ctx.oersted.time_dep_phase = 0.0;
+    ctx.oersted.time_dep_offset = 0.5;
+    ctx.state.current_time = 0.25;
     check_near(
         fullmag::fem::oersted_current_scale(ctx),
         4.5,
         1e-15,
         "sinusoidal Oersted current scale");
 
-    ctx.oersted_time_dep_kind = 2;
-    ctx.oersted_time_dep_t_on = 0.1;
-    ctx.oersted_time_dep_t_off = 0.3;
-    ctx.current_time = 0.2;
+    ctx.oersted.time_dep_kind = 2;
+    ctx.oersted.time_dep_t_on = 0.1;
+    ctx.oersted.time_dep_t_off = 0.3;
+    ctx.state.current_time = 0.2;
     check_near(
         fullmag::fem::oersted_current_scale(ctx),
         3.0,
         0.0,
         "pulse Oersted scale inside window");
 
-    ctx.current_time = 0.3;
+    ctx.state.current_time = 0.3;
     check_near(
         fullmag::fem::oersted_current_scale(ctx),
         0.0,
@@ -308,10 +406,10 @@ void time_modulation_scales_cylinder_current() {
 
 void explicit_oersted_field_is_added_unscaled() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
-    ctx.has_oersted_field = true;
-    ctx.has_oersted_cylinder = false;
-    ctx.oersted_current = 3.0;
+    ctx.mesh.n_nodes = 1;
+    ctx.oersted.has_explicit_field = true;
+    ctx.oersted.has_cylinder = false;
+    ctx.oersted.current = 3.0;
     ctx.oersted.h_xyz = {1.0, 2.0, 3.0};
 
     std::vector<double> h_eff = {10.0, 20.0, 30.0};
@@ -324,7 +422,7 @@ void explicit_oersted_field_is_added_unscaled() {
 
 void oersted_plan_import_validates_exclusive_realizations_and_copies_field() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
+    ctx.mesh.n_nodes = 1;
     const double explicit_field[] = {1.0, 2.0, 3.0};
     fullmag_fem_plan_desc plan{};
     plan.oersted_field_xyz = explicit_field;
@@ -333,10 +431,10 @@ void oersted_plan_import_validates_exclusive_realizations_and_copies_field() {
 
     std::string error;
     check(fullmag::fem::initialize_oersted_plan_fields(ctx, plan, error), error.c_str());
-    check(ctx.has_oersted_field, "explicit Oersted flag set");
-    check(!ctx.has_oersted_cylinder, "Oersted cylinder flag unset");
+    check(ctx.oersted.has_explicit_field, "explicit Oersted flag set");
+    check(!ctx.oersted.has_cylinder, "Oersted cylinder flag unset");
     check(ctx.oersted.h_xyz == std::vector<double>({1.0, 2.0, 3.0}), "explicit Oersted field copied");
-    check(ctx.oersted_current == 7.0, "Oersted current copied");
+    check(ctx.oersted.current == 7.0, "Oersted current copied");
 
     plan.has_oersted_cylinder = 1;
     check(

@@ -50,5 +50,19 @@ describe("sameViewport3DFieldRenderOptions", () => {
       ),
     ).toBe(false);
   });
-});
 
+  it("detects changed vector placement options", () => {
+    expect(
+      sameViewport3DFieldRenderOptions(
+        {
+          fullVectorAnchorMode: "center",
+          partVectorSurfaceOffsetScales: new Map([["part-a", 0.1]]),
+        },
+        {
+          fullVectorAnchorMode: "tail",
+          partVectorSurfaceOffsetScales: new Map([["part-a", 0]]),
+        },
+      ),
+    ).toBe(false);
+  });
+});

@@ -36,26 +36,26 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
             "reduced-node exchange yet";
         return plan;
     }
-    if (!ctx.gpu_exchange.legacy_sparse_metadata_ready) {
+    if (!ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready) {
         reason = "stage H_ex device-resident exchange requires captured legacy sparse exchange metadata";
         return plan;
     }
-    if (!ctx.gpu_exchange.lumped_mass_ready) {
+    if (!ctx.gpu_state.legacy_exchange.lumped_mass_ready) {
         reason = "stage H_ex device-resident exchange requires captured lumped mass metadata";
         return plan;
     }
-    if (!ctx.gpu_state.runtime_coefficients_uploaded) {
+    if (!ctx.gpu_state.device.runtime_coefficients_uploaded) {
         reason =
             "stage H_ex device-resident exchange requires device-resident "
             "runtime coefficients";
         return plan;
     }
-    if (!ctx.gpu_state.exchange_legacy_sparse_uploaded) {
+    if (!ctx.gpu_state.device.exchange_legacy_sparse_uploaded) {
         reason = "stage H_ex device-resident exchange requires device-resident CSR/mass upload";
         return plan;
     }
-    if (ctx.gpu_state.exchange_legacy_sparse_rows != ctx.gpu_state.node_count ||
-        ctx.gpu_state.exchange_legacy_sparse_cols != ctx.gpu_state.node_count) {
+    if (ctx.gpu_state.device.exchange_legacy_sparse_rows != ctx.gpu_state.device.node_count ||
+        ctx.gpu_state.device.exchange_legacy_sparse_cols != ctx.gpu_state.device.node_count) {
         reason =
             "stage H_ex device-resident exchange requires legacy sparse CSR "
             "dimensions to match FemGpuState node_count";

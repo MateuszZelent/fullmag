@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { OrthographicCamera, Vector3 } from "three";
 
 import {
+  applyViewport3DOrthographicCameraPose,
   resolveViewport3DGridSpec,
   resolveViewport3DOrthographicZoom,
 } from "./Viewport3DScene";
@@ -65,11 +67,32 @@ describe("Viewport3DScene scale helpers", () => {
 
   it("adapts orthographic zoom to micromagnetic dimensions", () => {
     expect(
-      resolveViewport3DOrthographicZoom({
-        center: [0, 0, 0],
-        radius: 5e-8,
-        size: [1e-7, 1e-7, 1e-8],
-      }),
-    ).toBeGreaterThan(1e6);
+      resolveViewport3DOrthographicZoom(
+        {
+          center: [0, 0, 0],
+          radius: 5e-8,
+          size: [1e-7, 1e-7, 1e-8],
+        },
+        { height: 600, width: 800 },
+      ),
+    ).toBeCloseTo(600 / (1e-7 * 1.6));
+  });
+
+  it("aims the orthographic camera at the active viewport target", () => {
+    const camera = new OrthographicCamera(-1, 1, 1, -1, 1e-12, 1e-3);
+    const cameraState = {
+      position: [2e-6, 1.4e-6, 2e-6] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    applyViewport3DOrthographicCameraPose(camera, cameraState, 1e-12, 1e-3);
+
+    const direction = new Vector3();
+    camera.getWorldDirection(direction);
+    const expected = new Vector3(...cameraState.target)
+      .sub(new Vector3(...cameraState.position))
+      .normalize();
+    expect(direction.angleTo(expected)).toBeLessThan(1e-6);
   });
 });

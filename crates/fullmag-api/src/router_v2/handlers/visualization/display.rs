@@ -1,11 +1,11 @@
 //! Display mutation endpoints.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::Json;
 use axum::extract::State;
+use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;

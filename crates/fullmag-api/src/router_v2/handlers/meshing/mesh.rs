@@ -397,10 +397,7 @@ pub async fn get_mesh_universe_quality(
 ) -> Result<Json<MeshUniverseQualityResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let quality = Some(json!({
-        "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
-        "effective_airbox_target": mesh_workspace.get("effective_airbox_target").cloned().unwrap_or(Value::Null),
-    }));
+    let quality = Some(universe_quality(mesh_workspace, snapshot.fem_mesh.as_ref()));
     Ok(Json(MeshUniverseQualityResource {
         revision: snapshot.mesh_revision,
         quality,
@@ -567,9 +564,7 @@ pub async fn get_mesh_shared_domain_quality_data(
         "mesh-shared-domain-quality-data:{}:{path}:{byte_size}:{element_count}",
         snapshot.mesh_revision
     ));
-    Ok(crate::router_v2::handlers::shared::conditional_binary_response(
-        &headers, &etag, bytes,
-    ))
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, bytes))
 }
 
 #[utoipa::path(
@@ -1502,6 +1497,174 @@ fn parse_interface_owners(interface_id: &str) -> Option<(String, String)> {
     Some((owner_a.to_string(), owner_b.to_string()))
 }
 
+fn marker_from_value(value: &Value) -> Option<u32> {
+    value.as_u64().and_then(|marker| u32::try_from(marker).ok())
+}
+
+fn scope_marker(scope: &Value) -> Option<u32> {
+    scope.get("marker").and_then(marker_from_value)
+}
+
+fn scope_kind(scope: &Value) -> Option<&str> {
+    scope.get("kind").and_then(Value::as_str)
+}
+
+fn filtered_worst_entries(value: Option<&Value>, marker: u32) -> Vec<Value> {
+    value
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("marker").and_then(marker_from_value) == Some(marker))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn scoped_mesh_statistics(
+    mesh_workspace: &Value,
+    marker: Option<u32>,
+    kind: Option<&str>,
+) -> Option<Value> {
+    let mesh_statistics = mesh_workspace.get("mesh_statistics")?;
+    let scopes = mesh_statistics.get("scopes").and_then(Value::as_array)?;
+    let scope = scopes.iter().find(|scope| {
+        marker.is_some_and(|marker| scope_marker(scope) == Some(marker))
+            || kind.is_some_and(|kind| scope_kind(scope) == Some(kind))
+    })?;
+    let mut projection = serde_json::Map::new();
+    for key in ["mesh_name", "quality_source"] {
+        if let Some(value) = mesh_statistics.get(key) {
+            projection.insert(key.to_string(), value.clone());
+        }
+    }
+    projection.insert("global".to_string(), scope.clone());
+    projection.insert("scopes".to_string(), Value::Array(vec![scope.clone()]));
+
+    if let Some(marker) = marker.or_else(|| scope_marker(scope)) {
+        let worst_elements = filtered_worst_entries(mesh_statistics.get("worst_elements"), marker);
+        projection.insert("worst_elements".to_string(), Value::Array(worst_elements));
+
+        if let Some(metrics) = mesh_statistics
+            .get("worst_elements_by_metric")
+            .and_then(Value::as_object)
+        {
+            let mut filtered_metrics = serde_json::Map::new();
+            for (metric, entries) in metrics {
+                filtered_metrics.insert(
+                    metric.clone(),
+                    Value::Array(filtered_worst_entries(Some(entries), marker)),
+                );
+            }
+            projection.insert(
+                "worst_elements_by_metric".to_string(),
+                Value::Object(filtered_metrics),
+            );
+        }
+    }
+
+    Some(Value::Object(projection))
+}
+
+fn legacy_domain_quality_statistics(marker: u32, label: &str, quality: &Value) -> Option<Value> {
+    if !quality.is_object() {
+        return None;
+    }
+    Some(json!({
+        "quality_source": "per_domain_quality",
+        "global": {
+            "scope_id": format!("marker:{marker}"),
+            "kind": if marker == 0 { "airbox" } else { "domain" },
+            "label": label,
+            "role": if marker == 0 { "air" } else { "domain" },
+            "marker": marker,
+            "element_count": quality.get("n_elements").cloned().unwrap_or(Value::Null),
+            "sicn": {
+                "min": quality.get("sicn_min").cloned().unwrap_or(Value::Null),
+                "max": quality.get("sicn_max").cloned().unwrap_or(Value::Null),
+                "mean": quality.get("sicn_mean").cloned().unwrap_or(Value::Null),
+                "p05": quality.get("sicn_p5").cloned().unwrap_or(Value::Null),
+                "histogram": quality.get("sicn_histogram").cloned().unwrap_or(Value::Null)
+            },
+            "gamma": {
+                "min": quality.get("gamma_min").cloned().unwrap_or(Value::Null),
+                "mean": quality.get("gamma_mean").cloned().unwrap_or(Value::Null),
+                "histogram": quality.get("gamma_histogram").cloned().unwrap_or(Value::Null)
+            },
+            "volume": {
+                "min": quality.get("volume_min").cloned().unwrap_or(Value::Null),
+                "max": quality.get("volume_max").cloned().unwrap_or(Value::Null),
+                "mean": quality.get("volume_mean").cloned().unwrap_or(Value::Null),
+                "std": quality.get("volume_std").cloned().unwrap_or(Value::Null)
+            }
+        }
+    }))
+}
+
+fn merge_quality_field(target: &mut Value, key: &str, value: Value) {
+    if let Value::Object(fields) = target {
+        fields.insert(key.to_string(), value);
+    }
+}
+
+fn object_marker_from_mesh(mesh: Option<&FemMeshPayload>, object_id: &str) -> Option<u32> {
+    let mesh = mesh?;
+    let segment = mesh
+        .object_segments
+        .iter()
+        .find(|segment| segment.object_id == object_id)?;
+    let start = segment.element_start as usize;
+    let end = start.saturating_add(segment.element_count as usize);
+    let markers = mesh
+        .element_markers
+        .get(start..end)?
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if markers.len() == 1 {
+        markers.first().copied()
+    } else {
+        None
+    }
+}
+
+fn universe_quality(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Value {
+    let per_domain_quality = mesh
+        .and_then(|mesh| mesh.per_domain_quality.get(&0))
+        .and_then(|quality| serde_json::to_value(quality).ok());
+    let mut quality = scoped_mesh_statistics(mesh_workspace, Some(0), Some("airbox"))
+        .or_else(|| {
+            per_domain_quality
+                .as_ref()
+                .and_then(|quality| legacy_domain_quality_statistics(0, "Airbox", quality))
+        })
+        .unwrap_or_else(|| json!({}));
+    merge_quality_field(&mut quality, "marker", json!(0));
+    merge_quality_field(
+        &mut quality,
+        "effective_airbox_target",
+        mesh_workspace
+            .get("effective_airbox_target")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    merge_quality_field(
+        &mut quality,
+        "mesh_quality_summary",
+        mesh_workspace
+            .get("mesh_quality_summary")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    merge_quality_field(
+        &mut quality,
+        "per_domain_quality",
+        per_domain_quality.unwrap_or(Value::Null),
+    );
+    quality
+}
+
 fn object_quality(
     snapshot: &SessionStateResponse,
     mesh_workspace: &Value,
@@ -1515,7 +1678,8 @@ fn object_quality(
         .as_ref()
         .and_then(|target| target.get("marker"))
         .and_then(Value::as_u64)
-        .map(|marker| marker as u32);
+        .and_then(|marker| u32::try_from(marker).ok())
+        .or_else(|| object_marker_from_mesh(snapshot.fem_mesh.as_ref(), object_id));
     let per_domain_quality = marker
         .and_then(|marker| {
             snapshot
@@ -1526,11 +1690,32 @@ fn object_quality(
                 .cloned()
         })
         .and_then(|quality| serde_json::to_value(quality).ok());
-    Some(json!({
-        "marker": marker,
-        "effective_target": effective_target.unwrap_or(Value::Null),
-        "per_domain_quality": per_domain_quality.unwrap_or(Value::Null),
-    }))
+    let mut quality = marker
+        .and_then(|marker| scoped_mesh_statistics(mesh_workspace, Some(marker), None))
+        .or_else(|| {
+            marker.and_then(|marker| {
+                per_domain_quality.as_ref().and_then(|quality| {
+                    legacy_domain_quality_statistics(marker, &format!("Domain {marker}"), quality)
+                })
+            })
+        })
+        .unwrap_or_else(|| json!({}));
+    merge_quality_field(
+        &mut quality,
+        "marker",
+        marker.map(Value::from).unwrap_or(Value::Null),
+    );
+    merge_quality_field(
+        &mut quality,
+        "effective_target",
+        effective_target.unwrap_or(Value::Null),
+    );
+    merge_quality_field(
+        &mut quality,
+        "per_domain_quality",
+        per_domain_quality.unwrap_or(Value::Null),
+    );
+    Some(quality)
 }
 
 #[derive(Debug, Clone, Copy, Default)]

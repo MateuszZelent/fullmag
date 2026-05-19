@@ -45,9 +45,12 @@ export interface VisualizationTargetSettings {
   surfaceColorSource: SurfaceColorSource;
   vectorAlphaPercent: number;
   vectorBudget: number;
+  vectorCenteringEnabled: boolean;
   vectorColorMode: VisualizationColorMode;
   vectorLengthScale: number;
   vectorMonoColor: string;
+  vectorSurfaceOffsetEnabled: boolean;
+  vectorSurfaceOffsetScale: number;
   vectorThickness: number;
   vectorsVisible: boolean;
   visible: boolean;
@@ -103,9 +106,12 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   surfaceColorSource: "orientation",
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
+  vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
+  vectorSurfaceOffsetEnabled: false,
+  vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -126,9 +132,12 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
+  vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
+  vectorSurfaceOffsetEnabled: false,
+  vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -896,6 +905,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorAlphaPercent === undefined
       ? {}
       : { vectorAlphaPercent: patch.vectorAlphaPercent }),
+    ...(patch.vectorCenteringEnabled === undefined
+      ? {}
+      : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
     ...(patch.vectorColorMode === undefined
       ? {}
       : { vectorColorMode: patch.vectorColorMode }),
@@ -905,6 +917,12 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorThickness === undefined
       ? {}
       : { vectorThickness: patch.vectorThickness }),
+    ...(patch.vectorSurfaceOffsetEnabled === undefined
+      ? {}
+      : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
+    ...(patch.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
     ...(patch.wireframeColor === undefined
       ? {}
       : { wireframeColor: patch.wireframeColor }),

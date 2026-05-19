@@ -9,6 +9,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
@@ -29,13 +30,13 @@ void eliminate_row_col_zero(mfem::SparseMatrix &op, int tdof) {
 
 DemagFemBemWorkspace *demag_fem_bem_workspace(Context &ctx)
 {
-    return static_cast<DemagFemBemWorkspace *>(ctx.mfem_demag_fem_bem_workspace);
+    return ctx.demag_fem_bem.workspace;
 }
 
 bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
 {
     try {
-        auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+        auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
         if (mesh == nullptr) {
             error = "FEM/BEM demag initialization requires an MFEM mesh";
             return false;
@@ -54,7 +55,7 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
         }
 
         workspace->potential_fec =
-            std::make_unique<mfem::H1_FECollection>(static_cast<int>(ctx.fe_order), mesh->Dimension());
+            std::make_unique<mfem::H1_FECollection>(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
         workspace->potential_fes =
             std::make_unique<mfem::FiniteElementSpace>(mesh, workspace->potential_fec.get());
         workspace->stiffness_form =
@@ -114,8 +115,8 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
             eliminate_row_col_zero(*workspace->dirichlet_op, tdof);
         }
 
-        ctx.mfem_demag_fem_bem_workspace = workspace.release();
-        ctx.demag_fem_bem_ready = true;
+        ctx.demag_fem_bem.workspace = workspace.release();
+        ctx.demag_fem_bem.ready = true;
         return true;
     } catch (const std::exception &ex) {
         error = std::string("FEM/BEM demag initialization failed: ") + ex.what();
@@ -130,9 +131,9 @@ void destroy_demag_fem_bem_workspace(Context &ctx)
 {
     destroy_demag_poisson_rhs_workspace(ctx);
     destroy_demag_poisson_recovery_workspace(ctx);
-    delete static_cast<DemagFemBemWorkspace *>(ctx.mfem_demag_fem_bem_workspace);
-    ctx.mfem_demag_fem_bem_workspace = nullptr;
-    ctx.demag_fem_bem_ready = false;
+    delete ctx.demag_fem_bem.workspace;
+    ctx.demag_fem_bem.workspace = nullptr;
+    ctx.demag_fem_bem.ready = false;
 }
 
 bool context_initialize_demag_fem_bem(Context &ctx, std::string &error)

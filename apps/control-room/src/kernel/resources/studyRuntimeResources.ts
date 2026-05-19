@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 
 import {
   DATA_SCALARS_PATH,
+  DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
@@ -32,7 +33,9 @@ import type {
   CheckpointListResource,
   CurrentRunResource,
   EngineLogResource,
+  CpuTelemetryResource,
   GpuTelemetryResource,
+  LiveStatusResource,
   ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
@@ -64,6 +67,80 @@ function ignoreMissingResource<T>(error: unknown): T | null {
 
 interface RuntimeResourceOptions {
   enabled?: boolean;
+}
+
+export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  SESSION_STATUS_RESOURCE_KEY,
+  SIMULATION_COMMANDS_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+] as const;
+
+export function shouldLoadRuntimeStageExecution(
+  enabled: boolean,
+  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+): boolean {
+  if (!enabled) return false;
+  return hasPositiveRevision(status?.resources.stages_revision);
+}
+
+export function shouldLoadRuntimeMeshBuild(
+  enabled: boolean,
+  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+): boolean {
+  if (!enabled) return false;
+  return hasPositiveRevision(status?.resources.mesh_build_revision);
+}
+
+export function shouldLoadRuntimeMeshSummary(
+  enabled: boolean,
+  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+): boolean {
+  if (!enabled) return false;
+  return (
+    hasPositiveRevision(status?.resources.mesh_revision) ||
+    hasPositiveRevision(status?.resources.mesh_build_revision)
+  );
+}
+
+export function shouldLoadRuntimeMeshManifest(
+  enabled: boolean,
+  status:
+    | Pick<LiveStatusResource, "capabilities" | "domain" | "resources">
+    | null
+    | undefined,
+): boolean {
+  if (!enabled || !status) return false;
+  const requiresSharedDomain =
+    status.capabilities.explicit_topology ||
+    status.domain.discretization.toLowerCase() === "fem";
+  return (
+    requiresSharedDomain &&
+    hasPositiveRevision(status.resources.mesh_revision)
+  );
+}
+
+export function shouldLoadRuntimeCurrentRun(
+  enabled: boolean,
+  status: Pick<LiveStatusResource, "run"> | null | undefined,
+): boolean {
+  if (!enabled) return false;
+  return status?.run != null;
+}
+
+export function shouldLoadRuntimeScalars(
+  enabled: boolean,
+  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+): boolean {
+  if (!enabled) return false;
+  return hasPositiveRevision(status?.resources.scalars_revision);
+}
+
+function hasPositiveRevision(revision: number | null | undefined): boolean {
+  return typeof revision === "number" && revision > 0;
 }
 
 export function useCommandQueueResource({
@@ -189,7 +266,10 @@ export function useSolverEnergyCurrentResource({
   });
 }
 
-export function useSolverEnergyHistoryResource(limit = 200) {
+export function useSolverEnergyHistoryResource(
+  limit = 200,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
   const { api } = useKernel();
   const resourceKey = `${SIMULATION_SOLVER_ENERGIES_HISTORY_PATH}?limit=${limit}`;
   const load = useCallback(
@@ -201,6 +281,7 @@ export function useSolverEnergyHistoryResource(limit = 200) {
   );
 
   return useResource<SolverEnergyHistoryResource | null>({
+    enabled,
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
@@ -314,6 +395,24 @@ export function useGpuTelemetryResource({
   });
 }
 
+export function useCpuTelemetryResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.diagnostics.cpuTelemetry({ signal }),
+    [api],
+  );
+
+  return useResource<CpuTelemetryResource>({
+    enabled,
+    load,
+    resolveRevision: (data) => data.sample_time_unix_ms,
+    resourceKey: DIAGNOSTICS_CPU_PATH,
+  });
+}
+
 export function useSolverProfileResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
@@ -337,16 +436,28 @@ export function useSolverProfileResource({
 export function useStudyRuntimeCommandResourceData({
   enabled = true,
 }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
-  const commandQueue = useCommandQueueResource({ enabled });
-  const currentRun = useCurrentRunResource({ enabled });
-  const geometryValidation = useGeometryValidationResource({ enabled });
-  const meshBuildCurrent = useMeshBuildCurrent({ enabled });
-  const meshBuildLatest = useMeshBuildLatestSuccessful({ enabled });
-  const meshManifest = useMeshSharedDomainManifestResource({ enabled });
-  const meshSummary = useMeshSummaryResource({ enabled });
-  const scene = useSceneResource({ enabled });
   const sessionStatus = useSessionStatus();
-  const stageExecution = useStageExecutionResource({ enabled });
+  const commandQueue = useCommandQueueResource({ enabled });
+  const currentRun = useCurrentRunResource({
+    enabled: shouldLoadRuntimeCurrentRun(enabled, sessionStatus.data),
+  });
+  const geometryValidation = useGeometryValidationResource({ enabled });
+  const meshBuildCurrent = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+  });
+  const meshBuildLatest = useMeshBuildLatestSuccessful({
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+  });
+  const meshManifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus.data),
+  });
+  const meshSummary = useMeshSummaryResource({
+    enabled: shouldLoadRuntimeMeshSummary(enabled, sessionStatus.data),
+  });
+  const scene = useSceneResource({ enabled });
+  const stageExecution = useStageExecutionResource({
+    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus.data),
+  });
   const solverStatus = useSolverStatusResource({ enabled });
   const solverProfile = useSolverProfileResource({ enabled });
   const checkpointCatalog = useCheckpointCatalogResource({ enabled });
@@ -386,6 +497,46 @@ export function useStudyRuntimeCommandResourceData({
   );
 }
 
+export function useRuntimeCommandControlResourceData({
+  enabled = true,
+}: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
+  const sessionStatus = useSessionStatus();
+  const commandQueue = useCommandQueueResource({ enabled });
+  const geometryValidation = useGeometryValidationResource({ enabled });
+  const meshBuildCurrent = useMeshBuildCurrent({
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+  });
+  const meshManifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus.data),
+  });
+  const solverStatus = useSolverStatusResource({ enabled });
+  const stageExecution = useStageExecutionResource({
+    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus.data),
+  });
+
+  return useMemo(
+    () => ({
+      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus.data : null,
+      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+    }),
+    [
+      commandQueue.data,
+      enabled,
+      geometryValidation.data,
+      meshBuildCurrent.data,
+      meshManifest.data,
+      sessionStatus.data,
+      solverStatus.data,
+      stageExecution.data,
+    ],
+  );
+}
+
 export function useObjectMetricsResource(objectId: string | null | undefined) {
   const { api } = useKernel();
   const resourceKey = objectId
@@ -402,6 +553,7 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
   );
 
   return useResource<ObjectMetricsResource | null>({
+    enabled: Boolean(objectId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,

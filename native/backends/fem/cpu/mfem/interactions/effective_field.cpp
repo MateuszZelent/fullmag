@@ -30,19 +30,19 @@ namespace fullmag::fem {
 
 bool has_any_field_or_direct_torque_term(const Context &ctx)
 {
-    return ctx.enable_exchange
-        || ctx.enable_demag
-        || ctx.has_external_field
-        || ctx.enable_anisotropy
-        || ctx.enable_dmi
-        || ctx.enable_bulk_dmi
-        || ctx.enable_cubic_anisotropy
-        || ctx.has_oersted_cylinder
-        || ctx.has_oersted_field
-        || ctx.enable_magnetoelastic
-        || ctx.has_zhang_li_stt
-        || ctx.has_slonczewski_stt
-        || (ctx.temperature > 0.0);
+    return ctx.exchange.enabled
+        || ctx.demag.enabled
+        || ctx.zeeman.has_external_field
+        || ctx.anisotropy.uniaxial_enabled
+        || ctx.dmi.interfacial_enabled
+        || ctx.dmi.bulk_enabled
+        || ctx.anisotropy.cubic_enabled
+        || ctx.oersted.has_cylinder
+        || ctx.oersted.has_explicit_field
+        || ctx.magnetoelastic.enabled
+        || ctx.stt.zhang_li_enabled
+        || ctx.stt.slonczewski_enabled
+        || (ctx.thermal_brown.temperature > 0.0);
 }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -54,7 +54,7 @@ bool refresh_initial_effective_field_from_plan(
     if (plan.eager_initial_effective_field == 0) {
         return true;
     }
-    if (!ctx.enable_exchange && !ctx.enable_demag) {
+    if (!ctx.exchange.enabled && !ctx.demag.enabled) {
         return true;
     }
     return context_refresh_exchange_field_mfem(ctx, error);
@@ -72,12 +72,12 @@ bool compute_effective_fields_for_magnetization(
     PhaseTimings *timings,
     std::string &error)
 {
-    if (ctx.enable_exchange) {
+    if (ctx.exchange.enabled) {
         h_ex_xyz.resize(m_xyz.size());
     } else {
         h_ex_xyz.assign(m_xyz.size(), 0.0);
     }
-    if (ctx.enable_demag) {
+    if (ctx.demag.enabled) {
         h_demag_xyz.resize(m_xyz.size());
     } else {
         h_demag_xyz.assign(m_xyz.size(), 0.0);
@@ -85,7 +85,7 @@ bool compute_effective_fields_for_magnetization(
     h_eff_xyz.resize(m_xyz.size());
 
     double exchange = 0.0;
-    if (ctx.enable_exchange) {
+    if (ctx.exchange.enabled) {
         ScopedPhaseTimer timer(timings != nullptr ? &timings->exchange_wall_time_ns : nullptr);
         if (!compute_exchange_for_magnetization(
                 ctx,
@@ -104,7 +104,7 @@ bool compute_effective_fields_for_magnetization(
     }
 
     double demag = 0.0;
-    if (ctx.enable_demag) {
+    if (ctx.demag.enabled) {
         ScopedPhaseTimer timer(timings != nullptr ? &timings->demag.wall_time_ns : nullptr);
         if (!compute_demag_field_for_magnetization(
                 ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, timings, error)) {
@@ -118,7 +118,7 @@ bool compute_effective_fields_for_magnetization(
     {
         ScopedPhaseTimer timer(timings != nullptr ? &timings->extra_energy_wall_time_ns : nullptr);
         double anisotropy_energy = 0.0;
-        if (ctx.enable_anisotropy) {
+        if (ctx.anisotropy.uniaxial_enabled) {
             compute_uniaxial_anisotropy_field(
                 ctx, m_xyz, ctx.anisotropy.h_uniaxial_xyz,
                 &anisotropy_energy);
@@ -130,7 +130,7 @@ bool compute_effective_fields_for_magnetization(
         }
 
         double dmi = 0.0;
-        if (ctx.enable_dmi) {
+        if (ctx.dmi.interfacial_enabled) {
             if (!compute_interfacial_dmi_field(
                     ctx, m_xyz, ctx.dmi.h_interfacial_xyz, &dmi, error)) {
                 return false;
@@ -142,7 +142,7 @@ bool compute_effective_fields_for_magnetization(
             ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0);
         }
 
-        if (ctx.enable_cubic_anisotropy) {
+        if (ctx.anisotropy.cubic_enabled) {
             double cubic_energy = 0.0;
             compute_cubic_anisotropy_field(
                 ctx, m_xyz, ctx.anisotropy.h_cubic_xyz, &cubic_energy);
@@ -155,7 +155,7 @@ bool compute_effective_fields_for_magnetization(
         }
 
         double bulk_dmi = 0.0;
-        if (ctx.enable_bulk_dmi) {
+        if (ctx.dmi.bulk_enabled) {
             if (!compute_bulk_dmi_field(
                     ctx, m_xyz, ctx.dmi.h_bulk_xyz, &bulk_dmi, error)) {
                 return false;
@@ -174,7 +174,7 @@ bool compute_effective_fields_for_magnetization(
         }
         add_zeeman_field(ctx, h_eff_xyz);
 
-        if (ctx.enable_bulk_dmi && !ctx.dmi.h_bulk_xyz.empty()) {
+        if (ctx.dmi.bulk_enabled && !ctx.dmi.h_bulk_xyz.empty()) {
             for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
                 h_eff_xyz[i] += ctx.dmi.h_bulk_xyz[i];
             }
@@ -182,12 +182,12 @@ bool compute_effective_fields_for_magnetization(
 
         add_oersted_field(ctx, h_eff_xyz);
 
-        if (ctx.temperature > 0.0) {
+        if (ctx.thermal_brown.temperature > 0.0) {
             refresh_thermal_brown_field(ctx);
             add_thermal_brown_field(ctx, h_eff_xyz);
         }
 
-        if (ctx.enable_magnetoelastic) {
+        if (ctx.magnetoelastic.enabled) {
             compute_magnetoelastic_field(ctx, m_xyz);
             add_magnetoelastic_field(ctx, h_eff_xyz);
         } else {

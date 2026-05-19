@@ -7,7 +7,8 @@
 
 namespace {
 
-constexpr double kMu0 = 1.25663706212e-6;
+constexpr double kPiTest = 3.14159265358979323846;
+constexpr double kMu0 = 4.0e-7 * kPiTest;
 constexpr double kVolume = 1.0 / 6.0;
 constexpr double kShape = 0.25;
 constexpr double kLumpedMass = kVolume * 0.25;
