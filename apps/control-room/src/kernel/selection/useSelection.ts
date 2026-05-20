@@ -33,3 +33,15 @@ export function useSelection(moduleId: ModuleId) {
 
   return { selection: state, select, clear } as const;
 }
+
+export function useSelectionSelector<T>(
+  selector: (state: Selection) => T,
+): T {
+  const { selection } = useKernel();
+
+  return useSyncExternalStore(
+    (onStoreChange) => selection.subscribe(onStoreChange),
+    () => selector(selection.get()),
+    () => selector(selection.get()),
+  );
+}

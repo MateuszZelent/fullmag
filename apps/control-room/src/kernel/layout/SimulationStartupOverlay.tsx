@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 
 import type { LiveStatusResource } from "../api/apiTypes";
 import type { ResourceResult } from "../resources/resourceTypes";
-import { useSessionStatus } from "../resources/useSessionStatus";
+import {
+  useSessionStatus,
+  useSessionStatusSelector,
+} from "../resources/useSessionStatus";
 
 interface SimulationStartupOverlayVisibleState {
   detail: string;
@@ -25,9 +28,22 @@ export const SIMULATION_STARTUP_STATUS_REFRESH_MS = 1_000;
 const BOOTSTRAPPING_STATUSES = new Set(["bootstrapping"]);
 const MATERIALIZING_STATUSES = new Set(["materializing_script"]);
 
+interface SimulationStartupOverlayOptions {
+  readonly allowMissingSessionSmoke?: boolean;
+}
+
+interface BrowserFullmagConfig {
+  readonly allowMissingSessionSmoke?: unknown;
+}
+
 export function resolveSimulationStartupOverlayState(
   status: ResourceResult<LiveStatusResource>,
+  options: SimulationStartupOverlayOptions = {},
 ): SimulationStartupOverlayState {
+  if (options.allowMissingSessionSmoke) {
+    return { isVisible: false };
+  }
+
   if (status.status === "loading" || status.status === "idle") {
     return {
       detail: "Connecting to the local simulation backend.",
@@ -82,6 +98,35 @@ function isTransientStartupError(error: Error | null): boolean {
   );
 }
 
+function simulationStartupOverlayOptionsFromBrowser(): SimulationStartupOverlayOptions {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const config = (window as Window & { __FULLMAG_CONFIG__?: BrowserFullmagConfig })
+    .__FULLMAG_CONFIG__;
+  return {
+    allowMissingSessionSmoke: config?.allowMissingSessionSmoke === true,
+  };
+}
+
+const subscribeToStaticSimulationStartupOptions = () => () => undefined;
+const serverSimulationStartupSmokeBypassSnapshot = () => false;
+
+function getSimulationStartupSmokeBypassSnapshot(): boolean {
+  return (
+    simulationStartupOverlayOptionsFromBrowser().allowMissingSessionSmoke === true
+  );
+}
+
+function useAllowMissingSessionSmoke(): boolean {
+  return useSyncExternalStore(
+    subscribeToStaticSimulationStartupOptions,
+    getSimulationStartupSmokeBypassSnapshot,
+    serverSimulationStartupSmokeBypassSnapshot,
+  );
+}
+
 export function SimulationStartupOverlayView({
   state,
 }: {
@@ -117,9 +162,24 @@ export function shouldRefreshSimulationStartupStatus(
   return state.isVisible;
 }
 
+export function selectSimulationStartupOverlayVisibility(
+  status: ResourceResult<LiveStatusResource>,
+): boolean {
+  return resolveSimulationStartupOverlayState(status).isVisible;
+}
+
+export function useSimulationStartupOverlayVisibility(): boolean {
+  const isVisible = useSessionStatusSelector(selectSimulationStartupOverlayVisibility);
+  const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
+  return allowMissingSessionSmoke ? false : isVisible;
+}
+
 export function useSimulationStartupOverlayState(): SimulationStartupOverlayState {
   const sessionStatus = useSessionStatus();
-  const state = resolveSimulationStartupOverlayState(sessionStatus);
+  const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
+  const state = resolveSimulationStartupOverlayState(sessionStatus, {
+    allowMissingSessionSmoke,
+  });
   const shouldRefresh = shouldRefreshSimulationStartupStatus(state);
 
   useEffect(() => {

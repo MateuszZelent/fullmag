@@ -16,6 +16,14 @@ struct ModeSummaryArtifact {
     eigenvalue_imag: f64,
     norm: f64,
     max_amplitude: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_norm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_linf: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tangent_leakage_mean_abs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tangent_leakage_max_abs: Option<f64>,
     dominant_polarization: String,
     k_vector: [f64; 3],
 }
@@ -81,6 +89,14 @@ struct ModeArtifact<'a> {
     eigenvalue_imag: f64,
     normalization: &'static str,
     damping_policy: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_norm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_linf: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tangent_leakage_mean_abs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tangent_leakage_max_abs: Option<f64>,
     dominant_polarization: &'a str,
     k_vector: [f64; 3],
     real: &'a [[f64; 3]],
@@ -100,6 +116,10 @@ fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> Mode
         eigenvalue_imag: mode.eigenvalue_imag,
         norm: mode.norm,
         max_amplitude: mode.max_amplitude,
+        residual_norm: mode.residual_norm,
+        residual_linf: mode.residual_linf,
+        tangent_leakage_mean_abs: mode.tangent_leakage_mean_abs,
+        tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
     }
@@ -125,6 +145,16 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 .collect(),
         })
         .collect();
+    let spectrum_artifact = PathArtifact {
+        schema_version: "eigen_spectrum.v2",
+        solver_model: result.solver_model.as_str(),
+        sample_count: samples.len(),
+        samples: samples.clone(),
+    };
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec_pretty(&spectrum_artifact).unwrap(),
+    )?;
     let path_artifact = PathArtifact {
         schema_version: "2",
         solver_model: result.solver_model.as_str(),
@@ -145,7 +175,7 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
 pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
     let eigen_dir = base_dir.join("eigen");
     fs::create_dir_all(&eigen_dir)?;
-    let branches = result
+    let branches: Vec<BranchArtifact> = result
         .branches
         .iter()
         .map(|branch| BranchArtifact {
@@ -165,6 +195,15 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
                 .collect(),
         })
         .collect();
+    let branches_v2 = BranchesArtifact {
+        schema_version: "eigen_branches.v2",
+        solver_model: result.solver_model.as_str().to_string(),
+        branches: branches.clone(),
+    };
+    fs::write(
+        eigen_dir.join("branches.v2.json"),
+        serde_json::to_vec_pretty(&branches_v2).unwrap(),
+    )?;
     let payload = BranchesArtifact {
         schema_version: "2",
         solver_model: result.solver_model.as_str().to_string(),
@@ -199,7 +238,64 @@ pub fn write_branch_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io
         }
     }
     fs::write(eigen_dir.join("branch_table.csv"), csv)?;
+
+    let mut dispersion = Vec::<u8>::new();
+    writeln!(
+        &mut dispersion,
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score"
+    )?;
+    for sample in &result.samples {
+        let k = sample.sample.k_vector;
+        let label = sample.sample.label.clone().unwrap_or_default();
+        for mode in &sample.modes {
+            writeln!(
+                &mut dispersion,
+                "{},{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{}",
+                sample.sample.sample_index,
+                sample.sample.path_s,
+                k[0],
+                k[1],
+                k[2],
+                label,
+                mode.raw_mode_index,
+                mode.branch_id
+                    .map(|branch_id| branch_id.to_string())
+                    .unwrap_or_default(),
+                mode.frequency_real_hz,
+                mode.angular_frequency_rad_per_s,
+                "",
+                mode.residual_norm
+                    .map(|value| format!("{value:.16e}"))
+                    .unwrap_or_default(),
+                resolve_overlap_score(result, sample.sample.sample_index, mode),
+            )?;
+        }
+    }
+    fs::write(eigen_dir.join("dispersion.csv"), dispersion)?;
     Ok(())
+}
+
+fn resolve_overlap_score(
+    result: &PathSolveResult,
+    sample_index: usize,
+    mode: &SingleKModeResult,
+) -> String {
+    mode.branch_id
+        .and_then(|branch_id| {
+            result
+                .branches
+                .iter()
+                .find(|branch| branch.branch_id == branch_id)
+                .and_then(|branch| {
+                    branch.points.iter().find(|point| {
+                        point.sample_index == sample_index
+                            && point.raw_mode_index == mode.raw_mode_index
+                    })
+                })
+                .and_then(|point| point.overlap_prev)
+        })
+        .map(|value| value.to_string())
+        .unwrap_or_default()
 }
 
 pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
@@ -225,6 +321,10 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 eigenvalue_imag: mode.eigenvalue_imag,
                 normalization: "unit_l2",
                 damping_policy: "ignore",
+                residual_norm: mode.residual_norm,
+                residual_linf: mode.residual_linf,
+                tangent_leakage_mean_abs: mode.tangent_leakage_mean_abs,
+                tangent_leakage_max_abs: mode.tangent_leakage_max_abs,
                 dominant_polarization: &mode.dominant_polarization,
                 k_vector: sample.sample.k_vector,
                 real,
@@ -232,11 +332,171 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 amplitude,
                 phase,
             };
+            let mode_bytes = serde_json::to_vec_pretty(&payload).unwrap();
+            fs::write(
+                eigen_dir.join(format!(
+                    "sample_{:04}_mode_{:04}.json",
+                    sample.sample.sample_index, mode.raw_mode_index
+                )),
+                &mode_bytes,
+            )?;
             fs::write(
                 sample_dir.join(format!("mode_{:04}.json", mode.raw_mode_index)),
-                serde_json::to_vec_pretty(&payload).unwrap(),
+                mode_bytes,
             )?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eigen::types::{
+        EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult,
+        SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
+    };
+    use num_complex::Complex64;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(slug: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("fullmag-runner-{slug}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).expect("temp test dir should be created");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn sample_result() -> PathSolveResult {
+        PathSolveResult {
+            samples: vec![SingleKSolveResult {
+                sample: KSampleDescriptor {
+                    sample_index: 0,
+                    label: Some("G".to_string()),
+                    segment_index: Some(0),
+                    path_s: 0.0,
+                    t_in_segment: 0.0,
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                modes: vec![SingleKModeResult {
+                    raw_mode_index: 0,
+                    branch_id: Some(0),
+                    frequency_real_hz: 1.0e9,
+                    frequency_imag_hz: 0.0,
+                    angular_frequency_rad_per_s: std::f64::consts::TAU * 1.0e9,
+                    eigenvalue_real: 0.0,
+                    eigenvalue_imag: std::f64::consts::TAU * 1.0e9,
+                    norm: 1.0,
+                    max_amplitude: 1.0,
+                    residual_norm: Some(1.25e-9),
+                    residual_linf: Some(2.5e-10),
+                    tangent_leakage_mean_abs: Some(3.0e-12),
+                    tangent_leakage_max_abs: Some(4.0e-12),
+                    dominant_polarization: "linear".to_string(),
+                    reduced_vector: Some(vec![Complex64::new(1.0, 0.0)]),
+                    lifted_real: Some(vec![[1.0, 0.0, 0.0]]),
+                    lifted_imag: Some(vec![[0.0, 1.0, 0.0]]),
+                    amplitude: Some(vec![1.0]),
+                    phase: Some(vec![0.0]),
+                }],
+                relaxation_steps: 0,
+                solver_model: EigenSolverModel::ReferenceScalarTangent,
+                solver_notes: vec!["test fixture".to_string()],
+            }],
+            branches: vec![TrackedBranch {
+                branch_id: 0,
+                label: Some("B0".to_string()),
+                points: vec![TrackedBranchPoint {
+                    sample_index: 0,
+                    raw_mode_index: 0,
+                    frequency_real_hz: 1.0e9,
+                    frequency_imag_hz: 0.0,
+                    tracking_confidence: 1.0,
+                    overlap_prev: None,
+                }],
+            }],
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: vec!["single sample".to_string()],
+        }
+    }
+
+    #[test]
+    fn eigen_artifact_writer_emits_v2_contract_files() {
+        let temp = TempDirGuard::new("eigen-artifacts-v2");
+        let result = sample_result();
+
+        write_path_bundle(&temp.path, &result).expect("path bundle should write");
+        write_branch_bundle(&temp.path, &result).expect("branch bundle should write");
+        write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+
+        let eigen_dir = temp.path.join("eigen");
+        let spectrum: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("spectrum.v2.json"))
+                .expect("spectrum.v2.json should be written"),
+        )
+        .expect("spectrum.v2.json should be valid JSON");
+        assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
+        assert_eq!(spectrum["sample_count"], 1);
+
+        let branches: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("branches.v2.json"))
+                .expect("branches.v2.json should be written"),
+        )
+        .expect("branches.v2.json should be valid JSON");
+        assert_eq!(branches["schema_version"], "eigen_branches.v2");
+
+        let dispersion = std::fs::read_to_string(eigen_dir.join("dispersion.csv"))
+            .expect("dispersion.csv should be written");
+        let mut dispersion_lines = dispersion.lines();
+        assert_eq!(
+            dispersion_lines.next(),
+            Some("sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score")
+        );
+        let dispersion_row = dispersion_lines
+            .next()
+            .expect("dispersion.csv should include a mode row");
+        assert!(
+            dispersion_row
+                .split(',')
+                .nth(11)
+                .is_some_and(|value| !value.is_empty()),
+            "dispersion.csv residual_norm column should be populated, row={dispersion_row}"
+        );
+
+        let mode: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("modes/sample_0000_mode_0000.json"))
+                .expect("flat v2 mode artifact should be written"),
+        )
+        .expect("mode artifact should be valid JSON");
+        assert_eq!(mode["sample_index"], 0);
+        assert_eq!(mode["raw_mode_index"], 0);
+        for required in [
+            "residual_norm",
+            "residual_linf",
+            "tangent_leakage_mean_abs",
+            "tangent_leakage_max_abs",
+        ] {
+            assert!(
+                mode[required].as_f64().is_some(),
+                "mode artifact should include numeric {required}: {mode}"
+            );
+        }
+
+        assert!(eigen_dir.join("path.json").is_file());
+        assert!(eigen_dir.join("branches.json").is_file());
+        assert!(eigen_dir.join("branch_table.csv").is_file());
+        assert!(eigen_dir.join("modes/sample_0000/mode_0000.json").is_file());
+    }
 }

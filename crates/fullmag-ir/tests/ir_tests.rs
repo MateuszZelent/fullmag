@@ -515,6 +515,150 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
 }
 
 #[test]
+fn frequency_response_round_trips_as_first_class_study() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::FrequencyResponse {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Include,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        excitation: FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: FrequencySweepIR {
+            values_hz: vec![1.0e9, 2.0e9],
+        },
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::EigenSpectrum {
+                quantity: "susceptibility".to_string(),
+            }],
+        },
+    };
+
+    ir.validate()
+        .expect("frequency response should be accepted as semantic IR");
+    let encoded = serde_json::to_string(&ir).expect("frequency response should serialize");
+    let decoded: ProblemIR =
+        serde_json::from_str(&encoded).expect("frequency response should deserialize");
+
+    match decoded.study {
+        StudyIR::FrequencyResponse {
+            excitation,
+            frequencies_hz,
+            ..
+        } => {
+            assert_eq!(excitation.field_au_per_m, [0.0, 0.0, 1.0]);
+            assert_eq!(frequencies_hz.values_hz, vec![1.0e9, 2.0e9]);
+        }
+        other => panic!("expected frequency_response study, got {other:?}"),
+    }
+}
+
+#[test]
+fn frequency_response_output_is_first_class_sampling_request() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let dynamics = ir.study.dynamics().clone();
+    ir.study = StudyIR::FrequencyResponse {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: None,
+        normalization: FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Include,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        excitation: FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        sampling: SamplingIR {
+            outputs: vec![OutputIR::FrequencyResponseOutput {
+                observable: FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    ir.validate()
+        .expect("frequency response output should be accepted as semantic IR");
+    let encoded = serde_json::to_value(&ir.study).expect("study should serialize");
+    assert_eq!(
+        encoded["sampling"]["outputs"][0],
+        serde_json::json!({
+            "kind": "frequency_response_output",
+            "observable": "susceptibility_tensor"
+        })
+    );
+}
+
+#[test]
+fn frequency_response_normalization_has_response_specific_contract_type() {
+    let encoded = serde_json::to_string(&FrequencyResponseNormalizationIR::UnitL2)
+        .expect("normalization should serialize");
+    assert_eq!(encoded, "\"unit_l2\"");
+    assert_ne!(
+        std::any::TypeId::of::<FrequencyResponseNormalizationIR>(),
+        std::any::TypeId::of::<EigenNormalizationIR>(),
+        "FrequencyResponseNormalizationIR must be distinct from EigenNormalizationIR",
+    );
+}
+
+#[test]
+fn frequency_response_observable_contract_uses_snake_case_names() {
+    let encoded = serde_json::to_string(&ResponseObservableIR::SusceptibilityTensor)
+        .expect("observable should serialize");
+    assert_eq!(encoded, "\"susceptibility_tensor\"");
+
+    let decoded: FrequencyResponseOutputIR =
+        serde_json::from_str("\"absorbed_power_density\"").expect("observable should deserialize");
+    assert_eq!(decoded, ResponseObservableIR::AbsorbedPowerDensity);
+}
+
+#[test]
+fn frequency_response_uses_distinct_public_contract_types() {
+    assert_ne!(
+        std::any::TypeId::of::<FrequencyExcitationIR>(),
+        std::any::TypeId::of::<DynamicFieldIR>(),
+        "FrequencyExcitationIR must be a distinct public response contract, not a plain alias",
+    );
+    assert_ne!(
+        std::any::TypeId::of::<FrequencySweepIR>(),
+        std::any::TypeId::of::<SweepIR>(),
+        "FrequencySweepIR must be a distinct public response contract, not a plain alias",
+    );
+}
+
+#[test]
+fn frequency_response_contract_has_own_public_module() {
+    let excitation = fullmag_ir::frequency_response_contract::FrequencyExcitationIR {
+        field_au_per_m: [0.0, 1.0, 2.0],
+    };
+    let sweep = fullmag_ir::frequency_response_contract::FrequencySweepIR {
+        values_hz: vec![1.0e9],
+    };
+    assert_eq!(
+        serde_json::to_value(excitation).expect("excitation should serialize"),
+        serde_json::json!({"field_au_per_m": [0.0, 1.0, 2.0]})
+    );
+    assert_eq!(
+        serde_json::to_value(sweep).expect("sweep should serialize"),
+        serde_json::json!({"values_hz": [1.0e9]})
+    );
+}
+
+#[test]
 fn spin_wave_boundary_condition_accepts_legacy_and_structured_forms() {
     let legacy: SpinWaveBoundaryConditionIR =
         serde_json::from_str("\"periodic\"").expect("legacy spin-wave BC should deserialize");

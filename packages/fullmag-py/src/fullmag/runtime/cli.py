@@ -9,7 +9,7 @@ from typing import Sequence
 
 from fullmag._core import extract_fem_mesh_ir, resample_fem_to_fdm_grid, run_problem_json
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
-from fullmag.model.study import Eigenmodes, Relaxation
+from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.simulation import Simulation, result_from_run_payload
 
@@ -215,7 +215,7 @@ def _resolve_until_seconds(study, default_until_seconds: float | None) -> float 
         if study.max_pseudotime_s is not None:
             return study.max_pseudotime_s
         return float("inf")
-    if isinstance(study, Eigenmodes):
+    if isinstance(study, (Eigenmodes, FrequencyResponse)):
         return 0.0
     return None
 

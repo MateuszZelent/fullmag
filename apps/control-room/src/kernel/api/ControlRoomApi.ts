@@ -165,6 +165,11 @@ import {
   type DecodedTopology,
 } from "./codecs";
 import {
+  createBinaryDecodeScheduler,
+  type BinaryDecoderKind,
+  type BinaryDecodeScheduler,
+} from "./binaryDecodeScheduler";
+import {
   createOpenApiV2Transport,
   type OpenApiV2Transport,
 } from "./generated/openapi-v2-client";
@@ -177,6 +182,7 @@ type QueryParams = Record<string, unknown>;
 
 interface ControlRoomApiOptions {
   baseUrl?: string;
+  binaryDecodeScheduler?: BinaryDecodeScheduler;
   diagnostics?: RequestDiagnosticsController;
   fetchImpl?: FetchLike;
   maxGetRetries?: number;
@@ -195,6 +201,7 @@ export class ControlRoomApiError extends Error {
 
 export class ControlRoomApi {
   private readonly baseUrl: string;
+  private readonly binaryDecodeScheduler: BinaryDecodeScheduler;
   private readonly requestDiagnostics: RequestDiagnosticsController | null;
   private readonly fetchImpl: FetchLike;
   private readonly maxGetRetries: number;
@@ -738,12 +745,14 @@ export class ControlRoomApi {
 
   constructor({
     baseUrl,
+    binaryDecodeScheduler = createBinaryDecodeScheduler(),
     diagnostics,
     fetchImpl,
     maxGetRetries = 1,
     requestIdFactory = () => crypto.randomUUID(),
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
+    this.binaryDecodeScheduler = binaryDecodeScheduler;
     this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
     this.maxGetRetries = maxGetRetries;
@@ -852,14 +861,25 @@ export class ControlRoomApi {
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
   ): Promise<BinaryResourceResult<DecodedTopology>> {
-    return this.requestBinaryResource(path, decodeTopology, options, pathParams);
+    return this.requestBinaryResource(
+      path,
+      "topology",
+      decodeTopology,
+      options,
+      pathParams,
+    );
   }
 
   private requestMeshQualityData(
     path: OpenApiV2Path,
     options: BinaryRequestOptions = {},
   ): Promise<BinaryResourceResult<DecodedMeshQualityData>> {
-    return this.requestBinaryResource(path, decodeMeshQualityData, options);
+    return this.requestBinaryResource(
+      path,
+      "mesh-quality-data",
+      decodeMeshQualityData,
+      options,
+    );
   }
 
   private requestFieldVector(
@@ -870,6 +890,7 @@ export class ControlRoomApi {
   ): Promise<BinaryResourceResult<DecodedFieldVector>> {
     return this.requestBinaryResource(
       path,
+      "field-vector",
       decodeFieldVector,
       options,
       pathParams,
@@ -879,68 +900,83 @@ export class ControlRoomApi {
 
   private async requestBinaryResource<TData>(
     path: OpenApiV2Path,
+    decoderKind: BinaryDecoderKind,
     decode: (buffer: ArrayBuffer) => TData,
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
     query?: QueryParams,
   ): Promise<BinaryResourceResult<TData>> {
-    const headers: Record<string, string> = {};
-    if (options.etag) {
-      headers["if-none-match"] = options.etag;
-    }
+    return measureControlRoomApiPerformance(
+      `fullmag.api.requestBinaryResource.${decoderKind}`,
+      async () => {
+        const headers: Record<string, string> = {};
+        if (options.etag) {
+          headers["if-none-match"] = options.etag;
+        }
 
-    const result = await this.transport.GET(path as never, {
-      cache: "no-store",
-      fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-        this.executeBinaryOpenApiFetch(input, init),
-      headers,
-      params: { path: pathParams, query },
-      parseAs: "arrayBuffer",
-      signal: options.signal,
-    } as never);
-    const response = result.response;
-    const etag = response.headers.get("etag");
+        const result = await this.transport.GET(path as never, {
+          cache: "no-store",
+          fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+            this.executeBinaryOpenApiFetch(input, init),
+          headers,
+          params: { path: pathParams, query },
+          parseAs: "arrayBuffer",
+          signal: options.signal,
+        } as never);
+        const response = result.response;
+        const etag = response.headers.get("etag");
 
-    if (response.status === 304) {
-      return { etag, status: "not-modified" };
-    }
+        if (response.status === 304) {
+          return { etag, status: "not-modified" };
+        }
 
-    if (response.status === 204) {
-      return { etag, status: "not-applicable" };
-    }
+        if (response.status === 204) {
+          return { etag, status: "not-applicable" };
+        }
 
-    if (!response.ok || result.error) {
-      throw new ControlRoomApiError(
-        await formatResponseError(response),
-        response.status,
-      );
-    }
+        if (!response.ok || result.error) {
+          throw new ControlRoomApiError(
+            await formatResponseError(response),
+            response.status,
+          );
+        }
 
-    const buffer = result.data as unknown;
-    if (!(buffer instanceof ArrayBuffer)) {
-      throw new ControlRoomApiError("Expected binary response body", 0);
-    }
+        const buffer = result.data as unknown;
+        if (!(buffer instanceof ArrayBuffer)) {
+          throw new ControlRoomApiError("Expected binary response body", 0);
+        }
 
-    this.requestDiagnostics?.record({
-      byteLength: buffer.byteLength,
-      channel: "http",
-      contentType: response.headers.get("content-type"),
-      detail: "decoded binary payload",
-      direction: "rx",
-      durationMs: null,
-      method: "GET",
-      outcome: "ok",
-      path: path as string,
-      requestId: response.headers.get("x-request-id") ?? "binary-payload",
-      status: response.status,
-    });
+        const decodeStartedAt = nowMs();
+        const data = await this.binaryDecodeScheduler({
+          buffer,
+          decodeInline: decode,
+          kind: decoderKind,
+          path: path as string,
+        });
+        const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
-    return {
-      byteLength: buffer.byteLength,
-      data: decode(buffer),
-      etag,
-      status: "ready",
-    };
+        this.requestDiagnostics?.record({
+          byteLength: buffer.byteLength,
+          channel: "http",
+          contentType: response.headers.get("content-type"),
+          detail: "decoded binary payload",
+          direction: "rx",
+          durationMs: decodeDurationMs,
+          method: "GET",
+          outcome: "ok",
+          path: path as string,
+          requestId: response.headers.get("x-request-id") ?? "binary-payload",
+          status: response.status,
+        });
+
+        return {
+          byteLength: buffer.byteLength,
+          data,
+          etag,
+          status: "ready",
+        };
+      },
+    );
   }
 
   private async executeBinaryOpenApiFetch(
@@ -1160,6 +1196,40 @@ function byteLengthFromHeaders(headers: Headers): number | null {
 
   const parsed = Number.parseInt(contentLength, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function measureControlRoomApiPerformance<T>(
+  name: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const performanceTarget =
+    typeof performance !== "undefined" ? performance : null;
+  if (
+    !performanceTarget ||
+    typeof performanceTarget.mark !== "function" ||
+    typeof performanceTarget.measure !== "function"
+  ) {
+    return task();
+  }
+
+  const startMark = `${name}:start`;
+  const endMark = `${name}:end`;
+  performanceTarget.mark(startMark);
+  try {
+    return await task();
+  } finally {
+    performanceTarget.mark(endMark);
+    performanceTarget.measure(name, startMark, endMark);
+    performanceTarget.clearMarks?.(startMark);
+    performanceTarget.clearMarks?.(endMark);
+  }
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
 }
 
 function byteLengthFromBody(body: BodyInit | null | undefined): number | null {

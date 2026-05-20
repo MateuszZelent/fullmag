@@ -10,6 +10,7 @@ checkKernelModuleImports();
 checkCrossModuleImports();
 checkRibbonCommandModel();
 checkAppMenuSlot();
+checkRuntimeComputeAcceptanceInvalidations();
 checkLegacyWebPathGovernance();
 checkRawHexOutsideDesignTokens();
 
@@ -101,7 +102,9 @@ function checkRibbonCommandModel() {
 
 function checkAppMenuSlot() {
   const shellPath = path.join(srcRoot, "kernel/layout/WorkspaceShell.tsx");
-  const shell = readIfExists(shellPath);
+  const shellClientPath = path.join(srcRoot, "kernel/layout/WorkspaceShellClient.tsx");
+  const shell = `${readIfExists(shellPath)}
+${readIfExists(shellClientPath)}`;
   if (shell.includes("<AppMenuBar") || shell.includes("AppMenuBar")) {
     failures.push("WorkspaceShell hardcodes AppMenuBar instead of the app-menu slot.");
   }
@@ -112,6 +115,42 @@ function checkAppMenuSlot() {
   const manifestPath = path.join(srcRoot, "modules/app-menu/manifest.ts");
   if (!existsSync(manifestPath)) {
     failures.push("app-menu module manifest is missing.");
+  }
+}
+
+function checkRuntimeComputeAcceptanceInvalidations() {
+  const runtimeCommandsPath = path.join(
+    srcRoot,
+    "kernel/runtime/studyRuntimeCommandContributions.ts",
+  );
+  const content = readIfExists(runtimeCommandsPath);
+  for (const commandId of ["study.compute-fields", "study.compute-energies"]) {
+    const block = extractCommandContributionBlock(content, commandId);
+    if (!block) {
+      failures.push(
+        `studyRuntimeCommandContributions.ts is missing ${commandId}.`,
+      );
+      continue;
+    }
+
+    const forbiddenPatterns = [
+      "invalidateRuntimeResources(",
+      "invalidateEnergyResources(",
+      "invalidate(DATA_FIELDS_PATH",
+      "invalidatePrefix(DATA_FIELDS_PATH",
+      "invalidate(DATA_SCALARS_PATH",
+      "invalidatePrefix(DATA_SCALARS_PATH",
+      "SIMULATION_SOLVER_ENERGIES_CURRENT_PATH",
+      "SIMULATION_OBJECT_METRICS_PATH",
+      "SESSION_STATUS_RESOURCE_KEY",
+    ];
+    for (const pattern of forbiddenPatterns) {
+      if (block.includes(pattern)) {
+        failures.push(
+          `${commandId} acceptance path contains broad invalidation pattern "${pattern}".`,
+        );
+      }
+    }
   }
 }
 
@@ -137,13 +176,24 @@ function checkLegacyWebPathGovernance() {
   }
 }
 
+function extractCommandContributionBlock(content, commandId) {
+  const marker = `id: "${commandId}"`;
+  const start = content.indexOf(marker);
+  if (start < 0) return "";
+
+  const nextCommandStart = content.indexOf('\n  {\n    id: "', start + marker.length);
+  const end = nextCommandStart < 0 ? content.length : nextCommandStart;
+  return content.slice(start, end);
+}
+
 function checkRawHexOutsideDesignTokens() {
   const rawColorPattern = /#[0-9a-fA-F]{3,8}\b/g;
   for (const filePath of listSourceFiles(srcRoot)) {
     const relativePath = relativeAppPath(filePath);
     if (
       relativePath.startsWith("src/design/styles/") ||
-      relativePath.startsWith("src/kernel/api/generated/")
+      relativePath.startsWith("src/kernel/api/generated/") ||
+      relativePath === "src/shared/brand/FullmagLogoVector.tsx"
     ) {
       continue;
     }

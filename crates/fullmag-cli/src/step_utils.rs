@@ -342,6 +342,7 @@ pub(crate) fn resolve_script_until_seconds(
             "no stop time provided. Define DEFAULT_UNTIL in the script for time-evolution runs"
         ),
         fullmag_ir::StudyIR::Eigenmodes { .. } => Ok(0.0),
+        fullmag_ir::StudyIR::FrequencyResponse { .. } => Ok(0.0),
     }
 }
 

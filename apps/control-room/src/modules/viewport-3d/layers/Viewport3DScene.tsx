@@ -1,14 +1,16 @@
 "use client";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
-import { OrthographicCamera } from "@react-three/drei";
+import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
-import type {
-  AxesHelper,
-  GridHelper,
-  Material,
-  OrthographicCamera as ThreeOrthographicCamera,
+import {
+  Vector3,
+  type AxesHelper,
+  type GridHelper,
+  type Material,
+  type OrthographicCamera as ThreeOrthographicCamera,
+  type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
@@ -41,7 +43,6 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
-  VIEWPORT_3D_WORLD_UP,
   CameraController,
   OrbitCameraControls,
   resolveViewport3DCameraFit,
@@ -125,11 +126,25 @@ interface Viewport3DViewportSize {
   width: number;
 }
 
+interface Viewport3DOrthographicCameraFrame {
+  bottom: number;
+  left: number;
+  right: number;
+  top: number;
+  zoom: number;
+}
+
+interface Viewport3DCameraClip {
+  far: number;
+  near: number;
+}
+
 const FALLBACK_GRID_SIZE = 1e-6;
 const PREFERRED_GRID_CELL_SIZE = 1e-6;
 const GRID_SIZE_UNIVERSE_LIMIT_SCALE = 1.5;
 const GRID_TARGET_DIVISIONS = 12;
 const GRID_MAX_DIVISIONS = 64;
+const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
 
 export function resolveViewport3DGridSpec(
   bounds: Viewport3DBounds | null,
@@ -175,18 +190,144 @@ function resolveViewport3DGridCellSize(maxGridSize: number): number {
   return niceGridStep(maxGridSize / GRID_TARGET_DIVISIONS);
 }
 
+export function resolveViewport3DProjectionCameraClip(
+  bounds: Viewport3DBounds | null,
+  cameraState?: Viewport3DCameraState,
+): Viewport3DCameraClip {
+  const fit = resolveViewport3DCameraFit(bounds);
+  if (!cameraState) return { near: fit.near, far: fit.far };
+
+  const distance = new Vector3(...cameraState.position).distanceTo(
+    new Vector3(...cameraState.target),
+  );
+  const radius = Math.max(bounds?.radius ?? FALLBACK_GRID_SIZE / 2, 1e-12);
+  const orbitFar = Number.isFinite(distance) && distance > 0
+    ? distance + radius * 4
+    : fit.far;
+
+  return {
+    near: fit.near,
+    far: Math.max(fit.far, orbitFar, fit.near * 100, 1e-3),
+  };
+}
+
 export function resolveViewport3DOrthographicZoom(
   bounds: Viewport3DBounds | null,
   viewportSize: Viewport3DViewportSize,
+  cameraState?: Viewport3DCameraState,
 ): number {
-  const span = bounds
+  const width = Math.max(2, viewportSize.width);
+  const height = Math.max(2, viewportSize.height);
+  const fitSize = resolveViewport3DOrthographicFitSize(bounds, cameraState);
+  return clamp(
+    Math.min(width / (fitSize.width * 1.6), height / (fitSize.height * 1.6)),
+    1e-3,
+    1e12,
+  );
+}
+
+export function resolveViewport3DOrthographicCameraFrame(
+  bounds: Viewport3DBounds | null,
+  viewportSize: Viewport3DViewportSize,
+  cameraState?: Viewport3DCameraState,
+): Viewport3DOrthographicCameraFrame {
+  const width = Math.max(2, viewportSize.width);
+  const height = Math.max(2, viewportSize.height);
+
+  return {
+    bottom: -height / 2,
+    left: -width / 2,
+    right: width / 2,
+    top: height / 2,
+    zoom: resolveViewport3DOrthographicZoom(bounds, { height, width }, cameraState),
+  };
+}
+
+function resolveViewport3DOrthographicFitSize(
+  bounds: Viewport3DBounds | null,
+  cameraState: Viewport3DCameraState | undefined,
+): { height: number; width: number } {
+  const fallbackSpan = bounds
     ? Math.max(...bounds.size, bounds.radius * 2, 1e-12)
     : FALLBACK_GRID_SIZE;
-  const viewportSpan = Math.max(
-    2,
-    Math.min(viewportSize.width, viewportSize.height),
+  if (!bounds || !cameraState) {
+    return { height: fallbackSpan, width: fallbackSpan };
+  }
+
+  const basis = resolveViewport3DOrthographicBasis(cameraState);
+  if (!basis) {
+    return { height: fallbackSpan, width: fallbackSpan };
+  }
+
+  const target = new Vector3(...cameraState.target);
+  const halfSize = bounds.size.map((value) => Math.max(0, value) / 2) as [
+    number,
+    number,
+    number,
+  ];
+  let maxX = 0;
+  let maxY = 0;
+
+  for (const xSign of [-1, 1]) {
+    for (const ySign of [-1, 1]) {
+      for (const zSign of [-1, 1]) {
+        const corner = new Vector3(
+          bounds.center[0] + halfSize[0] * xSign,
+          bounds.center[1] + halfSize[1] * ySign,
+          bounds.center[2] + halfSize[2] * zSign,
+        ).sub(target);
+        maxX = Math.max(maxX, Math.abs(corner.dot(basis.right)));
+        maxY = Math.max(maxY, Math.abs(corner.dot(basis.up)));
+      }
+    }
+  }
+
+  return {
+    height: Math.max(maxY * 2, 1e-12),
+    width: Math.max(maxX * 2, 1e-12),
+  };
+}
+
+function resolveViewport3DOrthographicBasis(
+  cameraState: Viewport3DCameraState,
+): { right: Vector3; up: Vector3 } | null {
+  const forward = new Vector3(...cameraState.target).sub(
+    new Vector3(...cameraState.position),
   );
-  return clamp(viewportSpan / (span * 1.6), 1e-3, 1e12);
+  if (forward.lengthSq() <= 0) return null;
+  forward.normalize();
+
+  const rawUp = new Vector3(...cameraState.up);
+  if (rawUp.lengthSq() <= 0) return null;
+  rawUp.normalize();
+
+  const right = new Vector3().crossVectors(forward, rawUp);
+  if (right.lengthSq() <= 0) return null;
+  right.normalize();
+
+  const up = new Vector3().crossVectors(right, forward);
+  if (up.lengthSq() <= 0) return null;
+  up.normalize();
+
+  return { right, up };
+}
+
+export function applyViewport3DPerspectiveCameraPose(
+  camera: ThreePerspectiveCamera,
+  cameraState: Viewport3DCameraState,
+  near: number,
+  far: number,
+  fov: number,
+): void {
+  camera.up.set(...cameraState.up);
+  camera.position.set(...cameraState.position);
+  camera.lookAt(...cameraState.target);
+  camera.near = near;
+  camera.far = far;
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  camera.updateMatrix();
+  camera.updateMatrixWorld();
 }
 
 export function applyViewport3DOrthographicCameraPose(
@@ -268,10 +409,13 @@ export function Viewport3DScene({
   const invalidate = useThree((state) => state.invalidate);
   const viewportSize = useThree((state) => state.size);
   const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
-  const cameraFit = useMemo(() => resolveViewport3DCameraFit(bounds), [bounds]);
-  const orthographicZoom = useMemo(
-    () => resolveViewport3DOrthographicZoom(bounds, viewportSize),
-    [bounds, viewportSize],
+  const cameraClip = useMemo(
+    () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
+    [bounds, cameraState],
+  );
+  const orthographicCameraFrame = useMemo(
+    () => resolveViewport3DOrthographicCameraFrame(bounds, viewportSize, cameraState),
+    [bounds, cameraState, viewportSize],
   );
   const materialProfile = useMemo(
     () =>
@@ -305,6 +449,48 @@ export function Viewport3DScene({
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
       <CanvasLifecycleProbe tracker={tracker} />
+      {cameraProjection === "orthographic" ? (
+        <OrthographicCamera
+          key="viewport-3d-orthographic-camera"
+          makeDefault
+          bottom={orthographicCameraFrame.bottom}
+          left={orthographicCameraFrame.left}
+          near={cameraClip.near}
+          far={cameraClip.far}
+          position={cameraState.position}
+          right={orthographicCameraFrame.right}
+          top={orthographicCameraFrame.top}
+          up={cameraState.up}
+          zoom={orthographicCameraFrame.zoom}
+          onUpdate={(camera) =>
+            applyViewport3DOrthographicCameraPose(
+              camera,
+              cameraState,
+              cameraClip.near,
+              cameraClip.far,
+            )
+          }
+        />
+      ) : (
+        <PerspectiveCamera
+          key="viewport-3d-perspective-camera"
+          makeDefault
+          far={cameraClip.far}
+          fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
+          near={cameraClip.near}
+          position={cameraState.position}
+          up={cameraState.up}
+          onUpdate={(camera) =>
+            applyViewport3DPerspectiveCameraPose(
+              camera,
+              cameraState,
+              cameraClip.near,
+              cameraClip.far,
+              PERSPECTIVE_CAMERA_FOV_DEGREES,
+            )
+          }
+        />
+      )}
       <CameraController
         bounds={bounds}
         cameraState={cameraState}
@@ -313,24 +499,6 @@ export function Viewport3DScene({
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
-      {cameraProjection === "orthographic" && (
-        <OrthographicCamera
-          makeDefault
-          zoom={orthographicZoom}
-          near={cameraFit.near}
-          far={cameraFit.far}
-          position={cameraState.position}
-          up={VIEWPORT_3D_WORLD_UP}
-          onUpdate={(camera) =>
-            applyViewport3DOrthographicCameraPose(
-              camera,
-              cameraState,
-              cameraFit.near,
-              cameraFit.far,
-            )
-          }
-        />
-      )}
       <DomainBoxLayer
         bounds={bounds}
         boundsVisible={fdmSettings.boundsVisible}
@@ -405,6 +573,7 @@ export function Viewport3DScene({
         materialProfile={materialProfile}
       />
       <OrbitCameraControls
+        cameraProjection={cameraProjection}
         cameraState={cameraState}
         onCameraChange={onCameraChange}
         rotationMode={rotationMode}

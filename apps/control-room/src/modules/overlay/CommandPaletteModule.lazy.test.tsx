@@ -18,9 +18,6 @@ describe("CommandPaletteModule lazy runtime resources", () => {
     vi.doMock("./MeshBuildDialog", () => ({
       MeshBuildDialog: () => null,
     }));
-    vi.doMock("../viewport-3d/components/Viewport3DSettingsDialog", () => ({
-      Viewport3DSettingsDialog: () => null,
-    }));
 
     const { default: CommandPaletteModule } = await import(
       "./CommandPaletteModule"
@@ -48,6 +45,5 @@ describe("CommandPaletteModule lazy runtime resources", () => {
     expect(useStudyRuntimeCommandResourceData).not.toHaveBeenCalled();
     vi.doUnmock("@/kernel/resources/studyRuntimeResources");
     vi.doUnmock("./MeshBuildDialog");
-    vi.doUnmock("../viewport-3d/components/Viewport3DSettingsDialog");
   });
 });

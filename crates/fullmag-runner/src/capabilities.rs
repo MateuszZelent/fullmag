@@ -36,8 +36,18 @@ pub struct BackendCapabilities {
     pub snapshot_quantities: Vec<String>,
     pub scalar_outputs: Vec<String>,
     pub approximate_operators: Vec<String>,
+    pub supports_frequency_response: bool,
+    pub supports_coupled_magnetoelastic_quasistatic: bool,
+    pub supports_coupled_magnetoelastic_elastodynamic: bool,
+    pub supports_frequency_domain_elastodynamics: bool,
+    pub supports_coupled_eigenmodes: bool,
     pub supports_lossy_fallback_override: bool,
 }
+
+// These are semantic-only in the current public contract. Keep them explicit so
+// prescribed-strain H_mel or FEM eigen support cannot be misread as a driven
+// frequency-domain or two-way magnetoelastic solver.
+const DEFERRED_STUDY_CAPABILITY: bool = false;
 
 fn quantity_names(ids: &[QuantityId]) -> Vec<String> {
     ids.iter().map(|id| id.as_str().to_string()).collect()
@@ -46,6 +56,11 @@ fn quantity_names(ids: &[QuantityId]) -> Vec<String> {
 pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilities {
     match engine {
         FdmEngine::CpuReference => BackendCapabilities {
+            supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_elastodynamic: DEFERRED_STUDY_CAPABILITY,
+            supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCpuReference,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![
@@ -91,6 +106,11 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
             supports_lossy_fallback_override: false,
         },
         FdmEngine::CudaFdm => BackendCapabilities {
+            supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_elastodynamic: DEFERRED_STUDY_CAPABILITY,
+            supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCuda,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![
@@ -141,6 +161,11 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
     match engine {
         FemEngine::CpuNative => BackendCapabilities {
+            supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_elastodynamic: DEFERRED_STUDY_CAPABILITY,
+            supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FemCpuNative,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![
@@ -190,6 +215,11 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             supports_lossy_fallback_override: false,
         },
         FemEngine::NativeGpu => BackendCapabilities {
+            supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_magnetoelastic_elastodynamic: DEFERRED_STUDY_CAPABILITY,
+            supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
+            supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FemNativeGpu,
             capability_profile_version: "2026-04-04".to_string(),
             supported_terms: vec![
@@ -271,5 +301,45 @@ mod tests {
             fem_gpu.supported_demag_realizations,
             fem_eigen_gpu.supported_demag_realizations
         );
+    }
+
+    #[test]
+    fn frequency_response_and_two_way_magnetoelasticity_are_explicitly_deferred() {
+        let capabilities = [
+            capabilities_for_fdm_engine(FdmEngine::CpuReference),
+            capabilities_for_fdm_engine(FdmEngine::CudaFdm),
+            capabilities_for_fem_engine(FemEngine::CpuNative),
+            capabilities_for_fem_engine(FemEngine::NativeGpu),
+            capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
+            capabilities_for_fem_eigen_engine(FemEngine::NativeGpu),
+        ];
+
+        for capability in capabilities {
+            assert!(
+                !capability.supports_frequency_response,
+                "{} must not advertise driven frequency response execution",
+                capability.engine_id.as_str()
+            );
+            assert!(
+                !capability.supports_coupled_magnetoelastic_quasistatic,
+                "{} must not advertise quasistatic two-way magnetoelasticity",
+                capability.engine_id.as_str()
+            );
+            assert!(
+                !capability.supports_coupled_magnetoelastic_elastodynamic,
+                "{} must not advertise elastodynamic magnetoelasticity",
+                capability.engine_id.as_str()
+            );
+            assert!(
+                !capability.supports_frequency_domain_elastodynamics,
+                "{} must not advertise frequency-domain elastodynamics",
+                capability.engine_id.as_str()
+            );
+            assert!(
+                !capability.supports_coupled_eigenmodes,
+                "{} must not advertise coupled magnon-phonon eigenmodes",
+                capability.engine_id.as_str()
+            );
+        }
     }
 }

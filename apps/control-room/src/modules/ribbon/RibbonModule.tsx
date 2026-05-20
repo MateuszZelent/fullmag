@@ -17,7 +17,8 @@ import {
 } from "@/kernel/api/apiPaths";
 import type { ModuleProps } from "@/kernel/types";
 import { createCommandContext } from "@/kernel/commands/commandContext";
-import { useLayout } from "@/kernel/layout/useLayout";
+import { useLayoutActions, useLayoutSelector } from "@/kernel/layout/useLayout";
+import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import {
   useGeometryCapabilitiesResource,
   useGeometryValidationResource,
@@ -40,10 +41,15 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   SESSION_STATUS_RESOURCE_KEY,
-  useSessionStatus,
+  useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
-import { useSelection } from "@/kernel/selection/useSelection";
-import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
+import {
+  EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+  useObjectVisualizationController,
+  useObjectVisualizationSelector,
+} from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 
@@ -53,13 +59,17 @@ import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
 
-export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
+export default function RibbonModule({ kernel }: ModuleProps) {
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
-  const { layout, setActiveTab } = useLayout();
-  const { selection } = useSelection(moduleId);
-  const { snapshot: visualizationSnapshot, visualization } =
-    useObjectVisualizationRegistry();
-  const activeTab = layout.activeModuleTab;
+  const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
+  const { setActiveTab } = useLayoutActions();
+  const selection = useSelectionSelector((currentSelection) =>
+    activeTab === "view" ? currentSelection : EMPTY_SELECTION,
+  );
+  const visualization = useObjectVisualizationController();
+  const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
+    activeTab === "view" ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+  );
   const needsGeometryResources =
     activeTab === "geometry" || activeTab === "mesh";
   const needsRuntimeResources = ribbonTabNeedsRuntimeResources(activeTab);
@@ -74,23 +84,28 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const geometryValidation = useGeometryValidationResource({
     enabled: needsGeometryResources || needsRuntimeResources,
   });
-  const sessionStatus = useSessionStatus();
+  const needsSessionStatusResources = needsMeshResources || needsRuntimeResources;
+  const sessionStatusData = useSessionStatusSelector(
+    (sessionStatus) =>
+      needsSessionStatusResources ? sessionStatus.data : null,
+    { enabled: needsSessionStatusResources },
+  );
   const meshBuildCurrent = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData),
   });
   const meshBuildLatest = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(
       needsMeshResources,
-      sessionStatus.data,
+      sessionStatusData,
     ),
   });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(
       needsMeshResources,
-      sessionStatus.data,
+      sessionStatusData,
     ),
   });
   const meshSemantics = useMeshSemanticsResource({
@@ -105,7 +120,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const stageExecution = useStageExecutionResource({
     enabled: shouldLoadRuntimeStageExecution(
       needsRuntimeResources,
-      sessionStatus.data,
+      sessionStatusData,
     ),
   });
   const checkpointCatalog = useCheckpointCatalogResource({
@@ -141,7 +156,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
             ? stageExecution.data
             : null,
           [SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources
-            ? sessionStatus.data
+            ? sessionStatusData
             : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
@@ -159,7 +174,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       meshBuildLatest.data,
       meshManifest.data,
       meshSummary.data,
-      sessionStatus.data,
+      sessionStatusData,
       solverStatus.data,
       stageExecution.data,
       visualizationState.data,
@@ -179,7 +194,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
         meshSummary: meshSummary.data,
         resources: kernel.resources,
         selection,
-        sessionStatus: sessionStatus.data,
+        sessionStatus: sessionStatusData,
         visualization,
         visualizationSnapshot,
         visualizationState: visualizationState.data,
@@ -197,7 +212,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       meshSemantics.data,
       meshSummary.data,
       selection,
-      sessionStatus.data,
+      sessionStatusData,
       visualization,
       visualizationSnapshot,
       visualizationState.data,
@@ -210,7 +225,8 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   }
 
   return (
-    <div className="fm-ribbon">
+    <WorkspaceRenderProfiler id="RibbonModule">
+      <div className="fm-ribbon">
       <RibbonTabStrip
         activeTabId={activeTab}
         tabs={RIBBON_TABS}
@@ -228,6 +244,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
           if (!open) setSelectedCommandId(null);
         }}
       />
-    </div>
+      </div>
+    </WorkspaceRenderProfiler>
   );
 }

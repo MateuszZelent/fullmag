@@ -163,10 +163,14 @@ export function useViewport3DSceneModel({
   );
   const topologyRenderModel = useMemo(
     () =>
-      buildViewport3DTopologyRenderModel(
-        topology.data,
-        femDomain.magneticParts,
-        femDomain.airboxParts,
+      measureViewport3DModelBuild(
+        "fullmag.viewport3d.buildTopologyRenderModel",
+        () =>
+          buildViewport3DTopologyRenderModel(
+            topology.data,
+            femDomain.magneticParts,
+            femDomain.airboxParts,
+          ),
       ),
     [femDomain.airboxParts, femDomain.magneticParts, topology.data],
   );
@@ -213,10 +217,14 @@ export function useViewport3DSceneModel({
   const meshQualityColors = useMemo(
     () =>
       meshQualityOverlayVisible && topologyCurrent
-        ? buildMeshQualityVertexColors(
-            topology.data,
-            meshQualityData.data,
-            meshQualityMetric,
+        ? measureViewport3DModelBuild(
+            "fullmag.viewport3d.buildMeshQualityVertexColors",
+            () =>
+              buildMeshQualityVertexColors(
+                topology.data,
+                meshQualityData.data,
+                meshQualityMetric,
+              ),
           )
         : null,
     [
@@ -375,12 +383,16 @@ export function useViewport3DSceneModel({
   );
   const fdmSurfaceColors = useMemo(() => {
     if (!fdmSurfaceColorMode) return null;
-    const model = buildFdmCuboidInstanceModel(fdmDomain, {
-      fieldVector: fieldVector.data,
-      voxelFillRatio: visualProfile.voxelFillRatio,
-      voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
-      voxelTopography: visualProfile.voxelTopography,
-    });
+    const model = measureViewport3DModelBuild(
+      "fullmag.viewport3d.buildFdmCuboidInstanceModel",
+      () =>
+        buildFdmCuboidInstanceModel(fdmDomain, {
+          fieldVector: fieldVector.data,
+          voxelFillRatio: visualProfile.voxelFillRatio,
+          voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
+          voxelTopography: visualProfile.voxelTopography,
+        }),
+    );
     return buildSampledScalarColors(
       fieldVector.data,
       model?.cellIndices,
@@ -401,11 +413,15 @@ export function useViewport3DSceneModel({
     topology: currentTopologyRenderModel,
   });
   const fieldRenderModel = useMemo(() => {
-    const model = buildViewport3DFieldRenderModel(
-      currentTopologyRenderModel,
-      fieldVector.data,
-      vectorScale,
-      fieldRenderOptions,
+    const model = measureViewport3DModelBuild(
+      "fullmag.viewport3d.buildFieldRenderModel",
+      () =>
+        buildViewport3DFieldRenderModel(
+          currentTopologyRenderModel,
+          fieldVector.data,
+          vectorScale,
+          fieldRenderOptions,
+        ),
     );
     return mergeViewport3DFieldScalarColors(
       model,
@@ -560,4 +576,28 @@ function useViewport3DRemoteCameraSync(
     lastRemoteSignatureRef.current = signature;
     viewport3dStore.setCameraView({ camera, projection });
   }, [cameraResource]);
+}
+
+function measureViewport3DModelBuild<T>(name: string, build: () => T): T {
+  const performanceTarget =
+    typeof performance !== "undefined" ? performance : null;
+  if (
+    !performanceTarget ||
+    typeof performanceTarget.mark !== "function" ||
+    typeof performanceTarget.measure !== "function"
+  ) {
+    return build();
+  }
+
+  const startMark = `${name}:start`;
+  const endMark = `${name}:end`;
+  performanceTarget.mark(startMark);
+  try {
+    return build();
+  } finally {
+    performanceTarget.mark(endMark);
+    performanceTarget.measure(name, startMark, endMark);
+    performanceTarget.clearMarks?.(startMark);
+    performanceTarget.clearMarks?.(endMark);
+  }
 }

@@ -18,8 +18,9 @@ import {
   shouldLoadRuntimeStageExecution,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
-import { useSelection } from "@/kernel/selection/useSelection";
+import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
   meshPipelineStatusIsActive,
@@ -40,7 +41,7 @@ import { ExplorerTabBar } from "./ExplorerTabBar";
 import {
   setExplorerActiveTab,
   setExplorerFilterText,
-  useExplorerStore,
+  useExplorerStoreSelector,
 } from "./explorerStore";
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
@@ -69,30 +70,38 @@ function qualityStatus(value: unknown): string | null {
 }
 
 export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
-  const explorer = useExplorerStore();
-  const { selection } = useSelection(moduleId);
-  const modelTabActive = explorer.activeTab === "model";
-  const sessionStatus = useSessionStatus();
+  const activeTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
+  const filterText = useExplorerStoreSelector((explorer) => explorer.filterText);
+  const keyboardRow = useExplorerStoreSelector((explorer) => explorer.keyboardRow);
+  const expandedIds = useExplorerStoreSelector(
+    (explorer) => explorer.expandedIds[activeTab],
+  );
+  const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const modelTabActive = activeTab === "model";
+  const sessionStatusData = useSessionStatusSelector(
+    (sessionStatus) => (modelTabActive ? sessionStatus.data : null),
+    { enabled: modelTabActive },
+  );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
   const activeBuild = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
-    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
   });
   const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
-    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
   });
   const stageExecution = useStageExecutionResource({
     enabled: shouldLoadRuntimeStageExecution(
       modelTabActive,
-      sessionStatus.data,
+      sessionStatusData,
     ),
   });
 
@@ -123,14 +132,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       regionCount: manifest.data?.regions?.length ?? null,
     };
     const baseNodes =
-      explorer.activeTab === "model"
+      activeTab === "model"
         ? buildModelTree({ ...modelSnapshot, mesh })
-        : buildExplorerTree(explorer.activeTab);
-    return filterExplorerNodes(baseNodes, explorer.filterText);
+        : buildExplorerTree(activeTab);
+    return filterExplorerNodes(baseNodes, filterText);
   }, [
     activeBuild.data,
-    explorer.activeTab,
-    explorer.filterText,
+    activeTab,
+    filterText,
     manifest.data,
     meshSummary.data,
     modelResource.data,
@@ -140,7 +149,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   ]);
 
   return (
-    <section className="fm-explorer" aria-label="Explorer">
+    <WorkspaceRenderProfiler id="ExplorerModule">
+      <section className="fm-explorer" aria-label="Explorer">
       <header className="fm-explorer__header">
         <div>
           <h2>Explorer</h2>
@@ -150,27 +160,29 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         </div>
       </header>
       <ExplorerTabBar
-        activeTab={explorer.activeTab}
+        activeTab={activeTab}
         onTabChange={setExplorerActiveTab}
       />
       <label className="fm-explorer-filter">
         <Search size={13} aria-hidden="true" />
         <input
           aria-label="Filter explorer"
-          value={explorer.filterText}
+          value={filterText}
           onChange={(event) => setExplorerFilterText(event.target.value)}
           placeholder="Filter"
           type="search"
         />
       </label>
       <ExplorerTreeView
-        activeNodeId={selection.nodeId}
-        expandedIds={explorer.expandedIds[explorer.activeTab]}
+        activeNodeId={selectedNodeId}
+        expandedIds={expandedIds}
+        keyboardRowId={keyboardRow}
         kernel={kernel}
         moduleId={moduleId}
         nodes={nodes}
-        tabId={explorer.activeTab}
+        tabId={activeTab}
       />
-    </section>
+      </section>
+    </WorkspaceRenderProfiler>
   );
 }

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import {
+  FDM_CUBOID_UPLOAD_BATCH_SIZE,
   buildFdmCuboidInstanceModel,
+  buildFdmCuboidUploadBatches,
   buildFdmVectorSegments,
   resolveFdmVectorGlyphScale,
 } from "./FdmCuboidLayer";
@@ -216,6 +218,16 @@ describe("FdmCuboidLayer model", () => {
       expect.closeTo(1.5e-9),
       1,
     ]);
+  });
+
+  it("splits large FDM instanced uploads into bounded batches", () => {
+    expect(buildFdmCuboidUploadBatches(0)).toEqual([]);
+    expect(buildFdmCuboidUploadBatches(5, 2)).toEqual([
+      { end: 2, start: 0 },
+      { end: 4, start: 2 },
+      { end: 5, start: 4 },
+    ]);
+    expect(FDM_CUBOID_UPLOAD_BATCH_SIZE).toBeLessThanOrEqual(4096);
   });
 
   it("caps rendered FDM vector glyph scale to the local voxel size", () => {

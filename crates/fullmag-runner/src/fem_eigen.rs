@@ -83,6 +83,8 @@ struct ReductionMap {
 struct RealEigenpair {
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
+    residual_norm: f64,
+    residual_linf: f64,
     vector: DVector<f64>,
 }
 
@@ -90,6 +92,8 @@ struct RealEigenpair {
 struct ComplexEigenpair {
     eigenvalue_real: f64,
     eigenvalue_imag: f64,
+    residual_norm: f64,
+    residual_linf: f64,
     vector: Vec<Complex64>,
 }
 
@@ -129,9 +133,13 @@ fn gpu_solve_real_symmetric_eigenpairs(
             let vector = DVector::from_column_slice(col_slice);
             // cuSolverDn Dsygvd returns M-orthonormal vectors; apply plan normalization.
             let normalized = normalize_real_mode(vector, mass, &plan.normalization);
+            let (residual_norm, residual_linf) =
+                generalized_residual_norms(stiffness, mass, val, &normalized);
             Some(RealEigenpair {
                 eigenvalue_real: val,
                 eigenvalue_imag: 0.0,
+                residual_norm,
+                residual_linf,
                 vector: normalized,
             })
         })
@@ -310,73 +318,87 @@ fn execute_fem_eigen_inner(
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
 
     for mode_index in 0..total_modes {
-        let (eigenvalue_real, eigenvalue_imag, real, imag, amplitude, phase, max_amplitude, norm) =
-            if complex_reduction {
-                let pair = &complex_eigenpairs[mode_index];
-                let (real, imag, amplitude, phase, max_amplitude) =
-                    project_complex_mode_to_tangent_basis(
-                        topology.n_nodes,
-                        &reduction.active_nodes,
-                        &pair.vector,
-                        &bases,
-                    );
-                let norm = pair
-                    .vector
-                    .iter()
-                    .map(|value| value.norm_sqr())
-                    .sum::<f64>()
-                    .sqrt();
-                (
-                    pair.eigenvalue_real,
-                    pair.eigenvalue_imag,
-                    real,
-                    imag,
-                    amplitude,
-                    phase,
-                    max_amplitude,
-                    norm,
-                )
-            } else if is_full_2x2 {
-                let pair = &real_eigenpairs[mode_index];
-                let (real, imag, amplitude, phase, max_amplitude) =
-                    project_2x2_mode_to_tangent_basis(
-                        topology.n_nodes,
-                        &reduction.active_nodes,
-                        &pair.vector,
-                        &bases,
-                    );
-                let norm = pair.vector.norm();
-                (
-                    pair.eigenvalue_real,
-                    pair.eigenvalue_imag,
-                    real,
-                    imag,
-                    amplitude,
-                    phase,
-                    max_amplitude,
-                    norm,
-                )
-            } else {
-                let pair = &real_eigenpairs[mode_index];
-                let (real, imag, amplitude, phase, max_amplitude) =
-                    project_real_mode_to_tangent_basis(
-                        topology.n_nodes,
-                        &reduction.active_nodes,
-                        &pair.vector,
-                        &bases,
-                    );
-                let norm = pair.vector.norm();
-                (
-                    pair.eigenvalue_real,
-                    pair.eigenvalue_imag,
-                    real,
-                    imag,
-                    amplitude,
-                    phase,
-                    max_amplitude,
-                    norm,
-                )
-            };
+        let (
+            eigenvalue_real,
+            eigenvalue_imag,
+            residual_norm,
+            residual_linf,
+            real,
+            imag,
+            amplitude,
+            phase,
+            max_amplitude,
+            norm,
+        ) = if complex_reduction {
+            let pair = &complex_eigenpairs[mode_index];
+            let (real, imag, amplitude, phase, max_amplitude) =
+                project_complex_mode_to_tangent_basis(
+                    topology.n_nodes,
+                    &reduction.active_nodes,
+                    &pair.vector,
+                    &bases,
+                );
+            let norm = pair
+                .vector
+                .iter()
+                .map(|value| value.norm_sqr())
+                .sum::<f64>()
+                .sqrt();
+            (
+                pair.eigenvalue_real,
+                pair.eigenvalue_imag,
+                pair.residual_norm,
+                pair.residual_linf,
+                real,
+                imag,
+                amplitude,
+                phase,
+                max_amplitude,
+                norm,
+            )
+        } else if is_full_2x2 {
+            let pair = &real_eigenpairs[mode_index];
+            let (real, imag, amplitude, phase, max_amplitude) = project_2x2_mode_to_tangent_basis(
+                topology.n_nodes,
+                &reduction.active_nodes,
+                &pair.vector,
+                &bases,
+            );
+            let norm = pair.vector.norm();
+            (
+                pair.eigenvalue_real,
+                pair.eigenvalue_imag,
+                pair.residual_norm,
+                pair.residual_linf,
+                real,
+                imag,
+                amplitude,
+                phase,
+                max_amplitude,
+                norm,
+            )
+        } else {
+            let pair = &real_eigenpairs[mode_index];
+            let (real, imag, amplitude, phase, max_amplitude) = project_real_mode_to_tangent_basis(
+                topology.n_nodes,
+                &reduction.active_nodes,
+                &pair.vector,
+                &bases,
+            );
+            let norm = pair.vector.norm();
+            (
+                pair.eigenvalue_real,
+                pair.eigenvalue_imag,
+                pair.residual_norm,
+                pair.residual_linf,
+                real,
+                imag,
+                amplitude,
+                phase,
+                max_amplitude,
+                norm,
+            )
+        };
         let angular_frequency_real =
             angular_frequency_from_eigenvalue(plan.gyromagnetic_ratio, eigenvalue_real);
         let angular_frequency_imag = if eigenvalue_imag.abs() > 0.0 {
@@ -392,6 +414,8 @@ fn execute_fem_eigen_inner(
             &equilibrium,
             max_amplitude,
         );
+        let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
+            mode_tangent_leakage(&equilibrium, &real, &imag);
         let mode_summary = serde_json::json!({
             "index": mode_index,
             "frequency_hz": frequency_hz,
@@ -404,6 +428,10 @@ fn execute_fem_eigen_inner(
             "eigenvalue_imag": eigenvalue_imag,
             "norm": norm,
             "max_amplitude": max_amplitude,
+            "residual_norm": residual_norm,
+            "residual_linf": residual_linf,
+            "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
+            "tangent_leakage_max_abs": tangent_leakage_max_abs,
             "dominant_polarization": dominant_polarization,
             "k_vector": k_vector_json(plan.k_sampling.as_ref()),
         });
@@ -420,6 +448,10 @@ fn execute_fem_eigen_inner(
                 "eigenvalue_real": eigenvalue_real,
                 "eigenvalue_imag": eigenvalue_imag,
                 "max_amplitude": max_amplitude,
+                "residual_norm": residual_norm,
+                "residual_linf": residual_linf,
+                "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
+                "tangent_leakage_max_abs": tangent_leakage_max_abs,
                 "normalization": normalization_label(plan.normalization),
                 "damping_policy": damping_policy_label(plan.damping_policy),
                 "solver_backend": "cpu_baseline_fem_eigen",
@@ -1396,7 +1428,7 @@ fn solve_real_symmetric_eigenpairs(
     let l_inv = l.clone().try_inverse().ok_or_else(|| RunError {
         message: "failed to invert FEM eigen mass Cholesky factor".to_string(),
     })?;
-    let transformed = &l_inv * stiffness * l_inv.transpose();
+    let transformed = &l_inv * &stiffness * l_inv.transpose();
     let spectrum = SymmetricEigen::new(transformed);
     let mut eigenpairs = spectrum
         .eigenvalues
@@ -1407,10 +1439,15 @@ fn solve_real_symmetric_eigenpairs(
                 return None;
             }
             let lifted = l_inv.transpose() * spectrum.eigenvectors.column(index).into_owned();
+            let normalized = normalize_real_mode(lifted, &mass, &plan.normalization);
+            let (residual_norm, residual_linf) =
+                generalized_residual_norms(&stiffness, &mass, *value, &normalized);
             Some(RealEigenpair {
                 eigenvalue_real: *value,
                 eigenvalue_imag: 0.0,
-                vector: normalize_real_mode(lifted, &mass, &plan.normalization),
+                residual_norm,
+                residual_linf,
+                vector: normalized,
             })
         })
         .collect::<Vec<_>>();
@@ -1458,10 +1495,15 @@ fn solve_real_symmetric_eigenpairs_sparse(
         .filter(|ep| ep.eigenvalue.is_finite())
         .map(|ep| {
             let vec = DVector::from_vec(ep.vector);
+            let normalized = normalize_real_mode(vec, &mass, &plan.normalization);
+            let (residual_norm, residual_linf) =
+                generalized_residual_norms(&stiffness, &mass, ep.eigenvalue, &normalized);
             RealEigenpair {
                 eigenvalue_real: ep.eigenvalue,
                 eigenvalue_imag: 0.0,
-                vector: normalize_real_mode(vec, &mass, &plan.normalization),
+                residual_norm,
+                residual_linf,
+                vector: normalized,
             }
         })
         .collect();
@@ -1485,7 +1527,7 @@ fn solve_complex_hermitian_eigenpairs(
     let l_inv = l.clone().try_inverse().ok_or_else(|| RunError {
         message: "failed to invert Floquet FEM eigen mass block Cholesky factor".to_string(),
     })?;
-    let transformed = &l_inv * stiffness_block * l_inv.transpose();
+    let transformed = &l_inv * &stiffness_block * l_inv.transpose();
     let spectrum = SymmetricEigen::new(transformed);
     let active_count = stiffness.len();
     let mut eigenpairs = Vec::new();
@@ -1496,14 +1538,68 @@ fn solve_complex_hermitian_eigenpairs(
         let lifted = l_inv.transpose() * spectrum.eigenvectors.column(index).into_owned();
         let complex = real_block_vector_to_complex(&lifted, active_count);
         let normalized = normalize_complex_mode(&complex, &mass, &plan.normalization);
+        let normalized_block = complex_vector_to_real_block(&normalized);
+        let (residual_norm, residual_linf) =
+            generalized_residual_norms(&stiffness_block, &mass_block, *value, &normalized_block);
         eigenpairs.push(ComplexEigenpair {
             eigenvalue_real: *value,
             eigenvalue_imag: 0.0,
+            residual_norm,
+            residual_linf,
             vector: normalized,
         });
     }
     sort_and_truncate_complex_modes(plan, &mut eigenpairs);
     Ok(eigenpairs)
+}
+
+fn generalized_residual_norms(
+    stiffness: &DMatrix<f64>,
+    mass: &DMatrix<f64>,
+    eigenvalue: f64,
+    vector: &DVector<f64>,
+) -> (f64, f64) {
+    if stiffness.ncols() != vector.len() || mass.ncols() != vector.len() {
+        return (f64::NAN, f64::NAN);
+    }
+    let residual = stiffness * vector - mass * vector * eigenvalue;
+    let residual_l2 = residual.norm();
+    let residual_linf = residual
+        .iter()
+        .fold(0.0_f64, |acc, value| acc.max(value.abs()));
+    (residual_l2, residual_linf)
+}
+
+fn complex_vector_to_real_block(vector: &[Complex64]) -> DVector<f64> {
+    let mut block = DVector::<f64>::zeros(vector.len() * 2);
+    for (index, value) in vector.iter().enumerate() {
+        block[index] = value.re;
+        block[index + vector.len()] = value.im;
+    }
+    block
+}
+
+fn mode_tangent_leakage(
+    equilibrium: &[[f64; 3]],
+    real: &[[f64; 3]],
+    imag: &[[f64; 3]],
+) -> (f64, f64) {
+    let mut count = 0usize;
+    let mut total = 0.0_f64;
+    let mut max = 0.0_f64;
+    for ((m0, real_dm), imag_dm) in equilibrium.iter().zip(real.iter()).zip(imag.iter()) {
+        for dm in [real_dm, imag_dm] {
+            let leakage = (m0[0] * dm[0] + m0[1] * dm[1] + m0[2] * dm[2]).abs();
+            total += leakage;
+            max = max.max(leakage);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        (0.0, 0.0)
+    } else {
+        (total / count as f64, max)
+    }
 }
 
 fn complex_pair_to_real_blocks(

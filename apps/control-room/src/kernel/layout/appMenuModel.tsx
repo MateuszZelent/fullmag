@@ -78,6 +78,7 @@ function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
 }
 
 const APP_DROPDOWN_ITEM_DEFINITIONS: AppMenuNode[] = [
+  { id: "workspace.theme-toggle", label: "Toggle Theme", icon: <Settings size={14} /> },
   { id: "workspace.preferences", label: "Preferences", icon: <Settings size={14} /> },
   { id: "workspace.docs", label: "Physics Documentation", icon: <BookOpen size={14} /> },
   { id: "workspace.about", label: "About Fullmag", icon: <Info size={14} /> },

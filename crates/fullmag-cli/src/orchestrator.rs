@@ -173,6 +173,7 @@ fn torque_display_mode(problem: &ProblemIR) -> Option<TorqueDisplayMode> {
             *algorithm == RelaxationAlgorithmIR::LlgOverdamped,
         ),
         StudyIR::Eigenmodes { .. } => return None,
+        StudyIR::FrequencyResponse { .. } => return None,
     };
     let damping = problem.materials.first()?.damping;
     Some(TorqueDisplayMode::FromDmdt {

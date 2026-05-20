@@ -34,6 +34,7 @@ type CommandDiagnosticListener = () => void;
 export class CommandDiagnosticsController {
   private readonly entries: CommandDiagnosticEntry[] = [];
   private readonly listeners = new Set<CommandDiagnosticListener>();
+  private notificationQueued = false;
   private sequence = 0;
   private version = 0;
 
@@ -45,7 +46,7 @@ export class CommandDiagnosticsController {
     }
 
     this.entries.length = 0;
-    this.publish();
+    this.schedulePublish();
   }
 
   getVersion(): number {
@@ -54,6 +55,10 @@ export class CommandDiagnosticsController {
 
   list(): CommandDiagnosticEntry[] {
     return [...this.entries];
+  }
+
+  listNewestFirst(): CommandDiagnosticEntry[] {
+    return [...this.entries].reverse();
   }
 
   record(entry: CommandDiagnosticRecord): void {
@@ -73,7 +78,7 @@ export class CommandDiagnosticsController {
       this.entries.splice(0, this.entries.length - this.maxEntries);
     }
 
-    this.publish();
+    this.schedulePublish();
   }
 
   subscribe(listener: CommandDiagnosticListener): () => void {
@@ -83,10 +88,18 @@ export class CommandDiagnosticsController {
     };
   }
 
-  private publish(): void {
-    this.version += 1;
-    for (const listener of this.listeners) {
-      listener();
+  private schedulePublish(): void {
+    if (this.notificationQueued) {
+      return;
     }
+
+    this.notificationQueued = true;
+    queueMicrotask(() => {
+      this.notificationQueued = false;
+      this.version += 1;
+      for (const listener of this.listeners) {
+        listener();
+      }
+    });
   }
 }

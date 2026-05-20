@@ -770,12 +770,90 @@ describe("ControlRoomApi", () => {
         byteLength: makeTopologyBuffer().byteLength,
         detail: "decoded binary payload",
         direction: "rx",
+        durationMs: expect.any(Number),
         method: "GET",
         outcome: "ok",
         path: "/v2/sessions/current/data/domain/topology",
         status: 200,
       },
     ]);
+  });
+
+  it("schedules binary decoding through the configured binary decode scheduler", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const decodeKinds: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      binaryDecodeScheduler: async ({ buffer, decodeInline, kind }) => {
+        decodeKinds.push(kind);
+        await Promise.resolve();
+        return decodeInline(buffer);
+      },
+      diagnostics,
+      fetchImpl: async () =>
+        binaryResponse(makeTopologyBuffer(), {
+          headers: { etag: '"topology-scheduled"', ...contractHeaders },
+        }),
+      requestIdFactory: () => "req-scheduled-topology",
+    });
+
+    const result = await api.data.domain.topology();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready topology, received ${result.status}`);
+    }
+    expect(result.data.nodeCount).toBe(4);
+    expect(decodeKinds).toEqual(["topology"]);
+    expect(diagnostics.list()).toContainEqual(
+      expect.objectContaining({
+        detail: "decoded binary payload",
+        durationMs: expect.any(Number),
+        outcome: "ok",
+        path: "/v2/sessions/current/data/domain/topology",
+      }),
+    );
+  });
+
+  it("emits performance measures around binary resource requests", async () => {
+    const markSpy = vi.spyOn(performance, "mark");
+    const measureSpy = vi.spyOn(performance, "measure");
+    const clearMarksSpy = vi.spyOn(performance, "clearMarks");
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        binaryResponse(makeTopologyBuffer(), {
+          headers: { etag: '"topology-measured"', ...contractHeaders },
+        }),
+    });
+
+    try {
+      await expect(api.data.domain.topology()).resolves.toMatchObject({
+        status: "ready",
+      });
+
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology:start",
+      );
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology:end",
+      );
+      expect(measureSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology",
+        "fullmag.api.requestBinaryResource.topology:start",
+        "fullmag.api.requestBinaryResource.topology:end",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology:start",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology:end",
+      );
+    } finally {
+      markSpy.mockRestore();
+      measureSpy.mockRestore();
+      clearMarksSpy.mockRestore();
+    }
   });
 
   it("loads shared-domain per-element quality data through the v2 binary facade", async () => {

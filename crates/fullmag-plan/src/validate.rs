@@ -62,6 +62,7 @@ pub(crate) fn planned_study_controls(
             fullmag_ir::StudyIR::TimeEvolution { .. } => IntegratorChoice::Rk45,
             fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
             fullmag_ir::StudyIR::Eigenmodes { .. } => IntegratorChoice::Heun,
+            fullmag_ir::StudyIR::FrequencyResponse { .. } => IntegratorChoice::Heun,
         },
     };
 
@@ -278,6 +279,9 @@ pub(crate) fn validate_executable_outputs(
                     ));
                 }
             }
+            OutputIR::FrequencyResponseOutput { .. } => errors.push(
+                "frequency response outputs require StudyIR::FrequencyResponse".to_string(),
+            ),
             OutputIR::EigenSpectrum { .. }
             | OutputIR::EigenMode { .. }
             | OutputIR::DispersionCurve { .. }
@@ -353,7 +357,8 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
                     errors.push("eigen diagnostics output is declared more than once".to_string());
                 }
             }
-            OutputIR::Field { .. }
+            OutputIR::FrequencyResponseOutput { .. }
+            | OutputIR::Field { .. }
             | OutputIR::Scalar { .. }
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {

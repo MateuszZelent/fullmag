@@ -68,7 +68,7 @@ describe("RealtimeClient", () => {
     });
     sockets[0].emit("message", message);
 
-    expect(resources.getRevision("session:status")).toBe(8);
+    expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(8);
     expect(diagnostics.list()).toMatchObject([
       {

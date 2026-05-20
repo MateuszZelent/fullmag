@@ -5,6 +5,18 @@ from typing import Sequence
 
 from fullmag._validation import require_non_empty, require_positive
 
+_SUPPORTED_RESPONSE_OBSERVABLES = {
+    "m_complex",
+    "u_complex",
+    "strain_complex",
+    "stress_complex",
+    "susceptibility_tensor",
+    "absorbed_power_density",
+    "response_amplitude",
+    "response_phase",
+    "mode_hybridization_index",
+}
+
 _KNOWN_SCALARS = {
     "E_ex",
     "E_demag",
@@ -146,6 +158,20 @@ class Snapshot:
         if self.layer is not None:
             d["layer"] = self.layer
         return d
+
+
+@dataclass(frozen=True, slots=True)
+class SaveResponse:
+    observable: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observable", require_non_empty(self.observable, "observable"))
+        if self.observable not in _SUPPORTED_RESPONSE_OBSERVABLES:
+            supported = ", ".join(sorted(_SUPPORTED_RESPONSE_OBSERVABLES))
+            raise ValueError(f"observable must be one of: {supported}")
+
+    def to_ir(self) -> dict[str, object]:
+        return {"kind": "frequency_response_output", "observable": self.observable}
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,8 +19,8 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
-import { useSelection } from "@/kernel/selection/useSelection";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
@@ -29,12 +29,14 @@ const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
 });
 
 export function FooterTelemetry() {
-  const { data: status } = useSessionStatus();
+  const status = useSessionStatusSelector((sessionStatus) => sessionStatus.data);
   const scene = useSceneResource();
-  const { selection } = useSelection("footer");
+  const selectedObjectId = useSelectionSelector(
+    (selection) => selection.objectId,
+  );
   const objectId = useMemo(
-    () => resolvePrimaryTelemetryObjectId(scene.data, selection.objectId),
-    [scene.data, selection.objectId],
+    () => resolvePrimaryTelemetryObjectId(scene.data, selectedObjectId),
+    [scene.data, selectedObjectId],
   );
   const objectMetrics = useObjectMetricsResource(objectId);
   const telemetry = buildFooterTelemetryModel(status, objectMetrics.data);

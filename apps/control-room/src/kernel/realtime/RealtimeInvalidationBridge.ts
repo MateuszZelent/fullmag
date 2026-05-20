@@ -11,7 +11,6 @@ import {
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
-  VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -105,8 +104,15 @@ function resourceFamilyPrefix(pathWithObjectId: string): string {
   return pathWithObjectId.slice(0, pathWithObjectId.indexOf("{object_id}"));
 }
 
+const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  SIMULATION_SOLVER_STATUS_PATH,
+]);
+
 function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {
-  return recommendedFetch !== VISUALIZATION_CLIENT_ACKS_PATH;
+  return (
+    recommendedFetch !== undefined &&
+    SESSION_STATUS_RECOMMENDED_FETCHES.has(recommendedFetch)
+  );
 }
 
 export class RealtimeInvalidationBridge {

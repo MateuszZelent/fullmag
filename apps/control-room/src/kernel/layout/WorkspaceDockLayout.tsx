@@ -13,7 +13,7 @@ import {
   type WorkspaceColumnLayout,
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
-import { useLayout } from "./useLayout";
+import { useLayoutSelector } from "./useLayout";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -54,7 +54,7 @@ function SortableWorkspaceColumn({
 }
 
 export function WorkspaceDockLayout() {
-  const { layout: kernelLayout } = useLayout();
+  const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
   const [dockState, setDockState] = useState<WorkspaceDockState>({
     layout: DEFAULT_WORKSPACE_LAYOUT,
     restored: false,
@@ -113,11 +113,11 @@ export function WorkspaceDockLayout() {
 
   const { layout, restored } = dockState;
   const visibleColumns = layout.columns.filter((column) => {
-    if (column.slotId === "panel-left") return kernelLayout.panelVisible.left;
-    if (column.slotId === "panel-right") return kernelLayout.panelVisible.right;
+    if (column.slotId === "panel-left") return panelVisible.left;
+    if (column.slotId === "panel-right") return panelVisible.right;
     return true;
   });
-  const mainPanelCount = kernelLayout.panelVisible.bottom ? 2 : 1;
+  const mainPanelCount = panelVisible.bottom ? 2 : 1;
   const mainAutoSaveId = `fullmag-workspace-main:${mainPanelCount}`;
   const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
     .map((column) => column.slotId)
@@ -126,7 +126,7 @@ export function WorkspaceDockLayout() {
   if (!restored) {
     return (
       <div className="fm-workspace-body" data-dock-hydration-pending="true">
-        {kernelLayout.panelVisible.left ? (
+        {panelVisible.left ? (
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Explorer</span>
@@ -142,7 +142,7 @@ export function WorkspaceDockLayout() {
           </div>
           <SlotHost slotId="viewport-main" />
         </div>
-        {kernelLayout.panelVisible.right ? (
+        {panelVisible.right ? (
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Inspector</span>
@@ -151,7 +151,7 @@ export function WorkspaceDockLayout() {
             <SlotHost slotId="panel-right" />
           </div>
         ) : null}
-        {kernelLayout.panelVisible.bottom ? <SlotHost slotId="panel-bottom" /> : null}
+        {panelVisible.bottom ? <SlotHost slotId="panel-bottom" /> : null}
       </div>
     );
   }
@@ -194,7 +194,7 @@ export function WorkspaceDockLayout() {
             </ResizablePanelGroup>
           </SortableList>
         </ResizablePanel>
-        {kernelLayout.panelVisible.bottom ? (
+        {panelVisible.bottom ? (
           <>
             <ResizableHandle className="fm-resize-handle--horizontal" />
             <ResizablePanel

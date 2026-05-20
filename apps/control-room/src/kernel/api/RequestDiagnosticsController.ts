@@ -1,5 +1,5 @@
 type RequestOutcome = "ok" | "error" | "network-error" | "aborted";
-export type TransportChannel = "http" | "websocket";
+export type TransportChannel = "http" | "performance" | "websocket";
 export type TransportDirection = "rx" | "tx";
 type TransportOutcome = RequestOutcome | "sent";
 
@@ -41,6 +41,7 @@ type RequestDiagnosticListener = () => void;
 export class RequestDiagnosticsController {
   private readonly entries: RequestDiagnosticEntry[] = [];
   private readonly listeners = new Set<RequestDiagnosticListener>();
+  private notificationQueued = false;
   private sequence = 0;
   private version = 0;
 
@@ -52,7 +53,7 @@ export class RequestDiagnosticsController {
     }
 
     this.entries.length = 0;
-    this.publish();
+    this.schedulePublish();
   }
 
   getVersion(): number {
@@ -82,11 +83,15 @@ export class RequestDiagnosticsController {
       this.entries.splice(0, this.entries.length - this.maxEntries);
     }
 
-    this.publish();
+    this.schedulePublish();
   }
 
   list(): RequestDiagnosticEntry[] {
     return [...this.entries];
+  }
+
+  listNewestFirst(): RequestDiagnosticEntry[] {
+    return [...this.entries].reverse();
   }
 
   subscribe(listener: RequestDiagnosticListener): () => void {
@@ -96,11 +101,19 @@ export class RequestDiagnosticsController {
     };
   }
 
-  private publish(): void {
-    this.version += 1;
-    for (const listener of this.listeners) {
-      listener();
+  private schedulePublish(): void {
+    if (this.notificationQueued) {
+      return;
     }
+
+    this.notificationQueued = true;
+    queueMicrotask(() => {
+      this.notificationQueued = false;
+      this.version += 1;
+      for (const listener of this.listeners) {
+        listener();
+      }
+    });
   }
 }
 

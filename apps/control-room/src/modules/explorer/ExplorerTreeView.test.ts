@@ -15,6 +15,8 @@ import type { ExplorerNode } from "./explorerTypes";
 import {
   contextCommandItemsForNode,
   flattenVisibleExplorerRows,
+  resolveExplorerFocusableRowId,
+  resolveExplorerKeyboardTargetRowId,
   sliceVisibleExplorerRows,
 } from "./ExplorerTreeView";
 
@@ -86,6 +88,79 @@ describe("flattenVisibleExplorerRows", () => {
       start: 24,
       topPadding: 240,
     });
+  });
+
+  it("chooses a single focusable row for roving tree tabindex", () => {
+    const rowIds = ["root", "geometry", "mesh"];
+
+    expect(
+      resolveExplorerFocusableRowId({
+        activeNodeId: "geometry",
+        keyboardRowId: "mesh",
+        rowIds,
+      }),
+    ).toBe("mesh");
+    expect(
+      resolveExplorerFocusableRowId({
+        activeNodeId: "geometry",
+        keyboardRowId: "offscreen",
+        rowIds,
+      }),
+    ).toBe("geometry");
+    expect(
+      resolveExplorerFocusableRowId({
+        activeNodeId: null,
+        keyboardRowId: null,
+        rowIds,
+      }),
+    ).toBe("root");
+    expect(
+      resolveExplorerFocusableRowId({
+        activeNodeId: null,
+        keyboardRowId: null,
+        rowIds: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves keyboard navigation targets for visible explorer rows", () => {
+    const rowIds = ["root", "geometry", "mesh"];
+
+    expect(
+      resolveExplorerKeyboardTargetRowId({
+        currentNodeId: "geometry",
+        key: "ArrowDown",
+        rowIds,
+      }),
+    ).toBe("mesh");
+    expect(
+      resolveExplorerKeyboardTargetRowId({
+        currentNodeId: "geometry",
+        key: "ArrowUp",
+        rowIds,
+      }),
+    ).toBe("root");
+    expect(
+      resolveExplorerKeyboardTargetRowId({
+        currentNodeId: "geometry",
+        key: "Home",
+        rowIds,
+      }),
+    ).toBe("root");
+    expect(
+      resolveExplorerKeyboardTargetRowId({
+        currentNodeId: "geometry",
+        key: "End",
+        rowIds,
+      }),
+    ).toBe("mesh");
+    expect(
+      resolveExplorerKeyboardTargetRowId({
+        currentNodeId: "geometry",
+        key: "PageDown",
+        rowIds,
+      }),
+    ).toBeNull();
   });
 
   it("resolves context command disabled state from the command registry", () => {

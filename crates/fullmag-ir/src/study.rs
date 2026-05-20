@@ -1,7 +1,8 @@
 #[allow(unused_imports)]
 use crate::{
-    BackendTarget, DiscretizationHintsIR, ExecutionPrecision, IntegratorChoice, KPointIR,
-    MechanicsIR, ModeTrackingIR, RelaxationAlgorithmIR, RelaxationControlIR, RequestedFemDemagIR,
+    BackendTarget, DiscretizationHintsIR, ExecutionPrecision, FrequencyExcitationIR,
+    FrequencyResponseOutputIR, FrequencySweepIR, IntegratorChoice, KPointIR, MechanicsIR,
+    ModeTrackingIR, RelaxationAlgorithmIR, RelaxationControlIR, RequestedFemDemagIR,
     ResolvedFemDemagIR, SpinWaveBoundaryConditionIR, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
@@ -518,6 +519,13 @@ pub enum EigenNormalizationIR {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum FrequencyResponseNormalizationIR {
+    UnitL2,
+    UnitMaxAmplitude,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum EigenDampingPolicyIR {
     Ignore,
     Include,
@@ -553,6 +561,20 @@ pub enum StudyIR {
         mode_tracking: Option<ModeTrackingIR>,
         sampling: SamplingIR,
     },
+    FrequencyResponse {
+        dynamics: DynamicsIR,
+        operator: EigenOperatorConfigIR,
+        equilibrium: EquilibriumSourceIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        k_sampling: Option<KSamplingIR>,
+        normalization: FrequencyResponseNormalizationIR,
+        damping_policy: EigenDampingPolicyIR,
+        #[serde(default)]
+        spin_wave_bc: SpinWaveBoundaryConditionIR,
+        excitation: FrequencyExcitationIR,
+        frequencies_hz: FrequencySweepIR,
+        sampling: SamplingIR,
+    },
 }
 
 impl StudyIR {
@@ -560,7 +582,8 @@ impl StudyIR {
         match self {
             StudyIR::TimeEvolution { dynamics, .. }
             | StudyIR::Relaxation { dynamics, .. }
-            | StudyIR::Eigenmodes { dynamics, .. } => dynamics,
+            | StudyIR::Eigenmodes { dynamics, .. }
+            | StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
         }
     }
 
@@ -568,13 +591,16 @@ impl StudyIR {
         match self {
             StudyIR::TimeEvolution { sampling, .. }
             | StudyIR::Relaxation { sampling, .. }
-            | StudyIR::Eigenmodes { sampling, .. } => sampling,
+            | StudyIR::Eigenmodes { sampling, .. }
+            | StudyIR::FrequencyResponse { sampling, .. } => sampling,
         }
     }
 
     pub fn relaxation(&self) -> Option<RelaxationControlIR> {
         match self {
-            StudyIR::TimeEvolution { .. } | StudyIR::Eigenmodes { .. } => None,
+            StudyIR::TimeEvolution { .. }
+            | StudyIR::Eigenmodes { .. }
+            | StudyIR::FrequencyResponse { .. } => None,
             StudyIR::Relaxation {
                 algorithm, stop, ..
             } => Some(RelaxationControlIR {
@@ -612,6 +638,9 @@ pub enum OutputIR {
     },
     DispersionCurve {
         name: String,
+    },
+    FrequencyResponseOutput {
+        observable: FrequencyResponseOutputIR,
     },
     EigenDiagnostics {
         #[serde(default)]

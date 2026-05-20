@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
+function nextMicrotask(): Promise<void> {
+  return new Promise((resolve) => queueMicrotask(resolve));
+}
+
 describe("RequestDiagnosticsController", () => {
   it("records bounded request outcomes in order", () => {
     const diagnostics = new RequestDiagnosticsController(2);
@@ -42,7 +46,7 @@ describe("RequestDiagnosticsController", () => {
     });
   });
 
-  it("publishes changes to subscribers and clears entries", () => {
+  it("publishes changes to subscribers and clears entries", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const listener = vi.fn();
     const unsubscribe = diagnostics.subscribe(listener);
@@ -57,6 +61,8 @@ describe("RequestDiagnosticsController", () => {
       requestId: "websocket",
     });
 
+    await nextMicrotask();
+
     expect(listener).toHaveBeenCalledTimes(1);
     expect(diagnostics.getVersion()).toBe(1);
     expect(diagnostics.list()[0]).toMatchObject({
@@ -67,6 +73,8 @@ describe("RequestDiagnosticsController", () => {
     });
 
     diagnostics.clear();
+    await nextMicrotask();
+
     expect(listener).toHaveBeenCalledTimes(2);
     expect(diagnostics.list()).toEqual([]);
 
@@ -80,4 +88,38 @@ describe("RequestDiagnosticsController", () => {
     });
     expect(listener).toHaveBeenCalledTimes(2);
   });
+
+  it("coalesces synchronous records into one subscriber notification", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const listener = vi.fn();
+    diagnostics.subscribe(listener);
+
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/first",
+      requestId: "req-1",
+      status: 200,
+      timestampMs: 10,
+    });
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/second",
+      requestId: "req-2",
+      status: 200,
+      timestampMs: 20,
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    await nextMicrotask();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(diagnostics.getVersion()).toBe(1);
+    expect(diagnostics.listNewestFirst().map((entry) => entry.requestId)).toEqual([
+      "req-2",
+      "req-1",
+    ]);
+  });
+
 });

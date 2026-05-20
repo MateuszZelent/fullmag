@@ -73,6 +73,12 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     match resolved_backend {
         BackendTarget::Fem => match &problem.study {
             StudyIR::Eigenmodes { .. } => fem::plan_fem_eigen(problem, resolved_backend),
+            StudyIR::FrequencyResponse { .. } => Err(PlanError {
+                reasons: vec![
+                    "StudyIR::FrequencyResponse is semantic-only in this build; driven frequency-domain execution is not implemented yet"
+                        .to_string(),
+                ],
+            }),
             _ => fem::plan_fem(problem, resolved_backend),
         },
         BackendTarget::Fdm => {
@@ -80,6 +86,14 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                 return Err(PlanError {
                     reasons: vec![
                         "StudyIR::Eigenmodes is currently executable only with backend='fem'"
+                            .to_string(),
+                    ],
+                });
+            }
+            if matches!(problem.study, StudyIR::FrequencyResponse { .. }) {
+                return Err(PlanError {
+                    reasons: vec![
+                        "StudyIR::FrequencyResponse is semantic-only in this build; driven frequency-domain execution is not implemented yet"
                             .to_string(),
                     ],
                 });

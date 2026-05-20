@@ -1,12 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
 import {
   sharedResourceRuntimeStore,
+  type ResourceRuntimeSnapshot,
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
 import type { ResourceKey, ResourceResult } from "./resourceTypes";
@@ -21,6 +28,12 @@ interface UseResourceOptions<TData> {
   load: (context: LoadContext) => Promise<TData>;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
+}
+
+interface UseResourceSelectorOptions<TData, TSelected>
+  extends UseResourceOptions<TData> {
+  isEqual?: (previous: TSelected, next: TSelected) => boolean;
+  selector: (resource: ResourceResult<TData>) => TSelected;
 }
 
 /** Minimum delay before retrying after a network/fetch error (ms). */
@@ -72,6 +85,149 @@ export function useResource<TData>({
   // Track consecutive errors to apply backoff before retrying.
   const errorCountRef = useRef(0);
 
+  useResourceLoader({
+    enabled,
+    errorCountRef,
+    externalRevision,
+    load,
+    refreshToken,
+    resolveRevision,
+    resourceKey,
+    runtimeStore,
+  });
+
+  const refetch = useCallback(() => {
+    errorCountRef.current = 0;
+    setRefreshToken((current) => current + 1);
+  }, []);
+
+  const settledForCurrentResource =
+    state.settledResourceKey === resourceKey &&
+    (state.settledExternalRevision === externalRevision ||
+      state.revision === externalRevision);
+  if (!enabled) {
+    return {
+      data: null,
+      error: null,
+      refetch,
+      revision: externalRevision,
+      status: "idle",
+    };
+  }
+
+  const visibleState = settledForCurrentResource
+    ? state
+    : markResourceLoading(state, externalRevision);
+
+  return { ...visibleState, refetch };
+}
+
+export function useResourceSelector<TData, TSelected>({
+  enabled = true,
+  isEqual = Object.is,
+  load,
+  resolveRevision,
+  resourceKey,
+  selector,
+}: UseResourceSelectorOptions<TData, TSelected>): TSelected {
+  const { resources } = useKernel();
+  const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
+  const [refreshToken, setRefreshToken] = useState(0);
+  const errorCountRef = useRef(0);
+  const selectedRef = useRef<{ selected: TSelected } | null>(null);
+
+  const subscribeStable = useCallback(
+    (onStoreChange: () => void) =>
+      resources.subscribe(resourceKey, onStoreChange),
+    [resources, resourceKey],
+  );
+  const getSnapshot = useCallback(
+    () => resources.getRevision(resourceKey),
+    [resources, resourceKey],
+  );
+
+  const externalRevision = useSyncExternalStore(
+    subscribeStable,
+    getSnapshot,
+    getSnapshot,
+  );
+
+  const refetch = useCallback(() => {
+    errorCountRef.current = 0;
+    setRefreshToken((current) => current + 1);
+  }, []);
+
+  const subscribeRuntime = useCallback(
+    (onStoreChange: () => void) =>
+      runtimeStore.subscribe(resourceKey, onStoreChange),
+    [resourceKey, runtimeStore],
+  );
+  const getRuntimeSelectedSnapshot = useCallback(() => {
+    const state = runtimeStore.getSnapshot<TData>(resourceKey);
+    const visibleState = visibleResourceResult({
+      enabled,
+      externalRevision,
+      refetch,
+      resourceKey,
+      state,
+    });
+    const selected = selector(visibleState);
+    const previous = selectedRef.current;
+    if (previous && isEqual(previous.selected, selected)) {
+      return previous.selected;
+    }
+
+    selectedRef.current = { selected };
+    return selected;
+  }, [
+    enabled,
+    externalRevision,
+    isEqual,
+    refetch,
+    resourceKey,
+    runtimeStore,
+    selector,
+  ]);
+
+  const selected = useSyncExternalStore(
+    subscribeRuntime,
+    getRuntimeSelectedSnapshot,
+    getRuntimeSelectedSnapshot,
+  );
+
+  useResourceLoader({
+    enabled,
+    errorCountRef,
+    externalRevision,
+    load,
+    refreshToken,
+    resolveRevision,
+    resourceKey,
+    runtimeStore,
+  });
+
+  return selected;
+}
+
+function useResourceLoader<TData>({
+  enabled,
+  errorCountRef,
+  externalRevision,
+  load,
+  refreshToken,
+  resolveRevision,
+  resourceKey,
+  runtimeStore,
+}: {
+  enabled: boolean;
+  errorCountRef: { current: number };
+  externalRevision: ResourceRevision | null;
+  load: (context: LoadContext) => Promise<TData>;
+  refreshToken: number;
+  resolveRevision?: (data: TData) => ResourceRevision | null;
+  resourceKey: ResourceKey;
+  runtimeStore: ResourceRuntimeStore<TData>;
+}): void {
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
@@ -101,6 +257,7 @@ export function useResource<TData>({
     };
   }, [
     enabled,
+    errorCountRef,
     externalRevision,
     load,
     refreshToken,
@@ -108,16 +265,21 @@ export function useResource<TData>({
     resourceKey,
     runtimeStore,
   ]);
+}
 
-  const refetch = useCallback(() => {
-    errorCountRef.current = 0;
-    setRefreshToken((current) => current + 1);
-  }, []);
-
-  const settledForCurrentResource =
-    state.settledResourceKey === resourceKey &&
-    (state.settledExternalRevision === externalRevision ||
-      state.revision === externalRevision);
+function visibleResourceResult<TData>({
+  enabled,
+  externalRevision,
+  refetch,
+  resourceKey,
+  state,
+}: {
+  enabled: boolean;
+  externalRevision: ResourceRevision | null;
+  refetch: () => void;
+  resourceKey: ResourceKey;
+  state: ResourceRuntimeSnapshot<TData>;
+}): ResourceResult<TData> {
   if (!enabled) {
     return {
       data: null,
@@ -128,6 +290,10 @@ export function useResource<TData>({
     };
   }
 
+  const settledForCurrentResource =
+    state.settledResourceKey === resourceKey &&
+    (state.settledExternalRevision === externalRevision ||
+      state.revision === externalRevision);
   const visibleState = settledForCurrentResource
     ? state
     : markResourceLoading(state, externalRevision);

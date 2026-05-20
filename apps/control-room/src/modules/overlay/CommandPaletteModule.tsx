@@ -28,7 +28,6 @@ import {
 
 import { MeshBuildDialog } from "./MeshBuildDialog";
 import { useCommandPalette } from "./useCommandPalette";
-import { Viewport3DSettingsDialog } from "../viewport-3d/components/Viewport3DSettingsDialog";
 
 export function filterPaletteCommands(
   commands: readonly CommandContribution[],
@@ -247,7 +246,6 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
         />
       ) : null}
       <MeshBuildDialog kernel={kernel} />
-      <Viewport3DSettingsDialog />
     </>
   );
 }

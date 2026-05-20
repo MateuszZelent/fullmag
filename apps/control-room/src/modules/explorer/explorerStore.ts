@@ -77,6 +77,16 @@ export function useExplorerStore(): ExplorerStoreState {
   );
 }
 
+export function useExplorerStoreSelector<T>(
+  selector: (state: ExplorerStoreState) => T,
+): T {
+  return useSyncExternalStore(
+    explorerStore.subscribe,
+    () => selector(explorerStore.getSnapshot()),
+    () => selector(explorerStore.getSnapshot()),
+  );
+}
+
 export function setExplorerActiveTab(activeTab: ExplorerTabId): void {
   explorerStore.setState({ activeTab, keyboardRow: null });
 }

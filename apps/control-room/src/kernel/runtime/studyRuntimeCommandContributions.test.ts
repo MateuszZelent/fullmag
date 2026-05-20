@@ -272,7 +272,7 @@ describe("study runtime command contributions", () => {
     );
   });
 
-  it("submits compute fields without a run command and invalidates field resources", async () => {
+  it("submits compute fields without broad result invalidations on acceptance", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -311,14 +311,20 @@ describe("study runtime command contributions", () => {
       }),
     );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-fields");
-    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-fields");
-    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe("cmd-fields");
-    expect(fieldVectorListener).toHaveBeenCalledWith("cmd-fields");
-    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe("cmd-fields");
-    expect(scalarWindowListener).toHaveBeenCalledWith("cmd-fields");
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      "cmd-fields",
+    );
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "cmd-fields",
+    );
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBeNull();
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBeNull();
+    expect(fieldVectorListener).not.toHaveBeenCalled();
+    expect(scalarWindowListener).not.toHaveBeenCalled();
   });
 
-  it("submits compute energies without a run command and invalidates energy/object metrics resources", async () => {
+  it("submits compute energies without broad result invalidations on acceptance", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -357,13 +363,17 @@ describe("study runtime command contributions", () => {
       }),
     );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-energies");
-    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-energies");
-    expect(resources.getRevision(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH)).toBe(
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
       "cmd-energies",
     );
-    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe("cmd-energies");
-    expect(scalarWindowListener).toHaveBeenCalledWith("cmd-energies");
-    expect(objectMetricsListener).toHaveBeenCalledWith("cmd-energies");
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "cmd-energies",
+    );
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBeNull();
+    expect(resources.getRevision(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH)).toBeNull();
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBeNull();
+    expect(scalarWindowListener).not.toHaveBeenCalled();
+    expect(objectMetricsListener).not.toHaveBeenCalled();
   });
 
   it("submits the Compute Study command as a solve request", async () => {

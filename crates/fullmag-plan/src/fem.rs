@@ -58,7 +58,8 @@ fn study_mechanics(problem: &ProblemIR) -> Option<&fullmag_ir::MechanicsIR> {
     match &problem.study {
         fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
         | fullmag_ir::StudyIR::Relaxation { dynamics, .. }
-        | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. } => match dynamics {
+        | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. }
+        | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => match dynamics {
             fullmag_ir::DynamicsIR::Llg { mechanics, .. } => mechanics.as_ref(),
         },
     }

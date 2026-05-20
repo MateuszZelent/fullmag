@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
 import { ControlRoomApi } from "./api/ControlRoomApi";
@@ -23,13 +23,13 @@ import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
 import { ModuleRegistry } from "./module/ModuleRegistry";
+import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
 import { installPerformanceMeasureGuard } from "./performance/performanceMeasureGuard";
 import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
-import { resolveSimulationStartupOverlayState } from "./layout/SimulationStartupOverlay";
+import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeResources";
-import { useSessionStatus } from "./resources/useSessionStatus";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
@@ -113,11 +113,10 @@ function createKernel(): KernelApi {
 }
 
 function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
-  const sessionStatus = useSessionStatus();
-  const startupState = resolveSimulationStartupOverlayState(sessionStatus);
+  const startupVisible = useSimulationStartupOverlayVisibility();
 
   useEffect(() => {
-    if (startupState.isVisible) {
+    if (startupVisible) {
       return;
     }
 
@@ -141,26 +140,30 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     });
     client.connect();
     return () => client.close();
-  }, [kernel, startupState.isVisible]);
+  }, [kernel, startupVisible]);
 
   return null;
 }
 
 function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
-  const sessionStatus = useSessionStatus();
-  const startupState = resolveSimulationStartupOverlayState(sessionStatus);
+  const startupVisible = useSimulationStartupOverlayVisibility();
   const runtimeResourceData = useRuntimeCommandControlResourceData({
-    enabled: !startupState.isVisible,
+    enabled: !startupVisible,
   });
+  const runtimeResourceDataRef = useRef(runtimeResourceData);
 
   useEffect(() => {
-    if (startupState.isVisible) {
+    runtimeResourceDataRef.current = runtimeResourceData;
+  }, [runtimeResourceData]);
+
+  useEffect(() => {
+    if (startupVisible) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent): void {
       const context = createCommandContext("shortcut", kernel, {
-        resourceData: runtimeResourceData,
+        resourceData: runtimeResourceDataRef.current,
         sourceDetail: "global",
       });
       dispatchShortcutCommand(kernel.commands, event, context);
@@ -168,7 +171,7 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel, runtimeResourceData, startupState.isVisible]);
+  }, [kernel, startupVisible]);
 
   return null;
 }
@@ -182,6 +185,15 @@ function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(
+    () => startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics }),
+    [kernel.diagnostics],
+  );
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const kernel = useMemo(() => createKernel(), []);
 
@@ -190,6 +202,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <RealtimeConnector kernel={kernel} />
       <CommandShortcutConnector kernel={kernel} />
       <VisualizationRegistrySyncConnector kernel={kernel} />
+      <PerformanceDiagnosticsConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>
   );

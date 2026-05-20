@@ -53,6 +53,10 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    return fem_source_root().parent_path().parent_path().parent_path();
+}
+
 void llg_rhs_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
@@ -151,6 +155,68 @@ void aos_helpers_normalize_and_mask_nodes() {
     check_near(field[5], 0.0, 1e-15, "nonmagnetic node z zeroed");
 }
 
+void gamma_mu0_convention_is_pinned_by_docs_and_material_validation() {
+    const std::filesystem::path root = repo_root();
+    const std::string units = read_text_file(root / "docs" / "physics" / "units.md");
+    const std::string llg_docs =
+        read_text_file(root / "docs" / "physics" / "llg_conventions.md");
+    const std::string material_fields =
+        read_text_file(fem_source_root() / "core" / "fem_material_fields.cpp");
+    const std::string rhs_header =
+        read_text_file(
+            fem_source_root() / "cpu" / "mfem" / "integrators" / "llg_rhs.hpp");
+
+    check(
+        units.find("`gamma_mu0` | `gyromagnetic_ratio` in native FEM material descriptors | `m/(A s)` | reduced gyromagnetic constant already including `mu0`") !=
+            std::string::npos,
+        "units doc must identify legacy gyromagnetic_ratio as reduced gamma_mu0");
+    check(
+        units.find("It must not be the electron gyromagnetic ratio in\n`rad/(T s)`") !=
+            std::string::npos,
+        "units doc must reject electron gyromagnetic ratio units");
+    check(
+        llg_docs.find("`gyromagnetic_ratio` carries the reduced\n`gamma_mu0` in `m/(A s)`") !=
+            std::string::npos,
+        "LLG conventions doc must pin gyromagnetic_ratio to gamma_mu0");
+    check(
+        llg_docs.find("missing runtime\ninclude directory") == std::string::npos &&
+            llg_docs.find(".fullmag/runtimes/fem-gpu-host/include") == std::string::npos,
+        "LLG conventions doc must not carry the stale missing-runtime-include blocker");
+    check(
+        llg_docs.find("Full active MFEM-stack numerical fixture qualification remains separate") !=
+            std::string::npos,
+        "LLG conventions doc must keep active MFEM numerical fixture qualification separate");
+    check(
+        material_fields.find("native FEM expects gamma_mu0 in m/(A s), not gamma in rad/(T s)") !=
+            std::string::npos,
+        "material validation must report the gamma_mu0 convention in its error");
+    check(
+        rhs_header.find("configured `gamma_mu0`-style factor used by the native FEM runtime") !=
+            std::string::npos,
+        "LLG RHS header must document that the RHS consumes gamma_mu0-style scaling");
+}
+
+void progress_report_marks_gamma_mu0_convention_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Ujednolicic konwencje `gamma_mu0` | zrobione kontraktowo |") !=
+            std::string::npos,
+        "progress report must mark gamma_mu0 convention as contract-covered");
+    check(
+        progress.find("`fem_material_fields_contract`") != std::string::npos &&
+            progress.find("`fem_llg_rhs_contract`") != std::string::npos &&
+            progress.find("`docs/physics/units.md`") != std::string::npos &&
+            progress.find("`docs/physics/llg_conventions.md`") != std::string::npos,
+        "progress report must cite gamma_mu0 contract gates and docs");
+    check(
+        progress.find("legacy ABI field `gyromagnetic_ratio` pozostaje gamma_mu0 w `m/(A s)`") !=
+            std::string::npos,
+        "progress report must document the legacy ABI name and gamma_mu0 units");
+}
+
 } // namespace
 
 int main() {
@@ -158,5 +224,7 @@ int main() {
     llg_rhs_uses_llg_gilbert_form_and_nodewise_damping();
     damping_only_macrospin_energy_decreases_under_relaxation();
     aos_helpers_normalize_and_mask_nodes();
+    gamma_mu0_convention_is_pinned_by_docs_and_material_validation();
+    progress_report_marks_gamma_mu0_convention_contract_covered();
     return 0;
 }

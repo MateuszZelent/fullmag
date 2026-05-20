@@ -55,8 +55,8 @@ from fullmag.model.dynamics import (
     FieldRefreshPolicy,
     LLG,
 )
-from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, Snapshot, parse_snapshot_quantity
-from fullmag.model.study import Eigenmodes, RelaxStop, Relaxation, TimeEvolution
+from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
+from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material, Region
 from fullmag.model.problem import (
     BackendTarget,
@@ -1156,6 +1156,21 @@ class EigenmodesStageSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class FrequencyResponseStageSpec:
+    frequencies_hz: Sequence[float]
+    excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    observable: str = "susceptibility_tensor"
+    include_demag: bool = True
+    equilibrium_source: str = "provided"
+    equilibrium_artifact: str | None = None
+    normalization: str = "unit_l2"
+    damping_policy: str = "ignore"
+    k_vector: tuple[float, float, float] | None = None
+    k_sampling: object | None = None
+    bc: str | dict[str, object] = "free"
+
+
+@dataclass(frozen=True, slots=True)
 class SaveStateStageSpec:
     artifact_name: str = "state_snapshot"
     format: str | None = None
@@ -1489,6 +1504,35 @@ def eigenmodes_stage(
     )
 
 
+def frequency_response_stage(
+    *,
+    frequencies_hz: Sequence[float],
+    excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    observable: str = "susceptibility_tensor",
+    include_demag: bool = True,
+    equilibrium_source: str = "provided",
+    equilibrium_artifact: str | None = None,
+    normalization: str = "unit_l2",
+    damping_policy: str = "ignore",
+    k_vector: tuple[float, float, float] | None = None,
+    k_sampling: object | None = None,
+    bc: str | dict[str, object] = "free",
+) -> FrequencyResponseStageSpec:
+    return FrequencyResponseStageSpec(
+        frequencies_hz=frequencies_hz,
+        excitation_field_au_per_m=excitation_field_au_per_m,
+        observable=observable,
+        include_demag=include_demag,
+        equilibrium_source=equilibrium_source,
+        equilibrium_artifact=equilibrium_artifact,
+        normalization=normalization,
+        damping_policy=damping_policy,
+        k_vector=k_vector,
+        k_sampling=k_sampling,
+        bc=bc,
+    )
+
+
 def save_state_stage(
     *,
     artifact_name: str = "state_snapshot",
@@ -1568,6 +1612,25 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             entrypoint_kind="flat_eigenmodes",
             default_until_seconds=None,
         )
+    if isinstance(stage_spec, FrequencyResponseStageSpec):
+        return CapturedStage(
+            problem=_build_problem(
+                study_kind="frequency_response",
+                frequency_frequencies_hz=stage_spec.frequencies_hz,
+                frequency_excitation_field_au_per_m=stage_spec.excitation_field_au_per_m,
+                frequency_observable=stage_spec.observable,
+                frequency_include_demag=stage_spec.include_demag,
+                frequency_equilibrium_source=stage_spec.equilibrium_source,
+                frequency_equilibrium_artifact=stage_spec.equilibrium_artifact,
+                frequency_normalization=stage_spec.normalization,
+                frequency_damping_policy=stage_spec.damping_policy,
+                frequency_k_vector=stage_spec.k_vector,
+                frequency_k_sampling=stage_spec.k_sampling,
+                frequency_spin_wave_bc=stage_spec.bc,
+            ),
+            entrypoint_kind="flat_frequency_response",
+            default_until_seconds=None,
+        )
     if isinstance(stage_spec, SaveStateStageSpec):
         return CapturedStage(
             problem=_build_problem(),
@@ -1581,7 +1644,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             },
         )
     raise TypeError(
-        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), fm.eigenmodes_stage(...), or fm.save_state_stage(...)"
+        "study.stages.add_stage(...) expects fm.relax_stage(...), fm.run_stage(...), fm.eigenmodes_stage(...), fm.frequency_response_stage(...), or fm.save_state_stage(...)"
     )
 
 
@@ -2061,6 +2124,40 @@ class StudyStagesBuilder:
             )
         )
 
+    def add_frequency_response(
+        self,
+        *,
+        frequencies_hz: Sequence[float],
+        excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        observable: str = "susceptibility_tensor",
+        include_demag: bool = True,
+        equilibrium_source: str = "provided",
+        equilibrium_artifact: str | None = None,
+        normalization: str = "unit_l2",
+        damping_policy: str = "ignore",
+        k_vector: tuple[float, float, float] | None = None,
+        k_sampling: object | None = None,
+        bc: str | dict[str, object] = "free",
+    ) -> "StudyStagesBuilder":
+        return self.add_stage(
+            frequency_response_stage(
+                frequencies_hz=frequencies_hz,
+                excitation_field_au_per_m=excitation_field_au_per_m,
+                observable=observable,
+                include_demag=include_demag,
+                equilibrium_source=equilibrium_source,
+                equilibrium_artifact=equilibrium_artifact,
+                normalization=normalization,
+                damping_policy=damping_policy,
+                k_vector=k_vector,
+                k_sampling=k_sampling,
+                bc=bc,
+            )
+        )
+
+    def add_frequency_response_stage(self, **kwargs: object) -> "StudyStagesBuilder":
+        return self.add_frequency_response(**kwargs)
+
     def add_save_state(
         self,
         *,
@@ -2443,6 +2540,10 @@ class StudyBuilder:
         save(quantity, every=every, indices=indices)
         return self
 
+    def save_response(self, observable: str = "susceptibility_tensor") -> "StudyBuilder":
+        save_response(observable)
+        return self
+
     def snapshot(
         self,
         layer_or_quantity: "str | MagnetHandle",
@@ -2627,6 +2728,82 @@ class StudyBuilder:
             k_sampling=k_sampling,
             bc=bc,
         )
+
+    def frequency_response(
+        self,
+        *,
+        frequencies_hz: Sequence[float],
+        excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        observable: str = "susceptibility_tensor",
+        include_demag: bool = True,
+        equilibrium_source: str = "provided",
+        equilibrium_artifact: str | None = None,
+        normalization: str = "unit_l2",
+        damping_policy: str = "ignore",
+        k_vector: tuple[float, float, float] | None = None,
+        k_sampling: object | None = None,
+        bc: str | dict[str, object] = "free",
+    ) -> Any:
+        return frequency_response(
+            frequencies_hz=frequencies_hz,
+            excitation_field_au_per_m=excitation_field_au_per_m,
+            observable=observable,
+            include_demag=include_demag,
+            equilibrium_source=equilibrium_source,
+            equilibrium_artifact=equilibrium_artifact,
+            normalization=normalization,
+            damping_policy=damping_policy,
+            k_vector=k_vector,
+            k_sampling=k_sampling,
+            bc=bc,
+        )
+
+
+def frequency_response(
+    *,
+    frequencies_hz: Sequence[float],
+    excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    observable: str = "susceptibility_tensor",
+    include_demag: bool = True,
+    equilibrium_source: str = "provided",
+    equilibrium_artifact: str | None = None,
+    normalization: str = "unit_l2",
+    damping_policy: str = "ignore",
+    k_vector: tuple[float, float, float] | None = None,
+    k_sampling: object | None = None,
+    bc: str | dict[str, object] = "free",
+) -> Any:
+    """Build the problem and queue/run a driven frequency-response analysis."""
+    from fullmag.runtime import Simulation
+
+    problem = _build_problem(
+        study_kind="frequency_response",
+        frequency_frequencies_hz=frequencies_hz,
+        frequency_excitation_field_au_per_m=excitation_field_au_per_m,
+        frequency_observable=observable,
+        frequency_include_demag=include_demag,
+        frequency_equilibrium_source=equilibrium_source,
+        frequency_equilibrium_artifact=equilibrium_artifact,
+        frequency_normalization=normalization,
+        frequency_damping_policy=damping_policy,
+        frequency_k_vector=k_vector,
+        frequency_k_sampling=k_sampling,
+        frequency_spin_wave_bc=bc,
+    )
+
+    if _capture_enabled:
+        _captured_stages.append(
+            CapturedStage(
+                problem=problem,
+                entrypoint_kind="flat_frequency_response",
+                default_until_seconds=None,
+            )
+        )
+        return problem
+
+    result = Simulation(problem).run()
+    _record_result(result)
+    return result
 
 
 def study(problem_name: str | None = None) -> StudyBuilder:
@@ -3933,6 +4110,11 @@ def save(
         _state._outputs.append(SaveField(field=quantity, every=every))
 
 
+def save_response(observable: str = "susceptibility_tensor") -> None:
+    """Register a frequency-response observable output."""
+    _state._outputs.append(SaveResponse(observable))
+
+
 def snapshot(
     layer_or_quantity: "str | MagnetHandle",
     quantity: str | None = None,
@@ -4127,6 +4309,17 @@ def _build_problem(
     eigen_k_vector: tuple[float, float, float] | None = None,
     eigen_k_sampling: object | None = None,
     eigen_spin_wave_bc: str | dict[str, object] = "free",
+    frequency_frequencies_hz: Sequence[float] = (1.0e9,),
+    frequency_excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    frequency_observable: str = "susceptibility_tensor",
+    frequency_include_demag: bool = True,
+    frequency_equilibrium_source: str = "provided",
+    frequency_equilibrium_artifact: str | None = None,
+    frequency_normalization: str = "unit_l2",
+    frequency_damping_policy: str = "ignore",
+    frequency_k_vector: tuple[float, float, float] | None = None,
+    frequency_k_sampling: object | None = None,
+    frequency_spin_wave_bc: str | dict[str, object] = "free",
 ) -> Problem:
     """Construct a Problem from the current world state."""
     s = _state
@@ -4218,10 +4411,17 @@ def _build_problem(
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow
 
-    # Partition outputs: eigen-specific vs time-domain (field/scalar/snapshot).
+    # Partition outputs by study family.
     _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion)
+    _RESPONSE_OUTPUT_TYPES = (SaveResponse,)
     eigen_outputs = [o for o in outputs if isinstance(o, _EIGEN_OUTPUT_TYPES)]
-    td_outputs = [o for o in outputs if not isinstance(o, _EIGEN_OUTPUT_TYPES)]
+    response_outputs = [o for o in outputs if isinstance(o, _RESPONSE_OUTPUT_TYPES)]
+    td_outputs = [
+        o
+        for o in outputs
+        if not isinstance(o, _EIGEN_OUTPUT_TYPES)
+        and not isinstance(o, _RESPONSE_OUTPUT_TYPES)
+    ]
 
     if study_kind == "relaxation":
         study = Relaxation(
@@ -4254,6 +4454,24 @@ def _build_problem(
             spin_wave_bc=eigen_spin_wave_bc,
             k_sampling=eigen_k_sampling,
             k_vector=eigen_k_vector,
+            dynamics=dynamics,
+        )
+    elif study_kind == "frequency_response":
+        frequency_outputs = [*response_outputs, *eigen_outputs]
+        if not frequency_outputs:
+            frequency_outputs = [SaveResponse(frequency_observable)]
+        study = FrequencyResponse(
+            outputs=frequency_outputs,
+            frequencies_hz=frequency_frequencies_hz,
+            excitation_field_au_per_m=frequency_excitation_field_au_per_m,
+            include_demag=frequency_include_demag,
+            equilibrium_source=frequency_equilibrium_source,
+            equilibrium_artifact=frequency_equilibrium_artifact,
+            normalization=frequency_normalization,
+            damping_policy=frequency_damping_policy,
+            spin_wave_bc=frequency_spin_wave_bc,
+            k_sampling=frequency_k_sampling,
+            k_vector=frequency_k_vector,
             dynamics=dynamics,
         )
     else:

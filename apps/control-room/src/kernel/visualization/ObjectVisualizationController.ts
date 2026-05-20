@@ -1122,5 +1122,14 @@ function samePatch(
   left: VisualizationTargetPatch,
   right: VisualizationTargetPatch,
 ): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  const leftKeys = Object.keys(left) as Array<keyof VisualizationTargetPatch>;
+  const rightKeys = Object.keys(right) as Array<keyof VisualizationTargetPatch>;
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  return leftKeys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) &&
+    Object.is(left[key], right[key]),
+  );
 }

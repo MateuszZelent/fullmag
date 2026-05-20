@@ -134,6 +134,7 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightPatch,
         patch,
       ),
+      pendingFingerprint: null,
       pendingPatch: null,
       version: this.snapshot.version + 1,
     };
@@ -236,25 +237,25 @@ export class VisualizationRegistrySyncController {
 
   queuePatch(patch: VisualizationStatePatch): void {
     if (!hasPatchKeys(patch)) return;
+    if (
+      this.snapshot.pendingPatch &&
+      visualizationPatchSatisfiesPatch(this.snapshot.pendingPatch, patch)
+    ) {
+      return;
+    }
+
     const now = this.now();
     const pendingPatch = mergeVisualizationStatePatch(
       this.snapshot.pendingPatch,
       patch,
     );
 
-    if (
-      this.snapshot.pendingPatch &&
-      stableJson(this.snapshot.pendingPatch) === stableJson(pendingPatch)
-    ) {
-      return;
-    }
-
     this.firstPendingAt = this.firstPendingAt ?? now;
     this.snapshot = {
       ...this.snapshot,
       error: null,
       lastLocalChangedAt: now,
-      pendingFingerprint: fingerprintVisualizationPatch(pendingPatch),
+      pendingFingerprint: null,
       pendingPatch,
       version: this.snapshot.version + 1,
     };
@@ -396,9 +397,24 @@ function visualizationStateSatisfiesPatch(
   );
 }
 
+function visualizationPatchSatisfiesPatch(
+  current: VisualizationStatePatch,
+  patch: VisualizationStatePatch,
+): boolean {
+  return Object.entries(patch).every(([key, patchValue]) =>
+    valueSatisfiesPatch(
+      (current as Record<string, unknown>)[key],
+      patchValue,
+    ),
+  );
+}
+
 function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
   if (Array.isArray(patch)) {
-    return stableJson(value) === stableJson(patch);
+    if (!Array.isArray(value) || value.length !== patch.length) return false;
+    return patch.every((entry, index) =>
+      valueSatisfiesPatch(value[index], entry),
+    );
   }
   if (isPlainObject(patch)) {
     if (!isPlainObject(value)) return false;

@@ -31,3 +31,29 @@ export function useLayout() {
 
   return { layout: state, setActiveTab, togglePanel } as const;
 }
+
+export function useLayoutActions() {
+  const { layout } = useKernel();
+
+  const setActiveTab = useCallback(
+    (tabId: RibbonTabId) => layout.setActiveTab(tabId),
+    [layout],
+  );
+
+  const togglePanel = useCallback(
+    (panel: PanelPosition) => layout.togglePanel(panel),
+    [layout],
+  );
+
+  return { setActiveTab, togglePanel } as const;
+}
+
+export function useLayoutSelector<T>(selector: (state: LayoutState) => T): T {
+  const { layout } = useKernel();
+
+  return useSyncExternalStore(
+    (onStoreChange) => layout.subscribe(onStoreChange),
+    () => selector(layout.get()),
+    () => selector(layout.get()),
+  );
+}

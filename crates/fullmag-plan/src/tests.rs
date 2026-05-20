@@ -895,6 +895,35 @@ fn fem_quasistatic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_
 }
 
 #[test]
+fn fem_elastodynamic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_exists() {
+    let mut ir = fem_shared_domain_ir_for_magnetoelastic();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: Some(fullmag_ir::MechanicsIR::Elastodynamics {
+                mechanical_dt: Some(1e-13),
+            }),
+        },
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![fullmag_ir::OutputIR::Field {
+                name: "H_mel".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let err = plan(&ir).expect_err("elastodynamic mechanics has no executable FEM solver yet");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("elastodynamic magnetoelasticity is not executable yet")));
+}
+
+#[test]
 fn fem_mechanics_observables_are_rejected_until_mechanics_solver_exists() {
     let mut ir = fem_shared_domain_ir_for_magnetoelastic();
     ir.study = fullmag_ir::StudyIR::TimeEvolution {
@@ -3938,6 +3967,43 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
         .reasons
         .iter()
         .any(|reason| reason.contains("surface_anisotropy_axis")));
+}
+
+#[test]
+fn frequency_response_is_first_class_ir_but_not_executable_yet() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9, 2.0e9],
+        },
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let err = plan(&ir).expect_err("frequency response execution is not implemented yet");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("StudyIR::FrequencyResponse is semantic-only")
+            && reason.contains("not implemented yet")
+    }));
 }
 
 // ---------------------------------------------------------------------------

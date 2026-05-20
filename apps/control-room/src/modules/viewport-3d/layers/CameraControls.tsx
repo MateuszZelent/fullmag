@@ -12,6 +12,7 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
   type Viewport3DCameraState,
+  type Viewport3DCameraProjection,
   type Viewport3DRotationMode,
 } from "../viewport3dStore";
 
@@ -890,11 +891,13 @@ function useWheelZoom({
 }
 
 export function OrbitCameraControls({
+  cameraProjection,
   cameraState,
   onCameraChange,
   rotationMode,
   tracker,
 }: {
+  cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   rotationMode: Viewport3DRotationMode;
@@ -991,7 +994,9 @@ export function OrbitCameraControls({
 
   return (
     <OrbitControls
+      key={`viewport-3d-orbit-controls-${cameraProjection}-${camera.uuid}`}
       ref={controlsRef}
+      camera={camera}
       domElement={gl.domElement}
       makeDefault
       enableDamping={interactionOptions.enableDamping}

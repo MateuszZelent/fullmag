@@ -148,6 +148,10 @@ export function buildTransportMessagePreview(
     return `${direction} WS ${messageType}`;
   }
 
+  if (entry.channel === "performance") {
+    return `${direction} PERF ${entry.path}`;
+  }
+
   return `${direction} ${entry.method} ${entry.path}`;
 }
 

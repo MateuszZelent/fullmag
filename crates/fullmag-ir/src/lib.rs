@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub mod eigen_contract;
 pub mod execution;
+pub mod frequency_response_contract;
 pub mod mechanics;
 pub mod mesh_assets;
 pub mod mesh_hints;
@@ -14,6 +15,7 @@ pub mod study;
 mod validation;
 pub use eigen_contract::*;
 pub use execution::*;
+pub use frequency_response_contract::*;
 pub use mechanics::*;
 pub use mesh_assets::*;
 pub use mesh_hints::*;
@@ -532,6 +534,9 @@ impl ProblemIR {
                         errors.push("dispersion_curve name must not be empty".to_string());
                     }
                 }
+                OutputIR::FrequencyResponseOutput { .. } => {
+                    // Observable enum constrains response output names.
+                }
                 OutputIR::EigenDiagnostics { .. } => {
                     // No additional validation needed for diagnostics flags
                 }
@@ -561,6 +566,7 @@ impl ProblemIR {
                         OutputIR::EigenSpectrum { .. }
                             | OutputIR::EigenMode { .. }
                             | OutputIR::DispersionCurve { .. }
+                            | OutputIR::FrequencyResponseOutput { .. }
                     ) {
                         errors.push(
                             "time_evolution outputs must be field/scalar/snapshot requests"
@@ -610,6 +616,7 @@ impl ProblemIR {
                         OutputIR::EigenSpectrum { .. }
                             | OutputIR::EigenMode { .. }
                             | OutputIR::DispersionCurve { .. }
+                            | OutputIR::FrequencyResponseOutput { .. }
                     ) {
                         errors.push(
                             "relaxation outputs must be field/scalar/snapshot requests".to_string(),
@@ -711,6 +718,125 @@ impl ProblemIR {
                     ) {
                         errors.push(
                             "eigenmodes outputs must be eigen_spectrum/eigen_mode/dispersion_curve requests"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            StudyIR::FrequencyResponse {
+                dynamics,
+                operator,
+                equilibrium,
+                k_sampling,
+                excitation,
+                frequencies_hz,
+                ..
+            } => {
+                validate_study_dynamics(dynamics, &mut errors);
+                match operator.kind {
+                    EigenOperatorIR::LinearizedLlg => {}
+                    EigenOperatorIR::Full2x2 => {}
+                }
+                if let EquilibriumSourceIR::Artifact { path } = equilibrium {
+                    if path.trim().is_empty() {
+                        errors.push(
+                            "frequency_response.equilibrium artifact path must not be empty"
+                                .to_string(),
+                        );
+                    }
+                }
+                if let Some(KSamplingIR::Single { k_vector }) = k_sampling {
+                    if !k_vector.iter().all(|value| value.is_finite()) {
+                        errors.push(
+                            "frequency_response.k_sampling.k_vector must contain finite values"
+                                .to_string(),
+                        );
+                    }
+                }
+                if let Some(KSamplingIR::Path {
+                    points,
+                    samples_per_segment,
+                    ..
+                }) = k_sampling
+                {
+                    if points.len() < 2 {
+                        errors.push(
+                            "frequency_response.k_sampling.path requires at least two control points"
+                                .to_string(),
+                        );
+                    }
+                    for point in points {
+                        if !point.k_vector.iter().all(|v| v.is_finite()) {
+                            errors.push(
+                                "frequency_response.k_sampling.path point k_vector must contain finite values".to_string(),
+                            );
+                        }
+                    }
+                    if samples_per_segment.iter().any(|n| *n == 0) {
+                        errors.push(
+                            "frequency_response.k_sampling.path samples_per_segment entries must be > 0"
+                                .to_string(),
+                        );
+                    }
+                }
+                if !excitation
+                    .field_au_per_m
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    errors.push(
+                        "frequency_response.excitation.field_au_per_m must contain finite values"
+                            .to_string(),
+                    );
+                }
+                if frequencies_hz.values_hz.is_empty() {
+                    errors.push(
+                        "frequency_response.frequencies_hz.values_hz must not be empty".to_string(),
+                    );
+                }
+                if frequencies_hz
+                    .values_hz
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+                {
+                    errors.push(
+                        "frequency_response.frequencies_hz.values_hz entries must be finite and > 0"
+                            .to_string(),
+                    );
+                }
+                let has_mode_output = self
+                    .study
+                    .sampling()
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, OutputIR::EigenMode { .. }));
+                let has_spectrum_output = self
+                    .study
+                    .sampling()
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+                let has_response_output = self
+                    .study
+                    .sampling()
+                    .outputs
+                    .iter()
+                    .any(|output| matches!(output, OutputIR::FrequencyResponseOutput { .. }));
+                if !has_mode_output && !has_spectrum_output && !has_response_output {
+                    errors.push(
+                        "frequency_response study requires at least one frequency_response_output, eigen_spectrum, or eigen_mode output"
+                            .to_string(),
+                    );
+                }
+                for output in &self.study.sampling().outputs {
+                    if matches!(
+                        output,
+                        OutputIR::Field { .. }
+                            | OutputIR::Scalar { .. }
+                            | OutputIR::Snapshot { .. }
+                    ) {
+                        errors.push(
+                            "frequency_response outputs must be frequency_response_output/eigen_spectrum/eigen_mode/dispersion_curve requests"
                                 .to_string(),
                         );
                     }

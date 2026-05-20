@@ -13,6 +13,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
+import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
+import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import {
   type Viewport3DPartSelection,
 } from "./viewport3dDomainAdapter";
@@ -160,7 +162,8 @@ export default function Viewport3DModule({
   );
 
   return (
-    <Viewport3DFrame
+    <WorkspaceRenderProfiler id="Viewport3DModule">
+      <Viewport3DFrame
       {...sceneModel}
       clientReady={clientReady}
       colors={colors}
@@ -181,7 +184,8 @@ export default function Viewport3DModule({
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}
-    />
+      />
+    </WorkspaceRenderProfiler>
   );
 }
 
@@ -393,6 +397,7 @@ function Viewport3DFrame({
         onOpenChange={(open) => viewport3dStore.setCameraDialogOpen(open)}
         open={cameraDialogOpen}
       />
+      <Viewport3DSettingsDialog />
     </section>
   );
 }

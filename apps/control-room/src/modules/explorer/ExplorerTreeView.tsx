@@ -152,6 +152,44 @@ interface ExplorerVisibleRowSlice {
   topPadding: number;
 }
 
+export function resolveExplorerFocusableRowId({
+  activeNodeId,
+  keyboardRowId,
+  rowIds,
+}: {
+  activeNodeId: string | null;
+  keyboardRowId: string | null;
+  rowIds: readonly string[];
+}): string | null {
+  const visibleIds = new Set(rowIds);
+  if (keyboardRowId && visibleIds.has(keyboardRowId)) return keyboardRowId;
+  if (activeNodeId && visibleIds.has(activeNodeId)) return activeNodeId;
+  return rowIds[0] ?? null;
+}
+
+export function resolveExplorerKeyboardTargetRowId({
+  currentNodeId,
+  key,
+  rowIds,
+}: {
+  currentNodeId: string;
+  key: string;
+  rowIds: readonly string[];
+}): string | null {
+  const currentIndex = rowIds.indexOf(currentNodeId);
+  if (currentIndex < 0) return null;
+
+  if (key === "ArrowDown") {
+    return rowIds[Math.min(rowIds.length - 1, currentIndex + 1)] ?? null;
+  }
+  if (key === "ArrowUp") {
+    return rowIds[Math.max(0, currentIndex - 1)] ?? null;
+  }
+  if (key === "Home") return rowIds[0] ?? null;
+  if (key === "End") return rowIds.at(-1) ?? null;
+  return null;
+}
+
 export function sliceVisibleExplorerRows({
   overscan,
   rowHeight,
@@ -202,21 +240,25 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   active,
   depth,
   expanded,
+  focusable,
   hasChildren,
   kernel,
   moduleId,
   node,
   resourceData,
+  rowIds,
   tabId,
 }: {
   active: boolean;
   depth: number;
   expanded: boolean;
+  focusable: boolean;
   hasChildren: boolean;
   kernel: KernelApi;
   moduleId: ModuleId;
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
+  rowIds: readonly string[];
   tabId: ExplorerTabId;
 }) {
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
@@ -243,6 +285,23 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const navigationTarget = resolveExplorerKeyboardTargetRowId({
+      currentNodeId: node.id,
+      key: event.key,
+      rowIds,
+    });
+
+    if (navigationTarget) {
+      event.preventDefault();
+      setExplorerKeyboardRow(navigationTarget);
+      const tree = event.currentTarget.closest('[role="tree"]');
+      const targetRow = Array.from(
+        tree?.querySelectorAll<HTMLElement>("[data-node-id]") ?? [],
+      ).find((row) => row.dataset.nodeId === navigationTarget);
+      targetRow?.focus();
+      return;
+    }
+
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       handleSelect();
@@ -266,11 +325,12 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       data-node-id={node.id}
       data-status={statusLabel(node.status)}
       role="treeitem"
-      tabIndex={0}
+      tabIndex={focusable ? 0 : -1}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-selected={active}
       onClick={handleSelect}
       onDoubleClick={handleToggle}
+      onFocus={() => setExplorerKeyboardRow(node.id)}
       onKeyDown={handleKeyDown}
       style={{ "--fm-tree-depth": depth } as CSSProperties}
     >
@@ -356,6 +416,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
 interface ExplorerTreeViewProps {
   activeNodeId: string | null;
   expandedIds: ReadonlySet<string>;
+  keyboardRowId: string | null;
   kernel: KernelApi;
   moduleId: ModuleId;
   nodes: readonly ExplorerNode[];
@@ -365,6 +426,7 @@ interface ExplorerTreeViewProps {
 export function ExplorerTreeView({
   activeNodeId,
   expandedIds,
+  keyboardRowId,
   kernel,
   moduleId,
   nodes,
@@ -395,6 +457,19 @@ export function ExplorerTreeView({
             topPadding: 0,
           },
     [rows, viewport.height, viewport.scrollTop, virtualized],
+  );
+  const visibleRowIds = useMemo(
+    () => visibleRows.rows.map((row) => row.node.id),
+    [visibleRows.rows],
+  );
+  const focusableRowId = useMemo(
+    () =>
+      resolveExplorerFocusableRowId({
+        activeNodeId,
+        keyboardRowId,
+        rowIds: visibleRowIds,
+      }),
+    [activeNodeId, keyboardRowId, visibleRowIds],
   );
 
   useEffect(() => {
@@ -444,11 +519,13 @@ export function ExplorerTreeView({
           active={activeNodeId === node.id}
           depth={depth}
           expanded={expanded}
+          focusable={focusableRowId === node.id}
           hasChildren={hasChildren}
           kernel={kernel}
           moduleId={moduleId}
           node={node}
           resourceData={runtimeResourceData}
+          rowIds={visibleRowIds}
           tabId={tabId}
         />
       ))}

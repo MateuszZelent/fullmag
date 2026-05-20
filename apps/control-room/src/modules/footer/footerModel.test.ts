@@ -76,6 +76,16 @@ describe("footerModel", () => {
         }),
       ),
     ).toBe("RX WS resource.batch_changed");
+    expect(
+      buildTransportMessagePreview(
+        entry({
+          channel: "performance",
+          durationMs: 12.7,
+          method: "MEASURE",
+          path: "fullmag.viewport3d.buildTopologyRenderModel",
+        }),
+      ),
+    ).toBe("RX PERF fullmag.viewport3d.buildTopologyRenderModel");
   });
 
   it("serializes full entries for the details modal", () => {
@@ -138,6 +148,7 @@ describe("footerModel", () => {
     const entries = [
       entry({ direction: "rx", id: "http-rx" }),
       entry({ channel: "websocket", direction: "rx", id: "ws-rx" }),
+      entry({ channel: "performance", direction: "rx", id: "perf-rx" }),
       entry({ direction: "tx", id: "http-tx" }),
     ];
 
@@ -146,6 +157,12 @@ describe("footerModel", () => {
         (item) => item.id,
       ),
     ).toEqual(["http-rx"]);
+    expect(
+      filterTransportEntries(entries, {
+        channel: "performance",
+        direction: "rx",
+      }).map((item) => item.id),
+    ).toEqual(["perf-rx"]);
   });
 
   it("shows websocket message types as row targets", () => {

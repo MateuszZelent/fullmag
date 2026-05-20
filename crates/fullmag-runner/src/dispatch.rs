@@ -1887,6 +1887,10 @@ fn execute_fem_eigen_path(
                     eigenvalue_imag: mode_json["eigenvalue_imag"].as_f64().unwrap_or(0.0),
                     norm: mode_json["norm"].as_f64().unwrap_or(0.0),
                     max_amplitude: mode_json["max_amplitude"].as_f64().unwrap_or(0.0),
+                    residual_norm: mode_json["residual_norm"].as_f64(),
+                    residual_linf: mode_json["residual_linf"].as_f64(),
+                    tangent_leakage_mean_abs: mode_json["tangent_leakage_mean_abs"].as_f64(),
+                    tangent_leakage_max_abs: mode_json["tangent_leakage_max_abs"].as_f64(),
                     dominant_polarization: mode_json["dominant_polarization"]
                         .as_str()
                         .unwrap_or("unknown")
@@ -2158,7 +2162,9 @@ fn execute_fem_eigen_path(
                     mode.frequency_real_hz,
                     mode.angular_frequency_rad_per_s,
                     "",
-                    "",
+                    mode.residual_norm
+                        .map(|value| format!("{value:.16e}"))
+                        .unwrap_or_default(),
                     overlap_score,
                 ));
             }

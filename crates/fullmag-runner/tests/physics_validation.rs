@@ -1102,6 +1102,21 @@ fn fem_eigen_modes_are_non_trivial() {
         max_amp > 0.0,
         "mode 0 max_amplitude must be positive, got {max_amp}"
     );
+
+    for required in [
+        "residual_norm",
+        "residual_linf",
+        "tangent_leakage_mean_abs",
+        "tangent_leakage_max_abs",
+    ] {
+        let value = mode_json[required]
+            .as_f64()
+            .unwrap_or_else(|| panic!("mode 0 must include numeric {required}: {mode_json}"));
+        assert!(
+            value >= 0.0,
+            "mode 0 diagnostic {required} must be non-negative, got {value}"
+        );
+    }
 }
 
 /// EIG-032 mesh-convergence hint: running on a finer mesh must not produce
@@ -2373,7 +2388,8 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
             .expect("dispersion.csv artifact should exist"),
     )
     .expect("dispersion.csv should be utf-8");
-    let header = csv.lines().next().unwrap_or_default();
+    let mut lines = csv.lines();
+    let header = lines.next().unwrap_or_default();
     for required in [
         "sample_index",
         "path_s_rad_per_m",
@@ -2388,4 +2404,14 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
             "dispersion.csv header must contain {required}, got {header}"
         );
     }
+    let first_row = lines
+        .next()
+        .expect("dispersion.csv should contain mode rows");
+    assert!(
+        first_row
+            .split(',')
+            .nth(11)
+            .is_some_and(|value| !value.is_empty()),
+        "dispersion.csv residual_norm column should be populated, row={first_row}"
+    );
 }

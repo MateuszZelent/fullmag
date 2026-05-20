@@ -51,6 +51,10 @@ Each mode summary must include:
 - eigenvalue real and imaginary components,
 - `norm`,
 - `max_amplitude`,
+- `residual_norm`,
+- `residual_linf`,
+- `tangent_leakage_mean_abs`,
+- `tangent_leakage_max_abs`,
 - `dominant_polarization`,
 - `k_vector`.
 
@@ -106,15 +110,22 @@ Required fields:
 - `angular_frequency_rad_per_s`,
 - `normalization`,
 - `damping_policy`,
+- `residual_norm`,
+- `residual_linf`,
+- `tangent_leakage_mean_abs`,
+- `tangent_leakage_max_abs`,
 - `k_vector`,
 - `real`,
 - `imag`,
 - `amplitude`,
 - `phase`.
 
-Mode fields are reconstructed physical vectors. The producing solver remains
-responsible for enforcing tangent-plane constraints and reporting tangent
-leakage diagnostics when available.
+Mode fields are reconstructed physical vectors. `residual_norm` and
+`residual_linf` are the generalized eigen residual norms reported by the
+producing solver for the exported mode. Tangent leakage diagnostics are the
+mean and max absolute `m0 dot dm` over the exported real and imaginary mode
+vectors, and must be emitted whenever the solver reconstructs physical mode
+vectors.
 
 ## periodic_pairs.v1.json
 

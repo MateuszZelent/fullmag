@@ -171,7 +171,7 @@ export function ViewCube3DBox({
         />
       </group>
       <AxisLabelSprite
-        color={String(colors.textPrimary ?? "#e4e4e7")}
+        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
         label={trimPositiveAxisLabel(axisLabels.x)}
         outlineColor={String(colors.background)}
         position={[VIEW_CUBE_LABEL_DISTANCE, 0, 0]}
@@ -179,7 +179,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={String(colors.textPrimary ?? "#e4e4e7")}
+        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
         label={trimPositiveAxisLabel(axisLabels.y)}
         outlineColor={String(colors.background)}
         position={[0, VIEW_CUBE_LABEL_DISTANCE, 0]}
@@ -187,7 +187,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={String(colors.textPrimary ?? "#e4e4e7")}
+        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
         label={trimPositiveAxisLabel(axisLabels.z)}
         outlineColor={String(colors.background)}
         position={[0, 0, VIEW_CUBE_LABEL_DISTANCE]}
@@ -300,7 +300,7 @@ function OrbitRing3D({
       >
         <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 20, 80]} />
         <meshBasicMaterial
-          color={hovered ? "#fb923c" : "#6b7280"}
+          color={hovered ? "rgb(251, 146, 60)" : "rgb(107, 114, 128)"}
           depthTest={false}
           depthWrite={false}
           opacity={hovered ? 0.92 : 0.42}
@@ -314,7 +314,7 @@ function OrbitRing3D({
             args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE + 2.5, 20, 80]}
           />
           <meshBasicMaterial
-            color="#f97316"
+            color="rgb(249, 115, 22)"
             depthTest={false}
             depthWrite={false}
             opacity={0.22}
@@ -471,14 +471,14 @@ function viewCubeCellMaterial(
 ): { color: string; opacity: number } {
   if (kind === "face") {
     return {
-      color: "#ffffff",
+      color: "white",
       opacity: hovered ? 1 : faceHovered ? 0.97 : 0.88,
     };
   }
 
   if (hovered) {
     return {
-      color: "#fb923c",
+      color: "rgb(251, 146, 60)",
       opacity: kind === "edge" ? 0.85 : 0.95,
     };
   }
@@ -528,7 +528,7 @@ function buildViewCubeFaceTexture(
       ctx.strokeRect(12, 12, size - 24, size - 24);
     } else {
       ctx.globalAlpha = 1.0;
-      ctx.fillStyle = String(colors.panelRaised ?? colors.panel ?? "#52525b");
+      ctx.fillStyle = String(colors.panelRaised ?? colors.panel ?? "rgb(82, 82, 91)");
       ctx.fillRect(0, 0, size, size);
 
       const vignette = ctx.createRadialGradient(

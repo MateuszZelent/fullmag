@@ -585,6 +585,15 @@ function invalidateRuntimeResources(
   context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
 }
 
+function invalidateRuntimeControlResources(
+  context: CommandContext,
+  revision: string | number,
+): void {
+  context.resources?.invalidate(SIMULATION_COMMANDS_PATH, revision);
+  context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+  context.resources?.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
+}
+
 function invalidateSolverProfileResources(
   context: CommandContext,
   revision: string | number,
@@ -593,20 +602,6 @@ function invalidateSolverProfileResources(
   context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
   context.resources?.invalidate(DIAGNOSTICS_SOLVER_PROFILE_PATH, revision);
   context.resources?.invalidate(DIAGNOSTICS_ENGINE_LOG_PATH, revision);
-}
-
-function invalidateEnergyResources(
-  context: CommandContext,
-  revision: string | number,
-): void {
-  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
-  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
-  context.resources?.invalidate(DATA_SCALARS_PATH, revision);
-  context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
-  context.resources?.invalidatePrefix(
-    SIMULATION_OBJECT_METRICS_PATH.split("{object_id}")[0],
-    revision,
-  );
 }
 
 function invalidateCheckpointResources(
@@ -1087,9 +1082,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       }
 
       const revision = commandRevision(response, "compute-fields");
-      invalidateRuntimeResources(context, revision);
-      context.resources?.invalidate(DATA_FIELDS_PATH, revision);
-      context.resources?.invalidatePrefix(DATA_FIELDS_PATH, revision);
+      invalidateRuntimeControlResources(context, revision);
 
       return {
         message: "Compute fields command accepted.",
@@ -1126,8 +1119,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       }
 
       const revision = commandRevision(response, "compute-energies");
-      invalidateRuntimeResources(context, revision);
-      invalidateEnergyResources(context, revision);
+      invalidateRuntimeControlResources(context, revision);
 
       return {
         message: "Compute energies command accepted.",

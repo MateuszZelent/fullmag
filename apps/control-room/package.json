@@ -6,6 +6,7 @@
     "dev": "next dev",
     "dev:binary": "node dev-server.mjs",
     "audit:idle-performance": "node scripts/audit-idle-performance.mjs",
+    "audit:compute-performance": "node scripts/audit-compute-performance.mjs",
     "audit:viewport-3d-profile-switch": "node scripts/audit-viewport-3d-profile-switch.mjs",
     "build": "next build",
     "build:webpack": "next build --webpack",
@@ -22,7 +23,8 @@
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",
     "verify:mesh-build-new-object": "node scripts/verify-mesh-build-new-object.mjs",
     "test": "vitest run",
-    "typecheck": "next typegen . && tsc --noEmit"
+    "typecheck": "next typegen . && tsc --noEmit",
+    "smoke:compute-performance": "node scripts/smoke-compute-performance.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

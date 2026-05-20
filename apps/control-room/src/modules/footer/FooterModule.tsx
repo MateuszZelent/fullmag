@@ -27,7 +27,7 @@ import { TransportLogTable } from "./TransportLogTable";
 type FooterTabId = "engine" | "logs" | "telemetry";
 
 export default function FooterModule({ kernel }: ModuleProps) {
-  const [activeTab, setActiveTab] = useState<FooterTabId>("telemetry");
+  const [activeTab, setActiveTab] = useState<FooterTabId>("logs");
 
   useEffect(() => {
     return kernel.bus.on("footer:tab-requested", ({ tab }) => {
@@ -57,7 +57,7 @@ export default function FooterModule({ kernel }: ModuleProps) {
           </TabsTrigger>
         </TabsList>
         <div className="fm-footer__summary" aria-label="Footer log summary">
-          <span className="fm-footer__summary-item">HTTP + WS</span>
+          <span className="fm-footer__summary-item">HTTP + WS + Perf</span>
           <Button
             type="button"
             variant="ghost"
@@ -143,6 +143,12 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
         >
           WS
         </FilterButton>
+        <FilterButton
+          active={channel === "performance"}
+          onClick={() => setChannel("performance")}
+        >
+          Perf
+        </FilterButton>
       </div>
       <div className="fm-footer__log-content">
         <CommandAuditTable entries={commandEntries} />
@@ -161,7 +167,7 @@ function useTransportDiagnostics(kernel: ModuleProps["kernel"]): RequestDiagnost
 
   return useMemo(() => {
     void version;
-    return kernel.diagnostics.list().slice().reverse();
+    return kernel.diagnostics.listNewestFirst();
   }, [kernel.diagnostics, version]);
 }
 
@@ -174,7 +180,7 @@ function useCommandDiagnostics(kernel: ModuleProps["kernel"]): CommandDiagnostic
 
   return useMemo(() => {
     void version;
-    return kernel.commandDiagnostics.list().slice().reverse();
+    return kernel.commandDiagnostics.listNewestFirst();
   }, [kernel.commandDiagnostics, version]);
 }
 

@@ -66,6 +66,69 @@ export interface FdmVoxelTopographyOptions {
 const IDENTITY_QUATERNION = new Quaternion();
 const CELL_VISUAL_FILL = 0.92;
 
+export const FDM_CUBOID_UPLOAD_BATCH_SIZE = 2048;
+
+export interface FdmCuboidUploadBatch {
+  end: number;
+  start: number;
+}
+
+export function buildFdmCuboidUploadBatches(
+  count: number,
+  batchSize = FDM_CUBOID_UPLOAD_BATCH_SIZE,
+): FdmCuboidUploadBatch[] {
+  const safeCount = Math.max(0, Math.floor(count));
+  const safeBatchSize = Math.max(1, Math.floor(batchSize));
+  const batches: FdmCuboidUploadBatch[] = [];
+
+  for (let start = 0; start < safeCount; start += safeBatchSize) {
+    batches.push({ end: Math.min(start + safeBatchSize, safeCount), start });
+  }
+
+  return batches;
+}
+
+function requestFdmUploadFrame(callback: () => void): number {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    return window.requestAnimationFrame(callback);
+  }
+
+  return setTimeout(callback, 0) as unknown as number;
+}
+
+function cancelFdmUploadFrame(handle: number): void {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.cancelAnimationFrame === "function"
+  ) {
+    window.cancelAnimationFrame(handle);
+    return;
+  }
+
+  clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+}
+
+function markFdmCuboidUpload(name: string): string | null {
+  const target = globalThis.performance;
+  if (!target?.mark || !target?.measure) return null;
+
+  const startMark = `${name}:start:${Date.now()}:${Math.random()}`;
+  target.mark(startMark);
+  return startMark;
+}
+
+function measureFdmCuboidUpload(name: string, startMark: string | null): void {
+  const target = globalThis.performance;
+  if (!startMark || !target?.mark || !target?.measure) return;
+
+  const endMark = `${name}:end:${Date.now()}:${Math.random()}`;
+  target.mark(endMark);
+  target.measure(name, startMark, endMark);
+}
+
 export function buildFdmCuboidInstanceModel(
   domain: FdmGridRenderDomain | null,
   options: FdmCuboidInstanceModelOptions = {},
@@ -435,29 +498,67 @@ export function FdmCuboidLayer({
   useEffect(() => {
     if (!model) return;
 
-    const matrix = new Matrix4();
-    const position = new Vector3();
-    const scale = new Vector3(...model.cellSize);
     const meshes = [surfaceRef.current, wireframeRef.current].filter(
       (mesh): mesh is InstancedMesh => Boolean(mesh),
     );
+    if (meshes.length === 0) return;
 
-    for (const mesh of meshes) {
-      for (let index = 0; index < model.count; index += 1) {
-        const offset = index * 3;
-        position.set(
-          model.centers[offset] ?? 0,
-          model.centers[offset + 1] ?? 0,
-          model.centers[offset + 2] ?? 0,
-        );
-        matrix.compose(position, IDENTITY_QUATERNION, scale);
-        mesh.setMatrixAt(index, matrix);
+    const batches = buildFdmCuboidUploadBatches(model.count);
+    if (batches.length === 0) return;
+
+    const matrix = new Matrix4();
+    const position = new Vector3();
+    const scale = new Vector3(...model.cellSize);
+    const startMark = markFdmCuboidUpload(
+      "fullmag.viewport3d.uploadFdmCuboidMatrices",
+    );
+    let cancelled = false;
+    let frameHandle: number | null = null;
+
+    const uploadBatch = (batchIndex: number) => {
+      if (cancelled) return;
+
+      const batch = batches[batchIndex];
+      if (!batch) return;
+
+      for (const mesh of meshes) {
+        for (let index = batch.start; index < batch.end; index += 1) {
+          const offset = index * 3;
+          position.set(
+            model.centers[offset] ?? 0,
+            model.centers[offset + 1] ?? 0,
+            model.centers[offset + 2] ?? 0,
+          );
+          matrix.compose(position, IDENTITY_QUATERNION, scale);
+          mesh.setMatrixAt(index, matrix);
+        }
       }
-      mesh.instanceMatrix.needsUpdate = true;
-    }
 
-    tracker.recordDirtyFrame("fdm-cuboids");
-    invalidate();
+      const nextBatch = batchIndex + 1;
+      if (nextBatch < batches.length) {
+        frameHandle = requestFdmUploadFrame(() => uploadBatch(nextBatch));
+        return;
+      }
+
+      for (const mesh of meshes) {
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+      measureFdmCuboidUpload(
+        "fullmag.viewport3d.uploadFdmCuboidMatrices",
+        startMark,
+      );
+      tracker.recordDirtyFrame("fdm-cuboids");
+      invalidate();
+    };
+
+    uploadBatch(0);
+
+    return () => {
+      cancelled = true;
+      if (frameHandle !== null) {
+        cancelFdmUploadFrame(frameHandle);
+      }
+    };
   }, [
     invalidate,
     model,
@@ -471,22 +572,57 @@ export function FdmCuboidLayer({
     const mesh = surfaceRef.current;
     if (!mesh || !model || !usesInstanceColors || !surfaceColors) return;
 
-    const color = new Color();
-    for (let index = 0; index < model.count; index += 1) {
-      const offset = index * 3;
-      color.setRGB(
-        surfaceColors.colors[offset] ?? 0,
-        surfaceColors.colors[offset + 1] ?? 0,
-        surfaceColors.colors[offset + 2] ?? 0,
-      );
-      mesh.setColorAt(index, color);
-    }
+    const batches = buildFdmCuboidUploadBatches(model.count);
+    if (batches.length === 0) return;
 
-    if (mesh.instanceColor) {
-      mesh.instanceColor.needsUpdate = true;
-    }
-    tracker.recordDirtyFrame("fdm-cuboid-colors");
-    invalidate();
+    const color = new Color();
+    const startMark = markFdmCuboidUpload(
+      "fullmag.viewport3d.uploadFdmCuboidColors",
+    );
+    let cancelled = false;
+    let frameHandle: number | null = null;
+
+    const uploadBatch = (batchIndex: number) => {
+      if (cancelled) return;
+
+      const batch = batches[batchIndex];
+      if (!batch) return;
+
+      for (let index = batch.start; index < batch.end; index += 1) {
+        const offset = index * 3;
+        color.setRGB(
+          surfaceColors.colors[offset] ?? 0,
+          surfaceColors.colors[offset + 1] ?? 0,
+          surfaceColors.colors[offset + 2] ?? 0,
+        );
+        mesh.setColorAt(index, color);
+      }
+
+      const nextBatch = batchIndex + 1;
+      if (nextBatch < batches.length) {
+        frameHandle = requestFdmUploadFrame(() => uploadBatch(nextBatch));
+        return;
+      }
+
+      if (mesh.instanceColor) {
+        mesh.instanceColor.needsUpdate = true;
+      }
+      measureFdmCuboidUpload(
+        "fullmag.viewport3d.uploadFdmCuboidColors",
+        startMark,
+      );
+      tracker.recordDirtyFrame("fdm-cuboid-colors");
+      invalidate();
+    };
+
+    uploadBatch(0);
+
+    return () => {
+      cancelled = true;
+      if (frameHandle !== null) {
+        cancelFdmUploadFrame(frameHandle);
+      }
+    };
   }, [invalidate, model, surfaceColors, tracker, usesInstanceColors]);
 
   if (

@@ -23,7 +23,7 @@ import fullmag.world as flat_world
 from fullmag.meshing.voxelization import VoxelMaskData
 from fullmag.runtime import cli as runtime_cli
 from fullmag.runtime import helper as runtime_helper
-from fullmag.runtime.loader import load_problem_from_script
+from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.scene_document import build_scene_document_from_builder
 from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
@@ -264,6 +264,77 @@ class ProblemApiTests(unittest.TestCase):
                 "phase_convention": "exp_minus_i_k_dot_delta_r",
             },
         )
+
+    def test_eigenmodes_rejects_frequency_response_outputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Eigenmodes outputs"):
+            fm.Eigenmodes(outputs=[fm.SaveResponse("susceptibility_tensor")])
+
+    def test_frequency_response_lowers_to_first_class_study_ir(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            energy=[fm.Exchange()],
+            study=fm.FrequencyResponse(
+                outputs=[fm.SaveResponse("susceptibility_tensor")],
+                frequencies_hz=[1.0e9, 2.0e9],
+                excitation_field_au_per_m=(0.0, 0.0, 2.5),
+                include_demag=False,
+                k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
+                damping_policy="include",
+            ),
+        )
+        ir = problem.to_ir()
+
+        self.assertEqual(ir["study"]["kind"], "frequency_response")
+        self.assertEqual(ir["study"]["operator"], {
+            "kind": "linearized_llg",
+            "include_demag": False,
+        })
+        self.assertEqual(ir["study"]["equilibrium"], {"kind": "provided"})
+        self.assertEqual(
+            ir["study"]["k_sampling"],
+            {
+                "kind": "single",
+                "k_vector": [0.0, 0.0, 0.0],
+            },
+        )
+        self.assertEqual(
+            ir["study"]["excitation"],
+            {"field_au_per_m": [0.0, 0.0, 2.5]},
+        )
+        self.assertEqual(
+            ir["study"]["frequencies_hz"],
+            {"values_hz": [1.0e9, 2.0e9]},
+        )
+        self.assertEqual(
+            ir["study"]["sampling"]["outputs"],
+            [
+                {
+                    "kind": "frequency_response_output",
+                    "observable": "susceptibility_tensor",
+                },
+            ],
+        )
+        self.assertEqual(runtime_cli._resolve_until_seconds(problem.study, None), 0.0)
+
+    def test_frequency_response_rejects_invalid_eigen_options(self) -> None:
+        with self.assertRaisesRegex(ValueError, "operator"):
+            fm.FrequencyResponse(
+                outputs=[fm.SaveSpectrum()],
+                frequencies_hz=[1.0e9],
+                operator="unsupported",
+            )
+        with self.assertRaisesRegex(ValueError, "normalization"):
+            fm.FrequencyResponse(
+                outputs=[fm.SaveSpectrum()],
+                frequencies_hz=[1.0e9],
+                normalization="unsupported",
+            )
+        with self.assertRaisesRegex(ValueError, "excitation_field_au_per_m"):
+            fm.FrequencyResponse(
+                outputs=[fm.SaveSpectrum()],
+                frequencies_hz=[1.0e9],
+                excitation_field_au_per_m=(0.0, 1.0),
+            )
 
     def test_interfacial_dmi_interface_normal_serializes_to_ir(self) -> None:
         term = fm.InterfacialDMI(D=3e-3, interface_normal=(0.0, 3.0, 4.0))
@@ -2486,6 +2557,47 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["study_pipeline"]["nodes"][0]["payload"]["max_steps"], "25")
         self.assertEqual(draft["study_pipeline"]["nodes"][1]["stage_kind"], "run")
         self.assertEqual(draft["study_pipeline"]["nodes"][1]["payload"]["until_seconds"], "4e-12")
+
+    def test_builder_rewrite_preserves_frequency_response_stage_and_output(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            energy=[fm.Exchange()],
+            discretization=None,
+            study=fm.FrequencyResponse(
+                outputs=[fm.SaveResponse("susceptibility_tensor")],
+                frequencies_hz=[1.0e9, 2.0e9],
+                excitation_field_au_per_m=(0.0, 0.0, 2.5),
+                include_demag=False,
+                k_vector=(0.0, 0.0, 0.0),
+                damping_policy="include",
+            ),
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_frequency_response.py"
+            path.write_text("import fullmag as fm\n", encoding="utf-8")
+            loaded = LoadedProblem(
+                problem=problem,
+                source_path=path,
+                script_source=path.read_text(encoding="utf-8"),
+                entrypoint_kind="build",
+            )
+
+            draft = export_builder_draft(loaded)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewrite_path = Path(tmp_dir) / "script_builder_frequency_response_rewritten.py"
+            rewrite_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewrite_path, lightweight_assets=True)
+
+        self.assertEqual(draft["stages"][0]["kind"], "frequency_response")
+        self.assertEqual(draft["study_pipeline"]["nodes"][0]["stage_kind"], "frequency_response")
+        self.assertIn('fm.save_response("susceptibility_tensor")', rewritten)
+        self.assertIn("fm.frequency_response(", rewritten)
+        self.assertEqual(reloaded.stages[0].problem.study.to_ir()["kind"], "frequency_response")
+        self.assertEqual(
+            reloaded.stages[0].problem.study.to_ir()["frequencies_hz"],
+            {"values_hz": [1.0e9, 2.0e9]},
+        )
 
     def test_study_builder_stage_authoring_captures_without_execution(self) -> None:
         script = """

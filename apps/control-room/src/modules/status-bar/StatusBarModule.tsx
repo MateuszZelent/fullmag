@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import { useCurrentRunResource } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
   buildStatusBarEngineModel,
@@ -33,24 +33,39 @@ export default function StatusBarModule() {
     serverMountedSnapshot,
   );
 
-  const status = useSessionStatus();
+  const sessionResourceStatus = useSessionStatusSelector(
+    (status) => status.status,
+    { enabled: mounted },
+  );
+  const solverState = useSessionStatusSelector(
+    (status) => status.data?.solver.state ?? null,
+    { enabled: mounted },
+  );
+  const sessionStatusName = useSessionStatusSelector(
+    (status) => status.data?.session.name ?? null,
+    { enabled: mounted },
+  );
+  const runtimeBundleVersion = useSessionStatusSelector(
+    (status) => status.data?.runtime_bundle_version ?? null,
+    { enabled: mounted },
+  );
   const currentRun = useCurrentRunResource({ enabled: mounted });
   const engine = buildStatusBarEngineModel(
     mounted ? currentRun.data : null,
-    mounted ? status.data?.solver.state : null,
+    mounted ? solverState : null,
   );
   const sessionState = mounted
-    ? readString(status.data?.solver.state, status.status)
+    ? readString(solverState, sessionResourceStatus)
     : "loading";
   const sessionName = mounted
-    ? readString(status.data?.session.name, "session unavailable")
+    ? readString(sessionStatusName, "session unavailable")
     : "—";
   const runtimeVersion = mounted
     ? formatRuntimeBundleVersionLabel(
-        readString(status.data?.runtime_bundle_version, "runtime unavailable"),
+        readString(runtimeBundleVersion, "runtime unavailable"),
       )
     : "—";
-  const dotStatus = mounted ? status.status : "loading";
+  const dotStatus = mounted ? sessionResourceStatus : "loading";
 
   return (
     <div className="fm-status-bar" role="status" aria-label="Session status">

@@ -148,15 +148,7 @@ impl Default for EigenDiagnosticsOutputIR {
 pub struct DynamicFieldIR {
     pub field_au_per_m: [f64; 3],
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SweepIR {
     pub values_hz: Vec<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FrequencyResponseStudyFieldsIR {
-    pub k_sampling: Option<super::KSamplingIR>,
-    pub excitation: DynamicFieldIR,
-    pub frequencies_hz: SweepIR,
 }

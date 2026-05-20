@@ -5,6 +5,7 @@ import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_SCALARS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -13,6 +14,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -40,11 +42,11 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(handled).toBe(true);
-    expect(resources.getRevision("session:status")).toBe(5);
+    expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
   });
 
-  it("coalesces session status invalidation once per backend batch", () => {
+  it("coalesces session status invalidation once for status-affecting backend batches", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
@@ -65,8 +67,8 @@ describe("RealtimeInvalidationBridge", () => {
             revision: 5,
           },
           {
-            recommended_fetch: VISUALIZATION_STATE_PATH,
-            resource: "visualization_state",
+            recommended_fetch: SIMULATION_SOLVER_STATUS_PATH,
+            resource: "solver_status",
             revision: 6,
           },
         ],
@@ -78,7 +80,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(statusInvalidations).toBe(1);
     expect(resources.getRevision("session:status")).toBe(6);
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
-    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(6);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(6);
   });
 
   it("does not refresh session status for visualization client ack batches", () => {
@@ -126,7 +128,7 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(handled).toBe(true);
-    expect(resources.getRevision("session:status")).toBe(44);
+    expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBeNull();
   });
 
@@ -155,7 +157,32 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(handled).toBe(true);
+    expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(fieldKey)).toBe(8);
+  });
+
+  it("refreshes simulation step resources for scalar result batches without session status fanout", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_SCALARS_PATH,
+            resource: "scalars",
+            revision: 10,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision("session:status")).toBeNull();
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
   });
 
   it("refreshes mesh build dependents after latest successful build changes", () => {

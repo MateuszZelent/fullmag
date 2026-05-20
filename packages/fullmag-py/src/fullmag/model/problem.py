@@ -36,7 +36,7 @@ from fullmag.model.outputs import (
     Snapshot,
 )
 from fullmag.model.structure import Ferromagnet, Material, Region
-from fullmag.model.study import Eigenmodes, Relaxation, TimeEvolution
+from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
 
 IR_VERSION = "0.2.0"
 API_VERSION = "0.2.0"
@@ -956,7 +956,7 @@ class Problem:
     name: str
     magnets: Sequence[Ferromagnet]
     energy: Sequence[EnergyTerm]
-    study: TimeEvolution | Relaxation | Eigenmodes | None = None
+    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse | None = None
     dynamics: LLG | None = None
     outputs: Sequence[LegacyOutputSpec] | None = None
     discretization: DiscretizationHints | None = None
@@ -1230,7 +1230,7 @@ class Problem:
             hybrid=self.discretization.hybrid,
         )
 
-    def _normalize_study(self) -> TimeEvolution | Relaxation | Eigenmodes:
+    def _normalize_study(self) -> TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse:
         if self.study is not None and (self.dynamics is not None or self.outputs is not None):
             raise ValueError(
                 "Problem accepts either study=... or the legacy dynamics=... and outputs=... shape, not both"

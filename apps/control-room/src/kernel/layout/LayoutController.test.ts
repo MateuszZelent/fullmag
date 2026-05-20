@@ -66,6 +66,20 @@ describe("LayoutController", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves panelVisible identity for selector hooks on focus-only changes", () => {
+    const { controller } = setup();
+    const panelVisible = controller.get().panelVisible;
+
+    controller.setFocusedSlot("viewport-main");
+    expect(controller.get().panelVisible).toBe(panelVisible);
+
+    controller.setActiveTab("study");
+    expect(controller.get().panelVisible).toBe(panelVisible);
+
+    controller.togglePanel("left");
+    expect(controller.get().panelVisible).not.toBe(panelVisible);
+  });
+
   it("subscribe() receives changes and can unsubscribe", () => {
     const { controller } = setup();
     const listener = vi.fn();

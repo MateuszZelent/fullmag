@@ -48,12 +48,13 @@ from fullmag.model.outputs import (
     SaveDispersion,
     SaveField,
     SaveMode,
+    SaveResponse,
     SaveScalar,
     SaveSpectrum,
     Snapshot,
 )
 from fullmag.model.problem import Problem
-from fullmag.model.study import Eigenmodes, RelaxStop, Relaxation, TimeEvolution
+from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
 from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 
@@ -327,6 +328,8 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
     entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
     if entrypoint == "relax" or "relax" in kind:
         return "relax"
+    if entrypoint == "frequency_response" or "frequency_response" in kind:
+        return "frequency_response"
     if entrypoint == "eigenmodes" or "eigen" in kind:
         return "eigenmodes"
     if entrypoint == "run" or "run" in kind:
@@ -423,6 +426,28 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_k_path": "",
             "eigen_spin_wave_bc": study.spin_wave_bc if isinstance(study.spin_wave_bc, str) else str(study.spin_wave_bc.get("kind", "")),
             "eigen_spin_wave_bc_config": study.spin_wave_bc if isinstance(study.spin_wave_bc, dict) else None,
+        }
+    if isinstance(study, FrequencyResponse):
+        return {
+            "kind": "frequency_response",
+            "entrypoint_kind": stage.entrypoint_kind,
+            "integrator": dynamics.integrator,
+            "fixed_timestep": _text_number(dynamics.fixed_timestep),
+            "until_seconds": "",
+            "relax_algorithm": "",
+            "torque_tolerance": "",
+            "energy_tolerance": "",
+            "max_steps": "",
+            "frequency_values_hz": ",".join(str(freq) for freq in study.frequencies_hz),
+            "frequency_excitation_field_au_per_m": ",".join(str(component) for component in study.excitation_field_au_per_m),
+            "frequency_include_demag": study.include_demag,
+            "frequency_equilibrium_source": study.equilibrium_source,
+            "frequency_equilibrium_artifact": _text_value(study.equilibrium_artifact),
+            "frequency_normalization": study.normalization,
+            "frequency_damping_policy": study.damping_policy,
+            "frequency_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
+            "frequency_spin_wave_bc": study.spin_wave_bc if isinstance(study.spin_wave_bc, str) else str(study.spin_wave_bc.get("kind", "")),
+            "frequency_spin_wave_bc_config": study.spin_wave_bc if isinstance(study.spin_wave_bc, dict) else None,
         }
     return {
         "kind": "run",
@@ -1172,7 +1197,11 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if transition_growth_value is not None:
         kwargs.append(f"transition_growth={_py_number(transition_growth_value)}")
 
-    edge_hmax_value = _number_or_none(mesh_config.get("edge_hmax"))
+    edge_hmax_value = _number_or_none(
+        mesh_config.get("edge_maximum_element_size")
+        if mesh_config.get("edge_maximum_element_size") is not None
+        else mesh_config.get("edge_hmax")
+    )
     if edge_hmax_value is not None:
         kwargs.append(f"edge_maximum_element_size={_py_number(edge_hmax_value)}")
 
@@ -1180,7 +1209,11 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if edge_thickness_value is not None:
         kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
 
-    corner_hmax_value = _number_or_none(mesh_config.get("corner_hmax"))
+    corner_hmax_value = _number_or_none(
+        mesh_config.get("corner_maximum_element_size")
+        if mesh_config.get("corner_maximum_element_size") is not None
+        else mesh_config.get("corner_hmax")
+    )
     if corner_hmax_value is not None:
         kwargs.append(f"corner_maximum_element_size={_py_number(corner_hmax_value)}")
 
@@ -1612,6 +1645,11 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
         if isinstance(output, SaveDispersion):
             lines.append(f"{_surface_call(surface, 'save')}(\"dispersion\")")
             continue
+        if isinstance(output, SaveResponse):
+            lines.append(
+                f"{_surface_call(surface, 'save_response')}({_py_repr(output.observable)})"
+            )
+            continue
         raise ValueError(f"unsupported output type: {type(output).__name__}")
     return lines
 
@@ -1724,6 +1762,32 @@ def _render_stages(
             else:
                 lines.append(f"{_surface_call(surface, 'eigenmodes')}({', '.join(call_parts)})")
             continue
+        if isinstance(study, FrequencyResponse):
+            frequency_values = ", ".join(_py_number(float(freq)) for freq in study.frequencies_hz)
+            call_parts = [f"frequencies_hz=[{frequency_values}]"]
+            if study.excitation_field_au_per_m != (0.0, 0.0, 1.0):
+                call_parts.append(
+                    f"excitation_field_au_per_m={_py_tuple3(study.excitation_field_au_per_m)}"
+                )
+            call_parts.append(f"include_demag={study.include_demag!r}")
+            if study.equilibrium_source != "provided":
+                call_parts.append(f"equilibrium_source={_py_repr(study.equilibrium_source)}")
+            if study.equilibrium_artifact is not None:
+                call_parts.append(f"equilibrium_artifact={_py_repr(study.equilibrium_artifact)}")
+            if study.normalization != "unit_l2":
+                call_parts.append(f"normalization={_py_repr(study.normalization)}")
+            if study.damping_policy != "ignore":
+                call_parts.append(f"damping_policy={_py_repr(study.damping_policy)}")
+            if study.spin_wave_bc != "free":
+                call_parts.append(f"bc={_py_repr(study.spin_wave_bc)}")  # type: ignore[arg-type]
+            if study.k_vector is not None:
+                call_parts.append(f"k_vector={study.k_vector!r}")
+            if is_study_surface:
+                lines.append(f"study.stages.add_frequency_response({', '.join(call_parts)})")
+            else:
+                lines.append(f"{_surface_call(surface, 'frequency_response')}({', '.join(call_parts)})")
+            continue
+
         if isinstance(study, Relaxation):
             relax_override = _normalize_mapping(solver_override.get("relax"))
             algorithm = (
@@ -1855,7 +1919,14 @@ def _stage_override_for(
         else:
             expected_kind = "run"
     else:
-        expected_kind = "relax" if isinstance(stage.problem.study, Relaxation) else ("eigenmodes" if isinstance(stage.problem.study, Eigenmodes) else "run")
+        if isinstance(stage.problem.study, Relaxation):
+            expected_kind = "relax"
+        elif isinstance(stage.problem.study, Eigenmodes):
+            expected_kind = "eigenmodes"
+        elif isinstance(stage.problem.study, FrequencyResponse):
+            expected_kind = "frequency_response"
+        else:
+            expected_kind = "run"
     override_kind = override.get("kind")
     if isinstance(override_kind, str) and override_kind and override_kind != expected_kind:
         return {}
@@ -2943,7 +3014,9 @@ def _normalize_bounds_pair(
     return normalized_min, normalized_max
 
 
-def _study_outputs(study: TimeEvolution | Relaxation | Eigenmodes) -> Sequence[object]:
+def _study_outputs(
+    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse,
+) -> Sequence[object]:
     return tuple(study.outputs)
 
 

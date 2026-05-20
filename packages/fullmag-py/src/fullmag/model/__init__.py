@@ -54,7 +54,7 @@ from .geometry import (
     Translate,
     Union,
 )
-from .outputs import SaveDispersion, SaveEigenDiagnostics, SaveField, SaveMode, SaveQuantity, SaveScalar, SaveSpectrum, Snapshot
+from .outputs import SaveDispersion, SaveEigenDiagnostics, SaveField, SaveMode, SaveQuantity, SaveResponse, SaveScalar, SaveSpectrum, Snapshot
 from .problem import (
     BackendTarget,
     DeviceTarget,
@@ -148,6 +148,7 @@ __all__ = [
     "SaveField",
     "SaveMode",
     "SaveQuantity",
+    "SaveResponse",
     "SaveScalar",
     "SaveSpectrum",
     "SaveEigenDiagnostics",

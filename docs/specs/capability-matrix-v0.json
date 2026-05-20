@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-04-18",
+  "updated_at": "2026-05-20",
   "status_vocabulary": {
     "semantic_only": "Canonical API and IR semantics exist, but the public executable path does not run this feature yet.",
     "reference_executable": "Executable on the trusted reference lane used for correctness and validation.",
@@ -226,6 +226,18 @@
       },
       "validated_workloads": [],
       "notes": "Keep status explicit; do not imply end-to-end STNO parity."
+    },
+    {
+      "id": "frequency_response_study",
+      "label": "StudyIR::FrequencyResponse / fm.FrequencyResponse",
+      "lanes": {
+        "fdm_cpu_reference": "semantic_only",
+        "fdm_gpu_production": "semantic_only",
+        "fem_cpu_public": "semantic_only",
+        "fem_gpu_public": "semantic_only"
+      },
+      "validated_workloads": [],
+      "notes": "First-class public semantics exist in Python API and ProblemIR. Public planners reject execution explicitly until a driven frequency-domain solver backend is implemented. Runtime capabilities expose supports_frequency_response, supports_coupled_magnetoelastic_quasistatic, supports_coupled_magnetoelastic_elastodynamic, supports_frequency_domain_elastodynamics, and supports_coupled_eigenmodes as false for all current engines."
     },
     {
       "id": "composite_free_layer_stno",

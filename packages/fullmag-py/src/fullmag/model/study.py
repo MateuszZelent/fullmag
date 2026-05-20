@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Sequence
 
 from fullmag.model.dynamics import LLG
@@ -10,6 +11,7 @@ from fullmag.model.outputs import (
     SaveEigenDiagnostics,
     SaveField,
     SaveMode,
+    SaveResponse,
     SaveScalar,
     SaveSpectrum,
     Snapshot,
@@ -20,6 +22,7 @@ _UNSET = object()
 
 TimeOutputSpec = SaveField | SaveScalar | Snapshot
 EigenOutputSpec = SaveSpectrum | SaveMode | SaveDispersion | SaveEigenDiagnostics
+FrequencyOutputSpec = EigenOutputSpec | SaveResponse
 OutputSpec = TimeOutputSpec | EigenOutputSpec
 SUPPORTED_RELAXATION_ALGORITHMS = {
     "llg_overdamped",
@@ -33,6 +36,54 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
+
+
+def _require_supported_eigen_options(
+    *,
+    damping_policy: str,
+    equilibrium_artifact: str | None,
+    equilibrium_source: str,
+    normalization: str,
+    operator: str,
+) -> str | None:
+    if operator not in SUPPORTED_EIGEN_OPERATORS:
+        supported = ", ".join(sorted(SUPPORTED_EIGEN_OPERATORS))
+        raise ValueError(f"operator must be one of: {supported}")
+    if equilibrium_source not in SUPPORTED_EQUILIBRIUM_SOURCES:
+        supported = ", ".join(sorted(SUPPORTED_EQUILIBRIUM_SOURCES))
+        raise ValueError(f"equilibrium_source must be one of: {supported}")
+    normalized_equilibrium_artifact = equilibrium_artifact
+    if equilibrium_source == "artifact":
+        if equilibrium_artifact is None:
+            raise ValueError("equilibrium_artifact is required when equilibrium_source='artifact'")
+        normalized_equilibrium_artifact = require_non_empty(
+            equilibrium_artifact,
+            "equilibrium_artifact",
+        )
+    elif equilibrium_artifact is not None:
+        normalized_equilibrium_artifact = require_non_empty(
+            equilibrium_artifact,
+            "equilibrium_artifact",
+        )
+    if normalization not in SUPPORTED_EIGEN_NORMALIZATIONS:
+        supported = ", ".join(sorted(SUPPORTED_EIGEN_NORMALIZATIONS))
+        raise ValueError(f"normalization must be one of: {supported}")
+    if damping_policy not in SUPPORTED_EIGEN_DAMPING_POLICIES:
+        supported = ", ".join(sorted(SUPPORTED_EIGEN_DAMPING_POLICIES))
+        raise ValueError(f"damping_policy must be one of: {supported}")
+    return normalized_equilibrium_artifact
+
+
+def _normalize_finite_vec3(
+    value: Sequence[float],
+    field_name: str,
+) -> tuple[float, float, float]:
+    if len(value) != 3:
+        raise ValueError(f"{field_name} must contain exactly 3 values")
+    normalized = (float(value[0]), float(value[1]), float(value[2]))
+    if not all(math.isfinite(component) for component in normalized):
+        raise ValueError(f"{field_name} must contain finite values")
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +415,8 @@ class Eigenmodes:
     def __post_init__(self) -> None:
         if not self.outputs:
             raise ValueError("Eigenmodes requires at least one output")
+        if any(isinstance(output, SaveResponse) for output in self.outputs):
+            raise ValueError("Eigenmodes outputs do not support frequency response observables")
         if self.count <= 0:
             raise ValueError("count must be positive")
         if self.operator not in SUPPORTED_EIGEN_OPERATORS:
@@ -376,29 +429,17 @@ class Eigenmodes:
             require_positive(self.target_frequency, "target_frequency")
         elif self.target_frequency is not None:
             require_positive(self.target_frequency, "target_frequency")
-        if self.equilibrium_source not in SUPPORTED_EQUILIBRIUM_SOURCES:
-            supported = ", ".join(sorted(SUPPORTED_EQUILIBRIUM_SOURCES))
-            raise ValueError(f"equilibrium_source must be one of: {supported}")
-        if self.equilibrium_source == "artifact":
-            if self.equilibrium_artifact is None:
-                raise ValueError("equilibrium_artifact is required when equilibrium_source='artifact'")
-            object.__setattr__(
-                self,
-                "equilibrium_artifact",
-                require_non_empty(self.equilibrium_artifact, "equilibrium_artifact"),
-            )
-        elif self.equilibrium_artifact is not None:
-            object.__setattr__(
-                self,
-                "equilibrium_artifact",
-                require_non_empty(self.equilibrium_artifact, "equilibrium_artifact"),
-            )
-        if self.normalization not in SUPPORTED_EIGEN_NORMALIZATIONS:
-            supported = ", ".join(sorted(SUPPORTED_EIGEN_NORMALIZATIONS))
-            raise ValueError(f"normalization must be one of: {supported}")
-        if self.damping_policy not in SUPPORTED_EIGEN_DAMPING_POLICIES:
-            supported = ", ".join(sorted(SUPPORTED_EIGEN_DAMPING_POLICIES))
-            raise ValueError(f"damping_policy must be one of: {supported}")
+        object.__setattr__(
+            self,
+            "equilibrium_artifact",
+            _require_supported_eigen_options(
+                damping_policy=self.damping_policy,
+                equilibrium_artifact=self.equilibrium_artifact,
+                equilibrium_source=self.equilibrium_source,
+                normalization=self.normalization,
+                operator=self.operator,
+            ),
+        )
         _serialize_spin_wave_bc(self.spin_wave_bc)
         # Validate alias / primary representation early to fail loudly.
         coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
@@ -447,7 +488,7 @@ class Eigenmodes:
 
 @dataclass(frozen=True, slots=True)
 class FrequencyResponse:
-    outputs: Sequence[EigenOutputSpec]
+    outputs: Sequence[FrequencyOutputSpec]
     frequencies_hz: Sequence[float]
     excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0)
     operator: str = "linearized_llg"
@@ -467,9 +508,28 @@ class FrequencyResponse:
         normalized_freqs = tuple(float(freq) for freq in self.frequencies_hz)
         if not normalized_freqs:
             raise ValueError("frequencies_hz must not be empty")
-        if any(freq <= 0.0 for freq in normalized_freqs):
-            raise ValueError("frequencies_hz must contain positive values only")
+        if any(not math.isfinite(freq) or freq <= 0.0 for freq in normalized_freqs):
+            raise ValueError("frequencies_hz must contain finite positive values only")
         object.__setattr__(self, "frequencies_hz", normalized_freqs)
+        object.__setattr__(
+            self,
+            "excitation_field_au_per_m",
+            _normalize_finite_vec3(
+                self.excitation_field_au_per_m,
+                "excitation_field_au_per_m",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "equilibrium_artifact",
+            _require_supported_eigen_options(
+                damping_policy=self.damping_policy,
+                equilibrium_artifact=self.equilibrium_artifact,
+                equilibrium_source=self.equilibrium_source,
+                normalization=self.normalization,
+                operator=self.operator,
+            ),
+        )
         coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
         _serialize_spin_wave_bc(self.spin_wave_bc)
 

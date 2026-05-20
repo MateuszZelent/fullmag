@@ -73,13 +73,8 @@ Current local contracts cover module-level sign/unit behavior for extracted
 interactions and source-level ownership boundaries for the native FEM
 integrator modules: adaptive timestep policy, Heun/RK tableau definitions,
 explicit RK workspace allocation, stage RHS evaluation, fixed-step Heun,
-complete explicit RK stepping, and LLG RHS helpers. Full active MFEM-stack
-validation is still blocked in the local environment by the missing runtime
-include directory:
+complete explicit RK stepping, and LLG RHS helpers. Full active MFEM-stack numerical fixture qualification remains separate from these local ownership and docstring contracts.
 
-```text
-.fullmag/runtimes/fem-gpu-host/include
-```
-
-Before production qualification, the LLG convention must be checked with
-macrospin, relaxation, direct-torque, and energy-monotonicity fixtures.
+Before production qualification, the LLG convention must remain covered by
+macrospin, relaxation, direct-torque, and energy-monotonicity fixtures in the
+validation matrix.

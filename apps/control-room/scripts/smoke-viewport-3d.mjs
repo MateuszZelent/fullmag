@@ -15,6 +15,26 @@ const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
 const CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX = 48;
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
+const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
+  "fullmag.viewport3d.buildTopologyRenderModel",
+  "fullmag.viewport3d.buildMeshQualityVertexColors",
+  "fullmag.viewport3d.buildFdmCuboidInstanceModel",
+  "fullmag.viewport3d.buildFieldRenderModel",
+];
+const REACT_RENDER_MEASURE_NAMES = [
+  "fullmag.react.render.ExplorerModule.mount",
+  "fullmag.react.render.ExplorerModule.update",
+  "fullmag.react.render.RibbonModule.mount",
+  "fullmag.react.render.RibbonModule.update",
+  "fullmag.react.render.Viewport3DModule.mount",
+  "fullmag.react.render.Viewport3DModule.update",
+  "fullmag.react.render.WorkspaceDockLayout.mount",
+  "fullmag.react.render.WorkspaceDockLayout.update",
+];
+const COMPUTE_PERFORMANCE_MEASURE_NAMES = [
+  ...VIEWPORT_3D_COMPUTE_MEASURE_NAMES,
+  ...REACT_RENDER_MEASURE_NAMES,
+];
 
 async function loadPlaywright() {
   try {
@@ -40,19 +60,19 @@ const browser = await playwright.chromium.launch();
 const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
+await installComputePerformanceProbe(page);
 const errors = [];
 const sceneResponses = [];
 const realtimeMessages = [];
 let sceneResponseSequence = 0;
 
-if (apiBase) {
-  await page.addInitScript((baseUrl) => {
-    window.__FULLMAG_CONFIG__ = {
-      ...(window.__FULLMAG_CONFIG__ ?? {}),
-      controlRoomApiBase: baseUrl,
-    };
-  }, apiBase);
-}
+await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
+  window.__FULLMAG_CONFIG__ = {
+    ...(window.__FULLMAG_CONFIG__ ?? {}),
+    ...(baseUrl ? { controlRoomApiBase: baseUrl } : {}),
+    ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
+  };
+}, { allowMissingSessionSmoke: allowMissingSession, baseUrl: apiBase });
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -170,8 +190,9 @@ try {
     );
   }
   if (errors.length > 0) {
-    throw new Error(`Browser console errors:\n${errors.join("\n")}`);
+    throw new Error("Browser console errors:\n" + errors.join("\n"));
   }
+  await verifyProjectionRoundTrip({ canvas, page });
   if (requireGeometryFlow) {
     await verifyGeometryAuthoringFlow({
       canvas,
@@ -182,9 +203,239 @@ try {
     });
   }
 
+  const computeMetrics = await collectComputePerformanceProbe(page, "viewport-3d-smoke");
+  logComputePerformanceProbe(computeMetrics);
   console.log(`Viewport 3D smoke passed at ${url}.`);
 } finally {
   await browser.close();
+}
+
+async function installComputePerformanceProbe(page) {
+  await page.addInitScript((measureNames) => {
+    window.__FULLMAG_REACT_PROFILER__ = true;
+    const state = {
+      longTasks: [],
+      measures: [],
+      resources: [],
+      supportedEntryTypes:
+        typeof PerformanceObserver === "undefined"
+          ? []
+          : PerformanceObserver.supportedEntryTypes ?? [],
+    };
+    window.__FULLMAG_COMPUTE_PERFORMANCE__ = state;
+
+    function observePerformanceEntries(type, handler) {
+      if (typeof PerformanceObserver === "undefined") return;
+      if (!PerformanceObserver.supportedEntryTypes?.includes(type)) return;
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            handler(entry);
+          }
+        });
+        observer.observe({ buffered: true, type });
+      } catch {
+        // Browser support for buffered observers differs across Chromium versions.
+      }
+    }
+
+    observePerformanceEntries("longtask", (entry) => {
+      state.longTasks.push({
+        duration: entry.duration,
+        name: entry.name,
+        startTime: entry.startTime,
+      });
+    });
+
+    observePerformanceEntries("measure", (entry) => {
+      if (!measureNames.includes(entry.name)) return;
+      state.measures.push({
+        duration: entry.duration,
+        name: entry.name,
+        startTime: entry.startTime,
+      });
+    });
+
+    observePerformanceEntries("resource", (entry) => {
+      if (!String(entry.name).includes("/v2/sessions/current/")) return;
+      state.resources.push({
+        duration: entry.duration,
+        initiatorType: entry.initiatorType,
+        name: entry.name,
+        startTime: entry.startTime,
+        transferSize: entry.transferSize,
+      });
+    });
+  }, COMPUTE_PERFORMANCE_MEASURE_NAMES);
+}
+
+async function collectComputePerformanceProbe(page, label) {
+  return page.evaluate(({ label, measureNames }) => {
+    const state = window.__FULLMAG_COMPUTE_PERFORMANCE__ ?? {
+      longTasks: [],
+      measures: [],
+      resources: [],
+      supportedEntryTypes: [],
+    };
+    const sessionResourceEntries = performance
+      .getEntriesByType("resource")
+      .filter((entry) => String(entry.name).includes("/v2/sessions/current/"))
+      .map((entry) => ({
+        duration: entry.duration,
+        initiatorType: entry.initiatorType,
+        name: entry.name,
+        startTime: entry.startTime,
+        transferSize: entry.transferSize,
+      }));
+    const measureEntries = performance
+      .getEntriesByType("measure")
+      .filter((entry) => measureNames.includes(entry.name))
+      .map((entry) => ({
+        duration: entry.duration,
+        name: entry.name,
+        startTime: entry.startTime,
+      }));
+    const resources = dedupePerformanceRows([
+      ...state.resources,
+      ...sessionResourceEntries,
+    ]);
+    const measuredEntries = dedupePerformanceRows([
+      ...state.measures,
+      ...measureEntries,
+    ]);
+    const reactRenderMeasureNames = measureNames.filter((name) =>
+      name.startsWith("fullmag.react.render."),
+    );
+    const viewportMeasureNames = measureNames.filter(
+      (name) => !name.startsWith("fullmag.react.render."),
+    );
+    const viewportMeasures = measuredEntries.filter((entry) =>
+      viewportMeasureNames.includes(entry.name),
+    );
+    const reactRenderMeasures = measuredEntries.filter((entry) =>
+      reactRenderMeasureNames.includes(entry.name),
+    );
+    const longTasks = state.longTasks;
+    const maxLongTaskMs = Math.max(0, ...longTasks.map((entry) => entry.duration));
+    const totalLongTaskMs = longTasks.reduce(
+      (total, entry) => total + entry.duration,
+      0,
+    );
+    const viewportMeasureTotals = summarizeMeasureTotals(
+      viewportMeasureNames,
+      viewportMeasures,
+    );
+    const reactRenderMeasureTotals = summarizeMeasureTotals(
+      reactRenderMeasureNames,
+      reactRenderMeasures,
+    );
+
+    return {
+      compute_metrics: true,
+      label,
+      longTaskCount: longTasks.length,
+      maxLongTaskMs,
+      reactRenderMeasureCount: reactRenderMeasures.length,
+      reactRenderMeasureTotals,
+      sessionRequestCount: resources.length,
+      supportedEntryTypes: state.supportedEntryTypes,
+      totalLongTaskMs,
+      viewportMeasureCount: viewportMeasures.length,
+      viewportMeasureTotals,
+    };
+
+    function summarizeMeasureTotals(names, entries) {
+      return Object.fromEntries(
+        names.map((name) => {
+          const rows = entries.filter((entry) => entry.name === name);
+          return [
+            name,
+            {
+              count: rows.length,
+              maxDurationMs: Math.max(0, ...rows.map((entry) => entry.duration)),
+              totalDurationMs: rows.reduce(
+                (total, entry) => total + entry.duration,
+                0,
+              ),
+            },
+          ];
+        }),
+      );
+    }
+
+    function dedupePerformanceRows(rows) {
+      const seen = new Set();
+      return rows.filter((row) => {
+        const key = `${row.name}:${row.startTime}:${row.duration}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }, { label, measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES });
+}
+
+function logComputePerformanceProbe(metrics) {
+  console.log(`Viewport 3D compute metrics: ${JSON.stringify(metrics)}`);
+}
+
+async function verifyProjectionRoundTrip({ canvas, page }) {
+  await page.getByRole("tab", { name: "View" }).first().click();
+  const projectionToggle = page.locator(`[data-action-id="view-projection"]`);
+  await projectionToggle.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+
+  const initialActive = await projectionToggle.getAttribute("data-active");
+  const firstExpectedActive = initialActive === "true" ? "false" : "true";
+  const secondExpectedActive = initialActive === "true" ? "true" : "false";
+
+  await projectionToggle.click();
+  await waitForCondition(
+    "projection toggle changes from initial state",
+    async () => {
+      const active = await projectionToggle.getAttribute("data-active");
+      if (active === firstExpectedActive) return true;
+      throw new Error("data-active=" + active);
+    },
+  );
+  const firstProjectionSample = await sampleCanvasComposite(page, canvas);
+  if (!firstProjectionSample.nonBlank) {
+    throw new Error(
+      "Viewport canvas after first projection toggle is blank: " +
+        firstProjectionSample.variedPixels +
+        "/" +
+        firstProjectionSample.sampledPixels +
+        " sampled pixels differ from background.",
+    );
+  }
+
+  await projectionToggle.click();
+  await waitForCondition(
+    "projection toggle returns to initial state",
+    async () => {
+      const active = await projectionToggle.getAttribute("data-active");
+      if (active === secondExpectedActive) return true;
+      throw new Error("data-active=" + active);
+    },
+  );
+  const secondProjectionSample = await sampleCanvasComposite(page, canvas);
+  if (!secondProjectionSample.nonBlank) {
+    throw new Error(
+      "Viewport canvas after second projection toggle is blank: " +
+        secondProjectionSample.variedPixels +
+        "/" +
+        secondProjectionSample.sampledPixels +
+        " sampled pixels differ from background.",
+    );
+  }
+
+  console.log(
+    "Viewport 3D projection round-trip passed (initial active=" +
+      (initialActive ?? "null") +
+      ").",
+  );
 }
 
 async function verifyGeometryAuthoringFlow({

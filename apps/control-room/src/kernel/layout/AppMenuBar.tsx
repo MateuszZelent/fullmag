@@ -14,7 +14,10 @@ import { useKernel } from "@/kernel/KernelContext";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import {
+  EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+  useObjectVisualizationSelector,
+} from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
 import { Button } from "@/shared/ui/Button";
@@ -406,7 +409,9 @@ export function AppMenuBar() {
   const sessionDisplay = resolveHeaderSessionDisplay(visibleSessionStatus);
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const [registryOpen, setRegistryOpen] = useState(false);
-  const { snapshot: visualizationSnapshot } = useObjectVisualizationRegistry();
+  const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
+    registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+  );
   const runtimeResourceData = useRuntimeCommandControlResourceData();
   const visualizationState = useVisualizationStateResource({ enabled: true });
   const visualizationSyncSnapshot = useSyncExternalStore(

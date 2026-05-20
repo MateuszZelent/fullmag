@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
@@ -66,6 +66,8 @@ const GEOMETRY_SCOPES: Array<{
   { label: "Surface", value: "surface" },
   { label: "Full", value: "full" },
 ];
+
+const VISUALIZATION_NUMBER_COMMIT_DELAY_MS = 120;
 
 function surfaceFieldStatus(
   source: SurfaceColorSource,
@@ -376,24 +378,18 @@ function VisualizationOpacitySection({
   patch: PatchVisualizationTarget;
   settings: VisualizationTargetSettings;
 }) {
-  const opacityPercent = settings.opacityPercent;
   return (
     <InspectorSection title="Opacity">
-      <label className="fm-visualization-range">
-        <span>{opacityPercent}%</span>
-        <input
-          aria-label="Opacity"
-          max={100}
-          min={0}
-          step={1}
-          style={{ "--pct": `${opacityPercent}%` } as React.CSSProperties}
-          type="range"
-          value={opacityPercent}
-          onChange={(event) =>
-            void patch({ opacityPercent: Number(event.target.value) })
-          }
-        />
-      </label>
+      <NumberField
+        disabled={false}
+        label="Opacity"
+        max={100}
+        min={0}
+        step={1}
+        unit="%"
+        value={settings.opacityPercent}
+        onChange={(value) => void patch({ opacityPercent: value })}
+      />
     </InspectorSection>
   );
 }
@@ -761,11 +757,71 @@ function NumberField({
   unit?: string;
   value: number;
 }) {
-  const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  const [draftValue, setDraftValue] = useState(value);
+  const editingRef = useRef(false);
+  const latestOnChangeRef = useRef(onChange);
+  const pendingValueRef = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    latestOnChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (!editingRef.current) {
+      setDraftValue(value);
+    }
+  }, [value]);
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const flushDraft = useCallback(() => {
+    const pendingValue = pendingValueRef.current;
+    editingRef.current = false;
+    pendingValueRef.current = null;
+    clearTimer();
+    if (pendingValue !== null) {
+      latestOnChangeRef.current(pendingValue);
+    }
+  }, [clearTimer]);
+
+  useEffect(() => () => clearTimer(), [clearTimer]);
+
+  useEffect(() => {
+    if (disabled) {
+      flushDraft();
+    }
+  }, [disabled, flushDraft]);
+
+  const scheduleDraft = useCallback(
+    (nextValue: number) => {
+      editingRef.current = true;
+      pendingValueRef.current = nextValue;
+      setDraftValue(nextValue);
+      clearTimer();
+      timerRef.current = window.setTimeout(
+        flushDraft,
+        VISUALIZATION_NUMBER_COMMIT_DELAY_MS,
+      );
+    },
+    [clearTimer, flushDraft],
+  );
+
+  const pct = Math.max(
+    0,
+    Math.min(100, ((draftValue - min) / (max - min)) * 100),
+  );
 
   return (
     <label className="fm-visualization-range">
-      <span>{unit ? `${label}: ${value}${unit}` : `${label}: ${value}`}</span>
+      <span>
+        {unit ? `${label}: ${draftValue}${unit}` : `${label}: ${draftValue}`}
+      </span>
       <input
         disabled={disabled}
         max={max}
@@ -773,8 +829,11 @@ function NumberField({
         step={step}
         style={{ "--pct": `${pct}%` } as React.CSSProperties}
         type="range"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        value={draftValue}
+        onBlur={flushDraft}
+        onChange={(event) => scheduleDraft(Number(event.target.value))}
+        onKeyUp={flushDraft}
+        onPointerUp={flushDraft}
       />
     </label>
   );

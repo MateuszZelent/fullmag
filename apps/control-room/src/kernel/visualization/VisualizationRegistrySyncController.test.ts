@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,6 +10,19 @@ import type {
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 
 import { VisualizationRegistrySyncController } from "./VisualizationRegistrySyncController";
+
+const visualizationRegistrySyncControllerSource = readFileSync(
+  join(process.cwd(), "src/kernel/visualization/VisualizationRegistrySyncController.ts"),
+  "utf8",
+);
+
+function blockBetween(source: string, startNeedle: string, endNeedle: string): string {
+  const start = source.indexOf(startNeedle);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(endNeedle, start + startNeedle.length);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
 
 function visualizationState(
   revision: number,
@@ -201,6 +217,18 @@ function createController({
 }
 
 describe("VisualizationRegistrySyncController", () => {
+  it("keeps stable JSON fingerprinting out of the high-frequency queuePatch path", () => {
+    const queuePatchBlock = blockBetween(
+      visualizationRegistrySyncControllerSource,
+      "  queuePatch(patch: VisualizationStatePatch): void {",
+      "  start(): void {",
+    );
+
+    expect(queuePatchBlock).toContain("visualizationPatchSatisfiesPatch");
+    expect(queuePatchBlock).not.toContain("fingerprintVisualizationPatch");
+    expect(queuePatchBlock).not.toContain("stableJson");
+  });
+
   it("does not start an idle recurring timer when there are no pending patches", () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");

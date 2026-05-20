@@ -208,6 +208,22 @@ void validation_matrix_names_periodic_fixture_coverage() {
         "validation matrix must map periodic exchange pair fixture to local class/reduction coverage and active-MFEM blocker");
 }
 
+void validation_matrix_documents_scope_and_runtime_boundary() {
+    const std::filesystem::path root = repo_root();
+    const std::string matrix =
+        read_text_file(root / "docs" / "validation" / "fem_cpu_validation_matrix.md");
+
+    check(
+        matrix.find("## Current Local Gates") != std::string::npos &&
+            matrix.find("## Required Physics Fixtures") != std::string::npos &&
+            matrix.find("## Environment Boundary") != std::string::npos,
+        "validation matrix must separate local gates, required physics fixtures, and environment boundary");
+    check(
+        matrix.find("Rows marked\n`runtime-open (requires MFEM stack)` still lack a concrete numerical fixture\ngate") !=
+            std::string::npos,
+        "validation matrix must keep runtime-open numerical fixture gates separate from local contracts");
+}
+
 void progress_report_marks_interaction_docs_gate_closed() {
     const std::filesystem::path root = repo_root();
     const std::string progress = read_text_file(
@@ -250,6 +266,49 @@ void progress_report_marks_local_interaction_split_contract_covered() {
         "progress report must keep active runtime/fixture validation separate from module split coverage");
 }
 
+void progress_report_marks_validation_matrix_contract_covered() {
+    const std::filesystem::path root = repo_root();
+    const std::string progress = read_text_file(
+        root / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Stworzyc pelna macierz testow FEM CPU | zrobione kontraktowo |") !=
+            std::string::npos,
+        "progress report must mark the FEM CPU validation matrix as contract-covered");
+    check(
+        progress.find("`docs/validation/fem_cpu_validation_matrix.md`") !=
+                std::string::npos &&
+            progress.find("Current Local Gates") != std::string::npos &&
+            progress.find("Required Physics Fixtures") != std::string::npos &&
+            progress.find("Environment Boundary") != std::string::npos,
+        "progress report must cite the validation matrix sections");
+    check(
+        progress.find("runtime-open fixture/convergence gates MFEM-stack pozostaja osobna kwalifikacja") !=
+            std::string::npos,
+        "progress report must keep active runtime fixture qualification open");
+}
+
+void progress_report_summary_matches_contract_closed_scope() {
+    const std::filesystem::path root = repo_root();
+    const std::string progress = read_text_file(
+        root / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("Ten wpis zamyka kontraktowy wycinek modularizacji native FEM CPU") !=
+            std::string::npos,
+        "progress report introduction must describe the current contract-closed modularization scope");
+    check(
+        progress.find("produkcyjna kwalifikacja runtime MFEM/libCEED i fixture numeryczne pozostaja osobnymi gate'ami") !=
+            std::string::npos,
+        "progress report introduction must keep production runtime qualification separate");
+    check(
+        progress.find("pierwszy maly wycinek") == std::string::npos &&
+            progress.find("pierwsze wydzielenia z monolitu") == std::string::npos,
+        "progress report introduction must not describe the current table as only the first small slice");
+}
+
 void interaction_headers_declare_ownership_boundaries() {
     const std::filesystem::path interactions =
         repo_root() / "native" / "backends" / "fem" / "cpu" / "mfem" / "interactions";
@@ -280,8 +339,11 @@ int main() {
     validation_matrix_names_leaf_header_gate_rows();
     validation_matrix_names_mfem_stack_fixture_statuses();
     validation_matrix_names_periodic_fixture_coverage();
+    validation_matrix_documents_scope_and_runtime_boundary();
     progress_report_marks_interaction_docs_gate_closed();
     progress_report_marks_local_interaction_split_contract_covered();
+    progress_report_marks_validation_matrix_contract_covered();
+    progress_report_summary_matches_contract_closed_scope();
     interaction_headers_declare_ownership_boundaries();
     return 0;
 }

@@ -89,6 +89,21 @@ describe("SimulationStartupOverlay", () => {
     });
   });
 
+  it("allows controlled offline smoke tests to bypass the startup gate", () => {
+    const state = resolveSimulationStartupOverlayState(
+      {
+        data: null,
+        error: new Error("fetch failed"),
+        refetch,
+        revision: null,
+        status: "error",
+      },
+      { allowMissingSessionSmoke: true },
+    );
+
+    expect(state).toEqual({ isVisible: false });
+  });
+
   it("does not hide unrelated API errors behind the startup overlay", () => {
     expect(
       resolveSimulationStartupOverlayState({
