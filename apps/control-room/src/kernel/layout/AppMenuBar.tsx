@@ -466,32 +466,34 @@ export function AppMenuBar() {
         </div>
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            className="fm-header__app-trigger"
-            size="sm"
-            type="button"
-            variant="secondary"
-          >
-            Fullmag
-            <ChevronDown size={12} aria-hidden="true" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          <DropdownMenuLabel>Application</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {APP_DROPDOWN_ITEMS.map((node) => (
-            <MenuNode
-              key={node.id}
-              isCommandActive={isCommandActive}
-              isCommandDisabled={isCommandDisabled}
-              node={node}
-              onCommand={runCommand}
-            />
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {APP_DROPDOWN_ITEMS.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              className="fm-header__app-trigger"
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              Fullmag
+              <ChevronDown size={12} aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>Application</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {APP_DROPDOWN_ITEMS.map((node) => (
+              <MenuNode
+                key={node.id}
+                isCommandActive={isCommandActive}
+                isCommandDisabled={isCommandDisabled}
+                node={node}
+                onCommand={runCommand}
+              />
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
 
       <nav className="fm-header__nav" aria-label="Main menu">
         {MAIN_MENUS.map((menu) => (

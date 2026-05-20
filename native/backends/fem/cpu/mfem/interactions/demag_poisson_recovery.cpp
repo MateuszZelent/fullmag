@@ -160,6 +160,56 @@ bool recover_demag_poisson_field(
             u_elem(i) = sign * gf_u(gdof);
         }
 
+        // P1 fast path: grad(u) is constant per element for linear tetrahedra.
+        // One CalcPhysDShape call suffices; distribute equally to all 4 nodes
+        // weighted by element volume / 4.
+        if (fe->GetOrder() == 1 && local_ndof == 4) {
+            const mfem::IntegrationPoint &ip0 =
+                mfem::Geometries.GetCenter(fe->GetGeomType());
+            T->SetIntPoint(&ip0);
+            const double elem_volume = std::abs(T->Weight()) / 6.0;
+
+            dshape.SetSize(local_ndof, 3);
+            fe->CalcPhysDShape(*T, dshape);
+
+            double grad_u[3] = {0.0, 0.0, 0.0};
+            for (int i = 0; i < local_ndof; ++i) {
+                for (int d = 0; d < 3; ++d) {
+                    grad_u[d] += u_elem(i) * dshape(i, d);
+                }
+            }
+
+            const double node_weight = elem_volume / 4.0;
+            for (int i = 0; i < local_ndof; ++i) {
+                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
+                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.mesh.n_nodes) {
+                    continue;
+                }
+                const size_t node = static_cast<size_t>(gdof);
+                const size_t base = node * 3u;
+                const double hx = -grad_u[0] * node_weight;
+                const double hy = -grad_u[1] * node_weight;
+                const double hz = -grad_u[2] * node_weight;
+                if (atomic_updates) {
+#pragma omp atomic update
+                    field_accum[base + 0] += hx;
+#pragma omp atomic update
+                    field_accum[base + 1] += hy;
+#pragma omp atomic update
+                    field_accum[base + 2] += hz;
+#pragma omp atomic update
+                    weight_accum[node] += node_weight;
+                } else {
+                    field_accum[base + 0] += hx;
+                    field_accum[base + 1] += hy;
+                    field_accum[base + 2] += hz;
+                    weight_accum[node] += node_weight;
+                }
+            }
+            return;
+        }
+
+        // General path for higher-order elements: quadrature-based recovery.
         const mfem::IntegrationRule &ir =
             mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
 
@@ -208,6 +258,7 @@ bool recover_demag_poisson_field(
                 }
             }
         }
+
     };
 
     int recover_threads = 1;

@@ -20,6 +20,7 @@ class Vector;
 namespace fullmag::fem {
 
 struct Context;
+struct FemBemHypreCache;
 
 /*
  * Workspace and lifecycle for Fredkin-Koehler FEM/BEM demag.
@@ -48,6 +49,8 @@ struct DemagFemBemWorkspace {
     int last_u2_iterations = 0;
     double last_u1_residual = 0.0;
     double last_u2_residual = 0.0;
+    FemBemHypreCache *u1_hypre_cache = nullptr;
+    FemBemHypreCache *u2_hypre_cache = nullptr;
 };
 
 /*

@@ -124,9 +124,8 @@ struct PoissonRhsWorkspace {
     mfem::Vector rhs_true;
 };
 
-namespace {
 
-} // namespace
+
 
 bool initialize_demag_poisson_rhs_workspace(
     Context &ctx,

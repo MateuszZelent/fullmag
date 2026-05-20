@@ -11,6 +11,7 @@
 
 namespace mfem {
 class BilinearForm;
+class CGSolver;
 class Vector;
 }
 
@@ -40,6 +41,7 @@ struct ExchangeMfemRuntimeState {
     mfem::Vector *inv_lumped_mass = nullptr;
     mfem::Vector *tmp_vec = nullptr;
     mfem::Vector *out_vec = nullptr;
+    mfem::CGSolver *consistent_mass_solver = nullptr;
     bool ready = false;
 };
 

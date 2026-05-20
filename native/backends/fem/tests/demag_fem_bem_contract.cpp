@@ -55,6 +55,10 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    return fem_source_root().parent_path().parent_path().parent_path();
+}
+
 fullmag::fem::Context unit_tet_context() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -417,11 +421,9 @@ void fem_bem_sparse_solve_is_owned_by_linear_solve_module() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_linear_solve.cpp");
 
     const char *symbols[] = {
-        "void ensure_local_mpi_initialized(",
         "bool solve_demag_fem_bem_sparse_system(",
-        "std::make_unique<mfem::HypreParMatrix>",
-        "mfem::HypreGMRES solver",
-        "mfem::HyprePCG solver",
+        "void destroy_fem_bem_hypre_cache(",
+        "struct FemBemHypreCache",
         "FEM/BEM demag requires an MPI/Hypre-enabled MFEM runtime",
     };
     for (const char *symbol : symbols) {
@@ -600,6 +602,35 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
     }
 }
 
+void progress_report_marks_open_boundary_fem_bem_demag_split_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Wydzielic open-boundary FEM/BEM demag | zrobione kontraktowo |") !=
+            std::string::npos,
+        "progress report must mark open-boundary FEM/BEM demag split as contract-covered");
+    check(
+        progress.find("`fem_demag_fem_bem_contract`") != std::string::npos &&
+            progress.find("`fem_interaction_docs_contract`") != std::string::npos &&
+            progress.find("demag_fem_bem_surface.*") != std::string::npos &&
+            progress.find("demag_fem_bem_operator.*") != std::string::npos &&
+            progress.find("demag_fem_bem_linear_solve.*") != std::string::npos &&
+            progress.find("demag_fem_bem_rhs.*") != std::string::npos &&
+            progress.find("demag_fem_bem_boundary_values.*") != std::string::npos &&
+            progress.find("demag_fem_bem_workspace.*") != std::string::npos &&
+            progress.find("demag_fem_bem_potential.*") != std::string::npos &&
+            progress.find("demag_fem_bem_telemetry.*") != std::string::npos &&
+            progress.find("demag_fem_bem_energy.*") != std::string::npos &&
+            progress.find("demag_fem_bem_solve.*") != std::string::npos,
+        "progress report must cite FEM/BEM demag contracts and owner modules");
+    check(
+        progress.find("aktywna walidacja runtime FEM/BEM demag MFEM-stack pozostaje osobna") !=
+            std::string::npos,
+        "progress report must keep active FEM/BEM demag runtime validation separate from module split coverage");
+}
+
 } // namespace
 
 int main() {
@@ -619,5 +650,6 @@ int main() {
     fem_bem_potential_trace_is_owned_by_potential_module();
     fem_bem_telemetry_is_owned_by_telemetry_module();
     fem_bem_neumann_rhs_is_owned_by_rhs_module();
+    progress_report_marks_open_boundary_fem_bem_demag_split_contract_covered();
     return 0;
 }

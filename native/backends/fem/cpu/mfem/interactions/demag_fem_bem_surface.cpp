@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_surface.hpp"
 
 #include "context.hpp"
+#include "fem_geometry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,8 +19,6 @@ namespace fullmag::fem {
 namespace {
 
 constexpr double kAreaEps = 1e-300;
-
-using Vec3 = std::array<double, 3>;
 
 struct FaceKey {
     uint32_t a;
@@ -34,41 +33,16 @@ struct FaceRecord {
     uint32_t count = 0;
 };
 
-Vec3 sub(const Vec3 &a, const Vec3 &b) {
-    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-}
-
-Vec3 add(const Vec3 &a, const Vec3 &b) {
-    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
-}
-
-Vec3 scale(const Vec3 &a, double s) {
-    return {a[0] * s, a[1] * s, a[2] * s};
-}
-
-double dot(const Vec3 &a, const Vec3 &b) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-Vec3 cross(const Vec3 &a, const Vec3 &b) {
-    return {
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
-}
-
-double norm(const Vec3 &a) {
-    return std::sqrt(dot(a, a));
-}
+using Vec3 = fullmag::fem::Vec3;
+inline Vec3 sub(const Vec3 &a, const Vec3 &b) { return vec3_sub(a, b); }
+inline Vec3 add(const Vec3 &a, const Vec3 &b) { return vec3_add(a, b); }
+inline Vec3 scale(const Vec3 &a, double s) { return vec3_scale(a, s); }
+inline double dot(const Vec3 &a, const Vec3 &b) { return vec3_dot(a, b); }
+inline Vec3 cross(const Vec3 &a, const Vec3 &b) { return vec3_cross(a, b); }
+inline double norm(const Vec3 &a) { return vec3_norm(a); }
 
 Vec3 node_position(const Context &ctx, uint32_t node) {
-    const size_t base = static_cast<size_t>(node) * 3u;
-    return {
-        ctx.mesh.nodes_xyz[base + 0u],
-        ctx.mesh.nodes_xyz[base + 1u],
-        ctx.mesh.nodes_xyz[base + 2u],
-    };
+    return mesh_node_position(ctx.mesh.nodes_xyz, node);
 }
 
 FaceKey sorted_key(std::array<uint32_t, 3> tri) {

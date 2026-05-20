@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { MAIN_MENUS } from "./appMenuModel";
+import { APP_DROPDOWN_ITEMS, MAIN_MENUS, QUICK_ACTIONS, type AppMenuNode } from "./appMenuModel";
 import { SHELL_COMMANDS } from "./shellCommands";
 
 const headerCss = readFileSync(
@@ -41,6 +41,28 @@ describe("AppMenuBar CSS contract", () => {
 });
 
 describe("app menu command model", () => {
+  function flattenMenuIds(nodes: AppMenuNode[]): string[] {
+    return nodes.flatMap((node) => [
+      node.id,
+      ...(node.children ? flattenMenuIds(node.children) : []),
+    ]);
+  }
+
+  it("does not expose disabled placeholder commands in primary menus", () => {
+    const placeholderIds = new Set(
+      SHELL_COMMANDS
+        .filter((command) => command.group === "workspace-placeholder")
+        .map((command) => command.id),
+    );
+    const exposedIds = [
+      ...flattenMenuIds(APP_DROPDOWN_ITEMS),
+      ...flattenMenuIds(MAIN_MENUS),
+      ...QUICK_ACTIONS.map((action) => action.id),
+    ].filter((id) => placeholderIds.has(id));
+
+    expect(exposedIds).toEqual([]);
+  });
+
   it("routes File/Open to the .fms import command instead of a dead placeholder", () => {
     const fileMenu = MAIN_MENUS.find((menu) => menu.id === "file");
     const openItem = fileMenu?.children?.find(

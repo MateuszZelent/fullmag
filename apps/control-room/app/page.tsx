@@ -1,6 +1,5 @@
-import { KernelProvider } from "@/kernel/KernelProvider";
-import { WorkspaceShell } from "@/kernel/layout/WorkspaceShell";
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
   title: "Fullmag Control Room",
@@ -8,9 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage() {
-  return (
-    <KernelProvider>
-      <WorkspaceShell />
-    </KernelProvider>
-  );
+  redirect("/workspace");
 }

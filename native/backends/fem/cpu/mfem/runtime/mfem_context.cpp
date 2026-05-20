@@ -19,16 +19,13 @@
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "fem_common.hpp"
-#include "transfer_audit.hpp"
 
 #include <mfem.hpp>
 
-#include <algorithm>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -60,39 +57,14 @@ std::optional<int> selected_cuda_device_from_env()
     return static_cast<int>(parsed);
 }
 
-bool env_flag_enabled(const char *name)
-{
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || *raw == '\0') {
-        return false;
-    }
-    return std::strcmp(raw, "1") == 0 ||
-           std::strcmp(raw, "true") == 0 ||
-           std::strcmp(raw, "TRUE") == 0 ||
-           std::strcmp(raw, "on") == 0 ||
-           std::strcmp(raw, "ON") == 0 ||
-           std::strcmp(raw, "yes") == 0 ||
-           std::strcmp(raw, "YES") == 0;
-}
-
 void debug_checkpoint(const char *stage)
 {
-    if (!env_flag_enabled("FULLMAG_FEM_DEBUG_STARTUP")) {
+    static const bool enabled = debug_startup_env_enabled();
+    if (!enabled) {
         return;
     }
     std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);
     std::fflush(stderr);
-}
-
-uint64_t vector_bytes(const mfem::Vector &vector)
-{
-    return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
-}
-
-double *audited_host_write(mfem::Vector &vector)
-{
-    record_mfem_host_write(vector_bytes(vector));
-    return vector.HostWrite();
 }
 
 } // namespace
@@ -307,6 +279,7 @@ void context_destroy_mfem(Context &ctx)
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.inv_lumped_mass);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.mass_lumped);
     delete static_cast<mfem::Vector *>(ctx.exchange.mfem.mass_ones);
+    delete static_cast<mfem::CGSolver *>(ctx.exchange.mfem.consistent_mass_solver);
     delete static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);
     delete static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
     delete static_cast<mfem::GridFunction *>(ctx.mfem_context.gf_ms);
@@ -327,6 +300,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.exchange.mfem.inv_lumped_mass = nullptr;
     ctx.exchange.mfem.mass_lumped = nullptr;
     ctx.exchange.mfem.mass_ones = nullptr;
+    ctx.exchange.mfem.consistent_mass_solver = nullptr;
     ctx.mfem_context.gf_ms = nullptr;
     ctx.mfem_context.gf_a = nullptr;
     ctx.mfem_context.gf_mz = nullptr;

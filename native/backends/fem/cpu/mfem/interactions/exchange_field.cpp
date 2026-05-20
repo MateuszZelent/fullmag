@@ -11,13 +11,13 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
 
-#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -28,15 +28,6 @@ namespace fullmag::fem {
 namespace {
 
 constexpr int kInterruptPollStride = 256;
-
-uint64_t vector_bytes(const mfem::Vector &vector) {
-    return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
-}
-
-double *audited_host_write(mfem::Vector &vector) {
-    record_mfem_host_write(vector_bytes(vector));
-    return vector.HostWrite();
-}
 
 void copy_host_vector_to_mfem(const std::vector<double> &src, mfem::Vector &dst) {
     dst.SetSize(static_cast<int>(src.size()));

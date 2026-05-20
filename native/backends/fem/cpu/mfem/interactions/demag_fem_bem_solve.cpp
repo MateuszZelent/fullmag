@@ -69,6 +69,7 @@ bool context_compute_demag_fem_bem(
             *workspace->u1,
             workspace->last_u1_iterations,
             workspace->last_u1_residual,
+            workspace->u1_hypre_cache,
             error)) {
         return false;
     }
@@ -110,6 +111,7 @@ bool context_compute_demag_fem_bem(
             *workspace->u2,
             workspace->last_u2_iterations,
             workspace->last_u2_residual,
+            workspace->u2_hypre_cache,
             error)) {
         return false;
     }

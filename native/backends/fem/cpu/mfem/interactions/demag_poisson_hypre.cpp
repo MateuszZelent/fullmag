@@ -8,10 +8,10 @@
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
+#include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
-#include "transfer_audit.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -42,36 +42,13 @@ struct PoissonHypreWorkspace {
 
 namespace {
 
-uint64_t vector_bytes(const mfem::Vector &vector) {
-    return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
-}
-
-const double *audited_host_read(const mfem::Vector &vector) {
-    record_mfem_host_read(vector_bytes(vector));
-    return vector.HostRead();
-}
-
-double *audited_host_write(mfem::Vector &vector) {
-    record_mfem_host_write(vector_bytes(vector));
-    return vector.HostWrite();
-}
-
 void zero_poisson_essential_values(const Context &ctx, mfem::Vector &vec) {
     for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
         vec(tdof) = 0.0;
     }
 }
 
-#ifdef MFEM_USE_MPI
-void ensure_mpi_initialized() {
-    int initialized = 0;
-    MPI_Initialized(&initialized);
-    if (!initialized) {
-        int provided = 0;
-        MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, &provided);
-    }
-}
-#endif
+
 
 } // namespace
 
@@ -158,7 +135,7 @@ bool solve_demag_poisson_hypre(
         static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
     if (poisson_hypre_workspace == nullptr) {
         poisson_hypre_workspace =
-            new PoissonHypreWorkspace(MPI_COMM_WORLD, glob_size, row_starts);
+            new PoissonHypreWorkspace(fullmag_serial_comm(), glob_size, row_starts);
         ctx.poisson_demag.hypre_workspace = poisson_hypre_workspace;
     }
 
@@ -169,7 +146,7 @@ bool solve_demag_poisson_hypre(
 
     if (!ctx.poisson_demag.solver_setup) {
         const auto setup_wall_start = FemSteadyClock::now();
-        auto *A_par = new mfem::HypreParMatrix(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
+        auto *A_par = new mfem::HypreParMatrix(fullmag_serial_comm(), glob_size, row_starts, A_bc);
         ctx.poisson_demag.cached_hypre_par = A_par;
 
         mfem::HypreSolver *preconditioner = nullptr;
@@ -204,7 +181,7 @@ bool solve_demag_poisson_hypre(
         mfem::HypreSolver *solver = nullptr;
         switch (ctx.demag.solver.solver) {
         case FULLMAG_FEM_LINEAR_SOLVER_CG: {
-            auto *pcg = new mfem::HyprePCG(MPI_COMM_WORLD);
+            auto *pcg = new mfem::HyprePCG(fullmag_serial_comm());
             pcg->iterative_mode = true;
             pcg->SetTol(ctx.demag.solver.relative_tolerance);
             if (ctx.demag.solver.has_absolute_tolerance &&
@@ -219,7 +196,7 @@ bool solve_demag_poisson_hypre(
             break;
         }
         case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
-            auto *gmres = new mfem::HypreGMRES(MPI_COMM_WORLD);
+            auto *gmres = new mfem::HypreGMRES(fullmag_serial_comm());
             gmres->iterative_mode = true;
             gmres->SetTol(ctx.demag.solver.relative_tolerance);
             if (ctx.demag.solver.has_absolute_tolerance &&

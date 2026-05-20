@@ -9,48 +9,32 @@
 
 #include "context.hpp"
 #include "fem_common.hpp"
+#include "fem_geometry.hpp"
 
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace fullmag::fem {
 namespace {
 
 constexpr double kVertexCoincidenceTol2 = 1e-48;
 
-using Vec3 = std::array<double, 3>;
-
-Vec3 sub(const Vec3 &a, const Vec3 &b) {
-    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-}
-
-Vec3 scale(const Vec3 &a, double s) {
-    return {a[0] * s, a[1] * s, a[2] * s};
-}
-
-double dot(const Vec3 &a, const Vec3 &b) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-Vec3 cross(const Vec3 &a, const Vec3 &b) {
-    return {
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
-}
-
-double norm(const Vec3 &a) {
-    return std::sqrt(dot(a, a));
-}
+// Local aliases for brevity inside this file.
+using Vec3 = fullmag::fem::Vec3;
+inline Vec3 sub(const Vec3 &a, const Vec3 &b) { return vec3_sub(a, b); }
+inline Vec3 scale(const Vec3 &a, double s) { return vec3_scale(a, s); }
+inline double dot(const Vec3 &a, const Vec3 &b) { return vec3_dot(a, b); }
+inline Vec3 cross(const Vec3 &a, const Vec3 &b) { return vec3_cross(a, b); }
+inline double norm(const Vec3 &a) { return vec3_norm(a); }
 
 Vec3 node_position(const Context &ctx, uint32_t node) {
-    const size_t base = static_cast<size_t>(node) * 3u;
-    return {
-        ctx.mesh.nodes_xyz[base + 0u],
-        ctx.mesh.nodes_xyz[base + 1u],
-        ctx.mesh.nodes_xyz[base + 2u],
-    };
+    return mesh_node_position(ctx.mesh.nodes_xyz, node);
 }
 
 double solid_angle_magnitude(const Vec3 &x, const Vec3 &p0, const Vec3 &p1, const Vec3 &p2) {
@@ -151,16 +135,34 @@ std::array<double, 3> lindholm_linear_triangle_weights(
     return weights;
 }
 
-double boundary_node_solid_angle_sum(
-    const Context &ctx,
-    uint32_t node)
-{
-    double sum = 0.0;
+// D13: Build a node-to-element adjacency list to avoid scanning all elements
+// for each boundary node in solid angle computation.
+std::vector<std::vector<uint32_t>> build_node_element_adjacency(const Context &ctx) {
+    std::vector<std::vector<uint32_t>> adjacency(ctx.mesh.n_nodes);
     for (uint32_t elem = 0; elem < ctx.mesh.n_elements; ++elem) {
         if (!ctx.mesh.magnetic_element_mask.empty() &&
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
         }
+        const size_t base = static_cast<size_t>(elem) * 4u;
+        for (int i = 0; i < 4; ++i) {
+            const uint32_t node = ctx.mesh.elements[base + static_cast<size_t>(i)];
+            if (node < ctx.mesh.n_nodes) {
+                adjacency[static_cast<size_t>(node)].push_back(elem);
+            }
+        }
+    }
+    return adjacency;
+}
+
+double boundary_node_solid_angle_sum(
+    const Context &ctx,
+    uint32_t node,
+    const std::vector<std::vector<uint32_t>> &node_adjacency)
+{
+    double sum = 0.0;
+    const auto &elems = node_adjacency[static_cast<size_t>(node)];
+    for (uint32_t elem : elems) {
         const size_t base = static_cast<size_t>(elem) * 4u;
         int local = -1;
         for (int i = 0; i < 4; ++i) {
@@ -200,13 +202,27 @@ bool DenseDemagBemOperator::build(
         return false;
     }
 
+    // D13: Build adjacency once, O(n_elements), instead of scanning all
+    // elements per boundary node.
+    const auto adjacency = build_node_element_adjacency(ctx);
+
+    // D16: Parallelize diagonal assembly over boundary rows.
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(size_ > 100)
+#endif
     for (uint32_t row = 0; row < size_; ++row) {
         const uint32_t global_node = surface.boundary_nodes[static_cast<size_t>(row)];
-        const double omega_sum = boundary_node_solid_angle_sum(ctx, global_node);
+        const double omega_sum = boundary_node_solid_angle_sum(ctx, global_node, adjacency);
         matrix_[static_cast<size_t>(row) * size_ + row] =
             omega_sum / (4.0 * kPi) - 1.0;
     }
 
+    // D16: Parallelize off-diagonal assembly over rows.
+    // Each row's contributions go to different matrix rows, so no race.
+    std::atomic<bool> invalid_boundary_node_map{false};
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 4) if(size_ > 100)
+#endif
     for (uint32_t row = 0; row < size_; ++row) {
         const Vec3 x = node_position(ctx, surface.boundary_nodes[static_cast<size_t>(row)]);
         for (size_t face = 0; face < surface.triangles.size(); ++face) {
@@ -227,16 +243,25 @@ bool DenseDemagBemOperator::build(
                 surface.triangle_areas[face],
                 surface.unit_normals[face]);
             for (int local = 0; local < 3; ++local) {
+                const uint32_t tri_node = tri[static_cast<size_t>(local)];
+                if (tri_node >= surface.global_to_boundary.size()) {
+                    invalid_boundary_node_map.store(true, std::memory_order_relaxed);
+                    continue;
+                }
                 const int32_t col =
-                    surface.global_to_boundary[static_cast<size_t>(tri[static_cast<size_t>(local)])];
+                    surface.global_to_boundary[static_cast<size_t>(tri_node)];
                 if (col < 0) {
-                    error = "FEM/BEM dense BEM operator found a boundary face without a node map";
-                    return false;
+                    invalid_boundary_node_map.store(true, std::memory_order_relaxed);
+                    continue;
                 }
                 matrix_[static_cast<size_t>(row) * size_ + static_cast<size_t>(col)] +=
                     weights[static_cast<size_t>(local)];
             }
         }
+    }
+    if (invalid_boundary_node_map.load(std::memory_order_relaxed)) {
+        error = "FEM/BEM dense BEM operator encountered an unmapped boundary node";
+        return false;
     }
     return true;
 }
@@ -251,10 +276,16 @@ bool DenseDemagBemOperator::apply(
         return false;
     }
     u2_boundary.assign(static_cast<size_t>(size_), 0.0);
+
+    // D14: Parallelize dense GEMV over rows.
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if(size_ > 200)
+#endif
     for (uint32_t row = 0; row < size_; ++row) {
         double sum = 0.0;
+        const size_t row_offset = static_cast<size_t>(row) * size_;
         for (uint32_t col = 0; col < size_; ++col) {
-            sum += matrix_[static_cast<size_t>(row) * size_ + col] *
+            sum += matrix_[row_offset + col] *
                    u1_boundary[static_cast<size_t>(col)];
         }
         u2_boundary[static_cast<size_t>(row)] = sum;

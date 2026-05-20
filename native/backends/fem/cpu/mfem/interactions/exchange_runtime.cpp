@@ -10,10 +10,9 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "fem_common.hpp"
 
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <string>
 
 namespace fullmag::fem {
@@ -21,24 +20,10 @@ namespace fullmag::fem {
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
 
-bool debug_startup_env_enabled()
-{
-    const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
-    if (raw == nullptr || *raw == '\0') {
-        return false;
-    }
-    return std::strcmp(raw, "1") == 0 ||
-           std::strcmp(raw, "true") == 0 ||
-           std::strcmp(raw, "TRUE") == 0 ||
-           std::strcmp(raw, "on") == 0 ||
-           std::strcmp(raw, "ON") == 0 ||
-           std::strcmp(raw, "yes") == 0 ||
-           std::strcmp(raw, "YES") == 0;
-}
-
 void debug_checkpoint(const char *stage)
 {
-    if (!debug_startup_env_enabled()) {
+    static const bool enabled = debug_startup_env_enabled();
+    if (!enabled) {
         return;
     }
     std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);

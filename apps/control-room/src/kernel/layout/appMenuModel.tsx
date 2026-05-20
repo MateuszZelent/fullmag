@@ -43,13 +43,47 @@ export interface HeaderQuickAction {
   label: string;
 }
 
-export const APP_DROPDOWN_ITEMS: AppMenuNode[] = [
+const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
+  "workspace.preferences",
+  "workspace.docs",
+  "workspace.about",
+  "workspace.new-problem",
+  "workspace.save-sync",
+  "workspace.export-python",
+  "workspace.undo",
+  "workspace.redo",
+  "workspace.view-2d",
+  "execution.fdm-cpu",
+  "execution.fdm-gpu",
+  "execution.fem-cpu",
+  "workspace.diagnostics",
+  "workspace.api-console",
+  "workspace.script-view",
+  "workspace.search-docs",
+  "workspace.reference",
+  "workspace.about-help",
+]);
+
+function hidePlaceholderMenuNodes(nodes: AppMenuNode[]): AppMenuNode[] {
+  return nodes.flatMap((node) => {
+    if (HIDDEN_PLACEHOLDER_COMMAND_IDS.has(node.id)) return [];
+
+    if (!node.children) return [node];
+
+    const children = hidePlaceholderMenuNodes(node.children);
+    if (children.length === 0) return [];
+
+    return [{ ...node, children }];
+  });
+}
+
+const APP_DROPDOWN_ITEM_DEFINITIONS: AppMenuNode[] = [
   { id: "workspace.preferences", label: "Preferences", icon: <Settings size={14} /> },
   { id: "workspace.docs", label: "Physics Documentation", icon: <BookOpen size={14} /> },
   { id: "workspace.about", label: "About Fullmag", icon: <Info size={14} /> },
 ];
 
-export const MAIN_MENUS: AppMenuNode[] = [
+const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
   {
     id: "file",
     label: "File",
@@ -130,11 +164,23 @@ export const MAIN_MENUS: AppMenuNode[] = [
   },
 ];
 
-export const QUICK_ACTIONS: HeaderQuickAction[] = [
+const QUICK_ACTION_DEFINITIONS: HeaderQuickAction[] = [
   { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} /> },
   { id: "workspace.undo", label: "Undo", icon: <Undo2 size={14} /> },
   { id: "workspace.redo", label: "Redo", icon: <Redo2 size={14} /> },
 ];
+
+export const APP_DROPDOWN_ITEMS: AppMenuNode[] = hidePlaceholderMenuNodes(
+  APP_DROPDOWN_ITEM_DEFINITIONS,
+);
+
+export const MAIN_MENUS: AppMenuNode[] = hidePlaceholderMenuNodes(
+  MAIN_MENU_DEFINITIONS,
+);
+
+export const QUICK_ACTIONS: HeaderQuickAction[] = QUICK_ACTION_DEFINITIONS.filter(
+  (action) => !HIDDEN_PLACEHOLDER_COMMAND_IDS.has(action.id),
+);
 
 export const RUN_CONTROLS: HeaderQuickAction[] = [
   { id: "study.run", label: "Compute Study", icon: <Play size={12} fill="currentColor" /> },

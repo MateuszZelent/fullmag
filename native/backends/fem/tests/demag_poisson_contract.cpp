@@ -628,7 +628,7 @@ void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
     const char *symbols[] = {
         "struct PoissonHypreWorkspace",
         "void zero_poisson_essential_values(",
-        "void ensure_mpi_initialized(",
+        "ensure_mpi_initialized()",
         "bool demag_poisson_hypre_has_warm_start(",
         "void destroy_demag_poisson_hypre_workspace(",
         "bool solve_demag_poisson_hypre(",

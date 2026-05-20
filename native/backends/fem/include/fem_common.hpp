@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 namespace fullmag::fem {
@@ -32,6 +34,24 @@ inline uint64_t elapsed_ns(const FemSteadyClock::time_point &start)
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             FemSteadyClock::now() - start)
             .count());
+}
+
+inline bool debug_startup_env_enabled()
+{
+    static const bool enabled = [] {
+        const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
+        if (raw == nullptr || *raw == '\0') {
+            return false;
+        }
+        return std::strcmp(raw, "1") == 0 ||
+               std::strcmp(raw, "true") == 0 ||
+               std::strcmp(raw, "TRUE") == 0 ||
+               std::strcmp(raw, "on") == 0 ||
+               std::strcmp(raw, "ON") == 0 ||
+               std::strcmp(raw, "yes") == 0 ||
+               std::strcmp(raw, "YES") == 0;
+    }();
+    return enabled;
 }
 
 class ScopedPhaseTimer {

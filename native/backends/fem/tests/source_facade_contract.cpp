@@ -435,6 +435,37 @@ void progress_report_marks_device_runtime_split_contract_covered() {
         "progress report must keep active MFEM/libCEED runtime qualification open");
 }
 
+void progress_report_marks_context_split_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+
+    check(
+        progress.find("| Rozbic `Context` na `FemMesh`, `FemState`, `FemFieldBuffers`, `FemWorkspace` itd. | zrobione kontraktowo |") != std::string::npos,
+        "progress report must mark the Context split as contract-covered");
+    check(
+        progress.find("`fem_source_facade_contract`") != std::string::npos &&
+            progress.find("`fem_plan_fields_contract`") != std::string::npos &&
+            progress.find("`fem_mesh_contract`") != std::string::npos &&
+            progress.find("`fem_state_contract`") != std::string::npos &&
+            progress.find("`fem_material_fields_contract`") != std::string::npos &&
+            progress.find("`fem_field_buffers_contract`") != std::string::npos,
+        "progress report must cite core Context split contract gates");
+    check(
+        progress.find("`fem_rk_explicit_contract`") != std::string::npos &&
+            progress.find("`fem_mfem_context_contract`") != std::string::npos &&
+            progress.find("`fem_gpu_state_runtime_contract`") != std::string::npos &&
+            progress.find("`fem_demag_contract`") != std::string::npos &&
+            progress.find("`fem_demag_poisson_contract`") != std::string::npos &&
+            progress.find("`fem_demag_fem_bem_contract`") != std::string::npos,
+        "progress report must cite workspace/runtime owner contract gates");
+    check(
+        progress.find("Context pozostaje compatibility facade") != std::string::npos &&
+            progress.find("nie jest juz wlascicielem plaskich pol core/runtime/interaction/workspace") !=
+                std::string::npos,
+        "progress report must describe Context as a facade rather than a flat owner");
+}
+
 } // namespace
 
 int main() {
@@ -442,5 +473,6 @@ int main() {
     common_fem_utilities_have_single_header();
     managed_runtime_export_keeps_mfem_headers_linkable();
     progress_report_marks_device_runtime_split_contract_covered();
+    progress_report_marks_context_split_contract_covered();
     return 0;
 }

@@ -40,6 +40,20 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::filesystem::path repo_root() {
+    return fem_source_root().parent_path().parent_path().parent_path();
+}
+
+size_t count_occurrences(const std::string &text, const std::string &needle) {
+    size_t count = 0;
+    size_t pos = text.find(needle);
+    while (pos != std::string::npos) {
+        ++count;
+        pos = text.find(needle, pos + needle.size());
+    }
+    return count;
+}
+
 void demag_update_execution_is_owned_by_demag_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
@@ -354,6 +368,34 @@ void unsupported_fresh_demag_plan_is_rejected() {
         "unsupported fresh demag error");
 }
 
+void progress_report_marks_demag_poisson_split_contract_covered() {
+    const std::string progress = read_text_file(
+        repo_root() / "docs" / "reports" / "16.05.2026" /
+        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
+    const std::string covered_row =
+        "| Wydzielic `DemagSubsystem` / `demag_poisson` | zrobione kontraktowo |";
+
+    check(
+        count_occurrences(progress, covered_row) == 2,
+        "progress report must mark both demag Poisson split rows as contract-covered");
+    check(
+        progress.find("`fem_demag_contract`") != std::string::npos &&
+            progress.find("`fem_demag_poisson_contract`") != std::string::npos &&
+            progress.find("demag_poisson_rhs.*") != std::string::npos &&
+            progress.find("demag_poisson_boundary.*") != std::string::npos &&
+            progress.find("demag_poisson_hypre.*") != std::string::npos &&
+            progress.find("demag_poisson_periodic.*") != std::string::npos &&
+            progress.find("demag_poisson_recovery.*") != std::string::npos &&
+            progress.find("demag_poisson_energy.*") != std::string::npos &&
+            progress.find("demag_poisson_cache.*") != std::string::npos &&
+            progress.find("demag_poisson_telemetry.*") != std::string::npos,
+        "progress report must cite demag Poisson contracts and owner modules");
+    check(
+        progress.find("aktywna walidacja runtime demag MFEM-stack pozostaje osobna") !=
+            std::string::npos,
+        "progress report must keep active demag runtime validation separate from module split coverage");
+}
+
 } // namespace
 
 int main() {
@@ -366,5 +408,6 @@ int main() {
     poisson_airbox_plan_requires_ready_poisson_operator();
     fredkin_koehler_plan_requires_ready_fem_bem_operator();
     unsupported_fresh_demag_plan_is_rejected();
+    progress_report_marks_demag_poisson_split_contract_covered();
     return 0;
 }

@@ -9,8 +9,8 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "fem_common.hpp"
-#include "transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -19,30 +19,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace fullmag::fem {
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
-
-uint64_t vector_bytes(const mfem::Vector &vector) {
-    return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
-}
-
-const double *audited_host_read(const mfem::Vector &vector) {
-    record_mfem_host_read(vector_bytes(vector));
-    return vector.HostRead();
-}
-
-double *audited_host_write(mfem::Vector &vector) {
-    record_mfem_host_write(vector_bytes(vector));
-    return vector.HostWrite();
-}
-
-double *audited_host_read_write(mfem::Vector &vector) {
-    record_mfem_host_read_write(vector_bytes(vector));
-    return vector.HostReadWrite();
-}
 
 void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst) {
     const int n = src.Size();
@@ -273,13 +255,27 @@ bool apply_exchange_component_mass_projection(
     }
 
     if (use_consistent_mass) {
-        mfem::CGSolver cg_solver;
-        cg_solver.SetRelTol(1e-10);
-        cg_solver.SetMaxIter(200);
-        cg_solver.SetPrintLevel(0);
-        cg_solver.SetOperator(mass_form);
+        std::unique_ptr<mfem::CGSolver> local_solver;
+        mfem::CGSolver *cg_solver = nullptr;
+        if (ctx != nullptr) {
+            if (ctx->exchange.mfem.consistent_mass_solver == nullptr) {
+                ctx->exchange.mfem.consistent_mass_solver = new mfem::CGSolver();
+                ctx->exchange.mfem.consistent_mass_solver->SetRelTol(1e-10);
+                ctx->exchange.mfem.consistent_mass_solver->SetMaxIter(200);
+                ctx->exchange.mfem.consistent_mass_solver->SetPrintLevel(0);
+                ctx->exchange.mfem.consistent_mass_solver->SetOperator(mass_form);
+            }
+            cg_solver = ctx->exchange.mfem.consistent_mass_solver;
+        } else {
+            local_solver = std::make_unique<mfem::CGSolver>();
+            local_solver->SetRelTol(1e-10);
+            local_solver->SetMaxIter(200);
+            local_solver->SetPrintLevel(0);
+            local_solver->SetOperator(mass_form);
+            cg_solver = local_solver.get();
+        }
         h_component = 0.0;
-        cg_solver.Mult(tmp, h_component);
+        cg_solver->Mult(tmp, h_component);
         const double *ms_host = audited_host_read(ms_field);
         double *h_host = audited_host_read_write(h_component);
         for (int i = 0; i < ndofs; ++i) {

@@ -26,8 +26,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -35,21 +33,6 @@ namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
-
-bool debug_startup_env_enabled()
-{
-    const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
-    if (raw == nullptr || *raw == '\0') {
-        return false;
-    }
-    return std::strcmp(raw, "1") == 0 ||
-           std::strcmp(raw, "true") == 0 ||
-           std::strcmp(raw, "TRUE") == 0 ||
-           std::strcmp(raw, "on") == 0 ||
-           std::strcmp(raw, "ON") == 0 ||
-           std::strcmp(raw, "yes") == 0 ||
-           std::strcmp(raw, "YES") == 0;
-}
 
 void debug_checkpoint(const char *stage)
 {

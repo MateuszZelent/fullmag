@@ -238,8 +238,9 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             exchange_header.find("mfem::Vector *inv_lumped_mass") != std::string::npos &&
             exchange_header.find("mfem::Vector *tmp_vec") != std::string::npos &&
             exchange_header.find("mfem::Vector *out_vec") != std::string::npos &&
+            exchange_header.find("mfem::CGSolver *consistent_mass_solver") != std::string::npos &&
             exchange_header.find("bool ready") != std::string::npos,
-        "exchange MFEM runtime state must own forms, mass vectors, component buffers, readiness, and consistent-mass policy");
+        "exchange MFEM runtime state must own forms, mass vectors, component buffers, consistent-mass solver, readiness, and consistent-mass policy");
     check(
         exchange_header.find("void *exchange_form") == std::string::npos &&
             exchange_header.find("void *mass_form") == std::string::npos &&
@@ -247,7 +248,8 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             exchange_header.find("void *mass_lumped") == std::string::npos &&
             exchange_header.find("void *inv_lumped_mass") == std::string::npos &&
             exchange_header.find("void *tmp_vec") == std::string::npos &&
-            exchange_header.find("void *out_vec") == std::string::npos,
+            exchange_header.find("void *out_vec") == std::string::npos &&
+            exchange_header.find("void *consistent_mass_solver") == std::string::npos,
         "exchange MFEM runtime state must use typed MFEM pointers, not void pointers");
     check(
         exchange_header.find("ExchangeMfemRuntimeState mfem{}") != std::string::npos,
@@ -282,7 +284,7 @@ void exchange_mass_projection_is_owned_by_mass_module() {
 
     const char *lumping_symbol = "void prepare_exchange_mass_lumping(";
     const char *projection_symbol = "bool apply_exchange_component_mass_projection(";
-    const char *consistent_mass_marker = "mfem::CGSolver cg_solver";
+    const char *consistent_mass_marker = "consistent_mass_solver";
 
     check(
         exchange.find(lumping_symbol) == std::string::npos,
@@ -302,6 +304,12 @@ void exchange_mass_projection_is_owned_by_mass_module() {
     check(
         mass_projection.find(consistent_mass_marker) != std::string::npos,
         "consistent-mass projection solve must be defined in exchange_mass_projection.cpp");
+    check(
+        mass_projection.find("new mfem::CGSolver()") != std::string::npos,
+        "consistent-mass projection must allocate the reusable CG solver lazily");
+    check(
+        mass_projection.find("SetOperator(mass_form)") != std::string::npos,
+        "consistent-mass projection must bind the mass operator once when creating the solver");
 }
 
 void exchange_legacy_gpu_upload_is_owned_by_upload_module() {

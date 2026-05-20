@@ -12,6 +12,7 @@
 #include <mfem.hpp>
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 
@@ -131,6 +132,10 @@ void destroy_demag_fem_bem_workspace(Context &ctx)
 {
     destroy_demag_poisson_rhs_workspace(ctx);
     destroy_demag_poisson_recovery_workspace(ctx);
+    if (ctx.demag_fem_bem.workspace != nullptr) {
+        destroy_fem_bem_hypre_cache(ctx.demag_fem_bem.workspace->u1_hypre_cache);
+        destroy_fem_bem_hypre_cache(ctx.demag_fem_bem.workspace->u2_hypre_cache);
+    }
     delete ctx.demag_fem_bem.workspace;
     ctx.demag_fem_bem.workspace = nullptr;
     ctx.demag_fem_bem.ready = false;
