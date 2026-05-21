@@ -961,6 +961,7 @@ export class ControlRoomApi {
         if (!(buffer instanceof ArrayBuffer)) {
           throw new ControlRoomApiError("Expected binary response body", 0);
         }
+        const byteLength = buffer.byteLength;
 
         const decodeStartedAt = nowMs();
         const data = await this.binaryDecodeScheduler({
@@ -972,7 +973,7 @@ export class ControlRoomApi {
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
         this.requestDiagnostics?.record({
-          byteLength: buffer.byteLength,
+          byteLength,
           channel: "http",
           contentType: response.headers.get("content-type"),
           detail: "decoded binary payload",
@@ -986,7 +987,7 @@ export class ControlRoomApi {
         });
 
         return {
-          byteLength: buffer.byteLength,
+          byteLength,
           data,
           etag,
           status: "ready",

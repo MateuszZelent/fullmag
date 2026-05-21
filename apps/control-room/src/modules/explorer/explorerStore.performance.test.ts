@@ -15,6 +15,8 @@ describe("explorer store subscription performance contracts", () => {
   it("exposes a selector hook for narrow explorer state subscriptions", () => {
     expect(explorerStoreSource).toContain("export function useExplorerStoreSelector");
     expect(explorerStoreSource).toContain("selector(explorerStore.getSnapshot())");
+    expect(explorerStoreSource).toContain("options: { isEqual?:");
+    expect(explorerStoreSource).toContain("isEqual(previous.selected, selected)");
   });
 
   it("uses selector subscriptions in ExplorerModule instead of the full store snapshot", () => {

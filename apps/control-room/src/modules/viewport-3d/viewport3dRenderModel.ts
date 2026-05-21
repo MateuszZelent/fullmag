@@ -125,6 +125,10 @@ const partVectorSegmentCache = new WeakMap<
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
 const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
+const surfaceNodeNormalCache = new WeakMap<
+  Viewport3DPositionSource,
+  WeakMap<object, Float32Array | null>
+>();
 
 function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   const cached = topologyPositionCache.get(topology);
@@ -956,7 +960,7 @@ function buildVectorLineSegmentsFromPositions(
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
   const surfaceNormals =
     surfaceOffsetScale > 0
-      ? buildAveragedSurfaceNodeNormals(
+      ? cachedAveragedSurfaceNodeNormals(
           topology,
           options.surfaceTriangleIndices,
         )
@@ -1081,7 +1085,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
   const surfaceNormals =
     surfaceOffsetScale > 0
-      ? buildAveragedSurfaceNodeNormals(
+      ? cachedAveragedSurfaceNodeNormals(
           topology,
           options.surfaceTriangleIndices,
         )
@@ -1145,6 +1149,31 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   }
 
   return segments;
+}
+
+function cachedAveragedSurfaceNodeNormals(
+  topology: Viewport3DPositionSource,
+  triangleIndices: ArrayLike<number> | null | undefined,
+): Float32Array | null {
+  if (!triangleIndices || triangleIndices.length < 3) return null;
+  if (typeof triangleIndices !== "object") {
+    return buildAveragedSurfaceNodeNormals(topology, triangleIndices);
+  }
+
+  let normalCache = surfaceNodeNormalCache.get(topology);
+  if (!normalCache) {
+    normalCache = new WeakMap<object, Float32Array | null>();
+    surfaceNodeNormalCache.set(topology, normalCache);
+  }
+
+  const cacheKey = triangleIndices;
+  if (normalCache.has(cacheKey)) {
+    return normalCache.get(cacheKey) ?? null;
+  }
+
+  const normals = buildAveragedSurfaceNodeNormals(topology, triangleIndices);
+  normalCache.set(cacheKey, normals);
+  return normals;
 }
 
 function buildAveragedSurfaceNodeNormals(

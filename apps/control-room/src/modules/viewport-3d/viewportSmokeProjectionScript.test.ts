@@ -5,6 +5,10 @@ const smokeScriptUrl = new URL(
   "../../../scripts/smoke-viewport-3d.mjs",
   import.meta.url,
 );
+const screenshotScriptUrl = new URL(
+  "../../../scripts/screenshot-viewport-3d.mjs",
+  import.meta.url,
+);
 
 describe("viewport smoke projection round-trip", () => {
   it("toggles relative to the initial projection state", () => {
@@ -54,4 +58,34 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("window.__FULLMAG_CONFIG__");
   });
 
+  it("guards camera wheel and drag gestures against visualization state PATCH churn", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("verifyCameraGesturesStayLocal");
+    expect(smokeScript).toContain("recordCameraGestureRequests = true");
+    expect(smokeScript).toContain('request.method === "PATCH"');
+    expect(smokeScript).toContain("request.path === VISUALIZATION_STATE_PATH");
+    expect(smokeScript).toContain("visualization_state_patches=0");
+  });
+
+  it("verifies the COMSOL-style dimension frame cage with canvas pixels", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("verifyDimensionFrameCage");
+    expect(smokeScript).toContain('name: "Floor + vertical"');
+    expect(smokeScript).toContain("viewport-3d.dimension-frame-cage");
+    expect(smokeScript).toContain("dimension frame canvas renders after cage mode");
+    expect(smokeScript).toContain(
+      "Viewport canvas did not visually change after enabling dimension frame cage",
+    );
+  });
+
+  it("keeps the screenshot gate on the full dimension frame path", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain("enableDimensionFrameCage");
+    expect(screenshotScript).toContain('name: "Floor + vertical"');
+    expect(screenshotScript).toContain("viewport-3d.dimension-frame-cage");
+    expect(screenshotScript).toContain("dimensionFrameChangedPixels=");
+  });
 });

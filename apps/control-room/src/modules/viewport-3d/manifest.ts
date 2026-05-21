@@ -1,5 +1,5 @@
 import type { ModuleManifest } from "@/kernel/types";
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import { viewport3dStore } from "./viewport3dStore";
 import type {
@@ -139,8 +139,9 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        run: () => {
+        run: (context) => {
           viewport3dStore.resetCamera();
+          context.cameraRegistry?.patchCamera(DEFAULT_CAMERA_REGISTRY_STATE);
           return { status: "completed" };
         },
       },
@@ -199,7 +200,7 @@ export const viewport3dManifest: ModuleManifest = {
         isActive: () =>
           viewport3dStore.getSnapshot().widgets.cameraProjection ===
           "orthographic",
-        run: async (context) => {
+        run: (context) => {
           // Use the local store for the immediate toggle state. Resource data can
           // lag behind queued patches, which would make repeated clicks compute
           // the same "next" projection and leave the button stuck.
@@ -210,17 +211,7 @@ export const viewport3dManifest: ModuleManifest = {
           // Update the local store immediately so the viewport responds without
           // waiting for the backend round-trip.
           viewport3dStore.setCameraProjection(nextProjection);
-          if (context.visualizationSync) {
-            context.visualizationSync.queuePatch({
-              camera: { projection: nextProjection },
-            });
-            await context.visualizationSync.flushNow();
-          } else if (context.api) {
-            const state = await context.api.visualization.patch({
-              camera: { projection: nextProjection },
-            });
-            context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-          }
+          context.cameraRegistry?.patchCamera({ projection: nextProjection });
           return { status: "completed" };
         },
       },

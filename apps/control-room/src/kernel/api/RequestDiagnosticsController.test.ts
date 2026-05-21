@@ -89,6 +89,58 @@ describe("RequestDiagnosticsController", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses newest-first snapshots until diagnostics change", () => {
+    const diagnostics = new RequestDiagnosticsController();
+
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/first",
+      requestId: "req-1",
+      status: 200,
+      timestampMs: 10,
+    });
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/second",
+      requestId: "req-2",
+      status: 200,
+      timestampMs: 20,
+    });
+
+    const firstSnapshot = diagnostics.listNewestFirst();
+
+    expect(diagnostics.listNewestFirst()).toBe(firstSnapshot);
+    expect(firstSnapshot.map((entry) => entry.requestId)).toEqual([
+      "req-2",
+      "req-1",
+    ]);
+
+    diagnostics.record({
+      method: "GET",
+      outcome: "ok",
+      path: "/third",
+      requestId: "req-3",
+      status: 200,
+      timestampMs: 30,
+    });
+
+    const secondSnapshot = diagnostics.listNewestFirst();
+
+    expect(secondSnapshot).not.toBe(firstSnapshot);
+    expect(secondSnapshot.map((entry) => entry.requestId)).toEqual([
+      "req-3",
+      "req-2",
+      "req-1",
+    ]);
+
+    diagnostics.clear();
+
+    expect(diagnostics.listNewestFirst()).toEqual([]);
+    expect(diagnostics.listNewestFirst()).not.toBe(secondSnapshot);
+  });
+
   it("coalesces synchronous records into one subscriber notification", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const listener = vi.fn();

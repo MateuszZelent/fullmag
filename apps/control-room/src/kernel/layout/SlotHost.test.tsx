@@ -14,6 +14,7 @@ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBrid
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
+import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
@@ -31,6 +32,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     bus,
+    cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),
     commands: new CommandRegistry(),
     diagnostics: new RequestDiagnosticsController(),

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
@@ -20,6 +23,11 @@ import {
   resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
+
+const viewport3dRenderModelSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/viewport3dRenderModel.ts"),
+  "utf8",
+);
 
 function topologyFixture(): DecodedTopology {
   return {
@@ -55,6 +63,23 @@ function fieldVectorFixture(): DecodedFieldVector {
     ]),
   };
 }
+
+describe("viewport3dRenderModel performance contracts", () => {
+  it("caches averaged surface normals used by vector surface offsets", () => {
+    expect(viewport3dRenderModelSource).toContain(
+      "const surfaceNodeNormalCache = new WeakMap",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "function cachedAveragedSurfaceNodeNormals",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "surfaceNodeNormalCache.get(topology)",
+    );
+    expect(viewport3dRenderModelSource).not.toContain(
+      "? buildAveragedSurfaceNodeNormals(",
+    );
+  });
+});
 
 describe("viewport3dRenderModel", () => {
   it("expands tetrahedral element indices into drawable triangle faces", () => {

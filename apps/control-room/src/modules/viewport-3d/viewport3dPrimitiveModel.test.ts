@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
@@ -10,7 +13,16 @@ import {
   resolvePrimitiveSelectionBounds,
 } from "./viewport3dPrimitiveModel";
 
+const viewport3dPrimitiveModelSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/viewport3dPrimitiveModel.ts"),
+  "utf8",
+);
+
 describe("viewport3dPrimitiveModel", () => {
+  it("keeps JSON stringify out of primitive geometry key generation", () => {
+    expect(viewport3dPrimitiveModelSource).not.toContain("JSON.stringify");
+  });
+
   it("builds primitive-only entries from SceneDocument without topology", () => {
     const model = buildViewport3DPrimitiveRenderModel(
       {

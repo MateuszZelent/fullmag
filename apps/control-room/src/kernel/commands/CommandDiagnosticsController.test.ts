@@ -85,6 +85,52 @@ describe("CommandDiagnosticsController", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses newest-first snapshots until diagnostics change", () => {
+    const diagnostics = new CommandDiagnosticsController();
+
+    diagnostics.record({
+      commandId: "study.run",
+      source: "ribbon",
+      status: "submitted",
+      timestampMs: 10,
+    });
+    diagnostics.record({
+      commandId: "study.compute-fields",
+      source: "ribbon",
+      status: "completed",
+      timestampMs: 20,
+    });
+
+    const firstSnapshot = diagnostics.listNewestFirst();
+
+    expect(diagnostics.listNewestFirst()).toBe(firstSnapshot);
+    expect(firstSnapshot.map((entry) => entry.commandId)).toEqual([
+      "study.compute-fields",
+      "study.run",
+    ]);
+
+    diagnostics.record({
+      commandId: "study.compute-energies",
+      source: "ribbon",
+      status: "completed",
+      timestampMs: 30,
+    });
+
+    const secondSnapshot = diagnostics.listNewestFirst();
+
+    expect(secondSnapshot).not.toBe(firstSnapshot);
+    expect(secondSnapshot.map((entry) => entry.commandId)).toEqual([
+      "study.compute-energies",
+      "study.compute-fields",
+      "study.run",
+    ]);
+
+    diagnostics.clear();
+
+    expect(diagnostics.listNewestFirst()).toEqual([]);
+    expect(diagnostics.listNewestFirst()).not.toBe(secondSnapshot);
+  });
+
   it("coalesces synchronous records into one subscriber notification", async () => {
     const diagnostics = new CommandDiagnosticsController();
     const listener = vi.fn();

@@ -18,6 +18,14 @@ const geometryObjectPanelSource = readFileSync(
   join(process.cwd(), "src/modules/inspector/panels/GeometryObjectPanel.tsx"),
   "utf8",
 );
+const viewportModuleSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/Viewport3DModule.tsx"),
+  "utf8",
+);
+const viewportSceneModelSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts"),
+  "utf8",
+);
 const objectVisualizationControllerSource = readFileSync(
   join(process.cwd(), "src/kernel/visualization/ObjectVisualizationController.ts"),
   "utf8",
@@ -58,5 +66,16 @@ describe("object visualization subscription performance contracts", () => {
     expect(geometryObjectPanelSource).toContain("geometryObjectVisualizationColorsEquals");
     expect(geometryObjectPanelSource).toContain("resolveGeometryObjectVisualizationColors");
     expect(geometryObjectPanelSource).not.toContain("useObjectVisualizationRegistry()");
+  });
+
+  it("keeps viewport rendering off the full visualization registry snapshot", () => {
+    expect(viewportModuleSource).not.toContain("useObjectVisualizationRegistry()");
+    expect(viewportSceneModelSource).toContain("useObjectVisualizationSelector");
+    expect(viewportSceneModelSource).toContain("selectViewport3DObjectVisualizationSnapshot");
+    expect(viewportSceneModelSource).toContain("viewport3DObjectVisualizationSnapshotEquals");
+    expect(viewportSceneModelSource).toContain("visualizationTargetKey");
+    expect(viewportSceneModelSource).not.toContain(
+      "ReturnType<typeof useObjectVisualizationRegistry>",
+    );
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import type { ExplorerTabId } from "./explorerTypes";
 import {
@@ -79,11 +79,26 @@ export function useExplorerStore(): ExplorerStoreState {
 
 export function useExplorerStoreSelector<T>(
   selector: (state: ExplorerStoreState) => T,
+  options: { isEqual?: (previous: T, next: T) => boolean } = {},
 ): T {
+  const { isEqual = Object.is } = options;
+  const selectedRef = useRef<{ selected: T } | null>(null);
+
+  const getSelectedSnapshot = useCallback(() => {
+    const selected = selector(explorerStore.getSnapshot());
+    const previous = selectedRef.current;
+    if (previous && isEqual(previous.selected, selected)) {
+      return previous.selected;
+    }
+
+    selectedRef.current = { selected };
+    return selected;
+  }, [isEqual, selector]);
+
   return useSyncExternalStore(
     explorerStore.subscribe,
-    () => selector(explorerStore.getSnapshot()),
-    () => selector(explorerStore.getSnapshot()),
+    getSelectedSnapshot,
+    getSelectedSnapshot,
   );
 }
 

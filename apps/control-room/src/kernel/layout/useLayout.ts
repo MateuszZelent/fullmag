@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import { useKernel } from "../KernelContext";
 
@@ -48,12 +48,32 @@ export function useLayoutActions() {
   return { setActiveTab, togglePanel } as const;
 }
 
-export function useLayoutSelector<T>(selector: (state: LayoutState) => T): T {
+export function useLayoutSelector<T>(
+  selector: (state: LayoutState) => T,
+  options: { isEqual?: (previous: T, next: T) => boolean } = {},
+): T {
   const { layout } = useKernel();
+  const { isEqual = Object.is } = options;
+  const selectedRef = useRef<{ selected: T } | null>(null);
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => layout.subscribe(onStoreChange),
+    [layout],
+  );
+  const getSelectedSnapshot = useCallback(() => {
+    const selected = selector(layout.get());
+    const previous = selectedRef.current;
+    if (previous && isEqual(previous.selected, selected)) {
+      return previous.selected;
+    }
+
+    selectedRef.current = { selected };
+    return selected;
+  }, [isEqual, selector, layout]);
 
   return useSyncExternalStore(
-    (onStoreChange) => layout.subscribe(onStoreChange),
-    () => selector(layout.get()),
-    () => selector(layout.get()),
+    subscribe,
+    getSelectedSnapshot,
+    getSelectedSnapshot,
   );
 }

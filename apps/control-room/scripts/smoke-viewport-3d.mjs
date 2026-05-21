@@ -14,6 +14,7 @@ const requireGeometryFlow =
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
+const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
   "fullmag.viewport3d.buildTopologyRenderModel",
   "fullmag.viewport3d.buildMeshQualityVertexColors",
@@ -63,7 +64,9 @@ await installComputePerformanceProbe(page);
 const errors = [];
 const sceneResponses = [];
 const realtimeMessages = [];
+const cameraGestureRequests = [];
 let sceneResponseSequence = 0;
+let recordCameraGestureRequests = false;
 
 await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
@@ -84,6 +87,15 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => {
   errors.push(error.message);
+});
+page.on("request", (request) => {
+  if (!recordCameraGestureRequests) return;
+  const path = pathnameFromUrl(request.url());
+  if (!path.startsWith("/v2/sessions/current/")) return;
+  cameraGestureRequests.push({
+    method: request.method(),
+    path,
+  });
 });
 page.on("websocket", (websocket) => {
   if (!isRealtimeWebsocketUrl(websocket.url())) {
@@ -191,7 +203,9 @@ try {
   if (errors.length > 0) {
     throw new Error("Browser console errors:\n" + errors.join("\n"));
   }
+  await verifyCameraGesturesStayLocal({ canvas, page });
   await verifyProjectionRoundTrip({ canvas, page });
+  await verifyDimensionFrameCage({ canvas, page });
   if (requireGeometryFlow) {
     await verifyGeometryAuthoringFlow({
       canvas,
@@ -207,6 +221,56 @@ try {
   console.log(`Viewport 3D smoke passed at ${url}.`);
 } finally {
   await browser.close();
+}
+
+async function verifyCameraGesturesStayLocal({ canvas, page }) {
+  const box = await canvas.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error("Cannot run camera gesture smoke: viewport canvas has no bounds.");
+  }
+  const x = box.x + box.width * 0.5;
+  const y = box.y + box.height * 0.5;
+  const startIndex = cameraGestureRequests.length;
+
+  recordCameraGestureRequests = true;
+  try {
+    await page.mouse.move(x, y);
+    for (let index = 0; index < 4; index += 1) {
+      await page.mouse.wheel(0, -240);
+    }
+    await delay(300);
+    await page.mouse.down();
+    await page.mouse.move(x + 80, y + 36, { steps: 8 });
+    await page.mouse.up();
+    await delay(300);
+  } finally {
+    recordCameraGestureRequests = false;
+  }
+
+  const gestureRequests = cameraGestureRequests.slice(startIndex);
+  const visualizationStatePatches = gestureRequests.filter(
+    (request) =>
+      request.method === "PATCH" &&
+      request.path === VISUALIZATION_STATE_PATH,
+  );
+  if (visualizationStatePatches.length > 0) {
+    throw new Error(
+      "Camera wheel/drag gestures emitted visualization PATCH requests: " +
+        visualizationStatePatches
+          .map((request) => `${request.method} ${request.path}`)
+          .join(", "),
+    );
+  }
+
+  const pixelSample = await sampleCanvasComposite(page, canvas);
+  if (!pixelSample.nonBlank) {
+    throw new Error(
+      `3D viewport canvas became blank after camera gestures: ${pixelSample.variedPixels}/${pixelSample.sampledPixels} sampled pixels differ from background.`,
+    );
+  }
+  console.log(
+    `Camera gesture smoke passed: visualization_state_patches=0 session_requests=${gestureRequests.length}`,
+  );
 }
 
 async function installComputePerformanceProbe(page) {
@@ -430,6 +494,31 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
       (initialActive ?? "null") +
       ").",
   );
+}
+
+async function verifyDimensionFrameCage({ canvas, page }) {
+  const commandId = "viewport-3d.dimension-frame-cage";
+  await page.getByRole("tab", { name: "View" }).first().click();
+  const initialSample = await sampleCanvasComposite(page, canvas);
+  const frameAction = page.locator('[data-action-id="view-dimension-frame"]');
+  await frameAction.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+
+  await frameAction.click();
+  await page
+    .getByRole("menuitemradio", { exact: true, name: "Floor + vertical" })
+    .click();
+  await waitForCanvasCompositeChange(
+    page,
+    canvas,
+    initialSample,
+    "dimension frame canvas renders after cage mode",
+    "Viewport canvas did not visually change after enabling dimension frame cage",
+  );
+
+  console.log(`Viewport 3D dimension frame cage passed (command=${commandId}).`);
 }
 
 async function verifyGeometryAuthoringFlow({

@@ -34,6 +34,7 @@ type CommandDiagnosticListener = () => void;
 export class CommandDiagnosticsController {
   private readonly entries: CommandDiagnosticEntry[] = [];
   private readonly listeners = new Set<CommandDiagnosticListener>();
+  private newestFirstEntries: CommandDiagnosticEntry[] | null = null;
   private notificationQueued = false;
   private sequence = 0;
   private version = 0;
@@ -46,6 +47,7 @@ export class CommandDiagnosticsController {
     }
 
     this.entries.length = 0;
+    this.newestFirstEntries = null;
     this.schedulePublish();
   }
 
@@ -58,7 +60,13 @@ export class CommandDiagnosticsController {
   }
 
   listNewestFirst(): CommandDiagnosticEntry[] {
-    return [...this.entries].reverse();
+    if (!this.newestFirstEntries) {
+      this.newestFirstEntries = Object.freeze(
+        [...this.entries].reverse(),
+      ) as CommandDiagnosticEntry[];
+    }
+
+    return this.newestFirstEntries;
   }
 
   record(entry: CommandDiagnosticRecord): void {
@@ -78,6 +86,7 @@ export class CommandDiagnosticsController {
       this.entries.splice(0, this.entries.length - this.maxEntries);
     }
 
+    this.newestFirstEntries = null;
     this.schedulePublish();
   }
 

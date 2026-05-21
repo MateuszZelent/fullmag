@@ -12,6 +12,7 @@ import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidati
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 
@@ -28,6 +29,7 @@ function makeKernel(): KernelApi {
   return {
     api,
     bus,
+    cameraRegistry: new CameraRegistryController({ api: api.visualization }),
     commandDiagnostics: new CommandDiagnosticsController(),
     commands,
     diagnostics: new RequestDiagnosticsController(),

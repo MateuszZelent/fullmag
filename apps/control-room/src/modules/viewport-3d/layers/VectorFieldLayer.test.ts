@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   BoxGeometry,
@@ -13,6 +16,11 @@ import {
   resolveVectorFieldLayerStyle,
   syncVectorGlyphColorState,
 } from "./VectorFieldLayer";
+
+const vectorFieldLayerSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/layers/VectorFieldLayer.tsx"),
+  "utf8",
+);
 import {
   shaderColorFromSettings,
   shaderUsesVertexColors,
@@ -21,6 +29,22 @@ import {
   vectorStyleFromSettings,
   wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+
+describe("VectorFieldLayer performance contracts", () => {
+  it("routes glyph matrix uploads through cancellable bounded batches", () => {
+    expect(vectorFieldLayerSource).toContain(
+      "export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
+    );
+    expect(vectorFieldLayerSource).toContain(
+      "export function buildVectorGlyphUploadBatches",
+    );
+    expect(vectorFieldLayerSource).toContain("requestVectorGlyphUploadTask");
+    expect(vectorFieldLayerSource).toContain("cancelVectorGlyphUploadTask");
+    expect(vectorFieldLayerSource).not.toContain(
+      "for (let index = 0; index < glyphs.count; index += 1)",
+    );
+  });
+});
 
 describe("VectorFieldLayer style mapping", () => {
   it("maps canonical vector style into material alpha, monochrome color, and glyph thickness", () => {

@@ -54,6 +54,9 @@ jobs:
       - name: Check control-room idle performance
         run: pnpm --dir apps/control-room audit:idle-performance
 
+      - name: Check control-room compute performance
+        run: pnpm --dir apps/control-room audit:compute-performance
+
       - name: Typecheck control-room app
         run: pnpm --dir apps/control-room typecheck
 

@@ -60,6 +60,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("selectHeaderSessionSource");
     expect(auditScript).toContain("headerSessionSourceEquals");
     expect(auditScript).toContain("checkRuntimeControlSessionStatusSelector");
+    expect(auditScript).toContain("checkSimulationStartupOverlaySessionStatusSelector");
+    expect(auditScript).toContain("selectSimulationStartupOverlayResourceState");
+    expect(auditScript).toContain("simulationStartupOverlayResourceStateEquals");
     expect(auditScript).toContain("selectRuntimeCommandControlSessionStatus");
     expect(auditScript).toContain("runtimeCommandControlSessionStatusEquals");
     expect(auditScript).toContain(
@@ -73,6 +76,11 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkFieldCatalogResourceSeparation");
     expect(auditScript).toContain("checkObjectVisualizationPanelSessionStatusSelector");
     expect(auditScript).toContain("checkObjectVisualizationPanelVisualizationSelector");
+    expect(auditScript).toContain("checkObjectVisualizationPanelNumberFieldDebounce");
+    expect(auditScript).toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
+    expect(auditScript).toContain("onPointerUp={flushDraft}");
+    expect(auditScript).toContain("onKeyUp={flushDraft}");
+    expect(auditScript).toContain("onBlur={flushDraft}");
     expect(auditScript).toContain("selectObjectVisualizationPanelSnapshot");
     expect(auditScript).toContain("objectVisualizationPanelSnapshotEquals");
     expect(auditScript).toContain("checkMeshDetailsPanelSessionStatusSelector");
@@ -134,12 +142,19 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("resultResourceRequestCount");
     expect(auditScript).toContain("checkShellSelectorHooks");
     expect(auditScript).toContain("checkObjectVisualizationSelectorHooks");
+    expect(auditScript).toContain("checkViewport3DObjectVisualizationSelector");
+    expect(auditScript).toContain("selectViewport3DObjectVisualizationSnapshot");
+    expect(auditScript).toContain("viewport3DObjectVisualizationSnapshotEquals");
     expect(auditScript).toContain("checkGeometryObjectPanelVisualizationSelector");
     expect(auditScript).toContain("useObjectVisualizationController");
     expect(auditScript).toContain("geometryObjectVisualizationColorsEquals");
     expect(auditScript).toContain("resolveGeometryObjectVisualizationColors");
     expect(auditScript).toContain("checkCommandShortcutConnector");
     expect(auditScript).toContain("checkFooterDiagnosticsBatching");
+    expect(auditScript).toContain("newestFirstEntries");
+    expect(auditScript).toContain("Object.freeze(");
+    expect(auditScript).toContain("[...this.entries].reverse()");
+    expect(auditScript).toContain("this.newestFirstEntries = null");
     expect(auditScript).toContain("checkPerformanceDiagnosticsExport");
     expect(auditScript).toContain("startPerformanceMeasureDiagnostics");
     expect(auditScript).toContain("channel: \"performance\"");
@@ -165,7 +180,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("totalResponsivenessDelayMs");
     expect(auditScript).toContain("delayedResponsivenessTickCount");
     expect(auditScript).toContain("useLayoutSelector");
+    expect(auditScript).toContain("useLayout selector equality");
+    expect(auditScript).toContain("explorer store selector equality");
     expect(auditScript).toContain("useSelectionSelector");
+    expect(auditScript).toContain("useSelectionActions");
+    expect(auditScript).toContain("src/modules/inspector/InspectorModule.tsx");
+    expect(auditScript).toContain("src/modules/viewport-3d/Viewport3DModule.tsx");
     expect(auditScript).toContain("runtimeResourceDataRef.current");
     expect(auditScript).toContain("listNewestFirst");
     expect(auditScript).toContain("queueMicrotask");

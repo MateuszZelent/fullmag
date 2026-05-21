@@ -15,6 +15,8 @@ describe("layout subscription performance contracts", () => {
   it("exposes action and selector hooks separately", () => {
     expect(useLayoutSource).toContain("export function useLayoutSelector");
     expect(useLayoutSource).toContain("export function useLayoutActions");
+    expect(useLayoutSource).toContain("options: { isEqual?:");
+    expect(useLayoutSource).toContain("isEqual(previous.selected, selected)");
   });
 
   it("keeps RibbonModule subscribed only to the active module tab", () => {

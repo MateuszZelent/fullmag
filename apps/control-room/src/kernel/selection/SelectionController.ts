@@ -2,18 +2,13 @@ import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import type { ModuleId } from "../types";
 
-import { EMPTY_SELECTION, type Selection } from "./selectionTypes";
+import {
+  EMPTY_SELECTION,
+  selectionRefEquals,
+  type Selection,
+} from "./selectionTypes";
 
 type SelectionListener = (selection: Selection) => void;
-
-function sameSelectionRef(
-  left: Selection["ref"],
-  right: Selection["ref"],
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return JSON.stringify(left) === JSON.stringify(right);
-}
 
 /**
  * Kernel-owned selection state.
@@ -49,7 +44,7 @@ export class SelectionController {
       prev.label === this.state.label &&
       prev.objectId === this.state.objectId &&
       prev.nodeId === this.state.nodeId &&
-      sameSelectionRef(prev.ref, this.state.ref)
+      selectionRefEquals(prev.ref, this.state.ref)
     ) {
       return;
     }

@@ -3239,29 +3239,132 @@ function buildAirboxAction(
 }
 
 function buildDimensionFrameAction({
+  commandContext = { source: "ribbon" },
+  commands,
   visualization,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
   const objectSettings = visualization.getDefaultSettings("object");
   const partSettings = visualization.getDefaultSettings("part");
   const objectFrameVisible =
     objectSettings.boundsVisible && partSettings.boundsVisible;
+  const dimensionMode =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.dimension-frame-floor", "floor"],
+      ["viewport-3d.dimension-frame-cage", "cage"],
+      ["viewport-3d.dimension-frame-off", "off"],
+    ]) ?? "floor";
+  const gridDensity =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.dimension-density-auto", "auto"],
+      ["viewport-3d.dimension-density-coarse", "coarse"],
+      ["viewport-3d.dimension-density-fine", "fine"],
+    ]) ?? "auto";
+  const scaleUnit =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.scale-unit-auto", "auto"],
+      ["viewport-3d.scale-unit-nm", "nm"],
+      ["viewport-3d.scale-unit-um", "um"],
+      ["viewport-3d.scale-unit-mm", "mm"],
+      ["viewport-3d.scale-unit-m", "m"],
+    ]) ?? "auto";
+  const scaleLabelsVisible = commands?.get("viewport-3d.scale-labels-toggle")
+    ? commands.isActive("viewport-3d.scale-labels-toggle", commandContext)
+    : true;
 
   return {
     id: "view-dimension-frame",
     icon: icon(Ruler),
     label: "Frame",
+    active: dimensionMode !== "off" || objectFrameVisible,
     iconColor: "text-emerald-300",
     menu: [
       {
         type: "radio-group",
-        id: "axes:scope",
-        label: "Axes scope",
-        value: "universe",
+        id: "frame:dimension-mode",
+        label: "Dimension grid",
+        value: dimensionMode,
         items: [
-          { value: "universe", label: "Universe scale" },
-          { value: "object", label: "Object scale" },
+          {
+            commandId: "viewport-3d.dimension-frame-floor",
+            value: "floor",
+            label: "Floor",
+          },
+          {
+            commandId: "viewport-3d.dimension-frame-cage",
+            value: "cage",
+            label: "Floor + vertical",
+          },
+          {
+            commandId: "viewport-3d.dimension-frame-off",
+            value: "off",
+            label: "Off",
+          },
         ],
       },
+      {
+        type: "radio-group",
+        id: "frame:grid-density",
+        label: "Grid density",
+        value: gridDensity,
+        items: [
+          {
+            commandId: "viewport-3d.dimension-density-auto",
+            value: "auto",
+            label: "Auto",
+          },
+          {
+            commandId: "viewport-3d.dimension-density-coarse",
+            value: "coarse",
+            label: "Coarse",
+          },
+          {
+            commandId: "viewport-3d.dimension-density-fine",
+            value: "fine",
+            label: "Fine",
+          },
+        ],
+      },
+      {
+        type: "checkbox",
+        id: "frame:scale-labels",
+        label: "Scale labels",
+        checked: scaleLabelsVisible,
+        commandId: "viewport-3d.scale-labels-toggle",
+      },
+      {
+        type: "radio-group",
+        id: "frame:scale-unit",
+        label: "Scale unit",
+        value: scaleUnit,
+        items: [
+          {
+            commandId: "viewport-3d.scale-unit-auto",
+            value: "auto",
+            label: "Auto",
+          },
+          {
+            commandId: "viewport-3d.scale-unit-nm",
+            value: "nm",
+            label: "nm",
+          },
+          {
+            commandId: "viewport-3d.scale-unit-um",
+            value: "um",
+            label: "um",
+          },
+          {
+            commandId: "viewport-3d.scale-unit-mm",
+            value: "mm",
+            label: "mm",
+          },
+          {
+            commandId: "viewport-3d.scale-unit-m",
+            value: "m",
+            label: "m",
+          },
+        ],
+      },
+      { type: "separator", id: "frame:display-separator" },
       {
         type: "checkbox",
         id: "frame:object-bounds",

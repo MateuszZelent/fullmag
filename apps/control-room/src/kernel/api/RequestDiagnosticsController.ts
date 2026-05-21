@@ -41,6 +41,7 @@ type RequestDiagnosticListener = () => void;
 export class RequestDiagnosticsController {
   private readonly entries: RequestDiagnosticEntry[] = [];
   private readonly listeners = new Set<RequestDiagnosticListener>();
+  private newestFirstEntries: RequestDiagnosticEntry[] | null = null;
   private notificationQueued = false;
   private sequence = 0;
   private version = 0;
@@ -53,6 +54,7 @@ export class RequestDiagnosticsController {
     }
 
     this.entries.length = 0;
+    this.newestFirstEntries = null;
     this.schedulePublish();
   }
 
@@ -83,6 +85,7 @@ export class RequestDiagnosticsController {
       this.entries.splice(0, this.entries.length - this.maxEntries);
     }
 
+    this.newestFirstEntries = null;
     this.schedulePublish();
   }
 
@@ -91,7 +94,13 @@ export class RequestDiagnosticsController {
   }
 
   listNewestFirst(): RequestDiagnosticEntry[] {
-    return [...this.entries].reverse();
+    if (!this.newestFirstEntries) {
+      this.newestFirstEntries = Object.freeze(
+        [...this.entries].reverse(),
+      ) as RequestDiagnosticEntry[];
+    }
+
+    return this.newestFirstEntries;
   }
 
   subscribe(listener: RequestDiagnosticListener): () => void {

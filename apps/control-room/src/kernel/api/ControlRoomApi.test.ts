@@ -886,6 +886,43 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("preserves binary byte length when the decode scheduler transfers the buffer", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const topologyBuffer = makeTopologyBuffer();
+    const originalByteLength = topologyBuffer.byteLength;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      binaryDecodeScheduler: async ({ buffer, decodeInline }) => {
+        const data = decodeInline(buffer.slice(0));
+        structuredClone(buffer, { transfer: [buffer] });
+        expect(buffer.byteLength).toBe(0);
+        return data;
+      },
+      diagnostics,
+      fetchImpl: async () =>
+        binaryResponse(topologyBuffer, {
+          headers: { etag: '"topology-transferred"', ...contractHeaders },
+        }),
+      requestIdFactory: () => "req-transferred-topology",
+    });
+
+    const result = await api.data.domain.topology();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready topology, received ${result.status}`);
+    }
+    expect(result.byteLength).toBe(originalByteLength);
+    expect(diagnostics.list()).toContainEqual(
+      expect.objectContaining({
+        byteLength: originalByteLength,
+        detail: "decoded binary payload",
+        outcome: "ok",
+        path: "/v2/sessions/current/data/domain/topology",
+      }),
+    );
+  });
+
   it("emits performance measures around binary resource requests", async () => {
     const markSpy = vi.spyOn(performance, "mark");
     const measureSpy = vi.spyOn(performance, "measure");

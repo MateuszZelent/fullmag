@@ -97,8 +97,9 @@ describe("SimulationStartupOverlay", () => {
   });
 
   it("hydrates the smoke bypass from browser config after startup", () => {
-    expect(source).toContain("useState(false)");
-    expect(source).toContain("setAllowMissingSessionSmoke(getSimulationStartupSmokeBypassSnapshot())");
+    expect(source).toContain("useSyncExternalStore(");
+    expect(source).toContain("getSimulationStartupSmokeBypassSnapshot");
+    expect(source).toContain("getSimulationStartupSmokeBypassServerSnapshot");
   });
 
   it("allows controlled offline smoke tests to bypass the startup gate", () => {
@@ -159,6 +160,16 @@ describe("SimulationStartupOverlay", () => {
 
     expect(html).toContain("Preparing simulation");
     expect(html).not.toContain("viewport-main");
+  });
+
+  it("selects startup overlay state instead of subscribing to full session status", () => {
+    expect(source).toContain("selectSimulationStartupOverlayResourceState");
+    expect(source).toContain("simulationStartupOverlayResourceStateEquals");
+    expect(source).toMatch(
+      /useSessionStatusSelector\(\s*selectSimulationStartupOverlayResourceState/,
+    );
+    expect(source).not.toContain("useSessionStatus,");
+    expect(source).not.toContain("const sessionStatus = useSessionStatus();");
   });
 
   it("keeps refreshing status while startup overlay is visible", () => {

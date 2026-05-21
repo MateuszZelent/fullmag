@@ -63,10 +63,7 @@ import {
   getViewport3DVisualProfile,
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
-import {
-  resolveViewport3DMaterialProfile,
-  type Viewport3DMaterialProfile,
-} from "./viewport3DMaterialProfile";
+import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
@@ -96,6 +93,8 @@ interface Viewport3DSceneProps {
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraInteractionEnd?: () => void;
+  onCameraInteractionStart?: () => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
@@ -347,6 +346,8 @@ export function Viewport3DScene({
   meshQualityColors,
   meshQualityOverlayVisible,
   onCameraChange,
+  onCameraInteractionEnd,
+  onCameraInteractionStart,
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
@@ -559,6 +560,8 @@ export function Viewport3DScene({
         cameraProjection={cameraProjection}
         cameraState={cameraState}
         onCameraChange={onCameraChange}
+        onCameraInteractionEnd={onCameraInteractionEnd}
+        onCameraInteractionStart={onCameraInteractionStart}
         rotationMode={rotationMode}
         tracker={tracker}
       />
@@ -566,6 +569,8 @@ export function Viewport3DScene({
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
         onCameraChange={onCameraChange}
+        onCameraInteractionEnd={onCameraInteractionEnd}
+        onCameraInteractionStart={onCameraInteractionStart}
         rotationMode={rotationMode}
         viewCubeVisible={viewCubeVisible}
       />

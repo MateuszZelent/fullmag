@@ -91,6 +91,7 @@ try {
     }
   }
 
+  const dimensionFrameDelta = await enableDimensionFrameCage(page, canvas);
   const captures = [];
   for (const profile of requiredProfiles) {
     await setVisualProfile(page, viewport, profile);
@@ -118,6 +119,7 @@ try {
     `profiles=${requiredProfiles.join(",")}`,
     `scenes=${[...detectedScenes].join(",")}`,
     `changedPixels=${delta.changedPixels}/${delta.sampledPixels}`,
+    `dimensionFrameChangedPixels=${dimensionFrameDelta.changedPixels}/${dimensionFrameDelta.sampledPixels}`,
     fdmFixtureDelta
       ? `fdmFixtureChangedPixels=${fdmFixtureDelta.changedPixels}/${fdmFixtureDelta.sampledPixels}`
       : "fdmFixture=live",
@@ -186,6 +188,7 @@ async function verifyFdmFixtureScene(browser) {
       throw new Error(`FDM fixture rendered '${detectedScene}' instead of 'fdm'.`);
     }
 
+    const dimensionFrameDelta = await enableDimensionFrameCage(page, canvas);
     const captures = [];
     for (const profile of requiredProfiles) {
       await setVisualProfile(page, viewport, profile);
@@ -210,7 +213,12 @@ async function verifyFdmFixtureScene(browser) {
     if (errors.length > 0) {
       throw new Error(`FDM fixture browser console/network errors:\n${errors.join("\n")}`);
     }
-    return delta;
+    return {
+      changedPixels: delta.changedPixels,
+      dimensionFrameChangedPixels: dimensionFrameDelta.changedPixels,
+      dimensionFrameSampledPixels: dimensionFrameDelta.sampledPixels,
+      sampledPixels: delta.sampledPixels,
+    };
   } finally {
     await page.close();
   }
@@ -330,6 +338,58 @@ async function setVisualProfile(page, viewport, profile) {
     { timeout: 10_000 },
   );
   await page.waitForTimeout(120);
+}
+
+async function enableDimensionFrameCage(page, canvas) {
+  const commandId = "viewport-3d.dimension-frame-cage";
+  const baseline = await sampleCanvasComposite(page, canvas);
+  await page.getByRole("tab", { name: "View" }).click({ force: true });
+  await page
+    .locator('[data-action-id="view-dimension-frame"]')
+    .click({ force: true });
+  await page
+    .getByRole("menuitemradio", { exact: true, name: "Floor + vertical" })
+    .click();
+  const changed = await waitForCanvasCompositeChange(
+    page,
+    canvas,
+    baseline,
+    "dimension frame screenshot renders after cage mode",
+    "Viewport screenshot canvas did not visually change after enabling dimension frame cage",
+  );
+  const delta = canvasCompositeDifference(baseline, changed);
+  console.log(
+    `Viewport 3D dimension frame screenshot passed (command=${commandId}, changedPixels=${delta.changedPixels}/${delta.sampledPixels}).`,
+  );
+  return delta;
+}
+
+async function waitForCanvasCompositeChange(
+  page,
+  canvas,
+  baseline,
+  label,
+  failureMessage,
+) {
+  const deadline = Date.now() + 10_000;
+  let lastDelta = null;
+  while (Date.now() <= deadline) {
+    const current = await sampleCanvasComposite(page, canvas);
+    if (!current.nonBlank) {
+      throw new Error(
+        `${failureMessage}: viewport is blank (${current.variedPixels}/${current.sampledPixels} sampled pixels differ from background).`,
+      );
+    }
+    const delta = canvasCompositeDifference(baseline, current);
+    if (delta.changed) return current;
+    lastDelta = delta;
+    await page.waitForTimeout(100);
+  }
+
+  const suffix = lastDelta
+    ? `${lastDelta.changedPixels}/${lastDelta.sampledPixels} sampled pixels changed; threshold=${lastDelta.minimumChangedPixels}`
+    : "no canvas sample was collected";
+  throw new Error(`${label} timed out. ${failureMessage}: ${suffix}.`);
 }
 
 function profileLabel(profile) {

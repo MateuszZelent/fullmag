@@ -274,9 +274,33 @@ function geometryKey(
   return [
     objectId,
     asString(geometry.geometry_kind) ?? asString(geometry.kind) ?? "object",
-    JSON.stringify(geometry.geometry_params ?? {}),
-    JSON.stringify(transform ?? {}),
+    primitiveKeyValue(geometry.geometry_params ?? {}),
+    primitiveKeyValue(transform ?? {}),
   ].join(":");
+}
+
+function primitiveKeyValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    return `[${value.map(primitiveKeyValue).join(",")}]`;
+  }
+  if (isKeyRecord(value)) {
+    return `{${Object.entries(value)
+      .map(([key, entry]) => `${quotePrimitiveKeyString(key)}:${primitiveKeyValue(entry)}`)
+      .join(",")}}`;
+  }
+  if (typeof value === "string") return quotePrimitiveKeyString(value);
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return "null";
+}
+
+function isKeyRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function quotePrimitiveKeyString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 export function buildViewport3DPrimitiveRenderModel(

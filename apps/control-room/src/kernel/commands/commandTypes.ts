@@ -4,6 +4,7 @@ import type { ControlRoomApi } from "../api/ControlRoomApi";
 import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import type { SelectionController } from "../selection/SelectionController";
+import type { CameraRegistryController } from "../visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
@@ -21,6 +22,7 @@ export interface CommandContext {
     | "shortcut"
     | "test";
   api?: ControlRoomApi;
+  cameraRegistry?: CameraRegistryController;
   input?: unknown;
   layout?: LayoutController;
   resourceData?: Readonly<Record<string, unknown>>;

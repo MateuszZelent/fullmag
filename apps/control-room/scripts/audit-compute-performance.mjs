@@ -72,9 +72,21 @@ const appMenuBarPath = path.join(
   "src/kernel/layout/AppMenuBar.tsx",
 );
 const useLayoutPath = path.join(appRoot, "src/kernel/layout/useLayout.ts");
+const simulationStartupOverlayPath = path.join(
+  appRoot,
+  "src/kernel/layout/SimulationStartupOverlay.tsx",
+);
 const useSelectionPath = path.join(
   appRoot,
   "src/kernel/selection/useSelection.ts",
+);
+const selectionControllerPath = path.join(
+  appRoot,
+  "src/kernel/selection/SelectionController.ts",
+);
+const selectionTypesPath = path.join(
+  appRoot,
+  "src/kernel/selection/selectionTypes.ts",
 );
 const explorerStorePath = path.join(
   appRoot,
@@ -171,6 +183,16 @@ const shellSelectorConsumerContracts = [
     path: "src/modules/footer/FooterTelemetry.tsx",
     require: ["useSelectionSelector", "useSessionStatusSelector"],
   },
+  {
+    forbid: ["useSelection("],
+    path: "src/modules/inspector/InspectorModule.tsx",
+    require: ["useSelectionSelector"],
+  },
+  {
+    forbid: ["useSelection("],
+    path: "src/modules/viewport-3d/Viewport3DModule.tsx",
+    require: ["useSelectionActions", "useSelectionSelector"],
+  },
 ].map((contract) => ({
   ...contract,
   absolutePath: path.join(appRoot, contract.path),
@@ -179,13 +201,25 @@ const viewportSceneModelPath = path.join(
   appRoot,
   "src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts",
 );
+const viewportModulePath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/Viewport3DModule.tsx",
+);
 const fdmCuboidLayerPath = path.join(
   appRoot,
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
 );
+const vectorFieldLayerPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/layers/VectorFieldLayer.tsx",
+);
 const topologyRenderModelPath = path.join(
   appRoot,
   "src/modules/viewport-3d/viewport3dRenderModel.ts",
+);
+const primitiveModelPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/viewport3dPrimitiveModel.ts",
 );
 const qualityMappingPath = path.join(
   appRoot,
@@ -208,17 +242,21 @@ checkSessionStatusSelectors();
 checkExplorerModuleSessionStatusSelector();
 checkRibbonModuleSessionStatusSelector();
 checkHeaderSessionStatusSelector();
+checkSimulationStartupOverlaySessionStatusSelector();
 checkRuntimeControlSessionStatusSelector();
 checkStudyRuntimeCommandResourceDataSessionStatusSelector();
 checkFieldCatalogResourceSeparation();
 checkObjectVisualizationPanelSessionStatusSelector();
 checkObjectVisualizationPanelVisualizationSelector();
+checkObjectVisualizationPanelNumberFieldDebounce();
 checkMeshDetailsPanelSessionStatusSelector();
 checkAirboxMeshPolicyPanelSessionStatusSelector();
 checkStudyInspectorPanelSessionStatusSelector();
 checkMeshBuildDialogSessionStatusSelector();
 checkShellSelectorHooks();
+checkSelectionComparatorHotPath();
 checkObjectVisualizationSelectorHooks();
+checkViewport3DObjectVisualizationSelector();
 checkGeometryObjectPanelVisualizationSelector();
 checkCommandShortcutConnector();
 checkFooterDiagnosticsBatching();
@@ -227,10 +265,13 @@ checkReactRenderProfilerInstrumentation();
 checkVisualizationPatchHotPath();
 checkRibbonSliderCommandDebounce();
 checkViewportPerformanceMarks();
+checkPrimitiveGeometryKeyHotPath();
 checkTopologyPositionConversionCache();
 checkTopologyIndexBufferCache();
+checkVectorSurfaceNormalCache();
 checkMeshQualityVertexColorCache();
 checkFdmCuboidChunkedUpload();
+checkVectorGlyphChunkedUpload();
 checkFdmVectorSegmentCache();
 checkFdmCuboidSceneModelReuse();
 checkFooterTelemetryIsOptIn();
@@ -542,6 +583,26 @@ function checkHeaderSessionStatusSelector() {
   ]);
 }
 
+function checkSimulationStartupOverlaySessionStatusSelector() {
+  const source = readFileSync(simulationStartupOverlayPath, "utf8");
+  requireTokens(source, "SimulationStartupOverlay session status selector", [
+    "selectSimulationStartupOverlayResourceState",
+    "simulationStartupOverlayResourceStateEquals",
+    "startupResource.refetch",
+  ]);
+  requirePatterns(source, "SimulationStartupOverlay session status selector", [
+    [
+      /useSessionStatusSelector\(\s*selectSimulationStartupOverlayResourceState/,
+      "useSessionStatusSelector(selectSimulationStartupOverlayResourceState)",
+    ],
+  ]);
+  forbidTokens(source, "SimulationStartupOverlay session status selector", [
+    "useSessionStatus,",
+    "const sessionStatus = useSessionStatus();",
+    "sessionStatus.refetch",
+  ]);
+}
+
 function checkRuntimeControlSessionStatusSelector() {
   const source = readFileSync(studyRuntimeResourcesPath, "utf8");
   const controlHook = blockBetween(
@@ -654,6 +715,29 @@ function checkObjectVisualizationPanelVisualizationSelector() {
   ]);
 }
 
+function checkObjectVisualizationPanelNumberFieldDebounce() {
+  const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  const numberField = blockBetween(
+    source,
+    "function NumberField",
+    "function ToggleButton",
+  );
+
+  requireTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
+    "VISUALIZATION_NUMBER_COMMIT_DELAY_MS",
+    "pendingValueRef",
+    "window.setTimeout(",
+    "flushDraft,",
+    "onPointerUp={flushDraft}",
+    "onKeyUp={flushDraft}",
+    "onBlur={flushDraft}",
+  ]);
+  forbidTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
+    "onChange(event.target.value)",
+    "onChange(Number(event.target.value))",
+  ]);
+}
+
 function checkMeshDetailsPanelSessionStatusSelector() {
   const source = readFileSync(meshDetailsPanelPath, "utf8");
   requireTokens(source, "MeshDetailsPanel session status selector", [
@@ -737,11 +821,21 @@ function checkShellSelectorHooks() {
     "export function useLayoutSelector",
     "export function useLayoutActions",
   ]);
+  requireTokens(useLayout, "useLayout selector equality", [
+    "options: { isEqual?:",
+    "useRef<{ selected: T } | null>(null)",
+    "isEqual(previous.selected, selected)",
+  ]);
   requireTokens(useSelection, "useSelection selector hook", [
     "export function useSelectionSelector",
   ]);
   requireTokens(explorerStore, "explorer store selector hook", [
     "export function useExplorerStoreSelector",
+  ]);
+  requireTokens(explorerStore, "explorer store selector equality", [
+    "options: { isEqual?:",
+    "useRef<{ selected: T } | null>(null)",
+    "isEqual(previous.selected, selected)",
   ]);
   requireTokens(objectVisualization, "object visualization selector hook", [
     "export function useObjectVisualizationSelector",
@@ -754,6 +848,32 @@ function checkShellSelectorHooks() {
   }
 }
 
+function checkSelectionComparatorHotPath() {
+  const selectionTypes = readFileSync(selectionTypesPath, "utf8");
+  const useSelection = readFileSync(useSelectionPath, "utf8");
+  const selectionController = readFileSync(selectionControllerPath, "utf8");
+
+  requireTokens(selectionTypes, "selection ref comparator", [
+    "export function selectionRefEquals",
+    "export function selectionSnapshotEquals",
+    "switch (left.type)",
+    "centroidEquals(left.centroid, right.centroid)",
+  ]);
+  requireTokens(useSelection, "useSelection selection comparator", [
+    "export { selectionSnapshotEquals }",
+  ]);
+  requireTokens(selectionController, "SelectionController selection comparator", [
+    "selectionRefEquals(prev.ref, this.state.ref)",
+  ]);
+  forbidTokens(selectionTypes, "selection ref comparator", ["JSON.stringify"]);
+  forbidTokens(useSelection, "useSelection selection comparator", [
+    "JSON.stringify",
+  ]);
+  forbidTokens(selectionController, "SelectionController selection comparator", [
+    "JSON.stringify",
+  ]);
+}
+
 function checkObjectVisualizationSelectorHooks() {
   const source = readFileSync(objectVisualizationHookPath, "utf8");
   requireTokens(source, "object visualization selector hook", [
@@ -761,6 +881,27 @@ function checkObjectVisualizationSelectorHooks() {
     "isEqual(previous.selected, selected)",
     "selectedRef.current",
     "export function useObjectVisualizationController",
+  ]);
+}
+
+function checkViewport3DObjectVisualizationSelector() {
+  const moduleSource = readFileSync(viewportModulePath, "utf8");
+  const sceneModelSource = readFileSync(viewportSceneModelPath, "utf8");
+
+  requireTokens(sceneModelSource, "Viewport3D object visualization selector", [
+    "useObjectVisualizationSelector",
+    "selectViewport3DObjectVisualizationSnapshot",
+    "viewport3DObjectVisualizationSnapshotEquals",
+    "visualizationTargetKey",
+    "pushViewportVisualizationTarget",
+    "AIRBOX_VISUALIZATION_TARGET",
+  ]);
+  forbidTokens(moduleSource, "Viewport3DModule object visualization selector", [
+    "useObjectVisualizationRegistry()",
+    "objectVisualizationSnapshot",
+  ]);
+  forbidTokens(sceneModelSource, "Viewport3D object visualization selector", [
+    "ReturnType<typeof useObjectVisualizationRegistry>",
   ]);
 }
 
@@ -822,13 +963,18 @@ function checkFooterDiagnosticsBatching() {
     ["CommandDiagnosticsController", commandDiagnostics],
   ]) {
     requireTokens(source, label, [
+      "private newestFirstEntries",
       "private notificationQueued = false",
+      "this.newestFirstEntries = null",
       "listNewestFirst()",
+      "Object.freeze(",
+      "[...this.entries].reverse()",
       "private schedulePublish(): void",
       "queueMicrotask(() => {",
     ]);
     forbidTokens(source, label, [
       "private publish(): void",
+      "return [...this.entries].reverse();",
     ]);
   }
 }
@@ -944,6 +1090,13 @@ function checkVisualizationPatchHotPath() {
   const samePatch =
     samePatchStart === -1 ? "" : objectVisualizationController.slice(samePatchStart);
 
+  forbidTokens(source, "VisualizationRegistrySyncController sync hot path", [
+    "deepMerge",
+    "cloneJson",
+    "stableJson",
+    "JSON.stringify",
+    "sortJson",
+  ]);
   requireTokens(queuePatch, "VisualizationRegistrySyncController.queuePatch", [
     "visualizationPatchSatisfiesPatch",
     "mergeQueuedVisualizationPatch",
@@ -1027,6 +1180,18 @@ function checkViewportPerformanceMarks() {
   ]);
 }
 
+function checkPrimitiveGeometryKeyHotPath() {
+  const source = readFileSync(primitiveModelPath, "utf8");
+  requireTokens(source, "viewport3dPrimitiveModel geometry key", [
+    "function primitiveKeyValue",
+    "function quotePrimitiveKeyString",
+    "geometryKey(objectId, geometry, transform)",
+  ]);
+  forbidTokens(source, "viewport3dPrimitiveModel geometry key", [
+    "JSON.stringify",
+  ]);
+}
+
 function checkTopologyPositionConversionCache() {
   const source = readFileSync(topologyRenderModelPath, "utf8");
   const buildTopologyPositions = blockBetween(
@@ -1084,6 +1249,24 @@ function checkTopologyIndexBufferCache() {
   );
 }
 
+function checkVectorSurfaceNormalCache() {
+  const source = readFileSync(topologyRenderModelPath, "utf8");
+  requireTokens(source, "viewport3dRenderModel vector surface normal cache", [
+    "const surfaceNodeNormalCache = new WeakMap",
+    "function cachedAveragedSurfaceNodeNormals",
+    "surfaceNodeNormalCache.get(topology)",
+    "surfaceNodeNormalCache.set(topology, normalCache)",
+    "normalCache.has(cacheKey)",
+    "buildAveragedSurfaceNodeNormals(topology, triangleIndices)",
+  ]);
+  forbidTokens(source, "viewport3dRenderModel vector surface normal cache", [
+    `? buildAveragedSurfaceNodeNormals(
+          topology,
+          options.surfaceTriangleIndices,
+        )`,
+  ]);
+}
+
 function checkMeshQualityVertexColorCache() {
   const source = readFileSync(qualityMappingPath, "utf8");
   requireTokens(source, "viewport3dQualityMapping color cache", [
@@ -1113,6 +1296,23 @@ function checkFdmCuboidChunkedUpload() {
     `for (let index = 0; index < model.count; index += 1) {
       const offset = index * 3;
       color.setRGB(`,
+  ]);
+}
+
+function checkVectorGlyphChunkedUpload() {
+  const source = readFileSync(vectorFieldLayerPath, "utf8");
+  requireTokens(source, "VectorFieldLayer chunked upload", [
+    "export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
+    "export function buildVectorGlyphUploadBatches",
+    "requestVectorGlyphUploadTask",
+    "cancelVectorGlyphUploadTask",
+    "const batches = buildVectorGlyphUploadBatches(activeGlyphs.count)",
+    "for (let index = batch.start; index < batch.end; index += 1)",
+    "activeShaft.setMatrixAt(index, matrix)",
+    "activeHead.setMatrixAt(index, matrix)",
+  ]);
+  forbidTokens(source, "VectorFieldLayer chunked upload", [
+    "for (let index = 0; index < glyphs.count; index += 1)",
   ]);
 }
 
@@ -1147,8 +1347,16 @@ function checkFdmCuboidSceneModelReuse() {
   const sceneModelSource = readFileSync(viewportSceneModelPath, "utf8");
 
   requireTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
-    "const fdmSurfaceInstanceModel = useMemo",
-    "fdmSurfaceInstanceModel?.cellIndices",
+    "const fdmInstanceModelEnabled = Boolean(",
+    "const fdmInstanceModelNeedsFieldVector =",
+    "const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector",
+    "const fdmInstanceModel = useMemo",
+    "fieldVector: fdmInstanceModelFieldVector",
+    "fdmInstanceModel?.cellIndices",
+    "fdmInstanceModel: fdmInstanceModel",
+  ]);
+  forbidTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
+    "const fdmSurfaceInstanceModel",
     "fdmInstanceModel: fdmSurfaceInstanceModel",
   ]);
   requireTokens(sceneSource, "Viewport3DScene FDM model reuse", [

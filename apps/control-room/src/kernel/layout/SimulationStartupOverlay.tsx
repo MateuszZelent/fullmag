@@ -1,13 +1,10 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 
 import type { LiveStatusResource } from "../api/apiTypes";
 import type { ResourceResult } from "../resources/resourceTypes";
-import {
-  useSessionStatus,
-  useSessionStatusSelector,
-} from "../resources/useSessionStatus";
+import { useSessionStatusSelector } from "../resources/useSessionStatus";
 
 interface SimulationStartupOverlayVisibleState {
   detail: string;
@@ -34,6 +31,11 @@ interface SimulationStartupOverlayOptions {
 
 interface BrowserFullmagConfig {
   readonly allowMissingSessionSmoke?: unknown;
+}
+
+interface SimulationStartupOverlayResourceState {
+  readonly refetch: () => void;
+  readonly state: SimulationStartupOverlayState;
 }
 
 export function resolveSimulationStartupOverlayState(
@@ -116,14 +118,20 @@ function getSimulationStartupSmokeBypassSnapshot(): boolean {
   );
 }
 
+function subscribeSimulationStartupSmokeBypass(): () => void {
+  return () => undefined;
+}
+
+function getSimulationStartupSmokeBypassServerSnapshot(): boolean {
+  return false;
+}
+
 function useAllowMissingSessionSmoke(): boolean {
-  const [allowMissingSessionSmoke, setAllowMissingSessionSmoke] = useState(false);
-
-  useEffect(() => {
-    setAllowMissingSessionSmoke(getSimulationStartupSmokeBypassSnapshot());
-  }, []);
-
-  return allowMissingSessionSmoke;
+  return useSyncExternalStore(
+    subscribeSimulationStartupSmokeBypass,
+    getSimulationStartupSmokeBypassSnapshot,
+    getSimulationStartupSmokeBypassServerSnapshot,
+  );
 }
 
 export function SimulationStartupOverlayView({
@@ -167,6 +175,34 @@ export function selectSimulationStartupOverlayVisibility(
   return resolveSimulationStartupOverlayState(status).isVisible;
 }
 
+export function selectSimulationStartupOverlayResourceState(
+  status: ResourceResult<LiveStatusResource>,
+): SimulationStartupOverlayResourceState {
+  return {
+    refetch: status.refetch,
+    state: resolveSimulationStartupOverlayState(status),
+  };
+}
+
+export function simulationStartupOverlayResourceStateEquals(
+  previous: SimulationStartupOverlayResourceState,
+  next: SimulationStartupOverlayResourceState,
+): boolean {
+  return (
+    Object.is(previous.refetch, next.refetch) &&
+    simulationStartupOverlayStateEquals(previous.state, next.state)
+  );
+}
+
+function simulationStartupOverlayStateEquals(
+  previous: SimulationStartupOverlayState,
+  next: SimulationStartupOverlayState,
+): boolean {
+  if (previous.isVisible !== next.isVisible) return false;
+  if (!previous.isVisible || !next.isVisible) return true;
+  return previous.title === next.title && previous.detail === next.detail;
+}
+
 export function useSimulationStartupOverlayVisibility(): boolean {
   const isVisible = useSessionStatusSelector(selectSimulationStartupOverlayVisibility);
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
@@ -174,11 +210,14 @@ export function useSimulationStartupOverlayVisibility(): boolean {
 }
 
 export function useSimulationStartupOverlayState(): SimulationStartupOverlayState {
-  const sessionStatus = useSessionStatus();
+  const startupResource = useSessionStatusSelector(
+    selectSimulationStartupOverlayResourceState,
+    { isEqual: simulationStartupOverlayResourceStateEquals },
+  );
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
-  const state = resolveSimulationStartupOverlayState(sessionStatus, {
-    allowMissingSessionSmoke,
-  });
+  const state: SimulationStartupOverlayState = allowMissingSessionSmoke
+    ? { isVisible: false }
+    : startupResource.state;
   const shouldRefresh = shouldRefreshSimulationStartupStatus(state);
 
   useEffect(() => {
@@ -187,11 +226,11 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
     }
 
     const intervalId = window.setInterval(
-      sessionStatus.refetch,
+      startupResource.refetch,
       SIMULATION_STARTUP_STATUS_REFRESH_MS,
     );
     return () => window.clearInterval(intervalId);
-  }, [sessionStatus.refetch, shouldRefresh]);
+  }, [startupResource.refetch, shouldRefresh]);
 
   return state;
 }

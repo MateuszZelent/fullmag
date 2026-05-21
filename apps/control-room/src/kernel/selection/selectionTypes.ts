@@ -69,3 +69,79 @@ export const EMPTY_SELECTION: Selection = {
   ref: null,
   moduleSource: null,
 };
+
+function nullableStringEquals(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  return (left ?? null) === (right ?? null);
+}
+
+function centroidEquals(
+  left: readonly [number, number, number] | null | undefined,
+  right: readonly [number, number, number] | null | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+}
+
+export function selectionRefEquals(
+  left: Selection["ref"],
+  right: Selection["ref"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.type !== right.type) return false;
+
+  switch (left.type) {
+    case "scene-object":
+      return (
+        right.type === "scene-object" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.objectId === right.objectId &&
+        nullableStringEquals(left.regionId, right.regionId) &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "airbox":
+      return (
+        right.type === "airbox" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "mesh-quality-element":
+      return (
+        right.type === "mesh-quality-element" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.elementIndex === right.elementIndex &&
+        nullableStringEquals(left.metric, right.metric) &&
+        centroidEquals(left.centroid, right.centroid) &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "mesh-quality-metric":
+      return (
+        right.type === "mesh-quality-metric" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.metric === right.metric &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+  }
+}
+
+export function selectionSnapshotEquals(
+  previous: Selection,
+  next: Selection,
+): boolean {
+  return (
+    previous.kind === next.kind &&
+    previous.label === next.label &&
+    previous.objectId === next.objectId &&
+    previous.nodeId === next.nodeId &&
+    previous.moduleSource === next.moduleSource &&
+    selectionRefEquals(previous.ref, next.ref)
+  );
+}

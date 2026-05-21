@@ -6,6 +6,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
+  Color,
   type ColorRepresentation,
 } from "three";
 
@@ -280,5 +281,5 @@ function labelWidthScale(
 }
 
 function colorToCss(color: ColorRepresentation): string {
-  return typeof color === "string" ? color : "#ffffff";
+  return typeof color === "string" ? color : new Color(color).getStyle();
 }

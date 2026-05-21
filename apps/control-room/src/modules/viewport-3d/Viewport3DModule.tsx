@@ -12,10 +12,13 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
-import { useSelection } from "@/kernel/selection/useSelection";
+import {
+  selectionSnapshotEquals,
+  useSelectionActions,
+  useSelectionSelector,
+} from "@/kernel/selection/useSelection";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
-import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
   useVisualizationClientAck,
   useVisualizationClientAckSender,
@@ -112,16 +115,16 @@ export default function Viewport3DModule({
   slotId,
 }: ModuleProps) {
   const { clientReady, colors } = useViewport3DColors();
-  const { selection, select, clear } = useSelection(moduleId);
-  const { snapshot: objectVisualizationSnapshot } =
-    useObjectVisualizationRegistry();
+  const selection = useSelectionSelector((state) => state, {
+    isEqual: selectionSnapshotEquals,
+  });
+  const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const { domainId, ...sceneModel } = useViewport3DSceneModel({
     commandState,
     colors,
-    objectVisualizationSnapshot,
     resourceCounts,
     selection,
   });
@@ -132,7 +135,7 @@ export default function Viewport3DModule({
   });
   const patchCameraState = useCallback(
     (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
-      kernel.visualizationSync.queuePatch({ camera: patch });
+      kernel.cameraRegistry.patchCamera(patch);
       if (patch.position && patch.target) {
         viewport3dStore.setCamera({
           position: toCameraTuple(patch.position),
@@ -144,7 +147,7 @@ export default function Viewport3DModule({
         viewport3dStore.setCameraProjection(patch.projection);
       }
     },
-    [kernel.visualizationSync],
+    [kernel.cameraRegistry],
   );
   const saveCameraState = useCallback(
     (camera: {
@@ -158,10 +161,16 @@ export default function Viewport3DModule({
         up: camera.up ?? VIEWPORT_3D_WORLD_UP,
       };
       viewport3dStore.setCamera(nextCamera);
-      kernel.visualizationSync.queuePatch({ camera: nextCamera });
+      kernel.cameraRegistry.patchCamera(nextCamera);
     },
-    [kernel.visualizationSync],
+    [kernel.cameraRegistry],
   );
+  const beginCameraInteraction = useCallback(() => {
+    kernel.cameraRegistry.beginInteraction();
+  }, [kernel.cameraRegistry]);
+  const endCameraInteraction = useCallback(() => {
+    kernel.cameraRegistry.endInteraction();
+  }, [kernel.cameraRegistry]);
 
   return (
     <WorkspaceRenderProfiler id="Viewport3DModule">
@@ -182,6 +191,8 @@ export default function Viewport3DModule({
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
       onCameraChange={saveCameraState}
+      onCameraInteractionEnd={endCameraInteraction}
+      onCameraInteractionStart={beginCameraInteraction}
       captureRevision={commandState.captureRevision}
       resetCameraRevision={commandState.resetCameraRevision}
       rotationMode={commandState.widgets.rotationMode}
@@ -200,7 +211,7 @@ function useViewport3DSelectionHandlers({
   select,
 }: {
   domainId: string | null | undefined;
-  select: ReturnType<typeof useSelection>["select"];
+  select: ReturnType<typeof useSelectionActions>["select"];
 }) {
   const onSelectDomain = useCallback(() => {
     select({

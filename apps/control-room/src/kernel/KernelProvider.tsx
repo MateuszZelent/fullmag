@@ -33,6 +33,7 @@ import { useRuntimeCommandControlResourceData } from "./resources/studyRuntimeRe
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
+import { CameraRegistryController } from "./visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
@@ -60,6 +61,9 @@ function createKernel(): KernelApi {
   const resources = new ResourceInvalidationController(bus);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+  const cameraRegistry = new CameraRegistryController({
+    api: api.visualization,
+  });
   const visualization = new ObjectVisualizationController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
@@ -67,7 +71,8 @@ function createKernel(): KernelApi {
   });
   const realtime = new RealtimeInvalidationBridge(resources, {
     shouldSuppressInvalidation: (resourceKey, revision) =>
-      visualizationSync.shouldSuppressInvalidation(resourceKey, revision),
+      visualizationSync.shouldSuppressInvalidation(resourceKey, revision) ||
+      cameraRegistry.shouldSuppressInvalidation(resourceKey, revision),
   });
 
   for (const cmd of SHELL_COMMANDS) {
@@ -99,6 +104,7 @@ function createKernel(): KernelApi {
   return {
     api,
     bus,
+    cameraRegistry,
     commandDiagnostics,
     commands,
     diagnostics,
@@ -185,6 +191,15 @@ function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function CameraRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    kernel.cameraRegistry.start();
+    return () => kernel.cameraRegistry.stop();
+  }, [kernel]);
+
+  return null;
+}
+
 function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(
     () => startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics }),
@@ -202,6 +217,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <RealtimeConnector kernel={kernel} />
       <CommandShortcutConnector kernel={kernel} />
       <VisualizationRegistrySyncConnector kernel={kernel} />
+      <CameraRegistrySyncConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>

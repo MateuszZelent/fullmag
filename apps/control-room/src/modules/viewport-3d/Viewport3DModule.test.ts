@@ -22,6 +22,40 @@ describe("resolveViewport3DMeshQualityLegend", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
+  it("writes camera gestures to the kernel camera registry instead of visualization sync", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const patchCameraStart = source.indexOf("const patchCameraState = useCallback");
+    const saveCameraStart = source.indexOf("const saveCameraState = useCallback");
+    const renderStart = source.indexOf("\n  return (", saveCameraStart);
+
+    expect(patchCameraStart).toBeGreaterThanOrEqual(0);
+    expect(saveCameraStart).toBeGreaterThan(patchCameraStart);
+    expect(renderStart).toBeGreaterThan(saveCameraStart);
+
+    const patchCameraStateSource = source.slice(patchCameraStart, saveCameraStart);
+    const saveCameraStateSource = source.slice(saveCameraStart, renderStart);
+
+    expect(patchCameraStateSource).toContain(
+      "kernel.cameraRegistry.patchCamera(patch);",
+    );
+    expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
+    expect(saveCameraStateSource).toContain("viewport3dStore.setCamera(nextCamera);");
+    expect(saveCameraStateSource).toContain(
+      "kernel.cameraRegistry.patchCamera(nextCamera);",
+    );
+    expect(saveCameraStateSource).not.toContain("visualizationSync.queuePatch");
+    expect(saveCameraStateSource).not.toContain("queuePatch({ camera: nextCamera })");
+    expect(source).toContain("kernel.cameraRegistry.beginInteraction();");
+    expect(source).toContain("kernel.cameraRegistry.endInteraction();");
+    expect(source).toContain(
+      "onCameraInteractionStart={beginCameraInteraction}",
+    );
+    expect(source).toContain("onCameraInteractionEnd={endCameraInteraction}");
+  });
+
   it("forwards dimension-frame widget state into the scene", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),

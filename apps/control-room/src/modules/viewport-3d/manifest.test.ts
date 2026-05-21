@@ -129,33 +129,28 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.scaleUnitMode).toBe("nm");
   });
 
-  it("keeps projection changes local while queuing the backend camera patch", async () => {
+  it("keeps projection changes local while recording the camera registry patch", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
-    const queuePatch = vi.fn();
-    const flushNow = vi.fn().mockResolvedValue(undefined);
+    const patchCamera = vi.fn();
 
     await expect(
       registry.execute("view-projection", {
         source: "test",
-        visualizationSync: { flushNow, queuePatch } as never,
+        cameraRegistry: { patchCamera } as never,
       }),
     ).resolves.toMatchObject({ status: "completed" });
 
     expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
       "orthographic",
     );
-    expect(queuePatch).toHaveBeenCalledWith({
-      camera: { projection: "orthographic" },
-    });
-    expect(flushNow).toHaveBeenCalledTimes(1);
+    expect(patchCamera).toHaveBeenCalledWith({ projection: "orthographic" });
   });
 
   it("toggles projection from the local store when resource data is stale", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
-    const queuePatch = vi.fn();
-    const flushNow = vi.fn().mockResolvedValue(undefined);
+    const patchCamera = vi.fn();
     const context = {
       source: "test",
       resourceData: {
@@ -163,7 +158,7 @@ describe("viewport3dManifest", () => {
           camera: { projection: "perspective" },
         },
       },
-      visualizationSync: { flushNow, queuePatch },
+      cameraRegistry: { patchCamera },
     } as never;
 
     await registry.execute("view-projection", context);
@@ -177,13 +172,12 @@ describe("viewport3dManifest", () => {
       "perspective",
     );
     expect(registry.isActive("view-projection", context)).toBe(false);
-    expect(queuePatch).toHaveBeenNthCalledWith(1, {
-      camera: { projection: "orthographic" },
+    expect(patchCamera).toHaveBeenNthCalledWith(1, {
+      projection: "orthographic",
     });
-    expect(queuePatch).toHaveBeenNthCalledWith(2, {
-      camera: { projection: "perspective" },
+    expect(patchCamera).toHaveBeenNthCalledWith(2, {
+      projection: "perspective",
     });
-    expect(flushNow).toHaveBeenCalledTimes(2);
   });
 
   it("contributes visual quality profile commands", async () => {

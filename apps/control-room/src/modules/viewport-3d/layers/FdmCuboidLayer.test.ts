@@ -211,9 +211,12 @@ describe("FdmCuboidLayer model", () => {
     const sceneSource = readFileSync(viewport3DScenePath, "utf8");
     const sceneModelSource = readFileSync(viewport3DSceneModelPath, "utf8");
 
-    expect(sceneModelSource).toContain("const fdmSurfaceInstanceModel = useMemo");
-    expect(sceneModelSource).toContain("fdmSurfaceInstanceModel?.cellIndices");
-    expect(sceneModelSource).toContain("fdmInstanceModel: fdmSurfaceInstanceModel");
+    expect(sceneModelSource).toContain("const fdmInstanceModelEnabled = Boolean(");
+    expect(sceneModelSource).toContain("const fdmInstanceModel = useMemo");
+    expect(sceneModelSource).toContain("fdmInstanceModel?.cellIndices");
+    expect(sceneModelSource).toContain("fieldVector: fdmInstanceModelFieldVector");
+    expect(sceneModelSource).toContain("fdmInstanceModel: fdmInstanceModel");
+    expect(sceneModelSource).not.toContain("const fdmSurfaceInstanceModel");
     expect(sceneSource).toContain("fdmInstanceModel: FdmCuboidInstanceModel | null | undefined");
     expect(sceneSource).toContain("instanceModel={fdmInstanceModel}");
     expect(layerSource).toContain("instanceModel?: FdmCuboidInstanceModel | null");

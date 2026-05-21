@@ -9,16 +9,21 @@ import {
 } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
-import { useKernel } from "@/kernel/KernelContext";
-import type { useSelection } from "@/kernel/selection/useSelection";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
   surfaceColorSourceToColorMode,
+  visualizationTargetKey,
+  type ObjectVisualizationSnapshot,
+  type VisualizationTargetKind,
+  type VisualizationTargetPatch,
+  type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import type { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
+import { useCameraRegistrySnapshot } from "@/kernel/visualization/useCameraRegistry";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 
@@ -95,7 +100,7 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 
 function resolveSelectionMeshQualityMetric(
-  selection: ReturnType<typeof useSelection>["selection"],
+  selection: Selection,
 ): MeshQualityColorMetric {
   const ref = selection.ref;
   const metric =
@@ -108,27 +113,108 @@ function resolveSelectionMeshQualityMetric(
   return "gamma";
 }
 
+const VIEWPORT_3D_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
+  "airbox",
+  "object",
+  "part",
+];
+
+function selectViewport3DObjectVisualizationSnapshot(
+  snapshot: ObjectVisualizationSnapshot,
+  targets: readonly VisualizationTargetRef[],
+): ObjectVisualizationSnapshot {
+  const defaults: ObjectVisualizationSnapshot["defaults"] = {};
+  const overrides: ObjectVisualizationSnapshot["overrides"] = {};
+
+  for (const kind of VIEWPORT_3D_VISUALIZATION_TARGET_KINDS) {
+    const defaultPatch = snapshot.defaults[kind];
+    if (defaultPatch) {
+      defaults[kind] = defaultPatch;
+    }
+  }
+
+  for (const target of targets) {
+    const key = visualizationTargetKey(target);
+    const override = snapshot.overrides[key];
+    if (override) {
+      overrides[key] = override;
+    }
+  }
+
+  return { defaults, overrides, version: snapshot.version };
+}
+
+function viewport3DObjectVisualizationSnapshotEquals(
+  previous: ObjectVisualizationSnapshot,
+  next: ObjectVisualizationSnapshot,
+): boolean {
+  for (const kind of VIEWPORT_3D_VISUALIZATION_TARGET_KINDS) {
+    if (!visualizationTargetPatchEquals(previous.defaults[kind], next.defaults[kind])) {
+      return false;
+    }
+  }
+
+  const overrideKeys = new Set([
+    ...Object.keys(previous.overrides),
+    ...Object.keys(next.overrides),
+  ]);
+  for (const key of overrideKeys) {
+    if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function visualizationTargetPatchEquals(
+  previous: VisualizationTargetPatch | undefined,
+  next: VisualizationTargetPatch | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+
+  const keys = new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ] as Array<keyof VisualizationTargetPatch>);
+  for (const key of keys) {
+    if (!Object.is(previous[key], next[key])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function pushViewportVisualizationTarget(
+  targets: VisualizationTargetRef[],
+  seen: Set<string>,
+  target: VisualizationTargetRef,
+): void {
+  const key = visualizationTargetKey(target);
+  if (seen.has(key)) return;
+  seen.add(key);
+  targets.push(target);
+}
+
 export function useViewport3DSceneModel({
   commandState,
   colors,
-  objectVisualizationSnapshot,
   resourceCounts,
   selection,
 }: {
   commandState: ReturnType<typeof useViewport3DCommandState>;
   colors: Viewport3DSceneProps["colors"] | null;
-  objectVisualizationSnapshot: ReturnType<typeof useObjectVisualizationRegistry>["snapshot"];
   resourceCounts: Viewport3DResourceCounts;
-  selection: ReturnType<typeof useSelection>["selection"];
+  selection: Selection;
 }) {
-  const { visualizationSync } = useKernel();
   const visualizationState = useVisualizationStateResource();
+  const cameraRegistrySnapshot = useCameraRegistrySnapshot();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const renderingState = visualizationState.data;
-  const cameraResource = renderingState?.camera ?? null;
-  const deferRemoteCameraSync =
-    visualizationSync.hasUnsatisfiedCameraPatch(visualizationState.rawData);
-  useViewport3DRemoteCameraSync(cameraResource, deferRemoteCameraSync);
+  const cameraResource = cameraRegistrySnapshot.camera;
+  useViewport3DCameraRegistryStoreSync(cameraResource);
   const visualizationRevision = renderingState?.revision ?? null;
   const visualizationError = visualizationState.error?.message ?? null;
   const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
@@ -296,6 +382,59 @@ export function useViewport3DSceneModel({
       renderingState?.vector_glyphs,
     ],
   );
+  const viewportVisualizationTargets = useMemo(() => {
+    const targets: VisualizationTargetRef[] = [];
+    const seen = new Set<string>();
+    pushViewportVisualizationTarget(
+      targets,
+      seen,
+      AIRBOX_VISUALIZATION_TARGET,
+    );
+
+    const fdmDomainId = domainMeta.data?.domain_id ?? null;
+    if (fdmDomain && fdmDomainId) {
+      pushViewportVisualizationTarget(targets, seen, {
+        id: fdmDomainId,
+        kind: "object",
+        label: fdmDomainId,
+      });
+    }
+
+    for (const object of primitiveModel.objects) {
+      pushViewportVisualizationTarget(targets, seen, {
+        id: object.objectId,
+        kind: "object",
+        label: object.label,
+      });
+    }
+
+    for (const part of femDomain.magneticParts) {
+      pushViewportVisualizationTarget(targets, seen, targetForMeshPart(part));
+    }
+    for (const part of femDomain.airboxParts) {
+      pushViewportVisualizationTarget(targets, seen, targetForMeshPart(part));
+    }
+
+    return targets;
+  }, [
+    domainMeta.data?.domain_id,
+    fdmDomain,
+    femDomain.airboxParts,
+    femDomain.magneticParts,
+    primitiveModel.objects,
+  ]);
+  const selectObjectVisualizationSnapshot = useCallback(
+    (snapshot: ObjectVisualizationSnapshot) =>
+      selectViewport3DObjectVisualizationSnapshot(
+        snapshot,
+        viewportVisualizationTargets,
+      ),
+    [viewportVisualizationTargets],
+  );
+  const objectVisualizationSnapshot = useObjectVisualizationSelector(
+    selectObjectVisualizationSnapshot,
+    { isEqual: viewport3DObjectVisualizationSnapshotEquals },
+  );
   const fallbackSettings = useMemo(
     () =>
       resolveDefaultVisualizationSettings(
@@ -377,26 +516,35 @@ export function useViewport3DSceneModel({
   const fdmVectorsVisible = Boolean(
     fdmDomain && fdmSettings.visible && fdmSettings.vectorsVisible,
   );
+  const fdmInstanceModelEnabled = Boolean(
+    fdmDomain &&
+      fdmSettings.visible &&
+      (fdmSettings.shaderVisible || fdmSettings.wireframeVisible || fdmVectorsVisible),
+  );
+  const fdmInstanceModelNeedsFieldVector =
+    fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const fieldVectorEnabled =
     viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions) ||
     Boolean(fdmSurfaceColorMode) ||
     fdmVectorsVisible ||
-    fdmVoxelMagnitudeThreshold > 0 ||
-    fdmTopographyEnabled;
+    fdmInstanceModelNeedsFieldVector;
   const fieldVector = useViewport3DFieldVector(
     quantityId,
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
-  const fdmSurfaceInstanceModel = useMemo<
+  const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
+    ? fieldVector.data
+    : null;
+  const fdmInstanceModel = useMemo<
     FdmCuboidInstanceModel | null | undefined
   >(() => {
-    if (!fdmSurfaceColorMode) return undefined;
+    if (!fdmInstanceModelEnabled) return undefined;
     return measureViewport3DModelBuild(
       "fullmag.viewport3d.buildFdmCuboidInstanceModel",
       () =>
         buildFdmCuboidInstanceModel(fdmDomain, {
-          fieldVector: fieldVector.data,
+          fieldVector: fdmInstanceModelFieldVector,
           voxelFillRatio: visualProfile.voxelFillRatio,
           voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
           voxelTopography: visualProfile.voxelTopography,
@@ -404,9 +552,9 @@ export function useViewport3DSceneModel({
     );
   }, [
     fdmDomain,
-    fdmSurfaceColorMode,
+    fdmInstanceModelEnabled,
+    fdmInstanceModelFieldVector,
     fdmVoxelMagnitudeThreshold,
-    fieldVector.data,
     visualProfile.voxelFillRatio,
     visualProfile.voxelTopography,
   ]);
@@ -414,10 +562,10 @@ export function useViewport3DSceneModel({
     if (!fdmSurfaceColorMode) return null;
     return buildSampledScalarColors(
       fieldVector.data,
-      fdmSurfaceInstanceModel?.cellIndices,
+      fdmInstanceModel?.cellIndices,
       fdmSurfaceColorMode,
     );
-  }, [fdmSurfaceColorMode, fdmSurfaceInstanceModel, fieldVector.data]);
+  }, [fdmSurfaceColorMode, fdmInstanceModel, fieldVector.data]);
   const chunkedScalarColors = useViewport3DChunkedScalarColors({
     colorModes: fieldRenderOptions.scalarColorModes,
     enabled: fieldRenderOptions.scalarColorsVisible !== false,
@@ -531,15 +679,15 @@ export function useViewport3DSceneModel({
   return {
     airboxSettings,
     bounds,
-    cameraProjection: commandState.widgets.cameraProjection,
+    cameraProjection: resolveViewport3DCameraProjection({ camera: cameraResource }),
     cameraResource,
-    cameraState: commandState.camera,
+    cameraState: resolveViewport3DCameraState({ camera: cameraResource }),
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,
     fallbackSettings,
     fdmDomain,
-    fdmInstanceModel: fdmSurfaceInstanceModel,
+    fdmInstanceModel: fdmInstanceModel,
     fdmSettings,
     fdmSurfaceColors,
     femDomain,
@@ -572,14 +720,12 @@ export function useViewport3DSceneModel({
   };
 }
 
-function useViewport3DRemoteCameraSync(
-  cameraResource: VisualizationStateResource["camera"] | null,
-  deferRemoteCameraSync: boolean,
+function useViewport3DCameraRegistryStoreSync(
+  cameraResource: VisualizationStateResource["camera"],
 ) {
   const lastRemoteSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!cameraResource || deferRemoteCameraSync) return;
     const camera = resolveViewport3DCameraState({ camera: cameraResource });
     const projection = resolveViewport3DCameraProjection({
       camera: cameraResource,
@@ -589,7 +735,7 @@ function useViewport3DRemoteCameraSync(
 
     lastRemoteSignatureRef.current = signature;
     viewport3dStore.setCameraView({ camera, projection });
-  }, [cameraResource, deferRemoteCameraSync]);
+  }, [cameraResource]);
 }
 
 function measureViewport3DModelBuild<T>(name: string, build: () => T): T {

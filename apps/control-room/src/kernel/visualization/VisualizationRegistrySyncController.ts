@@ -172,7 +172,7 @@ export class VisualizationRegistrySyncController {
           error: error instanceof Error ? error : new Error(String(error)),
           inflightPatch: null,
           lastLocalChangedAt: now,
-          pendingFingerprint: fingerprintVisualizationPatch(restoredPatch),
+          pendingFingerprint: null,
           pendingPatch: restoredPatch,
           version: this.snapshot.version + 1,
         };
@@ -221,10 +221,6 @@ export class VisualizationRegistrySyncController {
       visualizationStateSatisfiesPatch(state, this.snapshot.inflightPatch)
         ? null
         : this.snapshot.inflightPatch;
-    const pendingFingerprint = pendingPatch
-      ? fingerprintVisualizationPatch(pendingPatch)
-      : null;
-
     if (
       this.snapshot.lastRemoteRevision === state.revision &&
       this.snapshot.pendingPatch === pendingPatch &&
@@ -237,7 +233,7 @@ export class VisualizationRegistrySyncController {
       ...this.snapshot,
       inflightPatch,
       lastRemoteRevision: state.revision,
-      pendingFingerprint,
+      pendingFingerprint: null,
       pendingPatch,
       version: this.snapshot.version + 1,
     };
@@ -380,7 +376,11 @@ function applyVisualizationStatePatch<TState>(
   patch: VisualizationStatePatch | null | undefined,
 ): TState {
   if (!patch || !hasPatchKeys(patch)) return state;
-  return deepMerge(state, patch) as TState;
+  if (!isPlainObject(state)) return patch as TState;
+  return mergeQueuedPatchRecords(
+    state,
+    patch as Record<string, unknown>,
+  ) as TState;
 }
 
 function mergeQueuedVisualizationPatch(
@@ -416,15 +416,12 @@ function mergeVisualizationStatePatch(
   next: VisualizationStatePatch | null | undefined,
 ): VisualizationStatePatch | null {
   if (!current && !next) return null;
-  if (!current) return next ? ({ ...next } as VisualizationStatePatch) : null;
-  if (!next) return { ...current };
-  return deepMerge(current, next) as VisualizationStatePatch;
-}
-
-function fingerprintVisualizationPatch(
-  patch: VisualizationStatePatch | null,
-): string | null {
-  return patch ? stableJson(patch) : null;
+  if (!current) return next ?? null;
+  if (!next) return current;
+  return mergeQueuedPatchRecords(
+    current as Record<string, unknown>,
+    next as Record<string, unknown>,
+  ) as VisualizationStatePatch;
 }
 
 function visualizationStateSatisfiesPatch(
@@ -470,33 +467,6 @@ function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
   return Object.is(value, patch);
 }
 
-function deepMerge(left: unknown, right: unknown): unknown {
-  if (!isPlainObject(left) || !isPlainObject(right)) {
-    return cloneJson(right);
-  }
-
-  const output: Record<string, unknown> = { ...left };
-  for (const [key, value] of Object.entries(right)) {
-    output[key] =
-      isPlainObject(value) && isPlainObject(output[key])
-        ? deepMerge(output[key], value)
-        : cloneJson(value);
-  }
-  return output;
-}
-
-function cloneJson<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((entry) => cloneJson(entry)) as T;
-  }
-  if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, cloneJson(entry)]),
-    ) as T;
-  }
-  return value;
-}
-
 function hasPatchKeys(patch: VisualizationStatePatch): boolean {
   return Object.keys(patch).length > 0;
 }
@@ -507,24 +477,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     value !== null &&
     !Array.isArray(value)
   );
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(sortJson(value));
-}
-
-function sortJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortJson);
-  }
-  if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, sortJson(value[key])]),
-    );
-  }
-  return value;
 }
 
 function cameraProjectionPatch(

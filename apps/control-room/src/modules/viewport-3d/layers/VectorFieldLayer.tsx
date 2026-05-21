@@ -27,6 +27,40 @@ const UNIT_Y = new Vector3(0, 1, 0);
 const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
 const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
+export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 1024;
+
+export interface VectorGlyphUploadBatch {
+  end: number;
+  start: number;
+}
+
+type VectorGlyphUploadTaskHandle = ReturnType<typeof setTimeout>;
+
+export function buildVectorGlyphUploadBatches(
+  count: number,
+  batchSize = VECTOR_GLYPH_UPLOAD_BATCH_SIZE,
+): VectorGlyphUploadBatch[] {
+  const safeCount = Math.max(0, Math.floor(count));
+  const safeBatchSize = Math.max(1, Math.floor(batchSize));
+  const batches: VectorGlyphUploadBatch[] = [];
+
+  for (let start = 0; start < safeCount; start += safeBatchSize) {
+    batches.push({ end: Math.min(start + safeBatchSize, safeCount), start });
+  }
+
+  return batches;
+}
+
+function requestVectorGlyphUploadTask(
+  callback: () => void,
+): VectorGlyphUploadTaskHandle {
+  return setTimeout(callback, 0);
+}
+
+function cancelVectorGlyphUploadTask(handle: VectorGlyphUploadTaskHandle): void {
+  clearTimeout(handle);
+}
+
 export interface VectorFieldLayerVectorStyle {
   alpha?: number | null;
   monoColor?: string | null;
@@ -243,71 +277,101 @@ export function VectorFieldLayer({
     const instanceColorAttr = instanceColorAttrRef.current;
     if (!glyphs || !shaft || !head || !instanceColorAttr) return;
 
+    const activeGlyphs = glyphs;
+    const activeShaft = shaft;
+    const activeHead = head;
+
     // Set visible count (may be less than capacity).
-    shaft.count = glyphs.count;
-    head.count = glyphs.count;
+    activeShaft.count = activeGlyphs.count;
+    activeHead.count = activeGlyphs.count;
 
     // Attach instance color attribute for bulk writes.
     syncVectorGlyphColorState({
       hasInstanceColors: Boolean(glyphs.colors),
-      head,
+      head: activeHead,
       instanceColorAttr,
       material,
       materialColor: resolvedStyle.materialColor,
-      shaft,
+      shaft: activeShaft,
     });
-    shaft.instanceMatrix.setUsage(DynamicDrawUsage);
-    head.instanceMatrix.setUsage(DynamicDrawUsage);
-
-    const { direction, matrix, position, quaternion, scale } = transformScratch;
-
-    for (let index = 0; index < glyphs.count; index += 1) {
-      const offset = index * 3;
-      direction.set(
-        glyphs.directions[offset] ?? 0,
-        glyphs.directions[offset + 1] ?? 1,
-        glyphs.directions[offset + 2] ?? 0,
-      );
-      quaternion.setFromUnitVectors(UNIT_Y, direction);
-
-      position.set(
-        glyphs.shaftCenters[offset] ?? 0,
-        glyphs.shaftCenters[offset + 1] ?? 0,
-        glyphs.shaftCenters[offset + 2] ?? 0,
-      );
-      scale.set(
-        glyphs.shaftScales[offset] ?? 0,
-        glyphs.shaftScales[offset + 1] ?? 0,
-        glyphs.shaftScales[offset + 2] ?? 0,
-      );
-      matrix.compose(position, quaternion, scale);
-      shaft.setMatrixAt(index, matrix);
-
-      position.set(
-        glyphs.headCenters[offset] ?? 0,
-        glyphs.headCenters[offset + 1] ?? 0,
-        glyphs.headCenters[offset + 2] ?? 0,
-      );
-      scale.set(
-        glyphs.headScales[offset] ?? 0,
-        glyphs.headScales[offset + 1] ?? 0,
-        glyphs.headScales[offset + 2] ?? 0,
-      );
-      matrix.compose(position, quaternion, scale);
-      head.setMatrixAt(index, matrix);
-    }
+    activeShaft.instanceMatrix.setUsage(DynamicDrawUsage);
+    activeHead.instanceMatrix.setUsage(DynamicDrawUsage);
 
     // Bulk color write instead of per-instance setColorAt.
-    if (glyphs.colors) {
+    const glyphColors = activeGlyphs.colors;
+    if (glyphColors) {
       const colorArray = instanceColorAttr.array as Float32Array;
-      colorArray.set(glyphs.colors.subarray(0, glyphs.count * 3));
+      colorArray.set(glyphColors.subarray(0, activeGlyphs.count * 3));
       instanceColorAttr.needsUpdate = true;
     }
 
-    shaft.instanceMatrix.needsUpdate = true;
-    head.instanceMatrix.needsUpdate = true;
-    tracker.recordDirtyFrame("vector-glyphs");
-    invalidate();
+    const batches = buildVectorGlyphUploadBatches(activeGlyphs.count);
+    const { direction, matrix, position, quaternion, scale } = transformScratch;
+    let batchIndex = 0;
+    let cancelled = false;
+    let task: VectorGlyphUploadTaskHandle | null = null;
+
+    function uploadNextBatch(): void {
+      if (cancelled) return;
+
+      const batch = batches[batchIndex];
+      if (!batch) return;
+
+      for (let index = batch.start; index < batch.end; index += 1) {
+        const offset = index * 3;
+        direction.set(
+          activeGlyphs.directions[offset] ?? 0,
+          activeGlyphs.directions[offset + 1] ?? 1,
+          activeGlyphs.directions[offset + 2] ?? 0,
+        );
+        quaternion.setFromUnitVectors(UNIT_Y, direction);
+
+        position.set(
+          activeGlyphs.shaftCenters[offset] ?? 0,
+          activeGlyphs.shaftCenters[offset + 1] ?? 0,
+          activeGlyphs.shaftCenters[offset + 2] ?? 0,
+        );
+        scale.set(
+          activeGlyphs.shaftScales[offset] ?? 0,
+          activeGlyphs.shaftScales[offset + 1] ?? 0,
+          activeGlyphs.shaftScales[offset + 2] ?? 0,
+        );
+        matrix.compose(position, quaternion, scale);
+        activeShaft.setMatrixAt(index, matrix);
+
+        position.set(
+          activeGlyphs.headCenters[offset] ?? 0,
+          activeGlyphs.headCenters[offset + 1] ?? 0,
+          activeGlyphs.headCenters[offset + 2] ?? 0,
+        );
+        scale.set(
+          activeGlyphs.headScales[offset] ?? 0,
+          activeGlyphs.headScales[offset + 1] ?? 0,
+          activeGlyphs.headScales[offset + 2] ?? 0,
+        );
+        matrix.compose(position, quaternion, scale);
+        activeHead.setMatrixAt(index, matrix);
+      }
+
+      activeShaft.instanceMatrix.needsUpdate = true;
+      activeHead.instanceMatrix.needsUpdate = true;
+      tracker.recordDirtyFrame("vector-glyphs");
+      invalidate();
+
+      batchIndex += 1;
+      if (batchIndex < batches.length) {
+        task = requestVectorGlyphUploadTask(uploadNextBatch);
+      }
+    }
+
+    uploadNextBatch();
+
+    return () => {
+      cancelled = true;
+      if (task) {
+        cancelVectorGlyphUploadTask(task);
+      }
+    };
   }, [
     glyphs,
     invalidate,

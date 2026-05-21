@@ -44,6 +44,8 @@ interface OrientationHudLayerProps {
   colors: Viewport3DColors;
   hslReferenceVisible: boolean;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraInteractionEnd?: () => void;
+  onCameraInteractionStart?: () => void;
   rotationMode: Viewport3DRotationMode;
   viewCubeVisible: boolean;
 }
@@ -60,6 +62,8 @@ export function OrientationHudLayer({
   colors,
   hslReferenceVisible,
   onCameraChange,
+  onCameraInteractionEnd,
+  onCameraInteractionStart,
   rotationMode,
   viewCubeVisible,
 }: OrientationHudLayerProps) {
@@ -71,9 +75,12 @@ export function OrientationHudLayer({
   const pendingOrbitCameraRef = useRef<Viewport3DCameraState | null>(null);
   const commitCameraChange = useCallback(
     (nextCamera: Viewport3DCameraState) => {
-      void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
+      onCameraInteractionStart?.();
+      void Promise.resolve(onCameraChange(nextCamera))
+        .catch(() => undefined)
+        .finally(() => onCameraInteractionEnd?.());
     },
-    [onCameraChange],
+    [onCameraChange, onCameraInteractionEnd, onCameraInteractionStart],
   );
   const getCurrentCamera = useCallback(
     () =>
@@ -124,18 +131,41 @@ export function OrientationHudLayer({
       camera.updateProjectionMatrix();
       controls?.target?.set(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
       controls?.update?.();
+      onCameraInteractionStart?.();
       viewport3dStore.setCamera(nextCamera);
       pendingOrbitCameraRef.current = nextCamera;
       invalidate();
     },
-    [camera, controls, getCurrentCamera, invalidate, rotationMode],
+    [
+      camera,
+      controls,
+      getCurrentCamera,
+      invalidate,
+      onCameraInteractionStart,
+      rotationMode,
+    ],
   );
   const commitOrbit = useCallback(() => {
     const nextCamera = pendingOrbitCameraRef.current;
-    if (!nextCamera) return;
+    if (!nextCamera) {
+      onCameraInteractionEnd?.();
+      return;
+    }
     pendingOrbitCameraRef.current = null;
-    commitCameraChange(nextCamera);
-  }, [commitCameraChange]);
+    void Promise.resolve(onCameraChange(nextCamera))
+      .catch(() => undefined)
+      .finally(() => onCameraInteractionEnd?.());
+  }, [onCameraChange, onCameraInteractionEnd]);
+
+  useEffect(
+    () => () => {
+      if (pendingOrbitCameraRef.current) {
+        pendingOrbitCameraRef.current = null;
+        onCameraInteractionEnd?.();
+      }
+    },
+    [onCameraInteractionEnd],
+  );
 
   if (!viewCubeVisible && !hslReferenceVisible) {
     return null;

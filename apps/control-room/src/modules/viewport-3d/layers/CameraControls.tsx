@@ -721,6 +721,8 @@ function useNativeCameraGestures({
   gl,
   invalidate,
   onCameraChangeRef,
+  onCameraInteractionEndRef,
+  onCameraInteractionStartRef,
   rotationModeRef,
   targetRef,
   trackerRef,
@@ -730,6 +732,8 @@ function useNativeCameraGestures({
   gl: { domElement: HTMLElement };
   invalidate: () => void;
   onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
+  onCameraInteractionEndRef: MutableRefObject<(() => void) | undefined>;
+  onCameraInteractionStartRef: MutableRefObject<(() => void) | undefined>;
   rotationModeRef: MutableRefObject<Viewport3DRotationMode>;
   targetRef: MutableRefObject<Vector3>;
   trackerRef: MutableRefObject<Viewport3DResourceTracker>;
@@ -738,6 +742,7 @@ function useNativeCameraGestures({
   useEffect(() => {
     const element = gl.domElement;
     const gestureRef: { current: NativeGestureState | null } = { current: null };
+    const onCameraInteractionEndCleanup = onCameraInteractionEndRef.current;
 
     const flushWheelCommit = () => {
       if (!wheelCommitTimerRef.current) return;
@@ -748,6 +753,7 @@ function useNativeCameraGestures({
         onCameraChange: onCameraChangeRef.current,
         target: targetRef.current,
       });
+      onCameraInteractionEndRef.current?.();
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -763,6 +769,7 @@ function useNativeCameraGestures({
       if (mode === "pan") {
         stopCameraEvent(event);
       }
+      onCameraInteractionStartRef.current?.();
       gestureRef.current = {
         hasDragged: false,
         lastX: event.clientX,
@@ -823,6 +830,7 @@ function useNativeCameraGestures({
 
       gestureRef.current = null;
       if (!gesture.hasDragged && gesture.mode === "orbit") {
+        onCameraInteractionEndRef.current?.();
         return;
       }
 
@@ -838,6 +846,7 @@ function useNativeCameraGestures({
           ? "camera-native-pan-end"
           : "camera-native-orbit-end",
       );
+      onCameraInteractionEndRef.current?.();
     };
 
     const handleContextMenu = (event: MouseEvent) => {
@@ -852,6 +861,9 @@ function useNativeCameraGestures({
     window.addEventListener("contextmenu", handleContextMenu, { capture: true });
 
     return () => {
+      if (gestureRef.current) {
+        onCameraInteractionEndCleanup?.();
+      }
       gestureRef.current = null;
       element.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("pointermove", handlePointerMove, { capture: true });
@@ -864,6 +876,8 @@ function useNativeCameraGestures({
     gl.domElement,
     invalidate,
     onCameraChangeRef,
+    onCameraInteractionEndRef,
+    onCameraInteractionStartRef,
     rotationModeRef,
     targetRef,
     trackerRef,
@@ -876,6 +890,8 @@ function useWheelZoom({
   gl,
   invalidate,
   onCameraChangeRef,
+  onCameraInteractionEndRef,
+  onCameraInteractionStartRef,
   targetRef,
   trackerRef,
   wheelCommitTimerRef,
@@ -884,6 +900,8 @@ function useWheelZoom({
   gl: { domElement: HTMLElement };
   invalidate: () => void;
   onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
+  onCameraInteractionEndRef: MutableRefObject<(() => void) | undefined>;
+  onCameraInteractionStartRef: MutableRefObject<(() => void) | undefined>;
   targetRef: MutableRefObject<Vector3>;
   trackerRef: MutableRefObject<Viewport3DResourceTracker>;
   wheelCommitTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
@@ -891,10 +909,12 @@ function useWheelZoom({
   useEffect(() => {
     const element = gl.domElement;
     const fallbackDirection = new Vector3(1, 0.72, 1).normalize();
+    const onCameraInteractionEndCleanup = onCameraInteractionEndRef.current;
     const offset = new Vector3();
 
     const handleWheel = (event: WheelEvent) => {
       stopCameraEvent(event);
+      onCameraInteractionStartRef.current?.();
 
       const target = targetRef.current;
       offset.copy(camera.position).sub(target);
@@ -919,6 +939,7 @@ function useWheelZoom({
           onCameraChange: onCameraChangeRef.current,
           target,
         });
+        onCameraInteractionEndRef.current?.();
       }, WHEEL_CAMERA_COMMIT_DELAY_MS);
     };
 
@@ -932,6 +953,7 @@ function useWheelZoom({
       if (wheelCommitTimerRef.current) {
         clearTimeout(wheelCommitTimerRef.current);
         wheelCommitTimerRef.current = null;
+        onCameraInteractionEndCleanup?.();
       }
     };
   }, [
@@ -939,6 +961,8 @@ function useWheelZoom({
     gl.domElement,
     invalidate,
     onCameraChangeRef,
+    onCameraInteractionEndRef,
+    onCameraInteractionStartRef,
     targetRef,
     trackerRef,
     wheelCommitTimerRef,
@@ -948,12 +972,16 @@ function useWheelZoom({
 export function OrbitCameraControls({
   cameraState,
   onCameraChange,
+  onCameraInteractionEnd,
+  onCameraInteractionStart,
   rotationMode,
   tracker,
 }: {
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraInteractionEnd?: () => void;
+  onCameraInteractionStart?: () => void;
   rotationMode: Viewport3DRotationMode;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -961,6 +989,8 @@ export function OrbitCameraControls({
   const targetRef = useRef(new Vector3(...cameraState.target));
   const wheelCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCameraChangeRef = useLatestRef(onCameraChange);
+  const onCameraInteractionEndRef = useLatestRef(onCameraInteractionEnd);
+  const onCameraInteractionStartRef = useLatestRef(onCameraInteractionStart);
   const rotationModeRef = useLatestRef(rotationMode);
   const trackerRef = useLatestRef(tracker);
 
@@ -987,6 +1017,8 @@ export function OrbitCameraControls({
     gl,
     invalidate,
     onCameraChangeRef,
+    onCameraInteractionEndRef,
+    onCameraInteractionStartRef,
     rotationModeRef,
     targetRef,
     trackerRef,
@@ -998,6 +1030,8 @@ export function OrbitCameraControls({
     gl,
     invalidate,
     onCameraChangeRef,
+    onCameraInteractionEndRef,
+    onCameraInteractionStartRef,
     targetRef,
     trackerRef,
     wheelCommitTimerRef,

@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 import {
   DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   type Viewport3DVisualProfileId,
@@ -49,9 +50,9 @@ export interface Viewport3DWidgetState {
 }
 
 export const DEFAULT_VIEWPORT_3D_CAMERA_STATE: Viewport3DCameraState = {
-  position: [2e-6, 1.4e-6, 2e-6],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
+  position: tuple3(DEFAULT_CAMERA_REGISTRY_STATE.position),
+  target: tuple3(DEFAULT_CAMERA_REGISTRY_STATE.target),
+  up: tuple3(DEFAULT_CAMERA_REGISTRY_STATE.up),
 };
 
 const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
@@ -65,7 +66,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraDialogOpen: false,
-    cameraProjection: "perspective",
+    cameraProjection: DEFAULT_CAMERA_REGISTRY_STATE.projection,
     dimensionFrameDensity: "auto",
     dimensionFrameMode: "floor",
     effectAmbientOcclusion: false,
@@ -433,4 +434,8 @@ function vector3(value: readonly number[] | null | undefined): [number, number, 
     Number(value[2]),
   ];
   return next.every(Number.isFinite) ? next : null;
+}
+
+function tuple3(value: readonly number[]): [number, number, number] {
+  return [Number(value[0]), Number(value[1]), Number(value[2])];
 }

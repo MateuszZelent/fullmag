@@ -248,6 +248,14 @@ describe("VisualizationRegistrySyncController", () => {
     expect(queuedMergeBlock).not.toContain("stableJson");
   });
 
+  it("keeps generic JSON fingerprinting and deep clone merge out of the sync controller", () => {
+    expect(visualizationRegistrySyncControllerSource).not.toContain("deepMerge");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("cloneJson");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("stableJson");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("sortJson");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("JSON.stringify");
+  });
+
   it("does not start an idle recurring timer when there are no pending patches", () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");

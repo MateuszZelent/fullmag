@@ -1,12 +1,16 @@
 "use client";
 
-import { useSelection } from "@/kernel/selection/useSelection";
-import type { ModuleProps } from "@/kernel/types";
+import {
+  selectionSnapshotEquals,
+  useSelectionSelector,
+} from "@/kernel/selection/useSelection";
 
 import { resolveInspectorPanel } from "./inspectorRegistry";
 
-export default function InspectorModule({ moduleId }: ModuleProps) {
-  const { selection } = useSelection(moduleId);
+export default function InspectorModule() {
+  const selection = useSelectionSelector((state) => state, {
+    isEqual: selectionSnapshotEquals,
+  });
   const panel = resolveInspectorPanel(selection);
 
   if (!panel) {

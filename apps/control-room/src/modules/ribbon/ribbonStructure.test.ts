@@ -1067,6 +1067,86 @@ describe("ribbon structure", () => {
     const frameNode = frameAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "frame:object-bounds",
     );
+    const dimensionModeNode = frameAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "frame:dimension-mode",
+    );
+    const gridDensityNode = frameAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "frame:grid-density",
+    );
+    const scaleLabelsNode = frameAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "frame:scale-labels",
+    );
+    const scaleUnitNode = frameAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "frame:scale-unit",
+    );
+
+    expect(frameAction).toMatchObject({
+      id: "view-dimension-frame",
+      label: "Frame",
+    });
+    expect(dimensionModeNode).toMatchObject({
+      value: "floor",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-frame-floor",
+          value: "floor",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-frame-cage",
+          value: "cage",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-frame-off",
+          value: "off",
+        }),
+      ],
+    });
+    expect(gridDensityNode).toMatchObject({
+      value: "auto",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-density-auto",
+          value: "auto",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-density-coarse",
+          value: "coarse",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.dimension-density-fine",
+          value: "fine",
+        }),
+      ],
+    });
+    expect(scaleLabelsNode).toMatchObject({
+      checked: true,
+      commandId: "viewport-3d.scale-labels-toggle",
+    });
+    expect(scaleUnitNode).toMatchObject({
+      value: "auto",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.scale-unit-auto",
+          value: "auto",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.scale-unit-nm",
+          value: "nm",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.scale-unit-um",
+          value: "um",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.scale-unit-mm",
+          value: "mm",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.scale-unit-m",
+          value: "m",
+        }),
+      ],
+    });
 
     expect(frameNode).toMatchObject({
       checked: false,

@@ -12,6 +12,7 @@ import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
+import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 
@@ -56,6 +57,7 @@ export interface ModuleManifest {
 export interface KernelApi {
   readonly api: ControlRoomApi;
   readonly bus: EventBus<KernelEventMap>;
+  readonly cameraRegistry: CameraRegistryController;
   readonly commandDiagnostics: CommandDiagnosticsController;
   readonly commands: CommandRegistry;
   readonly diagnostics: RequestDiagnosticsController;

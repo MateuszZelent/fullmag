@@ -1,27 +1,31 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import { useKernel } from "../KernelContext";
 import type { ModuleId } from "../types";
 
 import type { Selection } from "./selectionTypes";
+export { selectionSnapshotEquals } from "./selectionTypes";
+
+export type SelectionPatch = Partial<Omit<Selection, "moduleSource">>;
 
 /**
  * React hook for reading and writing kernel selection.
  * Re-renders only when the selection changes.
  */
 export function useSelection(moduleId: ModuleId) {
+  const state = useSelectionSelector((selection) => selection);
+  const { select, clear } = useSelectionActions(moduleId);
+
+  return { selection: state, select, clear } as const;
+}
+
+export function useSelectionActions(moduleId: ModuleId) {
   const { selection } = useKernel();
 
-  const state = useSyncExternalStore<Selection>(
-    (onStoreChange) => selection.subscribe(onStoreChange),
-    () => selection.get(),
-    () => selection.get(),
-  );
-
   const select = useCallback(
-    (patch: Partial<Omit<Selection, "moduleSource">>) => {
+    (patch: SelectionPatch) => {
       selection.set(patch, moduleId);
     },
     [selection, moduleId],
@@ -31,17 +35,35 @@ export function useSelection(moduleId: ModuleId) {
     selection.clear(moduleId);
   }, [selection, moduleId]);
 
-  return { selection: state, select, clear } as const;
+  return { select, clear } as const;
 }
 
 export function useSelectionSelector<T>(
   selector: (state: Selection) => T,
+  options: { isEqual?: (previous: T, next: T) => boolean } = {},
 ): T {
   const { selection } = useKernel();
+  const { isEqual = Object.is } = options;
+  const selectedRef = useRef<{ selected: T } | null>(null);
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => selection.subscribe(onStoreChange),
+    [selection],
+  );
+  const getSelectedSnapshot = useCallback(() => {
+    const selected = selector(selection.get());
+    const previous = selectedRef.current;
+    if (previous && isEqual(previous.selected, selected)) {
+      return previous.selected;
+    }
+
+    selectedRef.current = { selected };
+    return selected;
+  }, [isEqual, selector, selection]);
 
   return useSyncExternalStore(
-    (onStoreChange) => selection.subscribe(onStoreChange),
-    () => selector(selection.get()),
-    () => selector(selection.get()),
+    subscribe,
+    getSelectedSnapshot,
+    getSelectedSnapshot,
   );
 }
