@@ -2,6 +2,11 @@ import type { ModuleManifest } from "@/kernel/types";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 
 import { viewport3dStore } from "./viewport3dStore";
+import type {
+  Viewport3DDimensionFrameDensity,
+  Viewport3DDimensionFrameMode,
+  Viewport3DScaleUnitMode,
+} from "./viewport3dStore";
 import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
 
 const VISUAL_PROFILE_COMMANDS: Array<{
@@ -33,6 +38,79 @@ const VISUAL_PROFILE_COMMANDS: Array<{
     id: "viewport-3d.profile-capture",
     profileId: "capture",
     title: "Use Capture 3D Profile",
+  },
+];
+const DIMENSION_FRAME_MODE_COMMANDS: Array<{
+  id: string;
+  mode: Viewport3DDimensionFrameMode;
+  title: string;
+}> = [
+  {
+    id: "viewport-3d.dimension-frame-off",
+    mode: "off",
+    title: "Hide 3D Dimension Frame",
+  },
+  {
+    id: "viewport-3d.dimension-frame-floor",
+    mode: "floor",
+    title: "Show 3D Floor Grid",
+  },
+  {
+    id: "viewport-3d.dimension-frame-cage",
+    mode: "cage",
+    title: "Show 3D Dimension Cage",
+  },
+];
+const DIMENSION_FRAME_DENSITY_COMMANDS: Array<{
+  density: Viewport3DDimensionFrameDensity;
+  id: string;
+  title: string;
+}> = [
+  {
+    density: "auto",
+    id: "viewport-3d.dimension-density-auto",
+    title: "Use Auto Dimension Grid Density",
+  },
+  {
+    density: "coarse",
+    id: "viewport-3d.dimension-density-coarse",
+    title: "Use Coarse Dimension Grid Density",
+  },
+  {
+    density: "fine",
+    id: "viewport-3d.dimension-density-fine",
+    title: "Use Fine Dimension Grid Density",
+  },
+];
+const SCALE_UNIT_COMMANDS: Array<{
+  id: string;
+  title: string;
+  unitMode: Viewport3DScaleUnitMode;
+}> = [
+  {
+    id: "viewport-3d.scale-unit-auto",
+    title: "Use Automatic Scale Units",
+    unitMode: "auto",
+  },
+  {
+    id: "viewport-3d.scale-unit-nm",
+    title: "Use Nanometer Scale Units",
+    unitMode: "nm",
+  },
+  {
+    id: "viewport-3d.scale-unit-um",
+    title: "Use Micrometer Scale Units",
+    unitMode: "um",
+  },
+  {
+    id: "viewport-3d.scale-unit-mm",
+    title: "Use Millimeter Scale Units",
+    unitMode: "mm",
+  },
+  {
+    id: "viewport-3d.scale-unit-m",
+    title: "Use Meter Scale Units",
+    unitMode: "m",
   },
 ];
 
@@ -211,6 +289,62 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      ...DIMENSION_FRAME_MODE_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.dimensionFrameMode ===
+          command.mode,
+        run: () => {
+          viewport3dStore.setDimensionFrameMode(command.mode);
+          return { status: "completed" as const };
+        },
+      })),
+      ...DIMENSION_FRAME_DENSITY_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.dimensionFrameDensity ===
+          command.density,
+        run: () => {
+          viewport3dStore.setDimensionFrameDensity(command.density);
+          return { status: "completed" as const };
+        },
+      })),
+      {
+        id: "viewport-3d.scale-labels-toggle",
+        title: "Toggle 3D Scale Labels",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => viewport3dStore.getSnapshot().widgets.scaleLabelsVisible,
+        run: () => {
+          const current =
+            viewport3dStore.getSnapshot().widgets.scaleLabelsVisible;
+          viewport3dStore.setScaleLabelsVisible(!current);
+          return { status: "completed" };
+        },
+      },
+      ...SCALE_UNIT_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.scaleUnitMode ===
+          command.unitMode,
+        run: () => {
+          viewport3dStore.setScaleUnitMode(command.unitMode);
+          return { status: "completed" as const };
+        },
+      })),
       ...VISUAL_PROFILE_COMMANDS.map((command) => ({
         id: command.id,
         title: command.title,

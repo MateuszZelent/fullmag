@@ -27,16 +27,23 @@ export interface Viewport3DCommandState {
 type Viewport3DListener = () => void;
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
+export type Viewport3DDimensionFrameDensity = "auto" | "coarse" | "fine";
+export type Viewport3DDimensionFrameMode = "off" | "floor" | "cage";
 export type Viewport3DRotationMode = "camera" | "object";
+export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
 
 export interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
   cameraProjection: Viewport3DCameraProjection;
+  dimensionFrameDensity: Viewport3DDimensionFrameDensity;
+  dimensionFrameMode: Viewport3DDimensionFrameMode;
   effectAmbientOcclusion: boolean;
   effectAntialias: boolean;
   effectBloom: boolean;
   hslReferenceMode: Viewport3DHslReferenceMode;
   rotationMode: Viewport3DRotationMode;
+  scaleLabelsVisible: boolean;
+  scaleUnitMode: Viewport3DScaleUnitMode;
   settingsDialogOpen: boolean;
   viewCubeVisible: boolean;
 }
@@ -59,11 +66,15 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   widgets: {
     cameraDialogOpen: false,
     cameraProjection: "perspective",
+    dimensionFrameDensity: "auto",
+    dimensionFrameMode: "floor",
     effectAmbientOcclusion: false,
     effectAntialias: true,
     effectBloom: false,
     hslReferenceMode: "auto",
     rotationMode: "camera",
+    scaleLabelsVisible: true,
+    scaleUnitMode: "auto",
     settingsDialogOpen: false,
     viewCubeVisible: true,
   },
@@ -142,6 +153,54 @@ class Viewport3DStore {
       widgets: {
         ...this.snapshot.widgets,
         rotationMode: mode,
+      },
+    };
+    this.notify();
+  }
+
+  setDimensionFrameMode(mode: Viewport3DDimensionFrameMode): void {
+    if (this.snapshot.widgets.dimensionFrameMode === mode) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        dimensionFrameMode: mode,
+      },
+    };
+    this.notify();
+  }
+
+  setDimensionFrameDensity(density: Viewport3DDimensionFrameDensity): void {
+    if (this.snapshot.widgets.dimensionFrameDensity === density) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        dimensionFrameDensity: density,
+      },
+    };
+    this.notify();
+  }
+
+  setScaleLabelsVisible(visible: boolean): void {
+    if (this.snapshot.widgets.scaleLabelsVisible === visible) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        scaleLabelsVisible: visible,
+      },
+    };
+    this.notify();
+  }
+
+  setScaleUnitMode(mode: Viewport3DScaleUnitMode): void {
+    if (this.snapshot.widgets.scaleUnitMode === mode) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        scaleUnitMode: mode,
       },
     };
     this.notify();

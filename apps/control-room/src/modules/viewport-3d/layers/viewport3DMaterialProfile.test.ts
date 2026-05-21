@@ -72,6 +72,21 @@ describe("viewport3D material profile", () => {
       toneMapped: false,
     });
     expect(interactive.axes.opacity).toBe(0.75);
+    expect(interactive.dimensionFrame).toMatchObject({
+      labelOpacity: expect.any(Number),
+      majorOpacity: expect.any(Number),
+      minorOpacity: expect.any(Number),
+      tickOpacity: expect.any(Number),
+    });
+    expect(interactive.dimensionFrame.minorOpacity).toBeGreaterThanOrEqual(0.12);
+    expect(interactive.dimensionFrame.minorOpacity).toBeLessThanOrEqual(0.28);
+    expect(interactive.dimensionFrame.majorOpacity).toBeGreaterThanOrEqual(0.24);
+    expect(interactive.dimensionFrame.majorOpacity).toBeLessThanOrEqual(0.46);
+    expect(interactive.dimensionFrame.labelOpacity).toBeGreaterThanOrEqual(0.72);
+    expect(interactive.dimensionFrame.labelOpacity).toBeLessThanOrEqual(1);
+    expect(figure.dimensionFrame.majorOpacity).toBeGreaterThan(
+      interactive.dimensionFrame.majorOpacity,
+    );
     expect(figure.selectionShell.opacity).toBeGreaterThan(
       interactive.selectionShell.opacity,
     );

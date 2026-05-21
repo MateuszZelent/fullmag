@@ -43,6 +43,12 @@ export interface Viewport3DMaterialProfile {
     opacity: number;
     toneMapped: boolean;
   };
+  dimensionFrame: {
+    labelOpacity: number;
+    majorOpacity: number;
+    minorOpacity: number;
+    tickOpacity: number;
+  };
   selectionShell: {
     opacity: number;
   };
@@ -92,6 +98,12 @@ export function resolveViewport3DMaterialProfile(
       depthWrite: false,
       opacity: visualProfile.lighting === "minimal" ? 0.6 : 0.75,
       toneMapped: false,
+    },
+    dimensionFrame: {
+      labelOpacity: visualProfile.lighting === "minimal" ? 0.76 : 0.9,
+      majorOpacity: visualProfile.lighting === "minimal" ? 0.26 : 0.38 + figureBoost * 0.06,
+      minorOpacity: visualProfile.lighting === "minimal" ? 0.14 : 0.22 + figureBoost * 0.04,
+      tickOpacity: visualProfile.lighting === "minimal" ? 0.4 : 0.58 + figureBoost * 0.08,
     },
     selectionShell: {
       opacity: visualProfile.lighting === "figure" ? 0.82 : 0.72,

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,6 +12,11 @@ import {
   resolveSimulationStartupOverlayState,
   shouldRefreshSimulationStartupStatus,
 } from "./SimulationStartupOverlay";
+
+const source = readFileSync(
+  new URL("./SimulationStartupOverlay.tsx", import.meta.url),
+  "utf8",
+);
 
 const refetch = vi.fn();
 
@@ -87,6 +94,11 @@ describe("SimulationStartupOverlay", () => {
       isVisible: true,
       title: "Preparing simulation",
     });
+  });
+
+  it("hydrates the smoke bypass from browser config after startup", () => {
+    expect(source).toContain("useState(false)");
+    expect(source).toContain("setAllowMissingSessionSmoke(getSimulationStartupSmokeBypassSnapshot())");
   });
 
   it("allows controlled offline smoke tests to bypass the startup gate", () => {

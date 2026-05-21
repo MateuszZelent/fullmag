@@ -90,6 +90,45 @@ describe("viewport3dManifest", () => {
       .toBe(true);
   });
 
+  it("contributes dimension frame commands for the ribbon and palette", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    expect(registry.get("viewport-3d.dimension-frame-off")).toBeDefined();
+    expect(registry.get("viewport-3d.dimension-frame-floor")).toBeDefined();
+    expect(registry.get("viewport-3d.dimension-frame-cage")).toBeDefined();
+    expect(registry.get("viewport-3d.dimension-density-auto")).toBeDefined();
+    expect(registry.get("viewport-3d.dimension-density-coarse")).toBeDefined();
+    expect(registry.get("viewport-3d.dimension-density-fine")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-labels-toggle")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-unit-auto")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-unit-nm")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-unit-um")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-unit-mm")).toBeDefined();
+    expect(registry.get("viewport-3d.scale-unit-m")).toBeDefined();
+
+    expect(
+      registry.isActive("viewport-3d.dimension-frame-floor", { source: "test" }),
+    ).toBe(true);
+    await registry.execute("viewport-3d.dimension-frame-cage", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.dimensionFrameMode).toBe("cage");
+    expect(
+      registry.isActive("viewport-3d.dimension-frame-cage", { source: "test" }),
+    ).toBe(true);
+
+    await registry.execute("viewport-3d.dimension-density-fine", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.dimensionFrameDensity).toBe("fine");
+
+    expect(
+      registry.isActive("viewport-3d.scale-labels-toggle", { source: "test" }),
+    ).toBe(true);
+    await registry.execute("viewport-3d.scale-labels-toggle", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.scaleLabelsVisible).toBe(false);
+
+    await registry.execute("viewport-3d.scale-unit-nm", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.scaleUnitMode).toBe("nm");
+  });
+
   it("keeps projection changes local while queuing the backend camera patch", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();

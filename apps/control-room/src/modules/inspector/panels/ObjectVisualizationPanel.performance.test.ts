@@ -32,4 +32,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("const sessionStatus = useSessionStatus();");
     expect(panelSource).not.toContain("sessionStatus.data");
   });
+
+  it("selects only visualization overrides relevant to the inspected target", () => {
+    expect(panelSource).toContain("useObjectVisualizationController");
+    expect(panelSource).toContain("useObjectVisualizationSelector");
+    expect(panelSource).toContain("selectObjectVisualizationPanelSnapshot");
+    expect(panelSource).toContain("objectVisualizationPanelSnapshotEquals");
+    expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
+  });
 });

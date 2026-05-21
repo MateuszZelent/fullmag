@@ -72,6 +72,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("Object.values(status.resources)");
     expect(auditScript).toContain("checkFieldCatalogResourceSeparation");
     expect(auditScript).toContain("checkObjectVisualizationPanelSessionStatusSelector");
+    expect(auditScript).toContain("checkObjectVisualizationPanelVisualizationSelector");
+    expect(auditScript).toContain("selectObjectVisualizationPanelSnapshot");
+    expect(auditScript).toContain("objectVisualizationPanelSnapshotEquals");
     expect(auditScript).toContain("checkMeshDetailsPanelSessionStatusSelector");
     expect(auditScript).toContain("selectMeshDetailsRuntimeStatus");
     expect(auditScript).toContain("meshDetailsRuntimeStatusEquals");

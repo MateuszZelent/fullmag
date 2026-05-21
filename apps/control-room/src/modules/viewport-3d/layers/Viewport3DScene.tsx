@@ -6,9 +6,6 @@ import { useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   Vector3,
-  type AxesHelper,
-  type GridHelper,
-  type Material,
   type OrthographicCamera as ThreeOrthographicCamera,
   type PerspectiveCamera as ThreePerspectiveCamera,
 } from "three";
@@ -37,10 +34,14 @@ import type {
 import type {
   Viewport3DCameraProjection,
   Viewport3DCameraState,
+  Viewport3DDimensionFrameDensity,
+  Viewport3DDimensionFrameMode,
   Viewport3DRotationMode,
+  Viewport3DScaleUnitMode,
 } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import { DimensionFrameLayer } from "./DimensionFrameLayer";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
   CameraController,
@@ -72,6 +73,8 @@ interface Viewport3DSceneProps {
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   colors: Viewport3DColors;
+  dimensionFrameDensity: Viewport3DDimensionFrameDensity;
+  dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
@@ -111,15 +114,10 @@ interface Viewport3DSceneProps {
   vectorStyle: VectorFieldLayerVectorStyle;
   visualizationRevision: number | null;
   hslReferenceVisible: boolean;
+  scaleLabelsVisible: boolean;
+  scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
-}
-
-interface Viewport3DGridSpec {
-  axesLength: number;
-  center: [number, number, number];
-  divisions: number;
-  size: number;
 }
 
 interface Viewport3DViewportSize {
@@ -141,55 +139,7 @@ interface Viewport3DCameraClip {
 }
 
 const FALLBACK_GRID_SIZE = 1e-6;
-const PREFERRED_GRID_CELL_SIZE = 1e-6;
-const GRID_SIZE_UNIVERSE_LIMIT_SCALE = 1.5;
-const GRID_TARGET_DIVISIONS = 12;
-const GRID_MAX_DIVISIONS = 64;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
-
-export function resolveViewport3DGridSpec(
-  bounds: Viewport3DBounds | null,
-): Viewport3DGridSpec {
-  if (!bounds) {
-    return {
-      axesLength: FALLBACK_GRID_SIZE / 2,
-      center: [0, 0, 0],
-      divisions: 10,
-      size: FALLBACK_GRID_SIZE,
-    };
-  }
-
-  const maxSpan = Math.max(...bounds.size, 1e-12);
-  const maxGridSize = maxSpan * GRID_SIZE_UNIVERSE_LIMIT_SCALE;
-  const targetCellSize = resolveViewport3DGridCellSize(maxGridSize);
-  const divisions = Math.min(
-    Math.max(1, Math.floor(maxGridSize / targetCellSize)),
-    GRID_MAX_DIVISIONS,
-  );
-  const size = targetCellSize * divisions;
-
-  return {
-    axesLength: size / 2,
-    center: bounds.center,
-    divisions,
-    size,
-  };
-}
-
-function resolveViewport3DGridCellSize(maxGridSize: number): number {
-  if (
-    maxGridSize >= PREFERRED_GRID_CELL_SIZE * 4 &&
-    maxGridSize <= PREFERRED_GRID_CELL_SIZE * GRID_MAX_DIVISIONS
-  ) {
-    return PREFERRED_GRID_CELL_SIZE;
-  }
-
-  if (maxGridSize > PREFERRED_GRID_CELL_SIZE * GRID_MAX_DIVISIONS) {
-    return niceGridStep(maxGridSize / GRID_MAX_DIVISIONS);
-  }
-
-  return niceGridStep(maxGridSize / GRID_TARGET_DIVISIONS);
-}
 
 export function resolveViewport3DProjectionCameraClip(
   bounds: Viewport3DBounds | null,
@@ -347,21 +297,6 @@ export function applyViewport3DOrthographicCameraPose(
   camera.updateMatrixWorld();
 }
 
-function niceGridStep(value: number): number {
-  const exponent = Math.floor(Math.log10(Math.max(value, 1e-18)));
-  const base = 10 ** exponent;
-  const normalized = value / base;
-  let multiplier = 10;
-  if (normalized <= 1) {
-    multiplier = 1;
-  } else if (normalized <= 2) {
-    multiplier = 2;
-  } else if (normalized <= 5) {
-    multiplier = 5;
-  }
-  return multiplier * base;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -393,6 +328,8 @@ export function Viewport3DScene({
   cameraProjection,
   cameraState,
   colors,
+  dimensionFrameDensity,
+  dimensionFrameMode,
   airboxSettings,
   fdmDomain,
   fdmInstanceModel,
@@ -427,6 +364,8 @@ export function Viewport3DScene({
   vectorStyle,
   visualizationRevision,
   hslReferenceVisible,
+  scaleLabelsVisible,
+  scaleUnitMode,
   viewCubeVisible,
   visualProfileId,
 }: Viewport3DSceneProps) {
@@ -435,7 +374,6 @@ export function Viewport3DScene({
   const viewportSize = useThree((state) => state.size);
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
-  const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
   const cameraClip = useMemo(
     () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
     [bounds, cameraState],
@@ -605,10 +543,17 @@ export function Viewport3DScene({
         colors={colors}
         materialProfile={materialProfile}
       />
-      <AxesGridLayer
+      <DimensionFrameLayer
+        bounds={bounds}
+        cameraProjection={cameraProjection}
+        cameraState={cameraState}
         colors={colors}
-        gridSpec={gridSpec}
+        density={dimensionFrameDensity}
+        labelsVisible={scaleLabelsVisible}
         materialProfile={materialProfile}
+        mode={dimensionFrameMode}
+        tracker={tracker}
+        unitMode={scaleUnitMode}
       />
       <OrbitCameraControls
         cameraProjection={cameraProjection}
@@ -627,54 +572,4 @@ export function Viewport3DScene({
       <PostProcessingLayer />
     </>
   );
-}
-
-function AxesGridLayer({
-  colors,
-  gridSpec,
-  materialProfile,
-}: {
-  colors: Viewport3DColors;
-  gridSpec: Viewport3DGridSpec;
-  materialProfile: Viewport3DMaterialProfile;
-}) {
-  const invalidate = useThree((state) => state.invalidate);
-  const gridRef = useRef<GridHelper>(null);
-  const axesRef = useRef<AxesHelper>(null);
-
-  useEffect(() => {
-    applyHelperMaterialProfile(gridRef.current?.material, materialProfile.grid);
-    applyHelperMaterialProfile(axesRef.current?.material, materialProfile.axes);
-    invalidate();
-  }, [invalidate, materialProfile.axes, materialProfile.grid]);
-
-  return (
-    <group position={gridSpec.center}>
-      <gridHelper
-        args={[gridSpec.size, gridSpec.divisions, colors.wire, colors.wire]}
-        ref={gridRef}
-        rotation={[Math.PI / 2, 0, 0]}
-      />
-      <axesHelper args={[gridSpec.axesLength]} ref={axesRef} />
-    </group>
-  );
-}
-
-function applyHelperMaterialProfile(
-  materialOrMaterials: Material | Material[] | undefined,
-  profile: Viewport3DMaterialProfile["grid" | "axes"],
-): void {
-  const materials = Array.isArray(materialOrMaterials)
-    ? materialOrMaterials
-    : materialOrMaterials
-      ? [materialOrMaterials]
-      : [];
-  for (const material of materials) {
-    material.opacity = profile.opacity;
-    material.transparent = profile.opacity < 1;
-    material.depthTest = profile.depthTest;
-    material.depthWrite = profile.depthWrite;
-    material.toneMapped = profile.toneMapped;
-    material.needsUpdate = true;
-  }
 }

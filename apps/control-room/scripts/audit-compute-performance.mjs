@@ -212,6 +212,7 @@ checkRuntimeControlSessionStatusSelector();
 checkStudyRuntimeCommandResourceDataSessionStatusSelector();
 checkFieldCatalogResourceSeparation();
 checkObjectVisualizationPanelSessionStatusSelector();
+checkObjectVisualizationPanelVisualizationSelector();
 checkMeshDetailsPanelSessionStatusSelector();
 checkAirboxMeshPolicyPanelSessionStatusSelector();
 checkStudyInspectorPanelSessionStatusSelector();
@@ -635,6 +636,21 @@ function checkObjectVisualizationPanelSessionStatusSelector() {
     "import { useSessionStatus }",
     "const sessionStatus = useSessionStatus()",
     "sessionStatus.data",
+  ]);
+}
+
+function checkObjectVisualizationPanelVisualizationSelector() {
+  const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  requireTokens(source, "ObjectVisualizationPanel visualization selector", [
+    "useObjectVisualizationController",
+    "useObjectVisualizationSelector",
+    "selectObjectVisualizationPanelSnapshot",
+    "objectVisualizationPanelSnapshotEquals",
+    "visualizationTargetPatchEquals",
+    "visualizationTargetKey",
+  ]);
+  forbidTokens(source, "ObjectVisualizationPanel visualization selector", [
+    "useObjectVisualizationRegistry()",
   ]);
 }
 

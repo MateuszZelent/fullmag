@@ -171,6 +171,8 @@ export default function Viewport3DModule({
       colors={colors}
       cameraDialogOpen={commandState.widgets.cameraDialogOpen}
       cameraDialogState={commandState.camera}
+      dimensionFrameDensity={commandState.widgets.dimensionFrameDensity}
+      dimensionFrameMode={commandState.widgets.dimensionFrameMode}
       effectAntialias={commandState.widgets.effectAntialias}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
@@ -183,6 +185,8 @@ export default function Viewport3DModule({
       captureRevision={commandState.captureRevision}
       resetCameraRevision={commandState.resetCameraRevision}
       rotationMode={commandState.widgets.rotationMode}
+      scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
+      scaleUnitMode={commandState.widgets.scaleUnitMode}
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}

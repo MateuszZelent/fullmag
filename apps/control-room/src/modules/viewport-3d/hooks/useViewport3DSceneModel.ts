@@ -127,7 +127,7 @@ export function useViewport3DSceneModel({
   const renderingState = visualizationState.data;
   const cameraResource = renderingState?.camera ?? null;
   const deferRemoteCameraSync =
-    visualizationSync.hasUnsatisfiedCameraPatch(renderingState);
+    visualizationSync.hasUnsatisfiedCameraPatch(visualizationState.rawData);
   useViewport3DRemoteCameraSync(cameraResource, deferRemoteCameraSync);
   const visualizationRevision = renderingState?.revision ?? null;
   const visualizationError = visualizationState.error?.message ?? null;

@@ -47,11 +47,15 @@ describe("viewport3dStore", () => {
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
       cameraDialogOpen: false,
       cameraProjection: "perspective",
+      dimensionFrameDensity: "auto",
+      dimensionFrameMode: "floor",
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
       hslReferenceMode: "auto",
       rotationMode: "camera",
+      scaleLabelsVisible: true,
+      scaleUnitMode: "auto",
       settingsDialogOpen: false,
       viewCubeVisible: true,
     });
@@ -66,13 +70,33 @@ describe("viewport3dStore", () => {
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
       cameraDialogOpen: false,
       cameraProjection: "perspective",
+      dimensionFrameDensity: "auto",
+      dimensionFrameMode: "floor",
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
       hslReferenceMode: "off",
       rotationMode: "camera",
+      scaleLabelsVisible: true,
+      scaleUnitMode: "auto",
       settingsDialogOpen: false,
       viewCubeVisible: false,
+    });
+  });
+
+  it("updates dimension frame preferences", () => {
+    viewport3dStore.resetForTest();
+
+    viewport3dStore.setDimensionFrameMode("cage");
+    viewport3dStore.setDimensionFrameDensity("fine");
+    viewport3dStore.setScaleLabelsVisible(false);
+    viewport3dStore.setScaleUnitMode("nm");
+
+    expect(viewport3dStore.getSnapshot().widgets).toMatchObject({
+      dimensionFrameDensity: "fine",
+      dimensionFrameMode: "cage",
+      scaleLabelsVisible: false,
+      scaleUnitMode: "nm",
     });
   });
 

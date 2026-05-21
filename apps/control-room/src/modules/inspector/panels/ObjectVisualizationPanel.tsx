@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { FieldCatalogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
@@ -15,10 +15,14 @@ import {
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  visualizationTargetKey,
+  type ObjectVisualizationSnapshot,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type SurfaceColorSource,
+  type VisualizationTargetKind,
   type VisualizationTargetPatch,
+  type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -26,7 +30,10 @@ import {
   shouldLoadRuntimeMeshManifest,
   useFieldCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import {
+  useObjectVisualizationController,
+  useObjectVisualizationSelector,
+} from "@/kernel/visualization/useObjectVisualization";
 import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
@@ -107,6 +114,81 @@ function objectVisualizationManifestStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_revision === next.resources.mesh_revision
   );
+}
+
+const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
+  "airbox",
+  "object",
+  "part",
+];
+
+function selectObjectVisualizationPanelSnapshot(
+  snapshot: ObjectVisualizationSnapshot,
+  targets: readonly VisualizationTargetRef[],
+): ObjectVisualizationSnapshot {
+  const defaults: ObjectVisualizationSnapshot["defaults"] = {};
+  const overrides: ObjectVisualizationSnapshot["overrides"] = {};
+
+  for (const target of targets) {
+    const defaultPatch = snapshot.defaults[target.kind];
+    if (defaultPatch) {
+      defaults[target.kind] = defaultPatch;
+    }
+
+    const override = snapshot.overrides[visualizationTargetKey(target)];
+    if (override) {
+      overrides[visualizationTargetKey(target)] = override;
+    }
+  }
+
+  return {
+    defaults,
+    overrides,
+    version: snapshot.version,
+  };
+}
+
+function objectVisualizationPanelSnapshotEquals(
+  previous: ObjectVisualizationSnapshot,
+  next: ObjectVisualizationSnapshot,
+): boolean {
+  for (const kind of OBJECT_VISUALIZATION_TARGET_KINDS) {
+    if (!visualizationTargetPatchEquals(previous.defaults[kind], next.defaults[kind])) {
+      return false;
+    }
+  }
+
+  const overrideKeys = new Set([
+    ...Object.keys(previous.overrides),
+    ...Object.keys(next.overrides),
+  ]);
+  for (const key of overrideKeys) {
+    if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function visualizationTargetPatchEquals(
+  previous: VisualizationTargetPatch | undefined,
+  next: VisualizationTargetPatch | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+
+  const keys = new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ] as Array<keyof VisualizationTargetPatch>);
+  for (const key of keys) {
+    if (!Object.is(previous[key], next[key])) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function surfaceFieldStatus(
@@ -457,7 +539,7 @@ function VisualizationOverridesSection({
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const target = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
-  const { snapshot, visualization } = useObjectVisualizationRegistry();
+  const visualization = useObjectVisualizationController();
   const visualizationState = useVisualizationStateResource();
   const manifestStatus = useSessionStatusSelector(
     selectObjectVisualizationManifestStatus,
@@ -468,6 +550,35 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   );
   const [feedback, setFeedback] = useState<string | null>(null);
   const pending = false;
+  const scene = useSceneResource({ enabled: Boolean(target) });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
+  });
+  const visualizationTargets = useMemo(() => {
+    const targets: VisualizationTargetRef[] = [];
+    if (target) {
+      targets.push(target);
+    }
+
+    for (const part of manifest.data?.mesh_parts ?? []) {
+      if (part.role === "airbox") continue;
+      targets.push(
+        part.object_id
+          ? { id: part.object_id, kind: "object", label: part.label }
+          : { id: part.id, kind: "part", label: part.label },
+      );
+    }
+
+    return targets;
+  }, [manifest.data?.mesh_parts, target]);
+  const selectPanelSnapshot = useCallback(
+    (snapshot: ObjectVisualizationSnapshot) =>
+      selectObjectVisualizationPanelSnapshot(snapshot, visualizationTargets),
+    [visualizationTargets],
+  );
+  const snapshot = useObjectVisualizationSelector(selectPanelSnapshot, {
+    isEqual: objectVisualizationPanelSnapshotEquals,
+  });
   const targetVisualization = target
     ? resolveTargetVisualization({
         snapshot,
@@ -477,10 +588,6 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
-  const scene = useSceneResource({ enabled: Boolean(target) });
-  const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
-  });
   const fieldCatalog = useFieldCatalogResource({
     enabled:
       Boolean(target) &&
