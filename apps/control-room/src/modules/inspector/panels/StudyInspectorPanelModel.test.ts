@@ -6,6 +6,8 @@ import {
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
 
+const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
+
 describe("StudyInspectorPanelModel", () => {
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
     const snapshot = studySnapshotFromScene({
@@ -23,7 +25,7 @@ describe("StudyInspectorPanelModel", () => {
             kind: "relax",
             max_steps: "200",
             relax_algorithm: "llg_overdamped",
-            torque_tolerance: "1e-4",
+            torque_tolerance: TORQUE_TOLERANCE_FOR_1E_4_T,
           },
           {
             entrypoint_kind: "run",
@@ -106,6 +108,11 @@ describe("StudyInspectorPanelModel", () => {
       commandLabel: "Command queue pending",
       maxTorque: "3.000e-3 T",
       progressPercent: 25,
+      relaxTorqueStop: {
+        current: "3.000e-3 T / 2.387e3 A/m",
+        status: "30.0x above threshold",
+        threshold: "1.000e-4 T / 7.958e1 A/m",
+      },
       runId: "run-1",
       state: "running",
     });

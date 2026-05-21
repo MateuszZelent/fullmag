@@ -26,6 +26,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("Viewport canvas did not visually change after first projection toggle");
     expect(smokeScript).toContain("Viewport canvas did not visually leave orthographic projection after second toggle");
     expect(smokeScript).toContain("const png = await withTimeout(");
+    expect(smokeScript).toContain("CANVAS_SCREENSHOT_TIMEOUT_MS");
     expect(smokeScript).toContain("page.screenshot({");
     expect(smokeScript).toContain("3D viewport canvas composite screenshot");
   });

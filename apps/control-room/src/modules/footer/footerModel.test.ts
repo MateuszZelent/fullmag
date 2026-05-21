@@ -82,10 +82,10 @@ describe("footerModel", () => {
           channel: "performance",
           durationMs: 12.7,
           method: "MEASURE",
-          path: "fullmag.viewport3d.buildTopologyRenderModel",
+          path: "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
         }),
       ),
-    ).toBe("RX PERF fullmag.viewport3d.buildTopologyRenderModel");
+    ).toBe("RX PERF fullmag.viewport3d.buildViewport3DTopologyRenderModel");
   });
 
   it("serializes full entries for the details modal", () => {

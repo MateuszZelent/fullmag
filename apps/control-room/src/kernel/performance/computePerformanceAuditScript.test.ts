@@ -78,6 +78,16 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkObjectVisualizationPanelVisualizationSelector");
     expect(auditScript).toContain("checkObjectVisualizationPanelNumberFieldDebounce");
     expect(auditScript).toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
+    expect(auditScript).toContain("Wireframe opacity");
+    expect(auditScript).toContain("Vector alpha");
+    expect(auditScript).toContain("Vector thickness");
+    expect(auditScript).toContain("Arrow length");
+    expect(auditScript).toContain("Arrow budget");
+    expect(auditScript).toContain("Surface lift amount");
+    expect(auditScript).toContain("label=\"Opacity\"");
+    expect(auditScript).toContain('patchNumber("vectorBudget"');
+    expect(auditScript).toContain('patchNumber("vectorThickness"');
+    expect(auditScript).toContain('patchNumber("vectorLengthScale"');
     expect(auditScript).toContain("onPointerUp={flushDraft}");
     expect(auditScript).toContain("onKeyUp={flushDraft}");
     expect(auditScript).toContain("onBlur={flushDraft}");
@@ -99,7 +109,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("objectVisualizationManifestStatusEquals");
     expect(auditScript).toContain("useFieldCatalogResource");
     expect(auditScript).toContain("status?.resources.field_revision");
-    expect(auditScript).toContain("fullmag.viewport3d.buildTopologyRenderModel");
+    expect(auditScript).toContain("fullmag.viewport3d.buildViewport3DTopologyRenderModel");
     expect(auditScript).toContain("fullmag.api.requestBinaryResource.topology");
     expect(auditScript).toContain("fullmag.viewport3d.buildFdmCuboidInstanceModel");
     expect(auditScript).toContain("checkFdmCuboidChunkedUpload");
@@ -179,6 +189,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("maxResponsivenessDelayMs");
     expect(auditScript).toContain("totalResponsivenessDelayMs");
     expect(auditScript).toContain("delayedResponsivenessTickCount");
+    expect(auditScript).toContain("BINARY_RESOURCE_MEASURE_NAMES");
+    expect(auditScript).toContain("fullmag.api.requestBinaryResource.topology");
+    expect(auditScript).toContain("fullmag.api.requestBinaryResource.mesh-quality-data");
+    expect(auditScript).toContain("fullmag.api.requestBinaryResource.field-vector");
+    expect(auditScript).toContain("binaryResourceMeasureCount");
+    expect(auditScript).toContain("binaryResourceMeasureTotals");
     expect(auditScript).toContain("useLayoutSelector");
     expect(auditScript).toContain("useLayout selector equality");
     expect(auditScript).toContain("explorer store selector equality");

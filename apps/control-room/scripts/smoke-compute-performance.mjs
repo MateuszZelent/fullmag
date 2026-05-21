@@ -21,10 +21,15 @@ const STRICT_COMPUTE_ACTIONS = [
 ];
 
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
-  "fullmag.viewport3d.buildTopologyRenderModel",
+  "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
   "fullmag.viewport3d.buildMeshQualityVertexColors",
   "fullmag.viewport3d.buildFdmCuboidInstanceModel",
-  "fullmag.viewport3d.buildFieldRenderModel",
+  "fullmag.viewport3d.buildViewport3DFieldRenderModel",
+];
+const BINARY_RESOURCE_MEASURE_NAMES = [
+  "fullmag.api.requestBinaryResource.topology",
+  "fullmag.api.requestBinaryResource.mesh-quality-data",
+  "fullmag.api.requestBinaryResource.field-vector",
 ];
 const REACT_RENDER_MEASURE_NAMES = [
   "fullmag.react.render.ExplorerModule.mount",
@@ -38,6 +43,7 @@ const REACT_RENDER_MEASURE_NAMES = [
 ];
 const COMPUTE_PERFORMANCE_MEASURE_NAMES = [
   ...VIEWPORT_3D_COMPUTE_MEASURE_NAMES,
+  ...BINARY_RESOURCE_MEASURE_NAMES,
   ...REACT_RENDER_MEASURE_NAMES,
 ];
 const TERMINAL_COMMAND_STATUSES = new Set([
@@ -450,11 +456,17 @@ async function collectComputePerformanceProbe(
         ...state.measures,
         ...measureEntries,
       ]);
+      const binaryResourceMeasureNames = measureNames.filter((name) =>
+        name.startsWith("fullmag.api.requestBinaryResource."),
+      );
       const reactRenderMeasureNames = measureNames.filter((name) =>
         name.startsWith("fullmag.react.render."),
       );
-      const viewportMeasureNames = measureNames.filter(
-        (name) => !name.startsWith("fullmag.react.render."),
+      const viewportMeasureNames = measureNames.filter((name) =>
+        name.startsWith("fullmag.viewport3d."),
+      );
+      const binaryResourceMeasures = measuredEntries.filter((entry) =>
+        binaryResourceMeasureNames.includes(entry.name),
       );
       const viewportMeasures = measuredEntries.filter((entry) =>
         viewportMeasureNames.includes(entry.name),
@@ -480,6 +492,11 @@ async function collectComputePerformanceProbe(
         longTaskCount: longTasks.length,
         maxLongTaskMs: Math.max(0, ...longTasks.map((entry) => entry.duration)),
         maxResponsivenessDelayMs: responsiveness.maxDelayMs,
+        binaryResourceMeasureCount: binaryResourceMeasures.length,
+        binaryResourceMeasureTotals: summarizeMeasureTotals(
+          binaryResourceMeasureNames,
+          binaryResourceMeasures,
+        ),
         reactRenderMeasureCount: reactRenderMeasures.length,
         resultResourceRequestCount,
         reactRenderMeasureTotals: summarizeMeasureTotals(

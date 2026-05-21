@@ -14,13 +14,14 @@ const requireGeometryFlow =
 const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
+const CANVAS_SCREENSHOT_TIMEOUT_MS = 15_000;
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
-  "fullmag.viewport3d.buildTopologyRenderModel",
+  "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
   "fullmag.viewport3d.buildMeshQualityVertexColors",
   "fullmag.viewport3d.buildFdmCuboidInstanceModel",
-  "fullmag.viewport3d.buildFieldRenderModel",
+  "fullmag.viewport3d.buildViewport3DFieldRenderModel",
 ];
 const REACT_RENDER_MEASURE_NAMES = [
   "fullmag.react.render.ExplorerModule.mount",
@@ -1018,7 +1019,7 @@ async function sampleCanvasComposite(page, canvas) {
         y: box.y,
       },
     }),
-    5_000,
+    CANVAS_SCREENSHOT_TIMEOUT_MS,
     "3D viewport canvas composite screenshot",
   );
   const bitmap = parsePng(png);

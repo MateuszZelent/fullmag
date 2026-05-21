@@ -1173,10 +1173,10 @@ function checkViewportPerformanceMarks() {
     "measureViewport3DModelBuild",
     "performanceTarget.mark(startMark)",
     "performanceTarget.measure(name, startMark, endMark)",
-    "fullmag.viewport3d.buildTopologyRenderModel",
+    "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
     "fullmag.viewport3d.buildMeshQualityVertexColors",
     "fullmag.viewport3d.buildFdmCuboidInstanceModel",
-    "fullmag.viewport3d.buildFieldRenderModel",
+    "fullmag.viewport3d.buildViewport3DFieldRenderModel",
   ]);
 }
 
@@ -1407,9 +1407,9 @@ function checkViewportSmokeComputeMetrics() {
     "collectComputePerformanceProbe",
     "PerformanceObserver",
     '"longtask"',
-    "fullmag.viewport3d.buildTopologyRenderModel",
+    "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
     "fullmag.viewport3d.buildFdmCuboidInstanceModel",
-    "fullmag.viewport3d.buildFieldRenderModel",
+    "fullmag.viewport3d.buildViewport3DFieldRenderModel",
     "compute_metrics",
     "sessionRequestCount",
     "maxLongTaskMs",
@@ -1457,6 +1457,14 @@ function checkComputePerformanceSmokeScript() {
     "totalResponsivenessDelayMs",
     "delayedResponsivenessTickCount",
     "reactRenderMeasureTotals",
+    "BINARY_RESOURCE_MEASURE_NAMES",
+    "fullmag.api.requestBinaryResource.topology",
+    "fullmag.api.requestBinaryResource.mesh-quality-data",
+    "fullmag.api.requestBinaryResource.field-vector",
+    "binaryResourceMeasureCount",
+    "binaryResourceMeasureTotals",
+    'startsWith("fullmag.api.requestBinaryResource.")',
+    'startsWith("fullmag.viewport3d.")',
     "viewportMeasureTotals",
   ]);
 }

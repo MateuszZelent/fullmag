@@ -32,6 +32,14 @@ describe("compute performance smoke script", () => {
     expect(smokeScript).toContain("totalResponsivenessDelayMs");
     expect(smokeScript).toContain("delayedResponsivenessTickCount");
     expect(smokeScript).toContain("reactRenderMeasureTotals");
+    expect(smokeScript).toContain("BINARY_RESOURCE_MEASURE_NAMES");
+    expect(smokeScript).toContain("fullmag.api.requestBinaryResource.topology");
+    expect(smokeScript).toContain("fullmag.api.requestBinaryResource.mesh-quality-data");
+    expect(smokeScript).toContain("fullmag.api.requestBinaryResource.field-vector");
+    expect(smokeScript).toContain("binaryResourceMeasureCount");
+    expect(smokeScript).toContain("binaryResourceMeasureTotals");
+    expect(smokeScript).toContain("startsWith(\"fullmag.api.requestBinaryResource.\")");
+    expect(smokeScript).toContain("startsWith(\"fullmag.viewport3d.\")");
     expect(smokeScript).toContain("commandRequestCount");
     expect(smokeScript).toContain("waitForEnabledAction");
     expect(smokeScript).toContain("cleanupSolveCommand");

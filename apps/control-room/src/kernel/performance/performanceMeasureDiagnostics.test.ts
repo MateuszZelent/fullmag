@@ -47,7 +47,7 @@ describe("performance measure diagnostics", () => {
       {
         duration: 12.7,
         entryType: "measure",
-        name: "fullmag.viewport3d.buildTopologyRenderModel",
+        name: "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
         startTime: 50,
       },
       {
@@ -68,7 +68,7 @@ describe("performance measure diagnostics", () => {
         messageType: "measure",
         method: "MEASURE",
         outcome: "ok",
-        path: "fullmag.viewport3d.buildTopologyRenderModel",
+        path: "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
         requestId: "performance-measure",
         status: null,
         timestampMs: 1_050,

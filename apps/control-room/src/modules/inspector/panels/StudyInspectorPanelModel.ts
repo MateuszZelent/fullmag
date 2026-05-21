@@ -19,6 +19,12 @@ interface StudyStageSnapshot {
   untilSeconds: string | null;
 }
 
+export interface StudyRelaxTorqueStopModel {
+  current: string;
+  status: string;
+  threshold: string;
+}
+
 export type StudyStageModel = StudyStageSnapshot & {
   label: string;
   progressPercent: number;
@@ -49,6 +55,7 @@ export interface StudyInspectorModel {
     commandLabel: string;
     maxTorque: string;
     progressPercent: number;
+    relaxTorqueStop: StudyRelaxTorqueStopModel | null;
     runId: string;
     state: string;
   };
@@ -119,6 +126,11 @@ export function resolveStudyInspectorModel({
     stages[selectedStageIndex ?? activeStageIndex ?? -1] ?? null;
   const activeStage = stages[activeStageIndex ?? -1] ?? null;
   const commandSummary = resolveCommandSummary(commandQueue);
+  const relaxTorqueStop = resolveRelaxTorqueStop({
+    activeStage,
+    activeStageKind: stageExecution?.active_stage_kind ?? null,
+    currentTorqueT: solverStatus?.max_torque ?? null,
+  });
 
   return {
     boundary: snapshot.boundary,
@@ -131,6 +143,7 @@ export function resolveStudyInspectorModel({
       commandLabel: commandSummary.label,
       maxTorque: formatTorque(solverStatus?.max_torque),
       progressPercent,
+      relaxTorqueStop,
       runId: currentRun?.run_id ?? "none",
       state:
         solverStatus?.runtime_state ??
@@ -142,6 +155,8 @@ export function resolveStudyInspectorModel({
     stages,
   };
 }
+
+const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
 
 type CommandQueueEntry = CommandQueueStatusResource["commands"][number];
 
@@ -227,12 +242,49 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
 
 function stageLabel(stage: StudyStageSnapshot): string {
   const base =
-    stage.kind === "relax"
+    isRelaxStageKind(stage.kind)
       ? "Relax"
       : stage.kind === "run"
         ? "Run"
         : titleCase(stage.kind);
   return `${base} ${stage.index + 1}`;
+}
+
+function resolveRelaxTorqueStop({
+  activeStage,
+  activeStageKind,
+  currentTorqueT,
+}: {
+  activeStage: StudyStageModel | null;
+  activeStageKind: string | null;
+  currentTorqueT: number | null;
+}): StudyRelaxTorqueStopModel | null {
+  if (
+    !activeStage ||
+    (!isRelaxStageKind(activeStage.kind) &&
+      !isRelaxStageKind(activeStageKind ?? ""))
+  ) {
+    return null;
+  }
+
+  const currentT = finiteNumber(currentTorqueT);
+  const thresholdApm = finiteNumberFromText(activeStage.torqueTolerance);
+  const thresholdT =
+    thresholdApm === null ? null : thresholdApm * MU0_T_PER_APM;
+
+  return {
+    current:
+      currentT === null ? "unavailable" : formatTorquePairFromTesla(currentT),
+    status: formatTorqueStopStatus(currentT, thresholdT),
+    threshold:
+      thresholdApm === null
+        ? "not set"
+        : formatTorquePairFromApm(thresholdApm),
+  };
+}
+
+function isRelaxStageKind(kind: string): boolean {
+  return kind.toLowerCase().includes("relax");
 }
 
 function resolveProgressPercent({
@@ -282,8 +334,43 @@ function formatExternalField(value: unknown): string {
 
 function formatTorque(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
-    ? `${value.toExponential(3)} T`
+    ? `${formatScientific(value)} T`
     : "unavailable";
+}
+
+function formatTorquePairFromTesla(value: number): string {
+  return `${formatScientific(value)} T / ${formatScientific(
+    value / MU0_T_PER_APM,
+  )} A/m`;
+}
+
+function formatTorquePairFromApm(value: number): string {
+  return `${formatScientific(value * MU0_T_PER_APM)} T / ${formatScientific(
+    value,
+  )} A/m`;
+}
+
+function formatTorqueStopStatus(
+  currentT: number | null,
+  thresholdT: number | null,
+): string {
+  if (thresholdT === null) return "threshold not set";
+  if (currentT === null) return "current unavailable";
+  if (currentT <= thresholdT) {
+    return `${formatThresholdRatio(currentT, thresholdT)} of threshold`;
+  }
+  return `${formatThresholdRatio(currentT, thresholdT)} above threshold`;
+}
+
+function formatThresholdRatio(currentT: number, thresholdT: number): string {
+  if (thresholdT <= 0) return "n/a";
+  const ratio = currentT / thresholdT;
+  if (ratio <= 1) return `${(ratio * 100).toPrecision(3)}%`;
+  return `${ratio.toPrecision(3)}x`;
+}
+
+function formatScientific(value: number): string {
+  return value.toExponential(3).replace("e+", "e");
 }
 
 function titleCase(value: string): string {
@@ -308,6 +395,16 @@ function optionalString(value: unknown): string | null {
 
 function stringValue(value: unknown, fallback: string): string {
   return optionalString(value) ?? fallback;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function finiteNumberFromText(value: string | null): number | null {
+  if (value === null || value.trim().length === 0) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function asRecord(value: unknown): JsonRecord | null {

@@ -304,7 +304,7 @@ export function useViewport3DSceneModel({
   const topologyRenderModel = useMemo(
     () =>
       measureViewport3DModelBuild(
-        "fullmag.viewport3d.buildTopologyRenderModel",
+        "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
         () =>
           buildViewport3DTopologyRenderModel(
             topology.data,
@@ -621,7 +621,7 @@ export function useViewport3DSceneModel({
   });
   const fieldRenderModel = useMemo(() => {
     const model = measureViewport3DModelBuild(
-      "fullmag.viewport3d.buildFieldRenderModel",
+      "fullmag.viewport3d.buildViewport3DFieldRenderModel",
       () =>
         buildViewport3DFieldRenderModel(
           currentTopologyRenderModel,

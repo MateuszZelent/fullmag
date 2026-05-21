@@ -589,6 +589,22 @@ function StudyRuntimeSection({
         <FieldRow label="Command error" value={model.runtime.commandError} />
       ) : null}
       <FieldRow label="Max torque" value={model.runtime.maxTorque} />
+      {model.runtime.relaxTorqueStop ? (
+        <>
+          <FieldRow
+            label="Relax torque"
+            value={model.runtime.relaxTorqueStop.current}
+          />
+          <FieldRow
+            label="Relax threshold"
+            value={model.runtime.relaxTorqueStop.threshold}
+          />
+          <FieldRow
+            label="Relax stop"
+            value={model.runtime.relaxTorqueStop.status}
+          />
+        </>
+      ) : null}
       <FieldRow label="Step" value={stepValue} />
       <ProgressBar
         label="Current study progress"
