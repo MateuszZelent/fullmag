@@ -258,8 +258,13 @@ function appendPlaneLines({
   const uIndex = AXIS_INDEX[plane.uAxis];
   const vIndex = AXIS_INDEX[plane.vAxis];
   const fixedIndex = AXIS_INDEX[plane.fixedAxis];
-  for (const value of ticksBetween(bounds.min[uIndex], bounds.max[uIndex], step)) {
-    if (skipStep && isOnMajorStep(value, skipStep)) continue;
+  for (const value of centeredTicksBetween({
+    max: bounds.max[uIndex],
+    min: bounds.min[uIndex],
+    origin: bounds.center[uIndex],
+    step,
+  })) {
+    if (skipStep && isOnMajorStep(value - bounds.center[uIndex], skipStep)) continue;
     if (lineBuffer.length / 6 >= maxSegments) return;
     pushSegment(
       lineBuffer,
@@ -267,8 +272,13 @@ function appendPlaneLines({
       pointOnPlane(plane, fixedIndex, plane.fixedValue, uIndex, value, vIndex, bounds.max[vIndex]),
     );
   }
-  for (const value of ticksBetween(bounds.min[vIndex], bounds.max[vIndex], step)) {
-    if (skipStep && isOnMajorStep(value, skipStep)) continue;
+  for (const value of centeredTicksBetween({
+    max: bounds.max[vIndex],
+    min: bounds.min[vIndex],
+    origin: bounds.center[vIndex],
+    step,
+  })) {
+    if (skipStep && isOnMajorStep(value - bounds.center[vIndex], skipStep)) continue;
     if (lineBuffer.length / 6 >= maxSegments) return;
     pushSegment(
       lineBuffer,
@@ -286,31 +296,46 @@ function buildTickLabels(
 ): DimensionFrameLabel[] {
   const labels: DimensionFrameLabel[] = [];
   const offset = Math.max(Math.max(...bounds.size) * 0.055, 1e-12);
-  for (const x of ticksBetween(bounds.min[0], bounds.max[0], step)) {
+  for (const x of centeredTicksBetween({
+    max: bounds.max[0],
+    min: bounds.min[0],
+    origin: bounds.center[0],
+    step,
+  })) {
     labels.push({
       colorRole: "tick",
       key: `tick:x:${x}`,
       position: [x, bounds.min[1] - offset, bounds.min[2]],
-      text: formatDimensionFrameTickValue(x, unit),
+      text: formatDimensionFrameTickValue(x - bounds.center[0], unit),
     });
     if (labels.length >= LABEL_CAP) return labels;
   }
-  for (const y of ticksBetween(bounds.min[1], bounds.max[1], step)) {
+  for (const y of centeredTicksBetween({
+    max: bounds.max[1],
+    min: bounds.min[1],
+    origin: bounds.center[1],
+    step,
+  })) {
     labels.push({
       colorRole: "tick",
       key: `tick:y:${y}`,
       position: [bounds.min[0] - offset, y, bounds.min[2]],
-      text: formatDimensionFrameTickValue(y, unit),
+      text: formatDimensionFrameTickValue(y - bounds.center[1], unit),
     });
     if (labels.length >= LABEL_CAP) return labels;
   }
   if (mode === "cage") {
-    for (const z of ticksBetween(bounds.min[2], bounds.max[2], step)) {
+    for (const z of centeredTicksBetween({
+      max: bounds.max[2],
+      min: bounds.min[2],
+      origin: bounds.center[2],
+      step,
+    })) {
       labels.push({
         colorRole: "tick",
         key: `tick:z:${z}`,
         position: [bounds.min[0] - offset, bounds.min[1] - offset, z],
-        text: formatDimensionFrameTickValue(z, unit),
+        text: formatDimensionFrameTickValue(z - bounds.center[2], unit),
       });
       if (labels.length >= LABEL_CAP) return labels;
     }
@@ -416,6 +441,22 @@ function ticksBetween(min: number, max: number, step: number): number[] {
     ticks.push(Number(value.toPrecision(12)));
   }
   return ticks;
+}
+
+function centeredTicksBetween({
+  max,
+  min,
+  origin,
+  step,
+}: {
+  max: number;
+  min: number;
+  origin: number;
+  step: number;
+}): number[] {
+  if (!Number.isFinite(step) || step <= 0) return [];
+  const relativeTicks = ticksBetween(min - origin, max - origin, step);
+  return relativeTicks.map((value) => Number((origin + value).toPrecision(12)));
 }
 
 function isOnMajorStep(value: number, majorStep: number): boolean {

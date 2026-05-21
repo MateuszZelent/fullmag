@@ -52,6 +52,10 @@ describe("compute performance smoke script", () => {
     expect(smokeScript).toContain("assertNoImmediateResultResourceReloads");
     expect(smokeScript).toContain("resultResourceRequestCount");
     expect(smokeScript).toContain(["", "v2", "sessions", "current", "data", "fields"].join("/"));
+    expect(smokeScript).toContain(["", "v2", "sessions", "current", "data", "scalars"].join("/"));
+    expect(smokeScript).toContain(["", "v2", "sessions", "current", "simulation", "solver", "energies", "current"].join("/"));
+    expect(smokeScript).toContain(["", "v2", "sessions", "current", "simulation", "solver", "energies", "history"].join("/"));
+    expect(smokeScript).toContain("simulation\\/objects\\/[^/]+\\/metrics");
     expect(smokeScript).not.toContain("response.status() < 400");
   });
 });

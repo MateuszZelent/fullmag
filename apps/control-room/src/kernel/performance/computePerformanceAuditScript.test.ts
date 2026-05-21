@@ -150,6 +150,10 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS");
     expect(auditScript).toContain("assertNoImmediateResultResourceReloads");
     expect(auditScript).toContain("resultResourceRequestCount");
+    expect(auditScript).toContain("/v2/sessions/current/data/scalars");
+    expect(auditScript).toContain("/v2/sessions/current/simulation/solver/energies/current");
+    expect(auditScript).toContain("/v2/sessions/current/simulation/solver/energies/history");
+    expect(auditScript).toContain("simulation\\\\/objects\\\\/[^/]+\\\\/metrics");
     expect(auditScript).toContain("checkShellSelectorHooks");
     expect(auditScript).toContain("checkObjectVisualizationSelectorHooks");
     expect(auditScript).toContain("checkViewport3DObjectVisualizationSelector");

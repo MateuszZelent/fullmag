@@ -584,7 +584,6 @@ export function Viewport3DScene({
         onCameraChange={onCameraChange}
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
-        rotationMode={rotationMode}
         tracker={tracker}
       />
       <OrientationHudLayer

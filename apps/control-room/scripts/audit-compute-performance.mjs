@@ -722,6 +722,21 @@ function checkObjectVisualizationPanelNumberFieldDebounce() {
     "function NumberField",
     "function ToggleButton",
   );
+  const wireframeSection = blockBetween(
+    source,
+    "function VisualizationWireframeSection",
+    "function VisualizationVectorsSection",
+  );
+  const vectorsSection = blockBetween(
+    source,
+    "function VisualizationVectorsSection",
+    "function VisualizationGeometryScopeSection",
+  );
+  const opacitySection = blockBetween(
+    source,
+    "function VisualizationOpacitySection",
+    "function VisualizationOverridesSection",
+  );
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
     "VISUALIZATION_NUMBER_COMMIT_DELAY_MS",
@@ -735,6 +750,29 @@ function checkObjectVisualizationPanelNumberFieldDebounce() {
   forbidTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
     "onChange(event.target.value)",
     "onChange(Number(event.target.value))",
+  ]);
+  requireTokens(wireframeSection, "ObjectVisualizationPanel wireframe range debounce", [
+    "<NumberField",
+    'label="Wireframe opacity"',
+    'patchNumber("wireframeOpacityPercent"',
+  ]);
+  requireTokens(vectorsSection, "ObjectVisualizationPanel vector range debounce", [
+    "<NumberField",
+    'label="Vector alpha"',
+    'label="Vector thickness"',
+    'label="Arrow length"',
+    'label="Arrow budget"',
+    'label="Surface lift amount"',
+    'patchNumber("vectorAlphaPercent"',
+    'patchNumber("vectorThickness"',
+    'patchNumber("vectorLengthScale"',
+    'patchNumber("vectorBudget"',
+    'patchNumber("vectorSurfaceOffsetScale"',
+  ]);
+  requireTokens(opacitySection, "ObjectVisualizationPanel opacity range debounce", [
+    "<NumberField",
+    'label="Opacity"',
+    "patch({ opacityPercent: value })",
   ]);
 }
 
@@ -1451,6 +1489,10 @@ function checkComputePerformanceSmokeScript() {
     "resultResourceRequestCount",
     "isForbiddenAcceptanceResourceUrl",
     "/v2/sessions/current/data/fields",
+    "/v2/sessions/current/data/scalars",
+    "/v2/sessions/current/simulation/solver/energies/current",
+    "/v2/sessions/current/simulation/solver/energies/history",
+    "simulation\\/objects\\/[^/]+\\/metrics",
     "COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS",
     "startResponsivenessProbe",
     "maxResponsivenessDelayMs",
