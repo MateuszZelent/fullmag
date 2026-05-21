@@ -14,6 +14,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
@@ -45,7 +46,9 @@ function runtimeResourceData({
   discretization = "fdm",
   explicitTopology = false,
   geometryValidation = { diagnostics: [] },
+  meshBuildCurrent = null,
   meshBuildStatus = "idle",
+  meshPipelineStatus = null,
   meshSourceSceneRevision = null,
   meshRevision = 0,
   runtimeState = "idle",
@@ -66,7 +69,13 @@ function runtimeResourceData({
   discretization?: string;
   explicitTopology?: boolean;
   geometryValidation?: unknown;
+  meshBuildCurrent?: unknown;
   meshBuildStatus?: string;
+  meshPipelineStatus?: Array<{
+    id: string;
+    label?: string;
+    status: string;
+  }> | null;
   meshRevision?: number;
   meshSourceSceneRevision?: number | null;
   runtimeState?: string;
@@ -81,7 +90,11 @@ function runtimeResourceData({
 } = {}): Record<string, unknown> {
   return {
     [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile,
-    [MESHING_BUILDS_CURRENT_PATH]: { status: meshBuildStatus },
+    [MESHING_BUILDS_CURRENT_PATH]:
+      meshBuildCurrent ??
+      (meshPipelineStatus
+        ? { mesh_pipeline_status: meshPipelineStatus }
+        : { status: meshBuildStatus }),
     [MESHING_SHARED_DOMAIN_MANIFEST_PATH]:
       meshRevision > 0
         ? {
@@ -376,19 +389,28 @@ describe("study runtime command contributions", () => {
     expect(objectMetricsListener).not.toHaveBeenCalled();
   });
 
-  it("submits the Compute Study command as a solve request", async () => {
+  it("submits the Compute Study command without broad result invalidations on acceptance", async () => {
     const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
     const submit = vi.fn(async () => ({
       accepted: true,
       command_id: "cmd-solve",
       error: null,
     }));
+    const scalarWindowListener = vi.fn();
+    const sessionStatusListener = vi.fn();
+    const currentRunListener = vi.fn();
+    resources.subscribe(`${DATA_SCALARS_PATH}?limit=100`, scalarWindowListener);
+    resources.subscribe(SESSION_STATUS_RESOURCE_KEY, sessionStatusListener);
+    resources.subscribe(SIMULATION_RUN_CURRENT_PATH, currentRunListener);
 
     const result = await registry.execute("study.run", {
       api: {
         commands: { submit },
       } as never,
       resourceData: runtimeResourceData(),
+      resources,
       source: "test",
     });
 
@@ -403,6 +425,19 @@ describe("study runtime command contributions", () => {
         target: { kind: "study" },
       }),
     );
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-solve");
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      "cmd-solve",
+    );
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "cmd-solve",
+    );
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBeNull();
+    expect(resources.getRevision(SIMULATION_RUN_CURRENT_PATH)).toBeNull();
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBeNull();
+    expect(sessionStatusListener).not.toHaveBeenCalled();
+    expect(currentRunListener).not.toHaveBeenCalled();
+    expect(scalarWindowListener).not.toHaveBeenCalled();
   });
 
   it("reports a clear disabled reason when the API facade is unavailable", () => {
@@ -970,6 +1005,63 @@ describe("study runtime command contributions", () => {
     expect(registry.isEnabled("study.run", currentMeshContext)).toBe(true);
   });
 
+  it("does not bypass local FEM mesh readiness when backend reports compute enabled", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      meshRevision: 5,
+      runtimeControls: [
+        { kind: "compute_fields", enabled: true },
+        { kind: "compute_energies", enabled: true },
+        { kind: "solve", enabled: true },
+      ],
+    });
+    const manifest = resourceData[MESHING_SHARED_DOMAIN_MANIFEST_PATH] as {
+      source_scene_revision?: number | null;
+    };
+    manifest.source_scene_revision = null;
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(false);
+    expect(
+      registry.get("study.compute-fields")?.disabledReason?.(context),
+    ).toBe("Shared-domain mesh provenance is unavailable; rebuild the mesh.");
+    expect(registry.isEnabled("study.compute-energies", context)).toBe(false);
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+  });
+
+  it("accepts generated shared-domain meshes once the build pipeline is ready", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      meshPipelineStatus: [
+        { id: "queued", label: "Queued", status: "done" },
+        { id: "ready", label: "Ready", status: "active" },
+      ],
+      meshRevision: 5,
+    });
+    const manifest = resourceData[MESHING_SHARED_DOMAIN_MANIFEST_PATH] as {
+      source_scene_revision?: number | null;
+    };
+    manifest.source_scene_revision = null;
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(true);
+    expect(
+      registry.get("study.compute-fields")?.disabledReason?.(context),
+    ).toBeNull();
+    expect(registry.isEnabled("study.compute-energies", context)).toBe(true);
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+  });
+
   it("submits paused-state discard as a stop command with explicit intent", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -1011,10 +1103,13 @@ describe("study runtime command contributions", () => {
       }),
     );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-discard");
-    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-discard");
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      "cmd-discard",
+    );
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
       "cmd-discard",
     );
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBeNull();
   });
 
   it("submits runtime controls with active-stage target and revision preconditions", async () => {

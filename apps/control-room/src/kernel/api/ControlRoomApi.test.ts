@@ -226,6 +226,77 @@ describe("ControlRoomApi", () => {
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
   });
 
+  it("loads magnetic response sweep artifacts through the analysis facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse({
+        frequencies: [{ frequency_hz: 1e9, response_amplitude: 2.5 }],
+        schema_version: "magnetic_response_sweep.v1",
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-response",
+    });
+
+    const artifact = await api.analysis.frequencyResponse.magneticSweepV1();
+
+    expect(artifact.schema_version).toBe("magnetic_response_sweep.v1");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
+    );
+    expect(observedInit?.method).toBe("GET");
+    expect(new Headers(observedInit?.headers).get("x-request-id")).toBe(
+      "req-response",
+    );
+  });
+
+  it("loads the field catalog through the v2 data facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse({
+        domain_generation_id: 3,
+        quantities: [
+          {
+            available: true,
+            components: 3,
+            domain_generation_id: 3,
+            field_revision: 8,
+            kind: "vector",
+            label: "Magnetization",
+            location: "nodes",
+            quantity_id: "m",
+            unit: "A/m",
+          },
+        ],
+        revision: 11,
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-fields",
+    });
+
+    const catalog = await api.data.fields.catalog();
+
+    expect(catalog.revision).toBe(11);
+    expect(catalog.quantities[0]?.field_revision).toBe(8);
+    const headers = new Headers(observedInit?.headers);
+    expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/fields");
+    expect(observedInit?.method).toBe("GET");
+    expect(headers.get("x-request-id")).toBe("req-fields");
+  });
+
   it("loads scalar windows through the v2 data facade", async () => {
     let observedUrl = "";
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {

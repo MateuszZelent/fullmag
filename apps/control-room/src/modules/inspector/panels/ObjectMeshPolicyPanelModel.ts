@@ -50,6 +50,9 @@ export interface ObjectMeshPolicyDraft {
   present: boolean;
   smoothingSteps: string;
   sweepFaceMeshing: string;
+  calibrateFor: string;
+  sizePreset: string;
+  sizeFactor: string;
   throughThicknessDistribution: string;
   throughThicknessElementRatio: string;
   throughThicknessElements: string;
@@ -86,6 +89,7 @@ export function draftFromObjectMeshPolicyResource(
     computeQuality: readBooleanText(config.compute_quality),
     cornerExtent: readNumberText(config.corner_extent),
     cornerMaximumElementSize: readNumberText(config.corner_maximum_element_size),
+    calibrateFor: readStringText(config.calibrate_for),
     configText: formatObjectMeshPolicyConfig(resource.config),
     curvatureFactor: readNumberText(config.curvature_factor),
     edgeMaximumElementSize: readNumberText(config.edge_maximum_element_size),
@@ -116,6 +120,8 @@ export function draftFromObjectMeshPolicyResource(
     optimizeIterations: readNumberText(config.optimize_iterations),
     perElementQuality: readBooleanText(config.per_element_quality),
     present: resource.config !== null && resource.config !== undefined,
+    sizeFactor: readNumberText(config.size_factor),
+    sizePreset: readStringText(config.size_preset),
     smoothingSteps: readNumberText(config.smoothing_steps),
     sweepFaceMeshing: readStringText(config.sweep_face_meshing),
     throughThicknessDistribution: readStringText(
@@ -180,6 +186,9 @@ export function buildObjectMeshPolicyReplaceRequest({
   perElementQuality,
   present,
   smoothingSteps,
+  calibrateFor,
+  sizePreset,
+  sizeFactor,
   sweepFaceMeshing,
   throughThicknessDistribution,
   throughThicknessElementRatio,
@@ -215,6 +224,7 @@ export function buildObjectMeshPolicyReplaceRequest({
     ],
     ["curvature_factor", curvatureFactor, "Curvature factor"],
     ["narrow_region_resolution", narrowRegionResolution, "Narrow region resolution"],
+    ["size_factor", sizeFactor, "Size factor"],
     ["order", order, "FEM order", true],
     ["smoothing_steps", smoothingSteps, "Smoothing steps", true],
     ["optimize_iterations", optimizeIterations, "Optimizer iterations", true],
@@ -272,6 +282,8 @@ export function buildObjectMeshPolicyReplaceRequest({
     throughThicknessDistribution,
   );
   applyOptionalString(value, "sweep_face_meshing", sweepFaceMeshing);
+  applyOptionalString(value, "calibrate_for", calibrateFor);
+  applyOptionalString(value, "size_preset", sizePreset);
   applyOptionalBoolean(
     value,
     "through_thickness_symmetric",

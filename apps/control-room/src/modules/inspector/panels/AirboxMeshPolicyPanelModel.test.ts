@@ -67,6 +67,18 @@ describe("AirboxMeshPolicyPanelModel", () => {
       airboxHmax: "5e-9",
       airboxHmin: "",
       configText: "{ \"maximum_element_growth_rate\": 1.2 }",
+      curvatureFactor: "",
+      narrowRegionResolution: "",
+      paddingX: "",
+      paddingY: "",
+      paddingZ: "",
+      airboxMode: "",
+      airboxSizeX: "",
+      airboxSizeY: "",
+      airboxSizeZ: "",
+      airboxCenterX: "",
+      airboxCenterY: "",
+      airboxCenterZ: "",
     });
 
     expect(result).toEqual({

@@ -14,6 +14,18 @@ export interface AirboxMeshPolicyDraft {
   airboxHmax: string;
   airboxHmin: string;
   configText: string;
+  curvatureFactor: string;
+  narrowRegionResolution: string;
+  paddingX: string;
+  paddingY: string;
+  paddingZ: string;
+  airboxMode: string;
+  airboxSizeX: string;
+  airboxSizeY: string;
+  airboxSizeZ: string;
+  airboxCenterX: string;
+  airboxCenterY: string;
+  airboxCenterZ: string;
 }
 
 export function defaultUniverseMeshPolicyResource(): MeshUniverseConfigResource {
@@ -41,6 +53,18 @@ export function draftFromUniverseMeshPolicyResource(
     airboxHmax: readNumberText(config.airbox_hmax),
     airboxHmin: readNumberText(config.airbox_hmin),
     configText: formatUniverseMeshPolicyConfig(config),
+    curvatureFactor: readNumberText(config.curvature_factor),
+    narrowRegionResolution: readNumberText(config.narrow_region_resolution),
+    paddingX: readVec3Component(config.padding, 0),
+    paddingY: readVec3Component(config.padding, 1),
+    paddingZ: readVec3Component(config.padding, 2),
+    airboxMode: readStringText(config.mode),
+    airboxSizeX: readVec3Component(config.size, 0),
+    airboxSizeY: readVec3Component(config.size, 1),
+    airboxSizeZ: readVec3Component(config.size, 2),
+    airboxCenterX: readVec3Component(config.center, 0),
+    airboxCenterY: readVec3Component(config.center, 1),
+    airboxCenterZ: readVec3Component(config.center, 2),
   };
 }
 
@@ -80,10 +104,71 @@ export function buildAirboxMeshPolicyReplaceRequest(
 
   const growthRate = parsePositiveNumber(
     draft.airboxGrowthRate,
-    "Airbox growth rate",
+    "Maximum element growth rate",
   );
   if (!growthRate.ok) return { error: growthRate.error };
   applyOptionalNumber(config, "airbox_growth_rate", growthRate.value);
+
+  const curvature = parsePositiveNumber(
+    draft.curvatureFactor,
+    "Curvature factor",
+  );
+  if (!curvature.ok) return { error: curvature.error };
+  applyOptionalNumber(config, "curvature_factor", curvature.value);
+
+  const narrowRegion = parsePositiveNumber(
+    draft.narrowRegionResolution,
+    "Resolution of narrow regions",
+  );
+  if (!narrowRegion.ok) return { error: narrowRegion.error };
+  applyOptionalNumber(config, "narrow_region_resolution", narrowRegion.value);
+
+  // Airbox mode
+  const trimmedMode = draft.airboxMode.trim();
+  if (trimmedMode) {
+    config.mode = trimmedMode;
+  } else {
+    delete config.mode;
+  }
+
+  // Padding (vec3)
+  const padX = parseOptionalNumber(draft.paddingX, "Padding X");
+  if (!padX.ok) return { error: padX.error };
+  const padY = parseOptionalNumber(draft.paddingY, "Padding Y");
+  if (!padY.ok) return { error: padY.error };
+  const padZ = parseOptionalNumber(draft.paddingZ, "Padding Z");
+  if (!padZ.ok) return { error: padZ.error };
+  if (padX.value !== null || padY.value !== null || padZ.value !== null) {
+    config.padding = [padX.value ?? 0, padY.value ?? 0, padZ.value ?? 0];
+  } else {
+    delete config.padding;
+  }
+
+  // Airbox size (vec3)
+  const sizeX = parseOptionalNumber(draft.airboxSizeX, "Size X");
+  if (!sizeX.ok) return { error: sizeX.error };
+  const sizeY = parseOptionalNumber(draft.airboxSizeY, "Size Y");
+  if (!sizeY.ok) return { error: sizeY.error };
+  const sizeZ = parseOptionalNumber(draft.airboxSizeZ, "Size Z");
+  if (!sizeZ.ok) return { error: sizeZ.error };
+  if (sizeX.value !== null || sizeY.value !== null || sizeZ.value !== null) {
+    config.size = [sizeX.value ?? 0, sizeY.value ?? 0, sizeZ.value ?? 0];
+  } else {
+    delete config.size;
+  }
+
+  // Airbox center (vec3)
+  const cenX = parseOptionalNumber(draft.airboxCenterX, "Center X");
+  if (!cenX.ok) return { error: cenX.error };
+  const cenY = parseOptionalNumber(draft.airboxCenterY, "Center Y");
+  if (!cenY.ok) return { error: cenY.error };
+  const cenZ = parseOptionalNumber(draft.airboxCenterZ, "Center Z");
+  if (!cenZ.ok) return { error: cenZ.error };
+  if (cenX.value !== null || cenY.value !== null || cenZ.value !== null) {
+    config.center = [cenX.value ?? 0, cenY.value ?? 0, cenZ.value ?? 0];
+  } else {
+    delete config.center;
+  }
 
   return { request: { config } };
 }
@@ -102,6 +187,20 @@ function readNumberText(value: unknown): string {
     const trimmed = value.trim();
     if (!trimmed) return "";
     return Number.isFinite(Number(trimmed)) ? trimmed : "";
+  }
+  return "";
+}
+
+function readStringText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function readVec3Component(value: unknown, index: number): string {
+  if (Array.isArray(value) && value.length > index) {
+    const component = value[index];
+    if (typeof component === "number" && Number.isFinite(component)) {
+      return String(component);
+    }
   }
   return "";
 }
@@ -155,4 +254,22 @@ function applyOptionalNumber(
   }
 
   config[key] = value;
+}
+
+function parseOptionalNumber(
+  value: string,
+  label: string,
+): { ok: true; value: number | null } | { error: string; ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: null };
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return {
+      error: `${label} must be a finite number.`,
+      ok: false,
+    };
+  }
+
+  return { ok: true, value: parsed };
 }

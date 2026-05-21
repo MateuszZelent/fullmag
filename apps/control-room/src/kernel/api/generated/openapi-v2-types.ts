@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -5071,6 +5087,31 @@ export interface operations {
                 content?: never;
             };
             /** @description No eigen spectrum artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Driven magnetic response sweep artifact v1 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No magnetic response sweep artifact */
             404: {
                 headers: {
                     [name: string]: unknown;

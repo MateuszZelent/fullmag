@@ -11,6 +11,8 @@ const timeoutMs = Number(
   process.env.CONTROL_ROOM_COMPUTE_SMOKE_TIMEOUT_MS ?? 180_000,
 );
 const pollMs = Number(process.env.CONTROL_ROOM_COMPUTE_SMOKE_POLL_MS ?? 500);
+const COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS = 50;
+const COMPUTE_RESPONSIVENESS_DELAY_THRESHOLD_MS = 50;
 
 const STRICT_COMPUTE_ACTIONS = [
   { actionId: "study.compute-fields", kind: "compute_fields", label: "Compute Fields" },
@@ -45,6 +47,13 @@ const TERMINAL_COMMAND_STATUSES = new Set([
   "rejected",
   "skipped",
 ]);
+const ACCEPTANCE_RESOURCE_RELOAD_GRACE_MS = 100;
+const FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS = new Set([
+  "/v2/sessions/current/data/fields",
+  "/v2/sessions/current/data/scalars",
+  "/v2/sessions/current/simulation/solver/energies/current",
+  "/v2/sessions/current/simulation/solver/energies/history",
+]);
 
 
 async function main() {
@@ -61,6 +70,7 @@ async function main() {
   const errors = [];
   const commandRequests = [];
   const commandResponses = [];
+  const resultResourceRequests = [];
 
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
@@ -68,7 +78,10 @@ async function main() {
       controlRoomApiBase: baseUrl,
     };
   }, apiBase);
-  await installComputePerformanceProbe(page);
+  await installComputePerformanceProbe(page, {
+    responsivenessDelayThresholdMs: COMPUTE_RESPONSIVENESS_DELAY_THRESHOLD_MS,
+    responsivenessProbeIntervalMs: COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS,
+  });
 
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -79,6 +92,14 @@ async function main() {
   });
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("request", (request) => {
+    if (request.method() === "GET" && isForbiddenAcceptanceResourceUrl(request.url())) {
+      resultResourceRequests.push({
+        path: pathnameFromUrl(request.url()),
+        timestamp: Date.now(),
+        url: request.url(),
+      });
+    }
+
     if (!isSimulationCommandsUrl(request.url())) return;
     if (request.method() !== "POST") return;
     commandRequests.push({
@@ -107,7 +128,7 @@ async function main() {
 
     const actionResults = [];
     for (const action of STRICT_COMPUTE_ACTIONS) {
-      const result = await clickComputeAction(page, action);
+      const result = await clickComputeAction(page, action, resultResourceRequests);
       actionResults.push(result);
       if (action.kind === "solve") {
         await cleanupSolveCommand(result.commandId);
@@ -123,6 +144,10 @@ async function main() {
       commandRequestCount: commandRequests.length,
       commandResponseCount: commandResponses.length,
       label: "compute-performance-smoke",
+      resultResourceRequestCount: actionResults.reduce(
+        (total, result) => total + result.resultResourceRequestCount,
+        0,
+      ),
     });
     console.log(`Compute performance metrics: ${JSON.stringify(metrics)}`);
     console.log(`Compute performance smoke passed at ${workspaceUrl}.`);
@@ -131,21 +156,28 @@ async function main() {
   }
 }
 
-async function clickComputeAction(page, action) {
+async function clickComputeAction(page, action, resultResourceRequests) {
   const button = page.locator(`[data-action-id="${cssAttributeValue(action.actionId)}"]`).first();
   await button.waitFor({ state: "visible", timeout: timeoutMs });
   await waitForEnabledAction(button, action.label);
 
+  const resultResourceStartIndex = resultResourceRequests.length;
   const commandResponsePromise = page.waitForResponse(
     (response) =>
       isSimulationCommandsUrl(response.url()) &&
-      response.request().method() === "POST" &&
-      response.status() < 400,
+      response.request().method() === "POST",
     { timeout: timeoutMs },
   );
   await button.click({ timeout: timeoutMs });
   const commandResponse = await commandResponsePromise;
-  const responseBody = await commandResponse.json();
+  const commandAcceptedAt = Date.now();
+  const responseText = await commandResponse.text();
+  if (!commandResponse.ok()) {
+    throw new Error(
+      `${action.label} request failed with ${commandResponse.status()}: ${responseText}`,
+    );
+  }
+  const responseBody = responseText ? JSON.parse(responseText) : {};
   if (!responseBody.accepted) {
     throw new Error(
       `${action.label} was rejected: ${responseBody.error ?? "unknown error"}`,
@@ -155,6 +187,13 @@ async function clickComputeAction(page, action) {
     throw new Error(`${action.label} response did not include command_id.`);
   }
 
+  await page.waitForTimeout(ACCEPTANCE_RESOURCE_RELOAD_GRACE_MS);
+  assertNoImmediateResultResourceReloads({
+    action,
+    commandAcceptedAt,
+    requests: resultResourceRequests.slice(resultResourceStartIndex),
+  });
+
   const detail =
     action.kind === "solve"
       ? await waitForCommandDetail(responseBody.command_id, action.kind)
@@ -163,8 +202,29 @@ async function clickComputeAction(page, action) {
     actionId: action.actionId,
     commandId: responseBody.command_id,
     kind: action.kind,
+    resultResourceRequestCount: resultResourceRequests.length - resultResourceStartIndex,
     status: commandStatus(detail),
   };
+}
+
+function assertNoImmediateResultResourceReloads({
+  action,
+  commandAcceptedAt,
+  requests,
+}) {
+  const immediateRequests = requests.filter(
+    (request) =>
+      request.timestamp >= commandAcceptedAt &&
+      request.timestamp - commandAcceptedAt <= ACCEPTANCE_RESOURCE_RELOAD_GRACE_MS,
+  );
+  if (immediateRequests.length === 0) return;
+
+  const formatted = immediateRequests
+    .map((request) => `${request.path} at +${request.timestamp - commandAcceptedAt}ms`)
+    .join(", ");
+  throw new Error(
+    `${action.label} triggered immediate result resource reload(s) after command acceptance: ${formatted}`,
+  );
 }
 
 async function waitForEnabledAction(button, label) {
@@ -244,19 +304,33 @@ async function assertActiveSession() {
   }
 }
 
-async function installComputePerformanceProbe(page) {
-  await page.addInitScript((measureNames) => {
+async function installComputePerformanceProbe(
+  page,
+  { responsivenessDelayThresholdMs, responsivenessProbeIntervalMs },
+) {
+  await page.addInitScript(({ measureNames, responsivenessDelayThresholdMs, responsivenessProbeIntervalMs }) => {
     window.__FULLMAG_REACT_PROFILER__ = true;
     const state = {
       longTasks: [],
       measures: [],
       resources: [],
+      responsiveness: {
+        delayedTickCount: 0,
+        maxDelayMs: 0,
+        sampleCount: 0,
+        totalDelayMs: 0,
+      },
       supportedEntryTypes:
         typeof PerformanceObserver === "undefined"
           ? []
           : PerformanceObserver.supportedEntryTypes ?? [],
     };
     window.__FULLMAG_COMPUTE_PERFORMANCE__ = state;
+    startResponsivenessProbe(
+      state,
+      responsivenessProbeIntervalMs,
+      responsivenessDelayThresholdMs,
+    );
 
     function observePerformanceEntries(type, handler) {
       if (typeof PerformanceObserver === "undefined") return;
@@ -271,6 +345,26 @@ async function installComputePerformanceProbe(page) {
       } catch {
         // Browser support for buffered observers differs across Chromium versions.
       }
+    }
+
+    function startResponsivenessProbe(state, intervalMs, thresholdMs) {
+      let expectedAt = performance.now() + intervalMs;
+      function probeTick() {
+        const now = performance.now();
+        const delayMs = Math.max(0, now - expectedAt);
+        state.responsiveness.sampleCount += 1;
+        if (delayMs > thresholdMs) {
+          state.responsiveness.delayedTickCount += 1;
+          state.responsiveness.maxDelayMs = Math.max(
+            state.responsiveness.maxDelayMs,
+            delayMs,
+          );
+          state.responsiveness.totalDelayMs += delayMs;
+        }
+        expectedAt = now + intervalMs;
+        setTimeout(probeTick, intervalMs);
+      }
+      setTimeout(probeTick, intervalMs);
     }
 
     observePerformanceEntries("longtask", (entry) => {
@@ -298,15 +392,32 @@ async function installComputePerformanceProbe(page) {
         transferSize: entry.transferSize,
       });
     });
-  }, COMPUTE_PERFORMANCE_MEASURE_NAMES);
+  }, {
+    measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES,
+    responsivenessDelayThresholdMs,
+    responsivenessProbeIntervalMs,
+  });
 }
 
 async function collectComputePerformanceProbe(
   page,
-  { actionResults, commandRequestCount, commandResponseCount, label },
+  {
+    actionResults,
+    commandRequestCount,
+    commandResponseCount,
+    label,
+    resultResourceRequestCount,
+  },
 ) {
   return page.evaluate(
-    ({ actionResults, commandRequestCount, commandResponseCount, label, measureNames }) => {
+    ({
+      actionResults,
+      commandRequestCount,
+      commandResponseCount,
+      label,
+      measureNames,
+      resultResourceRequestCount,
+    }) => {
       const state = window.__FULLMAG_COMPUTE_PERFORMANCE__ ?? {
         longTasks: [],
         measures: [],
@@ -352,26 +463,37 @@ async function collectComputePerformanceProbe(
         reactRenderMeasureNames.includes(entry.name),
       );
       const longTasks = state.longTasks;
+      const responsiveness = state.responsiveness ?? {
+        delayedTickCount: 0,
+        maxDelayMs: 0,
+        sampleCount: 0,
+        totalDelayMs: 0,
+      };
 
       return {
         actionResults,
         commandRequestCount,
         commandResponseCount,
         compute_metrics: true,
+        delayedResponsivenessTickCount: responsiveness.delayedTickCount,
         label,
         longTaskCount: longTasks.length,
         maxLongTaskMs: Math.max(0, ...longTasks.map((entry) => entry.duration)),
+        maxResponsivenessDelayMs: responsiveness.maxDelayMs,
         reactRenderMeasureCount: reactRenderMeasures.length,
+        resultResourceRequestCount,
         reactRenderMeasureTotals: summarizeMeasureTotals(
           reactRenderMeasureNames,
           reactRenderMeasures,
         ),
+        responsivenessSampleCount: responsiveness.sampleCount,
         sessionRequestCount: resources.length,
         supportedEntryTypes: state.supportedEntryTypes,
         totalLongTaskMs: longTasks.reduce(
           (total, entry) => total + entry.duration,
           0,
         ),
+        totalResponsivenessDelayMs: responsiveness.totalDelayMs,
         viewportMeasureCount: viewportMeasures.length,
         viewportMeasureTotals: summarizeMeasureTotals(
           viewportMeasureNames,
@@ -414,6 +536,7 @@ async function collectComputePerformanceProbe(
       commandResponseCount,
       label,
       measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES,
+      resultResourceRequestCount,
     },
   );
 }
@@ -497,6 +620,16 @@ async function loadPlaywright() {
 
 function isSimulationCommandsUrl(responseUrl) {
   return pathnameFromUrl(responseUrl) === "/v2/sessions/current/simulation/commands";
+}
+
+function isForbiddenAcceptanceResourceUrl(requestUrl) {
+  const pathname = pathnameFromUrl(requestUrl);
+  return (
+    FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS.has(pathname) ||
+    /^\/v2\/sessions\/current\/simulation\/objects\/[^/]+\/metrics$/.test(
+      pathname,
+    )
+  );
 }
 
 function pathnameFromUrl(rawUrl) {

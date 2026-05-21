@@ -23,6 +23,7 @@ import {
   freeCameraTargetForDirection,
   orbitCameraAroundTarget,
   rotateFreeCameraTarget,
+  resolveViewCubeCurrentCameraState,
   snapCameraToDirection,
   type Direction3,
 } from "./cameraOrientation";
@@ -67,10 +68,6 @@ export function OrientationHudLayer({
   const controls = useThree((state) =>
     "controls" in state ? (state.controls as OrbitControlsHandle | undefined) : undefined,
   );
-  const getTarget = useCallback(
-    () => controls?.target?.clone() ?? new Vector3(0, 0, 0),
-    [controls],
-  );
   const pendingOrbitCameraRef = useRef<Viewport3DCameraState | null>(null);
   const commitCameraChange = useCallback(
     (nextCamera: Viewport3DCameraState) => {
@@ -78,14 +75,21 @@ export function OrientationHudLayer({
     },
     [onCameraChange],
   );
+  const getCurrentCamera = useCallback(
+    () =>
+      resolveViewCubeCurrentCameraState({
+        cameraPosition: camera.position.toArray() as [number, number, number],
+        cameraState: viewport3dStore.getSnapshot().camera,
+        cameraUp: camera.up.toArray() as [number, number, number],
+        controlsTarget: controls?.target?.toArray() as
+          | [number, number, number]
+          | undefined,
+      }),
+    [camera, controls],
+  );
   const snapToDirection = useCallback(
     (direction: Direction3) => {
-      const target = getTarget();
-      const currentCamera = {
-        position: camera.position.toArray() as [number, number, number],
-        target: target.toArray() as [number, number, number],
-        up: camera.up.toArray() as [number, number, number],
-      };
+      const currentCamera = getCurrentCamera();
       const nextCamera = {
         ...(rotationMode === "camera"
           ? freeCameraTargetForDirection(currentCamera, direction)
@@ -102,17 +106,12 @@ export function OrientationHudLayer({
       commitCameraChange(nextCamera);
       invalidate();
     },
-    [camera, commitCameraChange, controls, getTarget, invalidate, rotationMode],
+    [camera, commitCameraChange, controls, getCurrentCamera, invalidate, rotationMode],
   );
 
   const onOrbit = useCallback(
     (deltaX: number) => {
-      const target = getTarget();
-      const currentCamera = {
-        position: camera.position.toArray() as [number, number, number],
-        target: target.toArray() as [number, number, number],
-        up: camera.up.toArray() as [number, number, number],
-      };
+      const currentCamera = getCurrentCamera();
       const nextCamera = {
         ...(rotationMode === "camera"
           ? rotateFreeCameraTarget(currentCamera, deltaX, ORBIT_SENSITIVITY)
@@ -129,7 +128,7 @@ export function OrientationHudLayer({
       pendingOrbitCameraRef.current = nextCamera;
       invalidate();
     },
-    [camera, controls, getTarget, invalidate, rotationMode],
+    [camera, controls, getCurrentCamera, invalidate, rotationMode],
   );
   const commitOrbit = useCallback(() => {
     const nextCamera = pendingOrbitCameraRef.current;

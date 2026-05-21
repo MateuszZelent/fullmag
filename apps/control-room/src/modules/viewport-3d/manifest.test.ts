@@ -94,11 +94,12 @@ describe("viewport3dManifest", () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
     const queuePatch = vi.fn();
+    const flushNow = vi.fn().mockResolvedValue(undefined);
 
     await expect(
       registry.execute("view-projection", {
         source: "test",
-        visualizationSync: { queuePatch } as never,
+        visualizationSync: { flushNow, queuePatch } as never,
       }),
     ).resolves.toMatchObject({ status: "completed" });
 
@@ -108,12 +109,14 @@ describe("viewport3dManifest", () => {
     expect(queuePatch).toHaveBeenCalledWith({
       camera: { projection: "orthographic" },
     });
+    expect(flushNow).toHaveBeenCalledTimes(1);
   });
 
   it("toggles projection from the local store when resource data is stale", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
     const queuePatch = vi.fn();
+    const flushNow = vi.fn().mockResolvedValue(undefined);
     const context = {
       source: "test",
       resourceData: {
@@ -121,7 +124,7 @@ describe("viewport3dManifest", () => {
           camera: { projection: "perspective" },
         },
       },
-      visualizationSync: { queuePatch },
+      visualizationSync: { flushNow, queuePatch },
     } as never;
 
     await registry.execute("view-projection", context);
@@ -141,6 +144,7 @@ describe("viewport3dManifest", () => {
     expect(queuePatch).toHaveBeenNthCalledWith(2, {
       camera: { projection: "perspective" },
     });
+    expect(flushNow).toHaveBeenCalledTimes(2);
   });
 
   it("contributes visual quality profile commands", async () => {

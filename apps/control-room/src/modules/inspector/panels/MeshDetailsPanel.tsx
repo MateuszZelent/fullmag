@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo } from "react";
 
+import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
@@ -25,7 +26,7 @@ import {
   shouldLoadRuntimeMeshSummary,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useKernel } from "@/kernel/KernelContext";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
@@ -57,6 +58,49 @@ import {
 } from "./MeshResourceView";
 import { MeshBuildHistoryView } from "./MeshBuildHistoryView";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
+
+type MeshDetailsRuntimeStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "mesh_build_revision" | "mesh_revision"
+  >;
+};
+
+function selectMeshDetailsRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): MeshDetailsRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+    },
+  };
+}
+
+function meshDetailsRuntimeStatusEquals(
+  previous: MeshDetailsRuntimeStatus | null,
+  next: MeshDetailsRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision
+  );
+}
 
 function selectedSectionTitle(kind: string | null): string {
   if (kind === "mesh.shared-domain") return "Shared-Domain Mesh";
@@ -611,44 +655,47 @@ function ThinFilmDiagnosticsSection({
 
 export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
-  const sessionStatus = useSessionStatus();
+  const runtimeStatus = useSessionStatusSelector(
+    selectMeshDetailsRuntimeStatus,
+    { isEqual: meshDetailsRuntimeStatusEquals },
+  );
   const scene = useSceneResource();
   const summary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const capabilities = useMeshCapabilitiesResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const semantics = useMeshSemanticsResource();
   const activeBuild = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
   const buildHistory = useMeshBuildHistoryResource({
-    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const sharedReport = useMeshSharedDomainReportResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const sharedQuality = useMeshSharedDomainQualityResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const universeReport = useMeshUniverseReportResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const universeQuality = useMeshUniverseQualityResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
 
   const meshSummary = asRecord(summary.data?.mesh_summary);

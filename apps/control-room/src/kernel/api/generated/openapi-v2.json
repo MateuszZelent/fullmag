@@ -11663,6 +11663,22 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1",
+        "responses": {
+          "200": {
+            "description": "Driven magnetic response sweep artifact v1"
+          },
+          "404": {
+            "description": "No magnetic response sweep artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/data/artifacts": {
       "get": {
         "operationId": "data_get_sessions_current_data_artifacts",

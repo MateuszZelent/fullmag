@@ -5,6 +5,7 @@ import {
   normalizeDirection,
   orbitCameraAroundTarget,
   resolveCameraUpForDirection,
+  resolveViewCubeCurrentCameraState,
   rotateCameraAroundCenter,
   snapCameraToDirection,
 } from "./cameraOrientation";
@@ -97,5 +98,74 @@ describe("camera orientation math", () => {
     expect(next.position[1]).toBeCloseTo(0);
     expect(next.position[2]).toBe(2);
     expect(next.target).toEqual([2, 2, 0]);
+  });
+
+  it("uses the live viewport camera target for 3DBox snaps when OrbitControls is absent", () => {
+    const current = resolveViewCubeCurrentCameraState({
+      cameraPosition: [11, 7, 5],
+      cameraState: {
+        position: [10, 6, 4],
+        target: [3, -2, 1],
+        up: [0, 0, 1],
+      },
+      cameraUp: [0, 0, 1],
+      controlsTarget: null,
+    });
+
+    expect(current).toEqual({
+      position: [11, 7, 5],
+      target: [3, -2, 1],
+      up: [0, 0, 1],
+    });
+  });
+
+  it("keeps front-bottom 3DBox snaps anchored to the same non-origin target in object mode", () => {
+    const current = resolveViewCubeCurrentCameraState({
+      cameraPosition: [11, 7, 5],
+      cameraState: {
+        position: [10, 6, 4],
+        target: [3, -2, 1],
+        up: [0, 0, 1],
+      },
+      cameraUp: [0, 0, 1],
+      controlsTarget: null,
+    });
+
+    const next = snapCameraToDirection(current, [0, 1, -1]);
+
+    expect(next.target).toEqual([3, -2, 1]);
+    expect(next.position[0]).toBeCloseTo(3);
+    expect(next.position[1]).toBeGreaterThan(-2);
+    expect(next.position[2]).toBeLessThan(1);
+  });
+
+  it("keeps front-bottom 3DBox snaps in-place in free camera mode while using the same distance", () => {
+    const current = resolveViewCubeCurrentCameraState({
+      cameraPosition: [11, 7, 5],
+      cameraState: {
+        position: [10, 6, 4],
+        target: [3, -2, 1],
+        up: [0, 0, 1],
+      },
+      cameraUp: [0, 0, 1],
+      controlsTarget: null,
+    });
+    const beforeDistance = Math.hypot(
+      current.position[0] - current.target[0],
+      current.position[1] - current.target[1],
+      current.position[2] - current.target[2],
+    );
+
+    const next = freeCameraTargetForDirection(current, [0, 1, -1]);
+    const afterDistance = Math.hypot(
+      next.position[0] - next.target[0],
+      next.position[1] - next.target[1],
+      next.position[2] - next.target[2],
+    );
+
+    expect(next.position).toEqual([11, 7, 5]);
+    expect(afterDistance).toBeCloseTo(beforeDistance);
+    expect(next.target[1]).toBeLessThan(7);
+    expect(next.target[2]).toBeGreaterThan(5);
   });
 });

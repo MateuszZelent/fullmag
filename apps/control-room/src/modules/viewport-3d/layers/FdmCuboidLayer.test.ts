@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
@@ -42,6 +45,19 @@ function vectorField(values: number[]): DecodedFieldVector {
     values: new Float64Array(values),
   };
 }
+
+const fdmCuboidLayerPath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
+);
+const viewport3DScenePath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/layers/Viewport3DScene.tsx",
+);
+const viewport3DSceneModelPath = join(
+  process.cwd(),
+  "src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts",
+);
 
 describe("FdmCuboidLayer model", () => {
   it("samples FDM cells from grid shape, origin and spacing", () => {
@@ -188,6 +204,45 @@ describe("FdmCuboidLayer model", () => {
       expect.closeTo(1.5e-9),
       1,
     ]);
+  });
+
+  it("reuses the scene-level FDM instance model for surface color mapping and layer rendering", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const sceneSource = readFileSync(viewport3DScenePath, "utf8");
+    const sceneModelSource = readFileSync(viewport3DSceneModelPath, "utf8");
+
+    expect(sceneModelSource).toContain("const fdmSurfaceInstanceModel = useMemo");
+    expect(sceneModelSource).toContain("fdmSurfaceInstanceModel?.cellIndices");
+    expect(sceneModelSource).toContain("fdmInstanceModel: fdmSurfaceInstanceModel");
+    expect(sceneSource).toContain("fdmInstanceModel: FdmCuboidInstanceModel | null | undefined");
+    expect(sceneSource).toContain("instanceModel={fdmInstanceModel}");
+    expect(layerSource).toContain("instanceModel?: FdmCuboidInstanceModel | null");
+    expect(layerSource).toContain("instanceModel !== undefined");
+  });
+
+  it("reuses FDM vector segment buffers for the same model, field, and sampling options", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture());
+    const field = vectorField([
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+      0, 0, 1,
+      0, 1, 0,
+      0, 0, 1,
+      -1, 0, 0,
+      0, 0, 1,
+    ]);
+
+    const first = buildFdmVectorSegments(model, field, 2e-9, 4);
+    const second = buildFdmVectorSegments(model, field, 2e-9, 4);
+    const tailAnchored = buildFdmVectorSegments(model, field, 2e-9, 4, {
+      anchorMode: "tail",
+    });
+    const differentBudget = buildFdmVectorSegments(model, field, 2e-9, 2);
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(tailAnchored);
+    expect(first).not.toBe(differentBudget);
   });
 
   it("can anchor FDM vector glyph segments by their tail", () => {

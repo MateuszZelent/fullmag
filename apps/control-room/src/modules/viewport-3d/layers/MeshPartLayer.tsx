@@ -121,6 +121,12 @@ export function MeshPartLayer({
     Boolean(meshQualityColors) || shaderUsesVertexColors(settings);
   useEffect(() => {
     if (!geometry || !topologyModel) return;
+    // Skip the destructive zero-fill when the surface mesh is unmounted
+    // (shaderVisible === false).  The geometry's color buffer persists across
+    // visibility toggles but the cached ScalarColorBuffer reference is stable,
+    // so without this guard the effect would zero the buffer while hidden and
+    // then skip re-application on toggle-on (same ref → deps unchanged).
+    if (!settings.shaderVisible) return;
     applyVertexScalarColorBuffer(
       geometry,
       vertexColorsEnabled ? effectiveScalarColors : null,
@@ -135,6 +141,7 @@ export function MeshPartLayer({
     geometry,
     invalidate,
     meshQualityColors,
+    settings.shaderVisible,
     topologyModel,
     tracker,
     vertexColorsEnabled,

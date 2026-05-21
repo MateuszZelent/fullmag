@@ -107,6 +107,57 @@ function ObjectMeshOverrideSection({
   );
 }
 
+const MESH_SIZE_CALIBRATIONS = [
+  "",
+  "general_physics",
+  "micromagnetics_static",
+  "micromagnetics_relaxation",
+  "micromagnetics_frequency_domain",
+  "magnetostatics_dominated",
+  "imported_surface_cleanup",
+] as const;
+
+const MESH_SIZE_PRESETS = [
+  "",
+  "extremely_fine",
+  "extra_fine",
+  "finer",
+  "fine",
+  "normal",
+  "coarse",
+  "coarser",
+  "extra_coarse",
+  "extremely_coarse",
+] as const;
+
+function ObjectMeshPresetSection({
+  draft,
+  updateDraft,
+}: {
+  draft: ObjectMeshPolicyDraft;
+  updateDraft: UpdateObjectMeshPolicyDraft;
+}) {
+  return (
+    <InspectorSection value="preset" title="Mesh Size Presets" collapsible defaultCollapsed={true}>
+      <FormField disabled={!draft.present} label="Calibrate for" type="select" value={draft.calibrateFor} onChange={(event) => updateDraft({ calibrateFor: event.target.value })}>
+        {MESH_SIZE_CALIBRATIONS.map((cal) => (
+          <option key={cal} value={cal}>
+            {cal || "Inherited"}
+          </option>
+        ))}
+      </FormField>
+      <FormField disabled={!draft.present} label="Size preset" type="select" value={draft.sizePreset} onChange={(event) => updateDraft({ sizePreset: event.target.value })}>
+        {MESH_SIZE_PRESETS.map((preset) => (
+          <option key={preset} value={preset}>
+            {preset ? preset.replace(/_/g, " ") : "Inherited"}
+          </option>
+        ))}
+      </FormField>
+      <FormField disabled={!draft.present} label="Size factor" type="number" value={draft.sizeFactor} onChange={(event) => updateDraft({ sizeFactor: event.target.value })} />
+    </InspectorSection>
+  );
+}
+
 function ObjectMeshSizeSemanticsSection({
   draft,
   updateDraft,
@@ -115,7 +166,7 @@ function ObjectMeshSizeSemanticsSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection value="semantics" title="COMSOL-Style Size Semantics" badge="solver policy">
+    <InspectorSection value="semantics" title="Element Size Parameters" badge="solver policy">
       <FormField disabled={!draft.present} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
@@ -173,7 +224,7 @@ function ObjectMeshInterfaceTransitionSection({
 }) {
   return (
     <InspectorSection value="interface" title="Interface And Transition Refinement" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Interface hmax" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} label="Interface max. element size" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Interface thickness" type="number" unit="m" value={draft.interfaceThickness} onChange={(event) => updateDraft({ interfaceThickness: event.target.value })} />
       <FormField disabled={!draft.present} label="Transition distance" type="number" unit="m" value={draft.transitionDistance} onChange={(event) => updateDraft({ transitionDistance: event.target.value })} />
       <FormField disabled={!draft.present} label="Transition growth" type="number" value={draft.transitionGrowth} onChange={(event) => updateDraft({ transitionGrowth: event.target.value })} />
@@ -269,9 +320,9 @@ function ObjectMeshEdgeCornerSection({
 }) {
   return (
     <InspectorSection value="edge" title="Edge And Corner Refinement" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Edge hmax" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} label="Edge max. element size" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Edge thickness" type="number" unit="m" value={draft.edgeThickness} onChange={(event) => updateDraft({ edgeThickness: event.target.value })} />
-      <FormField disabled={!draft.present} label="Corner hmax" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} label="Corner max. element size" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Corner extent" type="number" unit="m" value={draft.cornerExtent} onChange={(event) => updateDraft({ cornerExtent: event.target.value })} />
     </InspectorSection>
   );
@@ -482,7 +533,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "override", "semantics", "backend", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
+      defaultValue={["summary", "override", "preset", "semantics", "backend", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
     >
       <ObjectMeshPolicySummarySection
         hasConfig={Boolean(resource.config)}
@@ -493,6 +544,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         reportStatus={report.status}
       />
       <ObjectMeshOverrideSection draft={draft} updateDraft={updateDraft} />
+      <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshSweepStrategySection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshInterfaceTransitionSection draft={draft} updateDraft={updateDraft} />

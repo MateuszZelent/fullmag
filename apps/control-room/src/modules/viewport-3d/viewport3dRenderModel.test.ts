@@ -138,6 +138,27 @@ describe("viewport3dRenderModel", () => {
     expect(bounds?.size).toEqual([3e-7, 1e-7, 1e-8]);
   });
 
+  it("reuses converted topology positions for repeated model builds", () => {
+    const topology = topologyFixture();
+
+    const first = buildViewport3DTopologyRenderModel(topology, [], []);
+    const second = buildViewport3DTopologyRenderModel(topology, [], []);
+
+    expect(first?.positions).toBe(second?.positions);
+  });
+
+  it("reuses fallback topology index buffers for repeated model builds", () => {
+    const topology = topologyFixture();
+
+    const first = buildViewport3DTopologyRenderModel(topology, [], []);
+    const second = buildViewport3DTopologyRenderModel(topology, [], []);
+
+    expect(first?.fallbackSurfaceIndices).toBe(second?.fallbackSurfaceIndices);
+    expect(first?.fallbackVolumeEdgeIndices).toBe(
+      second?.fallbackVolumeEdgeIndices,
+    );
+  });
+
   it("builds sampled normalized vector line segments", () => {
     const segments = buildVectorLineSegments(
       topologyFixture(),

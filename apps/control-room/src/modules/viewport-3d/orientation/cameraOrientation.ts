@@ -2,6 +2,24 @@ import type { Viewport3DCameraState } from "../viewport3dStore";
 
 export type Direction3 = [number, number, number];
 
+export function resolveViewCubeCurrentCameraState({
+  cameraPosition,
+  cameraState,
+  cameraUp,
+  controlsTarget,
+}: {
+  cameraPosition: Direction3;
+  cameraState: Viewport3DCameraState;
+  cameraUp: Direction3;
+  controlsTarget?: Direction3 | null;
+}): Viewport3DCameraState {
+  return {
+    position: [...cameraPosition],
+    target: [...(controlsTarget ?? cameraState.target)],
+    up: [...cameraUp],
+  };
+}
+
 export function snapCameraToDirection(
   current: Viewport3DCameraState,
   direction: Direction3,

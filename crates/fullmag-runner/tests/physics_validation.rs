@@ -2415,3 +2415,100 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
         "dispersion.csv residual_norm column should be populated, row={first_row}"
     );
 }
+
+#[test]
+fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "single_k_dispersion_cube".to_string();
+    let plan = FemEigenPlanIR {
+        mesh_name: "single_k_dispersion_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [5.0e7, 0.0, 0.0],
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: None,
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[
+            OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            },
+            OutputIR::DispersionCurve {
+                name: "dispersion".to_string(),
+            },
+        ],
+    )
+    .expect("single-k eigensolve should execute");
+
+    let csv = std::str::from_utf8(
+        result
+            .artifact_bytes("eigen/dispersion.csv")
+            .expect("single-k dispersion request should write v2 dispersion.csv"),
+    )
+    .expect("dispersion.csv should be utf-8");
+    let mut lines = csv.lines();
+    let header = lines.next().unwrap_or_default();
+    for required in [
+        "sample_index",
+        "path_s_rad_per_m",
+        "kx_rad_per_m",
+        "raw_mode_index",
+        "frequency_hz",
+        "residual_norm",
+    ] {
+        assert!(
+            header.split(',').any(|column| column == required),
+            "single-k dispersion.csv header must contain {required}, got {header}"
+        );
+    }
+    let first_row = lines
+        .next()
+        .expect("single-k dispersion.csv should contain mode rows");
+    assert!(
+        first_row
+            .split(',')
+            .nth(11)
+            .is_some_and(|value| !value.is_empty()),
+        "single-k dispersion.csv residual_norm column should be populated, row={first_row}"
+    );
+}

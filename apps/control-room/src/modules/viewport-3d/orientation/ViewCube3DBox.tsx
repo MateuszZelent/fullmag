@@ -369,6 +369,8 @@ function ViewCubeFacePanel({
             key={`${face.id}:${target.id}`}
             onPointerDown={(event) => {
               event.stopPropagation();
+              event.nativeEvent.preventDefault();
+              event.nativeEvent.stopImmediatePropagation();
               onSnap(target.direction as Direction3);
             }}
             onPointerOut={() => onHoverChange(null)}
@@ -643,4 +645,3 @@ function viewCubeSegmentKey(
 function trimPositiveAxisLabel(label: string): string {
   return label.startsWith("+") ? label.slice(1) : label;
 }
-

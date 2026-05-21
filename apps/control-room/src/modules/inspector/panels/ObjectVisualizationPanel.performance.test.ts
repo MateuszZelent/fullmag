@@ -16,4 +16,20 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("onKeyUp={flushDraft}");
     expect(panelSource).toContain("onBlur={flushDraft}");
   });
+
+  it("uses the field catalog resource instead of session status field revisions", () => {
+    expect(panelSource).toContain("useFieldCatalogResource");
+    expect(panelSource).toContain("fieldCatalog");
+    expect(panelSource).not.toContain("status?.resources.field_revision");
+    expect(panelSource).not.toContain("status?.resources.fields_revision");
+  });
+
+  it("selects only the session status fields needed for mesh manifest gating", () => {
+    expect(panelSource).toContain("useSessionStatusSelector");
+    expect(panelSource).toContain("selectObjectVisualizationManifestStatus");
+    expect(panelSource).toContain("objectVisualizationManifestStatusEquals");
+    expect(panelSource).toContain("shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus)");
+    expect(panelSource).not.toContain("const sessionStatus = useSessionStatus();");
+    expect(panelSource).not.toContain("sessionStatus.data");
+  });
 });

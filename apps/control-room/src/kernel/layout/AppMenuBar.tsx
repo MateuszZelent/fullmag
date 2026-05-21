@@ -12,7 +12,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import { useKernel } from "@/kernel/KernelContext";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
@@ -68,6 +68,7 @@ interface HeaderSessionSource {
     solver?: { state?: unknown } | null;
   } | null;
   error?: Error | null;
+  refetch?: () => void;
   status: ResourceStatus;
 }
 
@@ -89,6 +90,34 @@ const HYDRATING_HEADER_SESSION_SOURCE: HeaderSessionSource = {
   status: "loading",
 };
 
+export function selectHeaderSessionSource(
+  status: HeaderSessionSource,
+): HeaderSessionSource {
+  return {
+    data: status.data
+      ? {
+          session: { name: status.data.session?.name },
+          solver: { state: status.data.solver?.state },
+        }
+      : null,
+    error: status.error ?? null,
+    refetch: status.refetch,
+    status: status.status,
+  };
+}
+
+export function headerSessionSourceEquals(
+  previous: HeaderSessionSource,
+  next: HeaderSessionSource,
+): boolean {
+  return (
+    previous.status === next.status &&
+    previous.error === next.error &&
+    previous.data?.session?.name === next.data?.session?.name &&
+    previous.data?.solver?.state === next.data?.solver?.state
+  );
+}
+
 function subscribeToHydration(): () => void {
   return () => {};
 }
@@ -100,6 +129,8 @@ function clientHydratedSnapshot(): boolean {
 function serverHydratedSnapshot(): boolean {
   return false;
 }
+
+function noopRefetch(): void {}
 
 export function resolveHydrationSafeHeaderSessionSource(
   status: HeaderSessionSource,
@@ -401,7 +432,9 @@ export function AppMenuBar() {
     clientHydratedSnapshot,
     serverHydratedSnapshot,
   );
-  const sessionStatus = useSessionStatus();
+  const sessionStatus = useSessionStatusSelector(selectHeaderSessionSource, {
+    isEqual: headerSessionSourceEquals,
+  });
   const visibleSessionStatus = resolveHydrationSafeHeaderSessionSource(
     sessionStatus,
     hydrated,
@@ -562,7 +595,7 @@ export function AppMenuBar() {
       <ApiConnectionErrorDialog
         details={apiErrorDetails}
         onOpenChange={onApiDialogOpenChange}
-        onRetry={sessionStatus.refetch}
+        onRetry={sessionStatus.refetch ?? noopRefetch}
         open={apiDialogOpen}
       />
 

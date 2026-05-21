@@ -16,7 +16,7 @@ The `charts` module shows scalar histories, energy terms, convergence, selected 
 | stage convergence | `simulation/stages` |
 | probe/profile | `data/fields` slice/profile resources |
 | eigen spectrum | `analysis/eigenmodes` |
-| frequency response | `analysis/frequency-response` |
+| frequency response | `useMagneticResponseSweepResource()` over `ControlRoomApi.analysis.frequencyResponse.magneticSweepV1()` (`magnetic-sweep.v1` for `response/magnetic_response_sweep.v1.json`) |
 | mesh quality histogram | `meshing/quality` |
 
 Charts consume resources through hooks and can request commands for analysis only through command registry.

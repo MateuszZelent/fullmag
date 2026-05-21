@@ -13,7 +13,6 @@ const requireGeometryFlow =
   !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
-const CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX = 48;
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
   "fullmag.viewport3d.buildTopologyRenderModel",
@@ -390,6 +389,7 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
   const initialActive = await projectionToggle.getAttribute("data-active");
   const firstExpectedActive = initialActive === "true" ? "false" : "true";
   const secondExpectedActive = initialActive === "true" ? "true" : "false";
+  const initialProjectionSample = await sampleCanvasComposite(page, canvas);
 
   await projectionToggle.click();
   await waitForCondition(
@@ -400,16 +400,13 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
       throw new Error("data-active=" + active);
     },
   );
-  const firstProjectionSample = await sampleCanvasComposite(page, canvas);
-  if (!firstProjectionSample.nonBlank) {
-    throw new Error(
-      "Viewport canvas after first projection toggle is blank: " +
-        firstProjectionSample.variedPixels +
-        "/" +
-        firstProjectionSample.sampledPixels +
-        " sampled pixels differ from background.",
-    );
-  }
+  const firstProjectionSample = await waitForCanvasCompositeChange(
+    page,
+    canvas,
+    initialProjectionSample,
+    "projection canvas renders after first toggle",
+    "Viewport canvas did not visually change after first projection toggle",
+  );
 
   await projectionToggle.click();
   await waitForCondition(
@@ -420,16 +417,13 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
       throw new Error("data-active=" + active);
     },
   );
-  const secondProjectionSample = await sampleCanvasComposite(page, canvas);
-  if (!secondProjectionSample.nonBlank) {
-    throw new Error(
-      "Viewport canvas after second projection toggle is blank: " +
-        secondProjectionSample.variedPixels +
-        "/" +
-        secondProjectionSample.sampledPixels +
-        " sampled pixels differ from background.",
-    );
-  }
+  await waitForCanvasCompositeChange(
+    page,
+    canvas,
+    firstProjectionSample,
+    "projection canvas renders after second toggle",
+    "Viewport canvas did not visually leave orthographic projection after second toggle",
+  );
 
   console.log(
     "Viewport 3D projection round-trip passed (initial active=" +
@@ -780,6 +774,41 @@ async function fillDraftInput(field, value) {
   await field.fill(value, { force: true, timeout: GEOMETRY_FLOW_TIMEOUT_MS });
 }
 
+async function waitForCanvasCompositeChange(
+  page,
+  canvas,
+  baseline,
+  label,
+  failureMessage,
+) {
+  return waitForCondition(label, async () => {
+    const current = await sampleCanvasComposite(page, canvas);
+    if (!current.nonBlank) {
+      throw new Error(
+        failureMessage +
+          ": viewport is blank (" +
+          current.variedPixels +
+          "/" +
+          current.sampledPixels +
+          " sampled pixels differ from background).",
+      );
+    }
+
+    const diff = canvasCompositeDifference(baseline, current);
+    if (diff.changed) return current;
+    throw new Error(
+      failureMessage +
+        ": " +
+        diff.changedPixels +
+        "/" +
+        diff.sampledPixels +
+        " sampled pixels changed; threshold=" +
+        diff.minimumChangedPixels +
+        ".",
+    );
+  });
+}
+
 async function waitForCanvasChange(page, canvas, baseline, label) {
   return waitForCondition(label, async () => {
     const current = await sampleCanvasComposite(page, canvas);
@@ -835,17 +864,7 @@ async function sampleCanvasComposite(page, canvas) {
     return viewport ? getComputedStyle(viewport).backgroundColor : "";
   });
   const backgroundRgb = parseCssRgb(background);
-  const png = await page.screenshot({
-    clip: {
-      height: Math.max(
-        1,
-        Math.floor(box.height - CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX),
-      ),
-      width: Math.max(1, Math.floor(box.width)),
-      x: Math.max(0, Math.floor(box.x)),
-      y: Math.max(0, Math.floor(box.y + CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX)),
-    },
-  });
+  const png = await canvas.screenshot();
   const bitmap = parsePng(png);
   const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
   const signature = [];

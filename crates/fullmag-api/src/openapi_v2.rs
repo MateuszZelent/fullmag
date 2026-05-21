@@ -126,6 +126,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::analysis::eigen::get_dispersion_csv,
         crate::router_v2::handlers::analysis::eigen::get_branches,
         crate::router_v2::handlers::analysis::eigen::get_branches_v2,
+        crate::router_v2::handlers::analysis::response::get_magnetic_response_sweep_v1,
         crate::router_v2::handlers::platform::system::get_engine_log,
         crate::router_v2::handlers::platform::system::get_cpu_telemetry,
         crate::router_v2::handlers::platform::system::get_gpu_telemetry,

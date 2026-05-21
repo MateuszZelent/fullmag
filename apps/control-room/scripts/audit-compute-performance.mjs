@@ -34,9 +34,17 @@ const useSessionStatusPath = path.join(
   appRoot,
   "src/kernel/resources/useSessionStatus.ts",
 );
+const studyRuntimeResourcesPath = path.join(
+  appRoot,
+  "src/kernel/resources/studyRuntimeResources.ts",
+);
 const footerModulePath = path.join(
   appRoot,
   "src/modules/footer/FooterModule.tsx",
+);
+const footerTelemetryPath = path.join(
+  appRoot,
+  "src/modules/footer/FooterTelemetry.tsx",
 );
 const kernelProviderPath = path.join(appRoot, "src/kernel/KernelProvider.tsx");
 const requestDiagnosticsControllerPath = path.join(
@@ -59,6 +67,10 @@ const footerModelPath = path.join(
   appRoot,
   "src/modules/footer/footerModel.ts",
 );
+const appMenuBarPath = path.join(
+  appRoot,
+  "src/kernel/layout/AppMenuBar.tsx",
+);
 const useLayoutPath = path.join(appRoot, "src/kernel/layout/useLayout.ts");
 const useSelectionPath = path.join(
   appRoot,
@@ -67,6 +79,14 @@ const useSelectionPath = path.join(
 const explorerStorePath = path.join(
   appRoot,
   "src/modules/explorer/explorerStore.ts",
+);
+const explorerModulePath = path.join(
+  appRoot,
+  "src/modules/explorer/ExplorerModule.tsx",
+);
+const ribbonModulePath = path.join(
+  appRoot,
+  "src/modules/ribbon/RibbonModule.tsx",
 );
 const objectVisualizationHookPath = path.join(
   appRoot,
@@ -80,6 +100,34 @@ const visualizationSyncControllerPath = path.join(
   appRoot,
   "src/kernel/visualization/VisualizationRegistrySyncController.ts",
 );
+const objectVisualizationPanelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
+);
+const geometryObjectPanelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/GeometryObjectPanel.tsx",
+);
+const meshDetailsPanelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/MeshDetailsPanel.tsx",
+);
+const airboxMeshPolicyPanelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/AirboxMeshPolicyPanel.tsx",
+);
+const studyInspectorPanelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/StudyInspectorPanel.tsx",
+);
+const meshBuildDialogPath = path.join(
+  appRoot,
+  "src/modules/overlay/MeshBuildDialog.tsx",
+);
+const ribbonMenuRendererPath = path.join(
+  appRoot,
+  "src/modules/ribbon/RibbonMenuRenderer.tsx",
+);
 const viewportSmokePath = path.join(
   appRoot,
   "scripts/smoke-viewport-3d.mjs",
@@ -87,6 +135,10 @@ const viewportSmokePath = path.join(
 const computePerformanceSmokePath = path.join(
   appRoot,
   "scripts/smoke-compute-performance.mjs",
+);
+const computePerformanceMicrobenchPath = path.join(
+  appRoot,
+  "src/kernel/performance/computePerformanceMicrobench.test.ts",
 );
 const broadSessionStatusConsumerPaths = [
   "src/modules/explorer/ExplorerModule.tsx",
@@ -131,6 +183,14 @@ const fdmCuboidLayerPath = path.join(
   appRoot,
   "src/modules/viewport-3d/layers/FdmCuboidLayer.tsx",
 );
+const topologyRenderModelPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/viewport3dRenderModel.ts",
+);
+const qualityMappingPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/viewport3dQualityMapping.ts",
+);
 const binaryResourcePerformanceMeasureNames = [
   "fullmag.api.requestBinaryResource.topology",
   "fullmag.api.requestBinaryResource.mesh-quality-data",
@@ -140,21 +200,42 @@ const binaryResourcePerformanceMeasureNames = [
 const failures = [];
 
 checkComputeCommandInvalidationScope();
+checkStudyRunCommandInvalidationScope();
 checkRealtimeSessionStatusFanout();
 checkBinaryDecodeScheduler();
 checkControlRoomApiBinaryPerformanceMarks();
 checkSessionStatusSelectors();
+checkExplorerModuleSessionStatusSelector();
+checkRibbonModuleSessionStatusSelector();
+checkHeaderSessionStatusSelector();
+checkRuntimeControlSessionStatusSelector();
+checkStudyRuntimeCommandResourceDataSessionStatusSelector();
+checkFieldCatalogResourceSeparation();
+checkObjectVisualizationPanelSessionStatusSelector();
+checkMeshDetailsPanelSessionStatusSelector();
+checkAirboxMeshPolicyPanelSessionStatusSelector();
+checkStudyInspectorPanelSessionStatusSelector();
+checkMeshBuildDialogSessionStatusSelector();
 checkShellSelectorHooks();
+checkObjectVisualizationSelectorHooks();
+checkGeometryObjectPanelVisualizationSelector();
 checkCommandShortcutConnector();
 checkFooterDiagnosticsBatching();
 checkPerformanceDiagnosticsExport();
 checkReactRenderProfilerInstrumentation();
 checkVisualizationPatchHotPath();
+checkRibbonSliderCommandDebounce();
 checkViewportPerformanceMarks();
+checkTopologyPositionConversionCache();
+checkTopologyIndexBufferCache();
+checkMeshQualityVertexColorCache();
 checkFdmCuboidChunkedUpload();
+checkFdmVectorSegmentCache();
+checkFdmCuboidSceneModelReuse();
 checkFooterTelemetryIsOptIn();
 checkViewportSmokeComputeMetrics();
 checkComputePerformanceSmokeScript();
+checkComputePerformanceMicrobenchCoverage();
 
 if (failures.length > 0) {
   console.error(`Compute performance audit failed:\n${failures.join("\n")}`);
@@ -208,6 +289,40 @@ function checkComputeCommandInvalidationScope() {
       "invalidatePrefix",
     ]);
   }
+}
+
+function checkStudyRunCommandInvalidationScope() {
+  const source = readFileSync(runtimeCommandsPath, "utf8");
+  const submitHelper = blockBetween(
+    source,
+    "async function submitRuntimeCommand",
+    "function record",
+  );
+  const studyRun = blockBetween(
+    source,
+    `runtimeCommand(
+    "study.run"`,
+    `runtimeCommand(
+    "study.pause"`,
+  );
+
+  requireTokens(studyRun, "study.run command", [
+    '"study.run"',
+    '"solve"',
+    '"Study compute command accepted."',
+  ]);
+  requireTokens(submitHelper, "submitRuntimeCommand invalidation scope", [
+    "invalidateRuntimeControlResources(",
+    "commandRevision(response, `study:${command.kind}`)",
+  ]);
+  forbidTokens(submitHelper, "submitRuntimeCommand invalidation scope", [
+    "invalidateRuntimeResources",
+    "SESSION_STATUS_RESOURCE_KEY",
+    "SIMULATION_RUN_CURRENT_PATH",
+    "DATA_FIELDS_PATH",
+    "DATA_SCALARS_PATH",
+    "invalidatePrefix",
+  ]);
 }
 
 function checkRealtimeSessionStatusFanout() {
@@ -348,6 +463,17 @@ function checkSessionStatusSelectors() {
     "SESSION_STATUS_RESOURCE_KEY",
   ]);
 
+  requireTokens(useSessionStatus, "session status narrow revision", [
+    "SESSION_STATUS_REVISION_RESOURCE_KEYS",
+    "command_completion_revision",
+    "commands_revision",
+    "mesh_revision",
+  ]);
+  forbidTokens(useSessionStatus, "session status narrow revision", [
+    "Object.values(status.resources)",
+    "Math.max(...Object.values",
+  ]);
+
   for (const consumerPath of broadSessionStatusConsumerPaths) {
     const source = readFileSync(consumerPath, "utf8");
     const label = relativeAppPath(consumerPath);
@@ -358,6 +484,231 @@ function checkSessionStatusSelectors() {
       "const status = useSessionStatus()",
     ]);
   }
+}
+
+function checkExplorerModuleSessionStatusSelector() {
+  const source = readFileSync(explorerModulePath, "utf8");
+  requireTokens(source, "ExplorerModule session status selector", [
+    "selectExplorerModelRuntimeStatus",
+    "explorerModelRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "isEqual: explorerModelRuntimeStatusEquals",
+    "shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData)",
+    "shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData)",
+    "shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData)",
+    "shouldLoadRuntimeStageExecution(",
+  ]);
+  forbidTokens(source, "ExplorerModule session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkRibbonModuleSessionStatusSelector() {
+  const source = readFileSync(ribbonModulePath, "utf8");
+  requireTokens(source, "RibbonModule session status selector", [
+    "selectRibbonRuntimeStatus",
+    "ribbonRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "isEqual: ribbonRuntimeStatusEquals",
+    "field_revision",
+    "fields_revision",
+    "shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData)",
+    "shouldLoadRuntimeMeshManifest(",
+    "shouldLoadRuntimeMeshSummary(",
+    "shouldLoadRuntimeStageExecution(",
+    "[SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources",
+  ]);
+  forbidTokens(source, "RibbonModule session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkHeaderSessionStatusSelector() {
+  const source = readFileSync(appMenuBarPath, "utf8");
+  requireTokens(source, "AppMenuBar header session selector", [
+    "selectHeaderSessionSource",
+    "headerSessionSourceEquals",
+    "useSessionStatusSelector(selectHeaderSessionSource",
+    "isEqual: headerSessionSourceEquals",
+  ]);
+  forbidTokens(source, "AppMenuBar header session selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+  ]);
+}
+
+function checkRuntimeControlSessionStatusSelector() {
+  const source = readFileSync(studyRuntimeResourcesPath, "utf8");
+  const controlHook = blockBetween(
+    source,
+    "export function useRuntimeCommandControlResourceData",
+    "export function useObjectMetricsResource",
+  );
+
+  requireTokens(source, "runtime command control session selector", [
+    "selectRuntimeCommandControlSessionStatus",
+    "runtimeCommandControlSessionStatusEquals",
+    "RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS",
+  ]);
+  requireTokens(controlHook, "useRuntimeCommandControlResourceData", [
+    "useSessionStatusSelector(selectRuntimeCommandControlSessionStatus",
+    "isEqual: runtimeCommandControlSessionStatusEquals",
+  ]);
+  forbidTokens(controlHook, "useRuntimeCommandControlResourceData", [
+    "useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkStudyRuntimeCommandResourceDataSessionStatusSelector() {
+  const source = readFileSync(studyRuntimeResourcesPath, "utf8");
+  const commandBundleHook = blockBetween(
+    source,
+    "export function useStudyRuntimeCommandResourceData",
+    "export function useRuntimeCommandControlResourceData",
+  );
+
+  requireTokens(source, "study runtime command session selector", [
+    "selectStudyRuntimeCommandSessionStatus",
+    "studyRuntimeCommandSessionStatusEquals",
+  ]);
+  requirePatterns(commandBundleHook, "useStudyRuntimeCommandResourceData", [
+    [
+      /useSessionStatusSelector\(\s*selectStudyRuntimeCommandSessionStatus/,
+      "useSessionStatusSelector(selectStudyRuntimeCommandSessionStatus)",
+    ],
+  ]);
+  requireTokens(commandBundleHook, "useStudyRuntimeCommandResourceData", [
+    "isEqual: studyRuntimeCommandSessionStatusEquals",
+  ]);
+  forbidTokens(commandBundleHook, "useStudyRuntimeCommandResourceData", [
+    "useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkFieldCatalogResourceSeparation() {
+  const controlRoomApi = readFileSync(controlRoomApiPath, "utf8");
+  const studyRuntimeResources = readFileSync(studyRuntimeResourcesPath, "utf8");
+  const objectVisualizationPanel = readFileSync(
+    objectVisualizationPanelPath,
+    "utf8",
+  );
+
+  requireTokens(controlRoomApi, "ControlRoomApi field catalog facade", [
+    "DATA_FIELDS_PATH",
+    "FieldCatalogResource",
+    "catalog: (options?: RequestOptions)",
+    "requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options)",
+  ]);
+  requireTokens(studyRuntimeResources, "field catalog resource hook", [
+    "export function useFieldCatalogResource",
+    "api.data.fields.catalog({ signal })",
+    "resourceKey: DATA_FIELDS_PATH",
+  ]);
+  requireTokens(objectVisualizationPanel, "ObjectVisualizationPanel field catalog separation", [
+    "useFieldCatalogResource",
+    "fieldCatalog.data",
+    "fieldCatalog.status",
+    "fieldCatalog={fieldCatalog}",
+  ]);
+  forbidTokens(objectVisualizationPanel, "ObjectVisualizationPanel field catalog separation", [
+    "status?.resources.field_revision",
+    "status?.resources.fields_revision",
+  ]);
+}
+
+function checkObjectVisualizationPanelSessionStatusSelector() {
+  const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  requireTokens(source, "ObjectVisualizationPanel session status selector", [
+    "selectObjectVisualizationManifestStatus",
+    "objectVisualizationManifestStatusEquals",
+    "useSessionStatusSelector",
+    "manifestStatus",
+    "shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus)",
+  ]);
+  forbidTokens(source, "ObjectVisualizationPanel session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkMeshDetailsPanelSessionStatusSelector() {
+  const source = readFileSync(meshDetailsPanelPath, "utf8");
+  requireTokens(source, "MeshDetailsPanel session status selector", [
+    "selectMeshDetailsRuntimeStatus",
+    "meshDetailsRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "runtimeStatus",
+    "shouldLoadRuntimeMeshSummary(true, runtimeStatus)",
+    "shouldLoadRuntimeMeshBuild(true, runtimeStatus)",
+    "shouldLoadRuntimeMeshManifest(true, runtimeStatus)",
+  ]);
+  forbidTokens(source, "MeshDetailsPanel session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkAirboxMeshPolicyPanelSessionStatusSelector() {
+  const source = readFileSync(airboxMeshPolicyPanelPath, "utf8");
+  requireTokens(source, "AirboxMeshPolicyPanel session status selector", [
+    "selectAirboxMeshPolicyRuntimeStatus",
+    "airboxMeshPolicyRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "runtimeStatus",
+    "shouldLoadRuntimeMeshSummary(true, runtimeStatus)",
+  ]);
+  forbidTokens(source, "AirboxMeshPolicyPanel session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkStudyInspectorPanelSessionStatusSelector() {
+  const source = readFileSync(studyInspectorPanelPath, "utf8");
+  requireTokens(source, "StudyInspectorPanel session status selector", [
+    "selectStudyInspectorRuntimeStatus",
+    "studyInspectorRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "runtimeStatus",
+    "shouldLoadRuntimeCurrentRun(true, runtimeStatus)",
+    "shouldLoadRuntimeStageExecution(true, runtimeStatus)",
+    "shouldLoadRuntimeMeshBuild(true, runtimeStatus)",
+    "shouldLoadRuntimeMeshManifest(true, runtimeStatus)",
+    "shouldLoadRuntimeMeshSummary(true, runtimeStatus)",
+    "shouldLoadRuntimeScalars(true, runtimeStatus)",
+  ]);
+  forbidTokens(source, "StudyInspectorPanel session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
+}
+
+function checkMeshBuildDialogSessionStatusSelector() {
+  const source = readFileSync(meshBuildDialogPath, "utf8");
+  requireTokens(source, "MeshBuildDialog session status selector", [
+    "selectMeshBuildDialogRuntimeStatus",
+    "meshBuildDialogRuntimeStatusEquals",
+    "useSessionStatusSelector",
+    "runtimeStatus",
+    "shouldLoadRuntimeMeshBuild(state.open, runtimeStatus)",
+    "shouldLoadRuntimeMeshSummary(state.open, runtimeStatus)",
+    "shouldLoadRuntimeMeshManifest(state.open, runtimeStatus)",
+  ]);
+  forbidTokens(source, "MeshBuildDialog session status selector", [
+    "import { useSessionStatus }",
+    "const sessionStatus = useSessionStatus()",
+    "sessionStatus.data",
+  ]);
 }
 
 function checkShellSelectorHooks() {
@@ -385,6 +736,31 @@ function checkShellSelectorHooks() {
     requireTokens(source, contract.path, contract.require);
     forbidTokens(source, contract.path, contract.forbid);
   }
+}
+
+function checkObjectVisualizationSelectorHooks() {
+  const source = readFileSync(objectVisualizationHookPath, "utf8");
+  requireTokens(source, "object visualization selector hook", [
+    "export function useObjectVisualizationSelector",
+    "isEqual(previous.selected, selected)",
+    "selectedRef.current",
+    "export function useObjectVisualizationController",
+  ]);
+}
+
+function checkGeometryObjectPanelVisualizationSelector() {
+  const source = readFileSync(geometryObjectPanelPath, "utf8");
+  requireTokens(source, "GeometryObjectPanel visualization selector", [
+    "useObjectVisualizationController",
+    "useObjectVisualizationSelector",
+    "resolveGeometryObjectVisualizationColors",
+    "geometryObjectVisualizationColorsEquals",
+    "shaderMonoColor",
+    "wireframeColor",
+  ]);
+  forbidTokens(source, "GeometryObjectPanel visualization selector", [
+    "useObjectVisualizationRegistry()",
+  ]);
 }
 
 function checkCommandShortcutConnector() {
@@ -554,13 +930,30 @@ function checkVisualizationPatchHotPath() {
 
   requireTokens(queuePatch, "VisualizationRegistrySyncController.queuePatch", [
     "visualizationPatchSatisfiesPatch",
+    "mergeQueuedVisualizationPatch",
     "pendingFingerprint: null",
   ]);
   forbidTokens(queuePatch, "VisualizationRegistrySyncController.queuePatch", [
+    "mergeVisualizationStatePatch",
     "fingerprintVisualizationPatch",
     "stableJson",
     "JSON.stringify",
     "sortJson",
+  ]);
+  const queuedMerge = blockBetween(
+    source,
+    "function mergeQueuedVisualizationPatch",
+    "function mergeVisualizationStatePatch",
+  );
+  requireTokens(queuedMerge, "VisualizationRegistrySyncController queued merge", [
+    "mergeQueuedPatchRecords",
+    "isPlainObject(previous) && isPlainObject(value)",
+  ]);
+  forbidTokens(queuedMerge, "VisualizationRegistrySyncController queued merge", [
+    "deepMerge",
+    "cloneJson",
+    "stableJson",
+    "JSON.stringify",
   ]);
   requireTokens(samePatch, "ObjectVisualizationController.samePatch", [
     "Object.is",
@@ -568,6 +961,40 @@ function checkVisualizationPatchHotPath() {
   ]);
   forbidTokens(samePatch, "ObjectVisualizationController.samePatch", [
     "JSON.stringify",
+  ]);
+}
+
+function checkRibbonSliderCommandDebounce() {
+  const source = readFileSync(ribbonMenuRendererPath, "utf8");
+  const slider = blockBetween(
+    source,
+    "function SliderMenuItem",
+    "function useDebouncedSliderCommand",
+  );
+  const debouncedCommand = blockBetween(
+    source,
+    "function useDebouncedSliderCommand",
+    "// ── Color picker",
+  );
+
+  requireTokens(source, "RibbonMenuRenderer slider debounce", [
+    "const SLIDER_COMMAND_DEBOUNCE_MS = 120",
+    "useDebouncedSliderCommand",
+    "key={node.id}",
+  ]);
+  requireTokens(slider, "SliderMenuItem local draft", [
+    "const [draftState, setDraftState] = useState<",
+    "draftState?.sourceValue === node.value ? draftState.value : node.value",
+    "value={draftValue}",
+    "setDraftState({ sourceValue: node.value, value: next })",
+    "scheduleSliderCommand(next)",
+    "onPointerUp={flushSliderCommand}",
+    "onBlur={flushSliderCommand}",
+  ]);
+  requireTokens(debouncedCommand, "useDebouncedSliderCommand", [
+    "setTimeout(flushSliderCommand, SLIDER_COMMAND_DEBOUNCE_MS)",
+    "clearTimeout(timerRef.current)",
+    "emitSliderCommand(value)",
   ]);
 }
 
@@ -584,13 +1011,80 @@ function checkViewportPerformanceMarks() {
   ]);
 }
 
+function checkTopologyPositionConversionCache() {
+  const source = readFileSync(topologyRenderModelPath, "utf8");
+  const buildTopologyPositions = blockBetween(
+    source,
+    "function buildTopologyPositions",
+    "export function buildViewport3DTopologyRenderModel",
+  );
+
+  requireTokens(source, "viewport3dRenderModel topology position cache", [
+    "const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>()",
+    "topologyPositionCache.get(topology)",
+    "topologyPositionCache.set(topology, positions)",
+  ]);
+  requireTokens(buildTopologyPositions, "buildTopologyPositions", [
+    "Float32Array.from(topology.positions)",
+  ]);
+}
+
+function checkTopologyIndexBufferCache() {
+  const source = readFileSync(topologyRenderModelPath, "utf8");
+  const buildCachedSurfaceIndices = blockBetween(
+    source,
+    "function buildCachedTopologySurfaceIndices",
+    "function buildCachedTopologyVolumeEdgeIndices",
+  );
+  const buildCachedVolumeEdgeIndices = blockBetween(
+    source,
+    "function buildCachedTopologyVolumeEdgeIndices",
+    "export function buildViewport3DTopologyRenderModel",
+  );
+
+  requireTokens(source, "viewport3dRenderModel topology index buffer cache", [
+    "const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>()",
+    "const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>()",
+    "buildCachedTopologySurfaceIndices(topology)",
+    "buildCachedTopologyVolumeEdgeIndices(topology)",
+  ]);
+  requireTokens(
+    buildCachedSurfaceIndices,
+    "buildCachedTopologySurfaceIndices",
+    [
+      "topologySurfaceIndexCache.get(topology)",
+      "buildTetraSurfaceIndices(topology.indices)",
+      "topologySurfaceIndexCache.set(topology, surfaceIndices)",
+    ],
+  );
+  requireTokens(
+    buildCachedVolumeEdgeIndices,
+    "buildCachedTopologyVolumeEdgeIndices",
+    [
+      "topologyVolumeEdgeIndexCache.get(topology)",
+      "buildTetraVolumeEdgeIndices(topology.indices)",
+      "topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices)",
+    ],
+  );
+}
+
+function checkMeshQualityVertexColorCache() {
+  const source = readFileSync(qualityMappingPath, "utf8");
+  requireTokens(source, "viewport3dQualityMapping color cache", [
+    "const meshQualityVertexColorCache = new WeakMap",
+    "cachedMeshQualityVertexColors(topology, quality, metric)",
+    "cacheMeshQualityVertexColors(topology, quality, metric",
+    "WeakMap<DecodedMeshQualityData",
+  ]);
+}
+
 function checkFdmCuboidChunkedUpload() {
   const source = readFileSync(fdmCuboidLayerPath, "utf8");
   requireTokens(source, "FdmCuboidLayer chunked upload", [
     "export const FDM_CUBOID_UPLOAD_BATCH_SIZE",
     "export function buildFdmCuboidUploadBatches",
-    "requestFdmUploadFrame",
-    "cancelFdmUploadFrame",
+    "requestFdmUploadTask",
+    "cancelFdmUploadTask",
     "fullmag.viewport3d.uploadFdmCuboidMatrices",
     "fullmag.viewport3d.uploadFdmCuboidColors",
     "mesh.setMatrixAt(index, matrix)",
@@ -606,6 +1100,51 @@ function checkFdmCuboidChunkedUpload() {
   ]);
 }
 
+function checkFdmVectorSegmentCache() {
+  const source = readFileSync(fdmCuboidLayerPath, "utf8");
+  const buildSegments = blockBetween(
+    source,
+    "export function buildFdmVectorSegments",
+    "export function resolveFdmVectorGlyphScale",
+  );
+
+  requireTokens(source, "FdmCuboidLayer vector segment cache", [
+    "const fdmVectorSegmentCache = new WeakMap",
+    "function cachedFdmVectorSegments",
+    "function cacheFdmVectorSegments",
+    "FdmVectorSegmentCache",
+  ]);
+  requireTokens(buildSegments, "buildFdmVectorSegments cache lookup", [
+    "const cacheKey = `${scale}:${maxVectors}:${anchorMode}`",
+    "cachedFdmVectorSegments(model, fieldVector, cacheKey)",
+    "if (cachedSegments !== undefined) return cachedSegments",
+    "cacheFdmVectorSegments(model, fieldVector, cacheKey",
+  ]);
+}
+
+function checkFdmCuboidSceneModelReuse() {
+  const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+  const sceneSource = readFileSync(
+    path.join(appRoot, "src/modules/viewport-3d/layers/Viewport3DScene.tsx"),
+    "utf8",
+  );
+  const sceneModelSource = readFileSync(viewportSceneModelPath, "utf8");
+
+  requireTokens(sceneModelSource, "useViewport3DSceneModel FDM model reuse", [
+    "const fdmSurfaceInstanceModel = useMemo",
+    "fdmSurfaceInstanceModel?.cellIndices",
+    "fdmInstanceModel: fdmSurfaceInstanceModel",
+  ]);
+  requireTokens(sceneSource, "Viewport3DScene FDM model reuse", [
+    "fdmInstanceModel: FdmCuboidInstanceModel | null | undefined",
+    "instanceModel={fdmInstanceModel}",
+  ]);
+  requireTokens(layerSource, "FdmCuboidLayer precomputed instance model", [
+    "instanceModel?: FdmCuboidInstanceModel | null",
+    "instanceModel !== undefined",
+  ]);
+}
+
 function checkFooterTelemetryIsOptIn() {
   const source = readFileSync(footerModulePath, "utf8");
   requireTokens(source, "Footer telemetry opt-in", [
@@ -614,6 +1153,17 @@ function checkFooterTelemetryIsOptIn() {
   ]);
   forbidTokens(source, "Footer telemetry opt-in", [
     'useState<FooterTabId>("telemetry")',
+  ]);
+
+  const telemetrySource = readFileSync(footerTelemetryPath, "utf8");
+  requireTokens(telemetrySource, "FooterTelemetry selective session status", [
+    "selectFooterTelemetryStatus",
+    "footerTelemetryStatusEquals",
+    "useSessionStatusSelector(selectFooterTelemetryStatus",
+    "isEqual: footerTelemetryStatusEquals",
+  ]);
+  forbidTokens(telemetrySource, "FooterTelemetry selective session status", [
+    "(sessionStatus) => sessionStatus.data",
   ]);
 }
 
@@ -630,6 +1180,19 @@ function checkViewportSmokeComputeMetrics() {
     "compute_metrics",
     "sessionRequestCount",
     "maxLongTaskMs",
+  ]);
+}
+
+function checkComputePerformanceMicrobenchCoverage() {
+  const source = readFileSync(computePerformanceMicrobenchPath, "utf8");
+  requireTokens(source, "compute performance microbench", [
+    "makeLargeTopologyBuffer",
+    "makeLargeQualityBuffer",
+    "makeLargeVectorField",
+    "assertUnderBudget",
+    "decodeTopology(makeLargeTopologyBuffer",
+    "decodeMeshQualityData(makeLargeQualityBuffer",
+    "buildVertexScalarColorsChunked(makeLargeVectorField",
   ]);
 }
 
@@ -650,6 +1213,16 @@ function checkComputePerformanceSmokeScript() {
     "cleanupSolveCommand",
     "commandRequestCount",
     "commandResponseCount",
+    "FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS",
+    "assertNoImmediateResultResourceReloads",
+    "resultResourceRequestCount",
+    "isForbiddenAcceptanceResourceUrl",
+    "/v2/sessions/current/data/fields",
+    "COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS",
+    "startResponsivenessProbe",
+    "maxResponsivenessDelayMs",
+    "totalResponsivenessDelayMs",
+    "delayedResponsivenessTickCount",
     "reactRenderMeasureTotals",
     "viewportMeasureTotals",
   ]);
@@ -679,6 +1252,14 @@ function requireTokens(block, label, tokens) {
   for (const token of tokens) {
     if (!block.includes(token)) {
       failures.push(`${label} must include ${token}.`);
+    }
+  }
+}
+
+function requirePatterns(block, label, patterns) {
+  for (const [pattern, description] of patterns) {
+    if (!pattern.test(block)) {
+      failures.push(`${label} must match ${description}.`);
     }
   }
 }

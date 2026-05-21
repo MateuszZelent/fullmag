@@ -113,10 +113,34 @@ Descriptor rules:
 
 ## Solve Stack
 
-- Magnetic eigen: dense reference for small validation problems; PETSc/SLEPc EPS
-  with shift-invert for production-sized CPU FEM.
+- Magnetic eigen: dense reference for small validation problems; the current
+  runner warns on dense O(n^3) solves above roughly 3,000 effective DOF and uses
+  a transitional CPU sparse LOBPCG lane above 5,000 effective DOF when the
+  problem is real-valued. The scalar-projected path now materializes an
+  `AssembledScalarOperator` with a PETSc/SLEPc binding descriptor for the
+  assembled symmetric generalized tangent operator. PETSc/SLEPc EPS with
+  shift-invert remains the production-sized CPU FEM target before any scalable
+  capability promotion.
 - Driven magnetic response: block-real or complex harmonic solve with residual
-  per frequency and reusable sweep state.
+  per frequency and reusable sweep state. The current runner now contains an
+  initial dense block-real primitive in `eigen::response_block_real` for
+  `K - omega^2 M + i omega C`; it returns complex response amplitudes plus
+  absolute/relative residual norms. The same module now has a field-driven
+  sweep wrapper that emits per-frequency amplitude, phase, field-work
+  absorbed-power diagnostic, scalar susceptibility, and residual metrics, while
+  rejecting empty sweeps, non-positive/non-finite frequencies, and non-finite
+  complex excitations before diagnostics are emitted. It also carries
+  previous-frequency response provenance for later warm-started iterative lanes,
+  including the source frequency and residual quality of that candidate; dense LU
+  still does not claim reusable factorization or preconditioner state. It can now
+  build and write a serializable `response/magnetic_response_sweep.v1.json`
+  payload with schema version, SI units, backend engine id, solver model, damping
+  policy, lane classification, Hz/rad-s frequency metadata, response vectors,
+  susceptibility tensor, absorbed-power diagnostic, residuals, excitation
+  provenance, sweep reuse, and an explicit tangent-leakage diagnostic status. It
+  remains a local validation primitive, not an executable
+  `StudyIR::FrequencyResponse` backend, runtime-integrated artifact writer, API
+  resource, or capability promotion.
 - Quasistatic mechanics: assemble stiffness once, refresh RHS from
   magnetization and loads, warm-start displacement, export residuals.
 - Elastodynamics: add mass and damping matrices explicitly and keep damping

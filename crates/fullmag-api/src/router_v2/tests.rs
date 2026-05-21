@@ -4765,6 +4765,70 @@ async fn eigen_branches_v2_missing_artifact_returns_404() {
 }
 
 #[tokio::test]
+async fn response_magnetic_sweep_v1_endpoint_returns_artifact_json() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let response_dir = artifact_dir.join("response");
+    fs::create_dir_all(&response_dir).expect("response artifact dir should be created");
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "magnetic_response_sweep.v1",
+            "solver_model": "block_real_dense_debug",
+            "backend_engine_id": "fem-eigen-cpu",
+            "frequencies_hz": [1.0e9],
+            "frequencies_rad_per_s": [6.283185307179586e9],
+            "points": [{
+                "frequency_hz": 1.0e9,
+                "omega_rad_per_s": 6.283185307179586e9,
+                "residual_norm": 1.0e-9
+            }]
+        }))
+        .expect("response fixture should serialize"),
+    )
+    .expect("response sweep artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], "magnetic_response_sweep.v1");
+    assert_eq!(json["frequencies_hz"][0], 1.0e9);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn response_magnetic_sweep_v1_missing_artifact_returns_404() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    fs::create_dir_all(artifact_dir.join("response"))
+        .expect("response artifact dir should be created");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = String::from_utf8(body_bytes(response).await).expect("body should be utf-8");
+    assert!(body.contains("magnetic_response_sweep.v1.json"));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

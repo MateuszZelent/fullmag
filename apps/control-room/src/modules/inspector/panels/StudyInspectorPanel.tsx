@@ -34,6 +34,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import type {
   CheckpointEntry,
+  LiveStatusResource,
   SessionImportInspectResponse,
 } from "@/kernel/api/apiTypes";
 import {
@@ -63,7 +64,7 @@ import {
 import { useKernel } from "@/kernel/KernelContext";
 import {
   SESSION_STATUS_RESOURCE_KEY,
-  useSessionStatus,
+  useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
 import { Accordion } from "@/shared/ui/Accordion";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -232,42 +233,123 @@ function studyInspectorPanelReducer(
   }
 }
 
+type StudyInspectorRuntimeStatus = {
+  capabilities: Pick<
+    LiveStatusResource["capabilities"],
+    "binary_fields" | "explicit_topology"
+  >;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    | "mesh_build_revision"
+    | "mesh_revision"
+    | "scalars_revision"
+    | "scene_revision"
+    | "stages_revision"
+  >;
+  run: LiveStatusResource["run"];
+};
+
+function selectStudyInspectorRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): StudyInspectorRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      binary_fields: status.data.capabilities.binary_fields,
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+      scalars_revision: status.data.resources.scalars_revision,
+      scene_revision: status.data.resources.scene_revision,
+      stages_revision: status.data.resources.stages_revision,
+    },
+    run: status.data.run,
+  };
+}
+
+function studyInspectorRunEquals(
+  previous: LiveStatusResource["run"],
+  next: LiveStatusResource["run"],
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.run_id === next.run_id &&
+    previous.solver_steps === next.solver_steps &&
+    previous.solver_time === next.solver_time &&
+    previous.stage_count === next.stage_count &&
+    previous.stage_index === next.stage_index &&
+    previous.stage_label === next.stage_label &&
+    previous.started_at === next.started_at
+  );
+}
+
+function studyInspectorRuntimeStatusEquals(
+  previous: StudyInspectorRuntimeStatus | null,
+  next: StudyInspectorRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.scalars_revision === next.resources.scalars_revision &&
+    previous.resources.scene_revision === next.resources.scene_revision &&
+    previous.resources.stages_revision === next.resources.stages_revision &&
+    studyInspectorRunEquals(previous.run, next.run)
+  );
+}
+
 export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
   const [state, dispatch] = useReducer(
     studyInspectorPanelReducer,
     STUDY_INSPECTOR_INITIAL_STATE,
   );
-  const sessionStatus = useSessionStatus();
+  const runtimeStatus = useSessionStatusSelector(
+    selectStudyInspectorRuntimeStatus,
+    { isEqual: studyInspectorRuntimeStatusEquals },
+  );
   const scene = useSceneResource();
   const currentRun = useCurrentRunResource({
-    enabled: shouldLoadRuntimeCurrentRun(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeCurrentRun(true, runtimeStatus),
   });
   const stageExecution = useStageExecutionResource({
-    enabled: shouldLoadRuntimeStageExecution(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeStageExecution(true, runtimeStatus),
   });
   const solverStatus = useSolverStatusResource();
   const commandQueue = useCommandQueueResource();
   const checkpointCatalog = useCheckpointCatalogResource();
   const geometryValidation = useGeometryValidationResource();
   const meshBuildCurrent = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
   const meshBuildLatest = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const meshSummary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const energyCurrent = useSolverEnergyCurrentResource({
-    enabled: shouldLoadRuntimeScalars(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeScalars(true, runtimeStatus),
   });
   const energyHistory = useSolverEnergyHistoryResource(
     120,
-    { enabled: shouldLoadRuntimeScalars(true, sessionStatus.data) },
+    { enabled: shouldLoadRuntimeScalars(true, runtimeStatus) },
   );
   const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];
@@ -298,7 +380,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
       [MODEL_SCENE_PATH]: scene.data,
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
-      [SESSION_STATUS_RESOURCE_KEY]: sessionStatus.data,
+      [SESSION_STATUS_RESOURCE_KEY]: runtimeStatus,
       [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,

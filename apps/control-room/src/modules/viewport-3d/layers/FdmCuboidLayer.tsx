@@ -43,7 +43,7 @@ import {
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const VECTOR_SEGMENT_STRIDE = 7;
 
-interface FdmCuboidInstanceModel {
+export interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
   cellIndices: Uint32Array;
   centers: Float32Array;
@@ -73,6 +73,8 @@ export interface FdmCuboidUploadBatch {
   start: number;
 }
 
+type FdmUploadTaskHandle = ReturnType<typeof setTimeout>;
+
 export function buildFdmCuboidUploadBatches(
   count: number,
   batchSize = FDM_CUBOID_UPLOAD_BATCH_SIZE,
@@ -88,27 +90,12 @@ export function buildFdmCuboidUploadBatches(
   return batches;
 }
 
-function requestFdmUploadFrame(callback: () => void): number {
-  if (
-    typeof window !== "undefined" &&
-    typeof window.requestAnimationFrame === "function"
-  ) {
-    return window.requestAnimationFrame(callback);
-  }
-
-  return setTimeout(callback, 0) as unknown as number;
+function requestFdmUploadTask(callback: () => void): FdmUploadTaskHandle {
+  return setTimeout(callback, 0);
 }
 
-function cancelFdmUploadFrame(handle: number): void {
-  if (
-    typeof window !== "undefined" &&
-    typeof window.cancelAnimationFrame === "function"
-  ) {
-    window.cancelAnimationFrame(handle);
-    return;
-  }
-
-  clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+function cancelFdmUploadTask(handle: FdmUploadTaskHandle): void {
+  clearTimeout(handle);
 }
 
 function markFdmCuboidUpload(name: string): string | null {
@@ -273,6 +260,47 @@ function resolveVoxelTopographyDisplacement(
   return value * topography.amplitudeCells * cellHeight;
 }
 
+type FdmVectorSegmentCache = WeakMap<
+  DecodedFieldVector,
+  Map<string, Float32Array | null>
+>;
+
+const fdmVectorSegmentCache = new WeakMap<
+  FdmCuboidInstanceModel,
+  FdmVectorSegmentCache
+>();
+
+function cachedFdmVectorSegments(
+  model: FdmCuboidInstanceModel,
+  fieldVector: DecodedFieldVector,
+  cacheKey: string,
+): Float32Array | null | undefined {
+  const fieldCache = fdmVectorSegmentCache.get(model)?.get(fieldVector);
+  if (!fieldCache?.has(cacheKey)) return undefined;
+  return fieldCache.get(cacheKey) ?? null;
+}
+
+function cacheFdmVectorSegments(
+  model: FdmCuboidInstanceModel,
+  fieldVector: DecodedFieldVector,
+  cacheKey: string,
+  segments: Float32Array | null,
+): void {
+  let modelCache = fdmVectorSegmentCache.get(model);
+  if (!modelCache) {
+    modelCache = new WeakMap();
+    fdmVectorSegmentCache.set(model, modelCache);
+  }
+
+  let fieldCache = modelCache.get(fieldVector);
+  if (!fieldCache) {
+    fieldCache = new Map();
+    modelCache.set(fieldVector, fieldCache);
+  }
+
+  fieldCache.set(cacheKey, segments);
+}
+
 export function buildFdmVectorSegments(
   model: FdmCuboidInstanceModel | null,
   fieldVector: DecodedFieldVector | null | undefined,
@@ -291,7 +319,16 @@ export function buildFdmVectorSegments(
   }
 
   const vectorCount = Math.min(model.count, fieldVector.pointCount, maxVectors);
-  if (vectorCount <= 0) return null;
+  const anchorMode = options.anchorMode ?? "center";
+  const cacheKey = `${scale}:${maxVectors}:${anchorMode}`;
+  const cachedSegments = cachedFdmVectorSegments(model, fieldVector, cacheKey);
+  if (cachedSegments !== undefined) return cachedSegments;
+
+  if (vectorCount <= 0) {
+    cacheFdmVectorSegments(model, fieldVector, cacheKey, null);
+    return null;
+  }
+
   const stride = Math.max(1, Math.floor(model.count / vectorCount));
 
   let maxMagnitude = 0;
@@ -310,7 +347,6 @@ export function buildFdmVectorSegments(
 
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const halfScale = scale / 2;
-  const anchorMode = options.anchorMode ?? "center";
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
@@ -350,6 +386,7 @@ export function buildFdmVectorSegments(
     segments[target + 6] = length / scaleMagnitude;
   }
 
+  cacheFdmVectorSegments(model, fieldVector, cacheKey, segments);
   return segments;
 }
 
@@ -365,6 +402,185 @@ export function resolveFdmVectorGlyphScale(
   return Math.min(safeScale, localCap);
 }
 
+interface FdmCuboidMatrixUploadOptions {
+  invalidate: () => void;
+  model: FdmCuboidInstanceModel | null;
+  shaderVisible: boolean;
+  surfaceRef: { current: InstancedMesh | null };
+  tracker: Viewport3DResourceTracker;
+  usesInstanceColors: boolean;
+  wireframeRef: { current: InstancedMesh | null };
+  wireframeVisible: boolean;
+}
+
+function useFdmCuboidMatrixUpload({
+  invalidate,
+  model,
+  shaderVisible,
+  surfaceRef,
+  tracker,
+  usesInstanceColors,
+  wireframeRef,
+  wireframeVisible,
+}: FdmCuboidMatrixUploadOptions): void {
+  useEffect(() => {
+    if (!model) return;
+
+    const meshes = [surfaceRef.current, wireframeRef.current].filter(
+      (mesh): mesh is InstancedMesh => Boolean(mesh),
+    );
+    if (meshes.length === 0) return;
+
+    const batches = buildFdmCuboidUploadBatches(model.count);
+    if (batches.length === 0) return;
+
+    const matrix = new Matrix4();
+    const position = new Vector3();
+    const scale = new Vector3(...model.cellSize);
+    const startMark = markFdmCuboidUpload(
+      "fullmag.viewport3d.uploadFdmCuboidMatrices",
+    );
+    let cancelled = false;
+    let taskHandle: FdmUploadTaskHandle | null = null;
+
+    const uploadBatch = (batchIndex: number) => {
+      if (cancelled) return;
+
+      const batch = batches[batchIndex];
+      if (!batch) return;
+
+      for (const mesh of meshes) {
+        for (let index = batch.start; index < batch.end; index += 1) {
+          const offset = index * 3;
+          position.set(
+            model.centers[offset] ?? 0,
+            model.centers[offset + 1] ?? 0,
+            model.centers[offset + 2] ?? 0,
+          );
+          matrix.compose(position, IDENTITY_QUATERNION, scale);
+          mesh.setMatrixAt(index, matrix);
+        }
+      }
+
+      const nextBatch = batchIndex + 1;
+      if (nextBatch < batches.length) {
+        taskHandle = requestFdmUploadTask(() => uploadBatch(nextBatch));
+        return;
+      }
+
+      for (const mesh of meshes) {
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+      measureFdmCuboidUpload(
+        "fullmag.viewport3d.uploadFdmCuboidMatrices",
+        startMark,
+      );
+      tracker.recordDirtyFrame("fdm-cuboids");
+      invalidate();
+    };
+
+    uploadBatch(0);
+
+    return () => {
+      cancelled = true;
+      if (taskHandle !== null) {
+        cancelFdmUploadTask(taskHandle);
+      }
+    };
+  }, [
+    invalidate,
+    model,
+    shaderVisible,
+    surfaceRef,
+    tracker,
+    usesInstanceColors,
+    wireframeRef,
+    wireframeVisible,
+  ]);
+}
+
+interface FdmCuboidColorUploadOptions {
+  invalidate: () => void;
+  model: FdmCuboidInstanceModel | null;
+  surfaceColors: ScalarColorBuffer | null;
+  surfaceRef: { current: InstancedMesh | null };
+  tracker: Viewport3DResourceTracker;
+  usesInstanceColors: boolean;
+}
+
+function useFdmCuboidColorUpload({
+  invalidate,
+  model,
+  surfaceColors,
+  surfaceRef,
+  tracker,
+  usesInstanceColors,
+}: FdmCuboidColorUploadOptions): void {
+  useEffect(() => {
+    const mesh = surfaceRef.current;
+    if (!mesh || !model || !usesInstanceColors || !surfaceColors) return;
+
+    const batches = buildFdmCuboidUploadBatches(model.count);
+    if (batches.length === 0) return;
+
+    const color = new Color();
+    const startMark = markFdmCuboidUpload(
+      "fullmag.viewport3d.uploadFdmCuboidColors",
+    );
+    let cancelled = false;
+    let taskHandle: FdmUploadTaskHandle | null = null;
+
+    const uploadBatch = (batchIndex: number) => {
+      if (cancelled) return;
+
+      const batch = batches[batchIndex];
+      if (!batch) return;
+
+      for (let index = batch.start; index < batch.end; index += 1) {
+        const offset = index * 3;
+        color.setRGB(
+          surfaceColors.colors[offset] ?? 0,
+          surfaceColors.colors[offset + 1] ?? 0,
+          surfaceColors.colors[offset + 2] ?? 0,
+        );
+        mesh.setColorAt(index, color);
+      }
+
+      const nextBatch = batchIndex + 1;
+      if (nextBatch < batches.length) {
+        taskHandle = requestFdmUploadTask(() => uploadBatch(nextBatch));
+        return;
+      }
+
+      if (mesh.instanceColor) {
+        mesh.instanceColor.needsUpdate = true;
+      }
+      measureFdmCuboidUpload(
+        "fullmag.viewport3d.uploadFdmCuboidColors",
+        startMark,
+      );
+      tracker.recordDirtyFrame("fdm-cuboid-colors");
+      invalidate();
+    };
+
+    uploadBatch(0);
+
+    return () => {
+      cancelled = true;
+      if (taskHandle !== null) {
+        cancelFdmUploadTask(taskHandle);
+      }
+    };
+  }, [
+    invalidate,
+    model,
+    surfaceColors,
+    surfaceRef,
+    tracker,
+    usesInstanceColors,
+  ]);
+}
+
 export function FdmCuboidLayer({
   colors,
   domain,
@@ -377,6 +593,7 @@ export function FdmCuboidLayer({
   vectorScale,
   vectorStyle,
   fieldVector,
+  instanceModel,
   maxVectorGlyphs,
   voxelFillRatio,
   voxelMagnitudeThreshold,
@@ -385,6 +602,7 @@ export function FdmCuboidLayer({
   colors: Viewport3DColors;
   domain: FdmGridRenderDomain | null;
   fieldVector: DecodedFieldVector | null | undefined;
+  instanceModel?: FdmCuboidInstanceModel | null;
   maxVectorGlyphs: number;
   materialProfile: Viewport3DMaterialProfile;
   onSelectDomain: () => void;
@@ -403,15 +621,18 @@ export function FdmCuboidLayer({
   const wireframeRef = useRef<InstancedMesh>(null);
   const model = useMemo(
     () =>
-      buildFdmCuboidInstanceModel(domain, {
-        fieldVector,
-        voxelFillRatio,
-        voxelMagnitudeThreshold,
-        voxelTopography,
-      }),
+      instanceModel !== undefined
+        ? instanceModel
+        : buildFdmCuboidInstanceModel(domain, {
+            fieldVector,
+            voxelFillRatio,
+            voxelMagnitudeThreshold,
+            voxelTopography,
+          }),
     [
       domain,
       fieldVector,
+      instanceModel,
       voxelFillRatio,
       voxelMagnitudeThreshold,
       voxelTopography,
@@ -495,135 +716,25 @@ export function FdmCuboidLayer({
     [wireframeMaterial, tracker],
   );
 
-  useEffect(() => {
-    if (!model) return;
-
-    const meshes = [surfaceRef.current, wireframeRef.current].filter(
-      (mesh): mesh is InstancedMesh => Boolean(mesh),
-    );
-    if (meshes.length === 0) return;
-
-    const batches = buildFdmCuboidUploadBatches(model.count);
-    if (batches.length === 0) return;
-
-    const matrix = new Matrix4();
-    const position = new Vector3();
-    const scale = new Vector3(...model.cellSize);
-    const startMark = markFdmCuboidUpload(
-      "fullmag.viewport3d.uploadFdmCuboidMatrices",
-    );
-    let cancelled = false;
-    let frameHandle: number | null = null;
-
-    const uploadBatch = (batchIndex: number) => {
-      if (cancelled) return;
-
-      const batch = batches[batchIndex];
-      if (!batch) return;
-
-      for (const mesh of meshes) {
-        for (let index = batch.start; index < batch.end; index += 1) {
-          const offset = index * 3;
-          position.set(
-            model.centers[offset] ?? 0,
-            model.centers[offset + 1] ?? 0,
-            model.centers[offset + 2] ?? 0,
-          );
-          matrix.compose(position, IDENTITY_QUATERNION, scale);
-          mesh.setMatrixAt(index, matrix);
-        }
-      }
-
-      const nextBatch = batchIndex + 1;
-      if (nextBatch < batches.length) {
-        frameHandle = requestFdmUploadFrame(() => uploadBatch(nextBatch));
-        return;
-      }
-
-      for (const mesh of meshes) {
-        mesh.instanceMatrix.needsUpdate = true;
-      }
-      measureFdmCuboidUpload(
-        "fullmag.viewport3d.uploadFdmCuboidMatrices",
-        startMark,
-      );
-      tracker.recordDirtyFrame("fdm-cuboids");
-      invalidate();
-    };
-
-    uploadBatch(0);
-
-    return () => {
-      cancelled = true;
-      if (frameHandle !== null) {
-        cancelFdmUploadFrame(frameHandle);
-      }
-    };
-  }, [
+  useFdmCuboidMatrixUpload({
     invalidate,
     model,
-    settings.shaderVisible,
-    settings.wireframeVisible,
+    shaderVisible: settings.shaderVisible,
+    surfaceRef,
     tracker,
     usesInstanceColors,
-  ]);
+    wireframeRef,
+    wireframeVisible: settings.wireframeVisible,
+  });
 
-  useEffect(() => {
-    const mesh = surfaceRef.current;
-    if (!mesh || !model || !usesInstanceColors || !surfaceColors) return;
-
-    const batches = buildFdmCuboidUploadBatches(model.count);
-    if (batches.length === 0) return;
-
-    const color = new Color();
-    const startMark = markFdmCuboidUpload(
-      "fullmag.viewport3d.uploadFdmCuboidColors",
-    );
-    let cancelled = false;
-    let frameHandle: number | null = null;
-
-    const uploadBatch = (batchIndex: number) => {
-      if (cancelled) return;
-
-      const batch = batches[batchIndex];
-      if (!batch) return;
-
-      for (let index = batch.start; index < batch.end; index += 1) {
-        const offset = index * 3;
-        color.setRGB(
-          surfaceColors.colors[offset] ?? 0,
-          surfaceColors.colors[offset + 1] ?? 0,
-          surfaceColors.colors[offset + 2] ?? 0,
-        );
-        mesh.setColorAt(index, color);
-      }
-
-      const nextBatch = batchIndex + 1;
-      if (nextBatch < batches.length) {
-        frameHandle = requestFdmUploadFrame(() => uploadBatch(nextBatch));
-        return;
-      }
-
-      if (mesh.instanceColor) {
-        mesh.instanceColor.needsUpdate = true;
-      }
-      measureFdmCuboidUpload(
-        "fullmag.viewport3d.uploadFdmCuboidColors",
-        startMark,
-      );
-      tracker.recordDirtyFrame("fdm-cuboid-colors");
-      invalidate();
-    };
-
-    uploadBatch(0);
-
-    return () => {
-      cancelled = true;
-      if (frameHandle !== null) {
-        cancelFdmUploadFrame(frameHandle);
-      }
-    };
-  }, [invalidate, model, surfaceColors, tracker, usesInstanceColors]);
+  useFdmCuboidColorUpload({
+    invalidate,
+    model,
+    surfaceColors,
+    surfaceRef,
+    tracker,
+    usesInstanceColors,
+  });
 
   if (
     !model ||

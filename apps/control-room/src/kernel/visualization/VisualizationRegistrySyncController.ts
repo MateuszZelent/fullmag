@@ -87,9 +87,12 @@ export class VisualizationRegistrySyncController {
     if (!remote) return null;
     const activePatch = this.activePatch();
     if (!activePatch) return remote;
-    // Camera-only patches do not affect rendering settings.  Return the
-    // original reference so downstream React memos stay stable.
-    if (isCameraOnlyPatch(activePatch)) return remote;
+    if (isCameraOnlyPatch(activePatch)) {
+      const projectionPatch = cameraProjectionPatch(activePatch);
+      return projectionPatch
+        ? applyVisualizationStatePatch(remote, projectionPatch)
+        : remote;
+    }
     return applyVisualizationStatePatch(remote, activePatch);
   }
 
@@ -193,6 +196,17 @@ export class VisualizationRegistrySyncController {
     return this.snapshot;
   }
 
+  hasUnsatisfiedCameraPatch(
+    state: VisualizationStateResource | null | undefined,
+  ): boolean {
+    if (!state) return false;
+    const activePatch = this.activePatch();
+    if (!activePatch?.camera) return false;
+    return !visualizationStateSatisfiesPatch(state, {
+      camera: activePatch.camera,
+    });
+  }
+
   observeRemoteState(state: VisualizationStateResource | null | undefined): void {
     if (!state) return;
     const previousSnapshot = this.snapshot;
@@ -245,7 +259,7 @@ export class VisualizationRegistrySyncController {
     }
 
     const now = this.now();
-    const pendingPatch = mergeVisualizationStatePatch(
+    const pendingPatch = mergeQueuedVisualizationPatch(
       this.snapshot.pendingPatch,
       patch,
     );
@@ -369,6 +383,34 @@ function applyVisualizationStatePatch<TState>(
   return deepMerge(state, patch) as TState;
 }
 
+function mergeQueuedVisualizationPatch(
+  current: VisualizationStatePatch | null | undefined,
+  next: VisualizationStatePatch | null | undefined,
+): VisualizationStatePatch | null {
+  if (!current && !next) return null;
+  if (!current) return next ?? null;
+  if (!next) return current;
+  return mergeQueuedPatchRecords(
+    current as Record<string, unknown>,
+    next as Record<string, unknown>,
+  ) as VisualizationStatePatch;
+}
+
+function mergeQueuedPatchRecords(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const output: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(next)) {
+    const previous = output[key];
+    output[key] =
+      isPlainObject(previous) && isPlainObject(value)
+        ? mergeQueuedPatchRecords(previous, value)
+        : value;
+  }
+  return output;
+}
+
 function mergeVisualizationStatePatch(
   current: VisualizationStatePatch | null | undefined,
   next: VisualizationStatePatch | null | undefined,
@@ -483,6 +525,16 @@ function sortJson(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function cameraProjectionPatch(
+  patch: VisualizationStatePatch | null | undefined,
+): VisualizationStatePatch | null {
+  const projection = patch?.camera?.projection;
+  if (projection !== "orthographic" && projection !== "perspective") {
+    return null;
+  }
+  return { camera: { projection } };
 }
 
 function isCameraOnlyPatch(

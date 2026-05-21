@@ -14,8 +14,8 @@ import {
   shouldLoadRuntimeMeshSummary,
   useEngineLogResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
-import type { EngineLogResource } from "@/kernel/api/apiTypes";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { EngineLogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import {
   normalizeMeshPipelineStatus,
@@ -269,24 +269,70 @@ function meshBuildDialogReducer(
   };
 }
 
+type MeshBuildDialogRuntimeStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "mesh_build_revision" | "mesh_revision"
+  >;
+};
+
+function selectMeshBuildDialogRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): MeshBuildDialogRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+    },
+  };
+}
+
+function meshBuildDialogRuntimeStatusEquals(
+  previous: MeshBuildDialogRuntimeStatus | null,
+  next: MeshBuildDialogRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision
+  );
+}
+
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const [state, dispatch] = useReducer(meshBuildDialogReducer, {
     lastCommandId: null,
     lastCommandStatus: "pending",
     open: false,
   });
-  const sessionStatus = useSessionStatus();
+  const runtimeStatus = useSessionStatusSelector(
+    selectMeshBuildDialogRuntimeStatus,
+    { enabled: state.open, isEqual: meshBuildDialogRuntimeStatusEquals },
+  );
   const activeBuild = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(state.open, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(state.open, runtimeStatus),
   });
   const latestBuild = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(state.open, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(state.open, runtimeStatus),
   });
   const summary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(state.open, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(state.open, runtimeStatus),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(state.open, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(state.open, runtimeStatus),
   });
   const engineLog = useEngineLogResource({ enabled: state.open });
   const activeRecord = asRecord(activeBuild.data?.active_build);

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
+  applyVertexScalarColorBuffer,
   applyVertexScalarColors,
   canApplyVertexScalarColors,
 } from "./viewport3dGeometryColors";
@@ -61,6 +62,23 @@ describe("viewport3dGeometryColors", () => {
     expect(Array.from(secondAttribute.array)).toEqual(
       Array.from(Float32Array.from([...magnitudeColorRgb(1), ...magnitudeColorRgb(0)])),
     );
+  });
+
+  it("preserves the existing color buffer when colorBuffer is null (compatible topology)", () => {
+    const geometry = new BufferGeometry();
+    // Populate a valid color buffer first.
+    applyVertexScalarColors(geometry, vectorField([1, 0, 0, 0, 1, 0]), 2);
+    const attrBefore = geometry.getAttribute("color") as BufferAttribute;
+    const dataBefore = Float32Array.from(attrBefore.array as Float32Array);
+
+    // Calling with null colorBuffer must leave the compatible buffer intact.
+    // The material's `vertexColors` flag hides stale data; zero-filling caused
+    // a black frame when the Surface pass was toggled off then back on.
+    applyVertexScalarColorBuffer(geometry, null, 2);
+
+    const attrAfter = geometry.getAttribute("color") as BufferAttribute;
+    expect(attrAfter).toBe(attrBefore);
+    expect(Float32Array.from(attrAfter.array as Float32Array)).toEqual(dataBefore);
   });
 
   it("removes stale vertex colors when the field has more points than the topology", () => {

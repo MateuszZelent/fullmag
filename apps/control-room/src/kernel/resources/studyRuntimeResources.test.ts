@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SUMMARY_PATH,
@@ -19,6 +22,8 @@ import {
   shouldLoadRuntimeScalars,
   shouldLoadRuntimeStageExecution,
 } from "./studyRuntimeResources";
+
+const studyRuntimeResourcesUrl = new URL("./studyRuntimeResources.ts", import.meta.url);
 
 const baseResources: LiveStatusResource["resources"] = {
   artifact_revision: 0,
@@ -82,6 +87,37 @@ function statusWith({
 }
 
 describe("study runtime command resource bundles", () => {
+  it("selects only command-control session status fields for always-mounted controls", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const controlHook = source.slice(
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+      source.indexOf("export function useObjectMetricsResource"),
+    );
+
+    expect(source).toContain("selectRuntimeCommandControlSessionStatus");
+    expect(source).toContain("runtimeCommandControlSessionStatusEquals");
+    expect(controlHook).toContain(
+      "useSessionStatusSelector(selectRuntimeCommandControlSessionStatus",
+    );
+    expect(controlHook).not.toContain("useSessionStatus()");
+  });
+
+  it("selects only command-palette session status fields for the full runtime command bundle", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const commandBundleHook = source.slice(
+      source.indexOf("export function useStudyRuntimeCommandResourceData"),
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+    );
+
+    expect(source).toContain("selectStudyRuntimeCommandSessionStatus");
+    expect(source).toContain("studyRuntimeCommandSessionStatusEquals");
+    expect(commandBundleHook).toMatch(
+      /useSessionStatusSelector\(\s*selectStudyRuntimeCommandSessionStatus/,
+    );
+    expect(commandBundleHook).not.toContain("useSessionStatus()");
+    expect(commandBundleHook).not.toContain("sessionStatus.data");
+  });
+
   it("keeps always-mounted command controls off the full runtime resource bundle", () => {
     expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).not.toEqual(
       expect.arrayContaining([
@@ -92,6 +128,21 @@ describe("study runtime command resource bundles", () => {
         PERSISTENCE_CHECKPOINTS_PATH,
         SIMULATION_RUN_CURRENT_PATH,
       ]),
+    );
+  });
+
+  it("exposes the magnetic response sweep artifact as an optional runtime resource", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useMagneticResponseSweepResource"),
+      source.indexOf("export function useStudyRuntimeCommandResourceData"),
+    );
+
+    expect(ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.analysis\.frequencyResponse\s*\.magneticSweepV1/);
+    expect(hookSource).toContain("ignoreMissingResource<MagneticResponseSweepResource>");
+    expect(hookSource).toContain(
+      "resourceKey: ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH",
     );
   });
 

@@ -45,5 +45,6 @@ export function useVisualizationStateResource({
   return {
     ...resource,
     data: optimisticData,
+    rawData: resource.data,
   };
 }

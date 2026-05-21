@@ -229,6 +229,25 @@ describe("VisualizationRegistrySyncController", () => {
     expect(queuePatchBlock).not.toContain("stableJson");
   });
 
+  it("keeps generic deep merge out of the high-frequency queuePatch path", () => {
+    const queuePatchBlock = blockBetween(
+      visualizationRegistrySyncControllerSource,
+      "  queuePatch(patch: VisualizationStatePatch): void {",
+      "  start(): void {",
+    );
+    const queuedMergeBlock = blockBetween(
+      visualizationRegistrySyncControllerSource,
+      "function mergeQueuedVisualizationPatch",
+      "function mergeVisualizationStatePatch",
+    );
+
+    expect(queuePatchBlock).toContain("mergeQueuedVisualizationPatch");
+    expect(queuePatchBlock).not.toContain("mergeVisualizationStatePatch");
+    expect(queuedMergeBlock).not.toContain("deepMerge");
+    expect(queuedMergeBlock).not.toContain("cloneJson");
+    expect(queuedMergeBlock).not.toContain("stableJson");
+  });
+
   it("does not start an idle recurring timer when there are no pending patches", () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
@@ -305,6 +324,51 @@ describe("VisualizationRegistrySyncController", () => {
     );
 
     expect(controller.getSnapshot().pendingPatch).toBeNull();
+  });
+
+  it("keeps camera projection optimistic so stale remote state cannot bounce the ORTHO toggle", () => {
+    const time = 0;
+    const { controller } = createController({ now: () => time });
+    const remote = visualizationState(10, {
+      camera: {
+        ...visualizationState(10).camera,
+        projection: "orthographic",
+      },
+    });
+
+    controller.observeRemoteState(remote);
+    controller.queuePatch({
+      camera: { projection: "perspective" },
+    });
+
+    const optimistic = controller.applyOptimisticState(remote);
+
+    expect(optimistic).not.toBe(remote);
+    expect(optimistic?.camera.projection).toBe("perspective");
+    expect(optimistic?.camera.position).toEqual(remote.camera.position);
+  });
+
+  it("reports stale remote camera state while a local camera patch is active", () => {
+    const time = 0;
+    const { controller } = createController({ now: () => time });
+    const remote = visualizationState(10);
+
+    controller.observeRemoteState(remote);
+    controller.queuePatch({
+      camera: { projection: "orthographic" },
+    });
+
+    expect(controller.hasUnsatisfiedCameraPatch(remote)).toBe(true);
+    expect(
+      controller.hasUnsatisfiedCameraPatch(
+        visualizationState(11, {
+          camera: {
+            ...remote.camera,
+            projection: "orthographic",
+          },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("does not send a patch when an incoming backend state already satisfies the pending fingerprint", async () => {

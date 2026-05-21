@@ -1,9 +1,8 @@
 "use client";
 
-import { OrbitControls, type OrbitControlsProps } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
-import type { ComponentRef, MutableRefObject } from "react";
+import type { MutableRefObject } from "react";
 import { MOUSE, Vector3, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
@@ -11,20 +10,10 @@ import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
-  type Viewport3DCameraState,
   type Viewport3DCameraProjection,
+  type Viewport3DCameraState,
   type Viewport3DRotationMode,
 } from "../viewport3dStore";
-
-type OrbitControlsEndEvent = Parameters<
-  NonNullable<OrbitControlsProps["onEnd"]>
->[0] & {
-  target?: {
-    target?: {
-      toArray: () => number[];
-    };
-  };
-};
 
 interface Viewport3DNativeCameraPanEvent {
   button: number;
@@ -35,6 +24,76 @@ interface Viewport3DNativeCameraPanEvent {
 
 interface Viewport3DNativeCameraOrbitEvent {
   button: number;
+}
+
+interface Viewport3DCameraFit {
+  far: number;
+  near: number;
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
+type OrbitMouseAction = (typeof MOUSE)[keyof typeof MOUSE];
+
+interface Viewport3DCameraInteractionOptions {
+  enableDamping: false;
+  enablePan: true;
+  enableZoom: false;
+  mouseButtons: {
+    LEFT: OrbitMouseAction;
+    MIDDLE: OrbitMouseAction;
+    RIGHT: OrbitMouseAction;
+  };
+  panSpeed: number;
+  rotateSpeed: number;
+  screenSpacePanning: true;
+}
+
+type NativeGestureState = {
+  hasDragged: boolean;
+  lastX: number;
+  lastY: number;
+  mode: "orbit" | "pan";
+  pointerId: number;
+  startX: number;
+  startY: number;
+};
+
+const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
+  center: [0, 0, 0],
+  radius: 1e-6,
+  size: [1e-6, 1e-6, 1e-6],
+};
+export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
+const WHEEL_CAMERA_COMMIT_DELAY_MS = 180;
+const WHEEL_ZOOM_INTENSITY = 0.0024;
+const WHEEL_ZOOM_MIN_DISTANCE = 1e-12;
+const WHEEL_ZOOM_MAX_DISTANCE = 1e-2;
+const CAMERA_STATE_EPSILON = 1e-7;
+const VIEWPORT_3D_ORBIT_PAN_SPEED = 2.75;
+const VIEWPORT_3D_ORBIT_ROTATE_SPEED = 1;
+const VIEWPORT_3D_NATIVE_ORBIT_BUTTON = 0;
+const VIEWPORT_3D_NATIVE_PAN_BUTTON = 2;
+const VIEWPORT_3D_DRAG_THRESHOLD_PX = 4;
+const VIEWPORT_3D_MIN_POLAR_ANGLE = 0.05;
+const VIEWPORT_3D_MAX_POLAR_ANGLE = Math.PI - 0.05;
+
+const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
+  enableDamping: false,
+  enablePan: true,
+  enableZoom: false,
+  mouseButtons: {
+    LEFT: MOUSE.ROTATE,
+    MIDDLE: MOUSE.PAN,
+    RIGHT: MOUSE.PAN,
+  },
+  panSpeed: VIEWPORT_3D_ORBIT_PAN_SPEED,
+  rotateSpeed: VIEWPORT_3D_ORBIT_ROTATE_SPEED,
+  screenSpacePanning: true,
+} satisfies Viewport3DCameraInteractionOptions;
+
+export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
+  return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
 }
 
 export function commitOrbitCameraEnd({
@@ -59,63 +118,8 @@ export function commitOrbitCameraEnd({
     ] as [number, number, number],
     up: cameraUp,
   };
+  viewport3dStore.setCamera(nextCamera);
   void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
-}
-
-interface Viewport3DCameraFit {
-  far: number;
-  near: number;
-  position: [number, number, number];
-  target: [number, number, number];
-}
-
-const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
-  center: [0, 0, 0],
-  radius: 1e-6,
-  size: [1e-6, 1e-6, 1e-6],
-};
-export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
-const WHEEL_CAMERA_COMMIT_DELAY_MS = 180;
-const WHEEL_ZOOM_INTENSITY = 0.0024;
-const WHEEL_ZOOM_MIN_DISTANCE = 1e-12;
-const WHEEL_ZOOM_MAX_DISTANCE = 1e-2;
-const CAMERA_STATE_EPSILON = 1e-7;
-const VIEWPORT_3D_ORBIT_PAN_SPEED = 2.75;
-const VIEWPORT_3D_ORBIT_ROTATE_SPEED = 1;
-const VIEWPORT_3D_NATIVE_ORBIT_BUTTON = 0;
-const VIEWPORT_3D_NATIVE_PAN_BUTTON = 2;
-type OrbitMouseAction = (typeof MOUSE)[keyof typeof MOUSE];
-
-interface Viewport3DCameraInteractionOptions {
-  enableDamping: false;
-  enablePan: true;
-  enableZoom: false;
-  mouseButtons: {
-    LEFT: OrbitMouseAction;
-    MIDDLE: OrbitMouseAction;
-    RIGHT: OrbitMouseAction;
-  };
-  panSpeed: number;
-  rotateSpeed: number;
-  screenSpacePanning: true;
-}
-
-const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
-  enableDamping: false,
-  enablePan: true,
-  enableZoom: false,
-  mouseButtons: {
-    LEFT: MOUSE.ROTATE,
-    MIDDLE: MOUSE.PAN,
-    RIGHT: MOUSE.PAN,
-  },
-  panSpeed: VIEWPORT_3D_ORBIT_PAN_SPEED,
-  rotateSpeed: 1,
-  screenSpacePanning: true,
-} satisfies Viewport3DCameraInteractionOptions;
-
-export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
-  return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
 }
 
 export function shouldHandleViewport3DNativeCameraPan(
@@ -200,8 +204,7 @@ export function applyViewport3DNativeCameraPan({
 
   camera.position.add(panOffset);
   target.add(panOffset);
-  camera.updateMatrix();
-  camera.updateMatrixWorld();
+  applyCameraLookAt(camera, target);
   return true;
 }
 
@@ -229,46 +232,52 @@ export function applyViewport3DNativeCameraOrbit({
     return false;
   }
 
-  camera.updateMatrixWorld();
-  const offset = new Vector3().copy(camera.position).sub(target);
-  const focusDistance = offset.length();
-  if (focusDistance <= 0) return false;
-
-  const yawAngle =
+  const yawDelta =
     -2 * Math.PI * deltaX * VIEWPORT_3D_ORBIT_ROTATE_SPEED / viewportHeightPixels;
-  const pitchAngle =
-    -2 * Math.PI * deltaY * VIEWPORT_3D_ORBIT_ROTATE_SPEED / viewportHeightPixels;
-  const worldUp = new Vector3(...VIEWPORT_3D_WORLD_UP);
-  const right = new Vector3()
-    .setFromMatrixColumn(camera.matrix, 0)
-    .normalize();
+  const polarDelta =
+    2 * Math.PI * deltaY * VIEWPORT_3D_ORBIT_ROTATE_SPEED / viewportHeightPixels;
 
   if (rotationMode === "object") {
-    offset.applyAxisAngle(worldUp, yawAngle);
-    right.applyAxisAngle(worldUp, yawAngle).normalize();
-    offset.applyAxisAngle(right, pitchAngle);
-    camera.position.copy(target).add(offset);
-    applyViewport3DWorldUp(camera);
-    camera.lookAt(target);
-    camera.updateMatrix();
-    camera.updateMatrixWorld();
+    const offset = camera.position.clone().sub(target);
+    const nextOffset = rotateZUpSphericalVector(offset, yawDelta, polarDelta);
+    if (!nextOffset) return false;
+
+    camera.position.copy(target).add(nextOffset);
+    applyCameraLookAt(camera, target);
     return true;
   }
 
-  const forward = target.clone().sub(camera.position).normalize();
-  right.applyAxisAngle(worldUp, yawAngle).normalize();
-  forward.applyAxisAngle(worldUp, yawAngle);
-  const pitchedForward = forward.clone().applyAxisAngle(right, pitchAngle);
-  if (Math.abs(pitchedForward.normalize().dot(worldUp)) < 0.98) {
-    forward.copy(pitchedForward);
-  }
+  const forward = target.clone().sub(camera.position);
+  const focusDistance = forward.length();
+  const nextForward = rotateZUpSphericalVector(forward, yawDelta, polarDelta);
+  if (!nextForward || focusDistance <= 0) return false;
 
-  target.copy(camera.position).addScaledVector(forward, focusDistance);
-  applyViewport3DWorldUp(camera);
-  camera.lookAt(target);
-  camera.updateMatrix();
-  camera.updateMatrixWorld();
+  target.copy(camera.position).add(nextForward);
+  applyCameraLookAt(camera, target);
   return true;
+}
+
+function rotateZUpSphericalVector(
+  vector: Vector3,
+  yawDelta: number,
+  polarDelta: number,
+): Vector3 | null {
+  const radius = vector.length();
+  if (!Number.isFinite(radius) || radius <= 0) return null;
+
+  const azimuth = Math.atan2(vector.y, vector.x) + yawDelta;
+  const polar = clamp(
+    Math.acos(clamp(vector.z / radius, -1, 1)) + polarDelta,
+    VIEWPORT_3D_MIN_POLAR_ANGLE,
+    VIEWPORT_3D_MAX_POLAR_ANGLE,
+  );
+  const sinPolar = Math.sin(polar);
+
+  return new Vector3(
+    radius * sinPolar * Math.cos(azimuth),
+    radius * sinPolar * Math.sin(azimuth),
+    radius * Math.cos(polar),
+  );
 }
 
 function resolveViewport3DNativeCameraPanOffset({
@@ -353,7 +362,9 @@ function addViewport3DPanLeft(
   distance: number,
   objectMatrix: Camera["matrix"],
 ): void {
-  panOffset.add(new Vector3().setFromMatrixColumn(objectMatrix, 0).multiplyScalar(-distance));
+  panOffset.add(
+    new Vector3().setFromMatrixColumn(objectMatrix, 0).multiplyScalar(-distance),
+  );
 }
 
 function addViewport3DPanUp(
@@ -361,7 +372,9 @@ function addViewport3DPanUp(
   distance: number,
   objectMatrix: Camera["matrix"],
 ): void {
-  panOffset.add(new Vector3().setFromMatrixColumn(objectMatrix, 1).multiplyScalar(distance));
+  panOffset.add(
+    new Vector3().setFromMatrixColumn(objectMatrix, 1).multiplyScalar(distance),
+  );
 }
 
 function resolveViewport3DElementSize(element: HTMLElement): {
@@ -380,8 +393,20 @@ export function applyViewport3DWorldUp(camera: Camera): void {
   camera.up.set(...VIEWPORT_3D_WORLD_UP);
 }
 
-function applyViewport3DCameraUp(camera: Camera, up: [number, number, number] | undefined): void {
+function applyViewport3DCameraUp(
+  camera: Camera,
+  up: [number, number, number] | undefined,
+): void {
   camera.up.set(...(up ?? VIEWPORT_3D_WORLD_UP));
+}
+
+function applyCameraLookAt(camera: Camera, target: Vector3): void {
+  applyViewport3DWorldUp(camera);
+  camera.lookAt(target);
+  (camera as Camera & { updateProjectionMatrix?: () => void })
+    .updateProjectionMatrix?.();
+  camera.updateMatrix();
+  camera.updateMatrixWorld();
 }
 
 export function resolveViewport3DCameraFit(
@@ -457,6 +482,24 @@ function nearCameraState(
   );
 }
 
+export function shouldApplyViewport3DCameraState<TCamera>({
+  appliedCamera,
+  appliedCameraState,
+  currentCamera,
+  nextCameraState,
+}: {
+  appliedCamera: TCamera | null;
+  appliedCameraState: Viewport3DCameraState | null;
+  currentCamera: TCamera;
+  nextCameraState: Viewport3DCameraState;
+}): boolean {
+  return (
+    appliedCamera !== currentCamera ||
+    !appliedCameraState ||
+    !nearCameraState(appliedCameraState, nextCameraState)
+  );
+}
+
 function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
   return (
     sameVector(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) &&
@@ -514,18 +557,14 @@ export function CameraController({
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
 }) {
-  // Camera ownership has three paths: remote visualization resources update the
-  // store, this controller applies store state to Three.js, and OrbitControls
-  // commits user interaction through onCameraChange. Keep the paths deduped.
   const { camera, invalidate } = useThree();
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
   const autoFittedBoundsRef = useRef<string | null>(null);
   const lastAutoFitCameraStateRef = useRef<Viewport3DCameraState | null>(null);
+  const appliedCameraRef = useRef<Camera | null>(null);
   const appliedCameraStateRef = useRef<Viewport3DCameraState | null>(null);
   const onCameraChangeRef = useRef(onCameraChange);
-  // Store cameraState in a ref so the fit/reset effect doesn't re-fire
-  // when OrbitControls updates the store (which it does on every drag-end).
   const cameraStateRef = useRef(cameraState);
 
   useEffect(() => {
@@ -536,8 +575,6 @@ export function CameraController({
     cameraStateRef.current = cameraState;
   }, [cameraState]);
 
-  // Only runs when bounds change or a fit/reset command is issued.
-  // Does NOT depend on cameraState to avoid the store write → re-render loop.
   useEffect(() => {
     const nextBoundsSignature = boundsSignature(bounds);
     const shouldAutoFitInitialBounds =
@@ -573,6 +610,8 @@ export function CameraController({
       up: VIEWPORT_3D_WORLD_UP,
     };
     lastAutoFitCameraStateRef.current = nextCamera;
+    appliedCameraRef.current = camera;
+    appliedCameraStateRef.current = nextCamera;
     viewport3dStore.setCamera(nextCamera);
     void Promise.resolve(
       onCameraChangeRef.current(nextCamera),
@@ -588,13 +627,13 @@ export function CameraController({
     tracker,
   ]);
 
-  // Initial camera placement (once, on mount)
   useEffect(() => {
     const state = cameraStateRef.current;
     applyViewport3DCameraUp(camera, state.up);
     camera.position.set(...state.position);
     camera.lookAt(...state.target);
     camera.updateProjectionMatrix();
+    appliedCameraRef.current = camera;
     appliedCameraStateRef.current = state;
     viewport3dStore.setCamera(state);
     invalidate();
@@ -605,8 +644,12 @@ export function CameraController({
 
   useEffect(() => {
     if (
-      appliedCameraStateRef.current &&
-      nearCameraState(appliedCameraStateRef.current, cameraState)
+      !shouldApplyViewport3DCameraState({
+        appliedCamera: appliedCameraRef.current,
+        appliedCameraState: appliedCameraStateRef.current,
+        currentCamera: camera,
+        nextCameraState: cameraState,
+      })
     ) {
       return;
     }
@@ -614,6 +657,7 @@ export function CameraController({
     camera.position.set(...cameraState.position);
     camera.lookAt(...cameraState.target);
     camera.updateProjectionMatrix();
+    appliedCameraRef.current = camera;
     appliedCameraStateRef.current = cameraState;
     viewport3dStore.setCamera(cameraState);
     invalidate();
@@ -623,44 +667,87 @@ export function CameraController({
   return null;
 }
 
-type NativeGestureState = {
-  controlsEnabled: boolean | null;
-  lastX: number;
-  lastY: number;
-  mode: "orbit" | "pan";
-  pointerId: number;
-};
+function useLatestRef<T>(value: T): MutableRefObject<T> {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref;
+}
 
-function useNativePointerGestures({
+function commitCurrentCamera({
   camera,
-  controlsRef,
-  flushWheelCommitRef,
-  gl,
-  invalidate,
-  nativeGestureRef,
-  nativeTargetRef,
-  onCameraChangeRef,
-  rotationModeRef,
-  trackerRef,
+  onCameraChange,
+  target,
 }: {
   camera: Camera;
-  controlsRef: MutableRefObject<ComponentRef<typeof OrbitControls> | null>;
-  flushWheelCommitRef: MutableRefObject<(() => void) | null>;
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  target: Vector3;
+}): void {
+  commitOrbitCameraEnd({
+    cameraPosition: camera.position.toArray() as [number, number, number],
+    cameraUp: camera.up.toArray() as [number, number, number],
+    controlTarget: target.toArray(),
+    onCameraChange,
+  });
+}
+
+function syncLocalCameraStore(camera: Camera, target: Vector3): void {
+  viewport3dStore.setCamera({
+    position: camera.position.toArray() as [number, number, number],
+    target: target.toArray() as [number, number, number],
+    up: camera.up.toArray() as [number, number, number],
+  });
+}
+
+function stopCameraEvent(event: Event): void {
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+}
+
+function gestureMovedPastThreshold(
+  gesture: NativeGestureState,
+  event: PointerEvent,
+): boolean {
+  return (
+    Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) >=
+    VIEWPORT_3D_DRAG_THRESHOLD_PX
+  );
+}
+
+function useNativeCameraGestures({
+  camera,
+  gl,
+  invalidate,
+  onCameraChangeRef,
+  rotationModeRef,
+  targetRef,
+  trackerRef,
+  wheelCommitTimerRef,
+}: {
+  camera: Camera;
   gl: { domElement: HTMLElement };
   invalidate: () => void;
-  nativeGestureRef: MutableRefObject<NativeGestureState | null>;
-  nativeTargetRef: MutableRefObject<Vector3>;
   onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
   rotationModeRef: MutableRefObject<Viewport3DRotationMode>;
+  targetRef: MutableRefObject<Vector3>;
   trackerRef: MutableRefObject<Viewport3DResourceTracker>;
+  wheelCommitTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
 }): void {
   useEffect(() => {
     const element = gl.domElement;
+    const gestureRef: { current: NativeGestureState | null } = { current: null };
 
-    const stopNativePanEvent = (event: PointerEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
+    const flushWheelCommit = () => {
+      if (!wheelCommitTimerRef.current) return;
+      clearTimeout(wheelCommitTimerRef.current);
+      wheelCommitTimerRef.current = null;
+      commitCurrentCamera({
+        camera,
+        onCameraChange: onCameraChangeRef.current,
+        target: targetRef.current,
+      });
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -672,36 +759,37 @@ function useNativePointerGestures({
           : null;
       if (!mode) return;
 
-      stopNativePanEvent(event);
-      flushWheelCommitRef.current?.();
-      const controls = controlsRef.current;
-      if (controls) {
-        nativeTargetRef.current.copy(controls.target);
+      flushWheelCommit();
+      if (mode === "pan") {
+        stopCameraEvent(event);
       }
-      nativeGestureRef.current = {
-        controlsEnabled: controls?.enabled ?? null,
+      gestureRef.current = {
+        hasDragged: false,
         lastX: event.clientX,
         lastY: event.clientY,
         mode,
         pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
       };
-      if (controls) {
-        controls.enabled = false;
-      }
     };
 
     const handlePointerMove = (event: PointerEvent) => {
-      const activeGesture = nativeGestureRef.current;
-      if (!activeGesture || activeGesture.pointerId !== event.pointerId) return;
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
 
-      stopNativePanEvent(event);
-      const target = nativeTargetRef.current;
+      if (!gesture.hasDragged && !gestureMovedPastThreshold(gesture, event)) {
+        return;
+      }
+      gesture.hasDragged = true;
+      stopCameraEvent(event);
+
       const viewportSize = resolveViewport3DElementSize(element);
-      const deltaX = event.clientX - activeGesture.lastX;
-      const deltaY = event.clientY - activeGesture.lastY;
-
+      const deltaX = event.clientX - gesture.lastX;
+      const deltaY = event.clientY - gesture.lastY;
+      const target = targetRef.current;
       const didMove =
-        activeGesture.mode === "pan"
+        gesture.mode === "pan"
           ? applyViewport3DNativeCameraPan({
               camera,
               deltaX,
@@ -718,37 +806,35 @@ function useNativePointerGestures({
               target,
               viewportHeightPixels: viewportSize.height,
             });
-      activeGesture.lastX = event.clientX;
-      activeGesture.lastY = event.clientY;
+
+      gesture.lastX = event.clientX;
+      gesture.lastY = event.clientY;
       if (!didMove) return;
 
-      controlsRef.current?.target.copy(target);
       invalidate();
       trackerRef.current.recordDirtyFrame(
-        activeGesture.mode === "pan" ? "camera-native-pan" : "camera-native-orbit",
+        gesture.mode === "pan" ? "camera-native-pan" : "camera-native-orbit",
       );
     };
 
-    const finishNativePan = (event: PointerEvent) => {
-      const activeGesture = nativeGestureRef.current;
-      if (!activeGesture || activeGesture.pointerId !== event.pointerId) return;
+    const finishGesture = (event: PointerEvent) => {
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
 
-      stopNativePanEvent(event);
-      nativeGestureRef.current = null;
-      const controls = controlsRef.current;
-      if (controls && activeGesture.controlsEnabled !== null) {
-        controls.enabled = activeGesture.controlsEnabled;
-        controls.target.copy(nativeTargetRef.current);
+      gestureRef.current = null;
+      if (!gesture.hasDragged && gesture.mode === "orbit") {
+        return;
       }
-      commitOrbitCameraEnd({
-        cameraPosition: camera.position.toArray() as [number, number, number],
-        cameraUp: camera.up.toArray() as [number, number, number],
-        controlTarget: nativeTargetRef.current.toArray(),
+
+      stopCameraEvent(event);
+      commitCurrentCamera({
+        camera,
         onCameraChange: onCameraChangeRef.current,
+        target: targetRef.current,
       });
       invalidate();
       trackerRef.current.recordDirtyFrame(
-        activeGesture.mode === "pan"
+        gesture.mode === "pan"
           ? "camera-native-pan-end"
           : "camera-native-orbit-end",
       );
@@ -756,93 +842,61 @@ function useNativePointerGestures({
 
     const handleContextMenu = (event: MouseEvent) => {
       if (event.target !== element) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
+      stopCameraEvent(event);
     };
 
-    window.addEventListener("pointerdown", handlePointerDown, { capture: true });
+    element.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("pointermove", handlePointerMove, { capture: true });
-    window.addEventListener("pointerup", finishNativePan, { capture: true });
+    window.addEventListener("pointerup", finishGesture, { capture: true });
+    window.addEventListener("pointercancel", finishGesture, { capture: true });
     window.addEventListener("contextmenu", handleContextMenu, { capture: true });
 
-    const controlsForCleanup = controlsRef.current;
     return () => {
-      const activeGesture = nativeGestureRef.current;
-      const controls = controlsForCleanup;
-      if (activeGesture && controls && activeGesture.controlsEnabled !== null) {
-        controls.enabled = activeGesture.controlsEnabled;
-      }
-      nativeGestureRef.current = null;
-      window.removeEventListener("pointerdown", handlePointerDown, { capture: true });
+      gestureRef.current = null;
+      element.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("pointermove", handlePointerMove, { capture: true });
-      window.removeEventListener("pointerup", finishNativePan, { capture: true });
+      window.removeEventListener("pointerup", finishGesture, { capture: true });
+      window.removeEventListener("pointercancel", finishGesture, { capture: true });
       window.removeEventListener("contextmenu", handleContextMenu, { capture: true });
     };
   }, [
     camera,
-    controlsRef,
-    flushWheelCommitRef,
     gl.domElement,
     invalidate,
-    nativeGestureRef,
-    nativeTargetRef,
     onCameraChangeRef,
     rotationModeRef,
+    targetRef,
     trackerRef,
+    wheelCommitTimerRef,
   ]);
 }
 
 function useWheelZoom({
   camera,
-  cameraState,
-  controlsRef,
-  flushWheelCommitRef,
   gl,
   invalidate,
-  onCameraChange,
-  tracker,
+  onCameraChangeRef,
+  targetRef,
+  trackerRef,
   wheelCommitTimerRef,
 }: {
   camera: Camera;
-  cameraState: Viewport3DCameraState;
-  controlsRef: MutableRefObject<ComponentRef<typeof OrbitControls> | null>;
-  flushWheelCommitRef: MutableRefObject<(() => void) | null>;
   gl: { domElement: HTMLElement };
   invalidate: () => void;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
-  tracker: Viewport3DResourceTracker;
+  onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
+  targetRef: MutableRefObject<Vector3>;
+  trackerRef: MutableRefObject<Viewport3DResourceTracker>;
   wheelCommitTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
 }): void {
   useEffect(() => {
     const element = gl.domElement;
     const fallbackDirection = new Vector3(1, 0.72, 1).normalize();
     const offset = new Vector3();
-    const target = new Vector3();
-
-    const commitWheelCamera = () => {
-      if (wheelCommitTimerRef.current) {
-        clearTimeout(wheelCommitTimerRef.current);
-        wheelCommitTimerRef.current = null;
-      }
-      const controlTarget =
-        controlsRef.current?.target.toArray() ?? cameraState.target;
-      commitOrbitCameraEnd({
-        cameraPosition: camera.position.toArray() as [number, number, number],
-        cameraUp: camera.up.toArray() as [number, number, number],
-        controlTarget,
-        onCameraChange,
-      });
-    };
 
     const handleWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
+      stopCameraEvent(event);
 
-      target.copy(
-        controlsRef.current?.target ?? new Vector3(...cameraState.target),
-      );
+      const target = targetRef.current;
       offset.copy(camera.position).sub(target);
       const currentDistance = offset.length();
       const nextDistance = resolveWheelZoomDistance(currentDistance, event.deltaY);
@@ -850,22 +904,28 @@ function useWheelZoom({
         currentDistance > 0 ? offset.normalize() : fallbackDirection;
 
       camera.position.copy(target).addScaledVector(direction, nextDistance);
-      (camera as Camera & { updateProjectionMatrix?: () => void })
-        .updateProjectionMatrix?.();
-      controlsRef.current?.update();
+      applyCameraLookAt(camera, target);
+      syncLocalCameraStore(camera, target);
       invalidate();
-      tracker.recordDirtyFrame("camera-wheel");
+      trackerRef.current.recordDirtyFrame("camera-wheel");
 
       if (wheelCommitTimerRef.current) {
         clearTimeout(wheelCommitTimerRef.current);
       }
       wheelCommitTimerRef.current = setTimeout(() => {
-        commitWheelCamera();
+        wheelCommitTimerRef.current = null;
+        commitCurrentCamera({
+          camera,
+          onCameraChange: onCameraChangeRef.current,
+          target,
+        });
       }, WHEEL_CAMERA_COMMIT_DELAY_MS);
     };
 
-    flushWheelCommitRef.current = commitWheelCamera;
-    element.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+    element.addEventListener("wheel", handleWheel, {
+      capture: true,
+      passive: false,
+    });
 
     return () => {
       element.removeEventListener("wheel", handleWheel, { capture: true });
@@ -873,25 +933,19 @@ function useWheelZoom({
         clearTimeout(wheelCommitTimerRef.current);
         wheelCommitTimerRef.current = null;
       }
-      if (flushWheelCommitRef.current === commitWheelCamera) {
-        flushWheelCommitRef.current = null;
-      }
     };
   }, [
     camera,
-    cameraState.target,
-    controlsRef,
-    flushWheelCommitRef,
     gl.domElement,
     invalidate,
-    onCameraChange,
-    tracker,
+    onCameraChangeRef,
+    targetRef,
+    trackerRef,
     wheelCommitTimerRef,
   ]);
 }
 
 export function OrbitCameraControls({
-  cameraProjection,
   cameraState,
   onCameraChange,
   rotationMode,
@@ -904,27 +958,15 @@ export function OrbitCameraControls({
   tracker: Viewport3DResourceTracker;
 }) {
   const { camera, gl, invalidate } = useThree();
-  const controlsRef = useRef<ComponentRef<typeof OrbitControls> | null>(null);
-  const flushWheelCommitRef = useRef<(() => void) | null>(null);
-  const onCameraChangeRef = useRef(onCameraChange);
-  const nativeGestureRef = useRef<NativeGestureState | null>(null);
-  const nativeTargetRef = useRef(new Vector3(...cameraState.target));
-  const rotationModeRef = useRef(rotationMode);
-  const trackerRef = useRef(tracker);
+  const targetRef = useRef(new Vector3(...cameraState.target));
   const wheelCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const interactionOptions = resolveViewport3DCameraInteractionOptions();
+  const onCameraChangeRef = useLatestRef(onCameraChange);
+  const rotationModeRef = useLatestRef(rotationMode);
+  const trackerRef = useLatestRef(tracker);
 
   useEffect(() => {
-    onCameraChangeRef.current = onCameraChange;
-  }, [onCameraChange]);
-
-  useEffect(() => {
-    trackerRef.current = tracker;
-  }, [tracker]);
-
-  useEffect(() => {
-    rotationModeRef.current = rotationMode;
-  }, [rotationMode]);
+    targetRef.current.set(...cameraState.target);
+  }, [cameraState.target]);
 
   useEffect(() => {
     applyViewport3DCameraUp(camera, cameraState.up);
@@ -932,83 +974,38 @@ export function OrbitCameraControls({
     tracker.recordDirtyFrame("camera-up");
   }, [camera, cameraState.up, invalidate, tracker]);
 
-  useEffect(() => {
-    const controls = controlsRef.current;
-    nativeTargetRef.current.set(...cameraState.target);
-    if (!controls) return;
-    controls.target.set(...cameraState.target);
-    controls.update();
-    invalidate();
-    tracker.recordDirtyFrame("camera-controls-target");
-  }, [cameraState.target, invalidate, tracker]);
-
-  const recordCameraControlChange = useCallback(() => {
-    invalidate();
+  const recordCameraReady = useCallback(() => {
     tracker.recordDirtyFrame("camera-control");
-  }, [invalidate, tracker]);
+  }, [tracker]);
 
-  const recordCameraControlStart = useCallback(() => {
-    flushWheelCommitRef.current?.();
-  }, []);
+  useEffect(() => {
+    recordCameraReady();
+  }, [recordCameraReady]);
 
-  const recordCameraControlEnd = useCallback(
-    (event: OrbitControlsEndEvent) => {
-      flushWheelCommitRef.current?.();
-      const controlTarget = event.target?.target?.toArray();
-      commitOrbitCameraEnd({
-        cameraPosition: camera.position.toArray() as [number, number, number],
-        cameraUp: camera.up.toArray() as [number, number, number],
-        controlTarget: controlTarget ?? cameraState.target,
-        onCameraChange,
-      });
-      invalidate();
-      tracker.recordDirtyFrame("camera-control-end");
-    },
-    [camera, cameraState.target, invalidate, onCameraChange, tracker],
-  );
-
-  useNativePointerGestures({
+  useNativeCameraGestures({
     camera,
-    controlsRef,
-    flushWheelCommitRef,
     gl,
     invalidate,
-    nativeGestureRef,
-    nativeTargetRef,
     onCameraChangeRef,
     rotationModeRef,
+    targetRef,
     trackerRef,
+    wheelCommitTimerRef,
   });
 
   useWheelZoom({
     camera,
-    cameraState,
-    controlsRef,
-    flushWheelCommitRef,
     gl,
     invalidate,
-    onCameraChange,
-    tracker,
+    onCameraChangeRef,
+    targetRef,
+    trackerRef,
     wheelCommitTimerRef,
   });
 
-  return (
-    <OrbitControls
-      key={`viewport-3d-orbit-controls-${cameraProjection}-${camera.uuid}`}
-      ref={controlsRef}
-      camera={camera}
-      domElement={gl.domElement}
-      makeDefault
-      enableDamping={interactionOptions.enableDamping}
-      enablePan={interactionOptions.enablePan}
-      enableZoom={interactionOptions.enableZoom}
-      mouseButtons={interactionOptions.mouseButtons}
-      onChange={recordCameraControlChange}
-      onEnd={(event) => recordCameraControlEnd(event as OrbitControlsEndEvent)}
-      onStart={recordCameraControlStart}
-      panSpeed={interactionOptions.panSpeed}
-      rotateSpeed={interactionOptions.rotateSpeed}
-      screenSpacePanning={interactionOptions.screenSpacePanning}
-    />
-  );
+  return null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

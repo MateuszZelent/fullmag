@@ -1364,7 +1364,7 @@ const meshTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         { id: "element-size", icon: icon(Ruler),    label: "Element Size", menu: menu("mesh-size", "Size controls", ["Maximum element", "Minimum element", "Growth rate", "Curvature factor", "Narrow regions"]) },
-        { id: "transitions",  icon: icon(Columns2), label: "Transitions", iconColor: C.sapphire, menu: menu("mesh-transition", "Transitions", ["Interface refinement", "Boundary layer", "Airbox grading"]) },
+        { id: "transitions",  icon: icon(Columns2), label: "Transitions", iconColor: C.sapphire, menu: menu("mesh-transition", "Transitions", ["Interface refinement", "Boundary layer", "Element grading"]) },
       ],
     },
     {
@@ -1560,6 +1560,13 @@ const automationTab: RibbonTabContent = {
   ],
 };
 
+export type RibbonSessionStatus = {
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "field_revision" | "fields_revision"
+  >;
+};
+
 export interface RibbonBuildContext {
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
@@ -1570,7 +1577,7 @@ export interface RibbonBuildContext {
   meshSummary?: MeshSummaryResource | null;
   resources?: RibbonResourceInvalidator;
   selection: Selection;
-  sessionStatus?: LiveStatusResource | null;
+  sessionStatus?: RibbonSessionStatus | null;
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
@@ -2157,7 +2164,9 @@ function buildViewDisplayGroup(
   return {
     ...group,
     actions: group.actions.map((action) =>
-      action.id === "view-dimension-frame"
+      action.id === "view-camera"
+        ? buildViewCameraAction(context)
+      : action.id === "view-dimension-frame"
         ? buildDimensionFrameAction(context)
         : action,
     ),
@@ -2248,6 +2257,54 @@ function buildCameraRotationModeAction({
   };
 }
 
+function buildViewCameraAction({
+  commandContext = { source: "ribbon" },
+  commands,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const rotationMode =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.rotation-camera", "camera"],
+      ["viewport-3d.rotation-object", "object"],
+    ]) ?? "camera";
+
+  return {
+    id: "view-camera",
+    icon: icon(Camera),
+    label: "Camera",
+    active: rotationMode === "camera",
+    iconColor: "text-sky-300",
+    menu: [
+      {
+        type: "item",
+        id: "camera:parameters",
+        label: "Camera parameters",
+        commandId: "viewport-3d.open-camera-dialog",
+      },
+      {
+        type: "radio-group",
+        id: "view-camera:rotation-mode",
+        label: "Rotation mode",
+        value: rotationMode,
+        items: [
+          {
+            commandId: "viewport-3d.rotation-camera",
+            label: "Camera center",
+            value: "camera",
+          },
+          {
+            commandId: "viewport-3d.rotation-object",
+            label: "Object target",
+            value: "object",
+          },
+        ],
+      },
+      { type: "separator", id: "camera:rotation-separator" },
+      { type: "item", id: "camera:focus", label: "Focus selected", disabled: true },
+      { type: "item", id: "camera:frame-all", label: "Frame all", disabled: true },
+    ],
+  };
+}
+
 function activeCommandValue(
   commands: CommandRegistry | undefined,
   commandContext: CommandContext,
@@ -2274,7 +2331,7 @@ function surfaceColorSourceLabel(source: SurfaceColorSource): string {
 
 function surfaceFieldStatus(
   source: SurfaceColorSource,
-  status: LiveStatusResource | null | undefined,
+  status: RibbonSessionStatus | null | undefined,
 ): {
   tone: "success" | "warning" | "danger" | "neutral";
   value: string;

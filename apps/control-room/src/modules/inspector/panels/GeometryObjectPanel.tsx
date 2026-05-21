@@ -20,8 +20,16 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import {
+  resolveVisualizationSettings,
+  type ObjectVisualizationSnapshot,
+  type VisualizationTargetRef,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  useObjectVisualizationController,
+  useObjectVisualizationSelector,
+} from "@/kernel/visualization/useObjectVisualization";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -75,6 +83,35 @@ type VectorDraftUpdater = (
   value: string,
 ) => void;
 
+type GeometryObjectVisualizationColors = Pick<
+  VisualizationTargetSettings,
+  "shaderMonoColor" | "wireframeColor"
+>;
+
+function resolveGeometryObjectVisualizationColors(
+  snapshot: ObjectVisualizationSnapshot,
+  target: VisualizationTargetRef | null,
+): GeometryObjectVisualizationColors | null {
+  if (!target) return null;
+  const settings = resolveVisualizationSettings(snapshot, target);
+  return {
+    shaderMonoColor: settings.shaderMonoColor,
+    wireframeColor: settings.wireframeColor,
+  };
+}
+
+function geometryObjectVisualizationColorsEquals(
+  previous: GeometryObjectVisualizationColors | null,
+  next: GeometryObjectVisualizationColors | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.shaderMonoColor === next.shaderMonoColor &&
+    previous.wireframeColor === next.wireframeColor
+  );
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -97,7 +134,7 @@ function invalidateAuthoringResources(
 
 export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   const { api, resources, selection: selectionController } = useKernel();
-  const { visualization } = useObjectVisualizationRegistry();
+  const visualization = useObjectVisualizationController();
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveGeometryObjectPanelModel(selection, scene.data);
@@ -125,13 +162,17 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     validation.data,
     draft.objectId,
   );
-  const visualizationTarget =
-    object.mode === "committed"
-      ? { id: object.objectId, kind: "object" as const, label: object.name }
-      : null;
-  const visualizationSettings = visualizationTarget
-    ? visualization.getSettings(visualizationTarget)
-    : null;
+  const visualizationTarget = useMemo<VisualizationTargetRef | null>(
+    () =>
+      object.mode === "committed"
+        ? { id: object.objectId, kind: "object", label: object.name }
+        : null,
+    [object.mode, object.name, object.objectId],
+  );
+  const visualizationSettings = useObjectVisualizationSelector(
+    (snapshot) => resolveGeometryObjectVisualizationColors(snapshot, visualizationTarget),
+    { isEqual: geometryObjectVisualizationColorsEquals },
+  );
   const metricsModel = resolveObjectMetricsPanelModel(objectMetrics.data);
 
   function updateDraft(updater: (current: GeometryObjectDraft) => GeometryObjectDraft): void {
@@ -375,7 +416,7 @@ function GeometryObjectSummarySection({
   object: ReturnType<typeof resolveGeometryObjectPanelModel>;
   onColorChange: (field: "primitiveColor" | "frameColor", value: string) => void;
   onFieldChange: DraftFieldUpdater;
-  visualizationSettings: VisualizationTargetSettings | null;
+  visualizationSettings: GeometryObjectVisualizationColors | null;
 }) {
   return (
     <InspectorSection value="summary" title="Geometry Object" collapsible defaultCollapsed={false}>

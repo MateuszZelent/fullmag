@@ -14,6 +14,10 @@ const appMenuSource = readFileSync(
   join(process.cwd(), "src/kernel/layout/AppMenuBar.tsx"),
   "utf8",
 );
+const geometryObjectPanelSource = readFileSync(
+  join(process.cwd(), "src/modules/inspector/panels/GeometryObjectPanel.tsx"),
+  "utf8",
+);
 const objectVisualizationControllerSource = readFileSync(
   join(process.cwd(), "src/kernel/visualization/ObjectVisualizationController.ts"),
   "utf8",
@@ -23,6 +27,8 @@ describe("object visualization subscription performance contracts", () => {
   it("exposes selector and controller hooks for narrow visualization subscriptions", () => {
     expect(hookSource).toContain("export function useObjectVisualizationSelector");
     expect(hookSource).toContain("selector(visualization.getSnapshot())");
+    expect(hookSource).toContain("isEqual(previous.selected, selected)");
+    expect(hookSource).toContain("selectedRef.current");
     expect(hookSource).toContain("export function useObjectVisualizationController");
     expect(hookSource).toContain("EMPTY_OBJECT_VISUALIZATION_SNAPSHOT");
   });
@@ -44,5 +50,13 @@ describe("object visualization subscription performance contracts", () => {
     expect(appMenuSource).toContain("useObjectVisualizationSelector");
     expect(appMenuSource).toContain("registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT");
     expect(appMenuSource).not.toContain("useObjectVisualizationRegistry()");
+  });
+
+  it("keeps geometry object color editing off the full visualization snapshot", () => {
+    expect(geometryObjectPanelSource).toContain("useObjectVisualizationController");
+    expect(geometryObjectPanelSource).toContain("useObjectVisualizationSelector");
+    expect(geometryObjectPanelSource).toContain("geometryObjectVisualizationColorsEquals");
+    expect(geometryObjectPanelSource).toContain("resolveGeometryObjectVisualizationColors");
+    expect(geometryObjectPanelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 });

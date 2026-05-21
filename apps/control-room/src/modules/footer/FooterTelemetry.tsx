@@ -18,6 +18,7 @@ import type {
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -29,7 +30,9 @@ const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
 });
 
 export function FooterTelemetry() {
-  const status = useSessionStatusSelector((sessionStatus) => sessionStatus.data);
+  const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
+    isEqual: footerTelemetryStatusEquals,
+  });
   const scene = useSceneResource();
   const selectedObjectId = useSelectionSelector(
     (selection) => selection.objectId,
@@ -102,8 +105,79 @@ type FooterTelemetryMetric = {
   value: string;
 };
 
+type FooterTelemetryStatus = {
+  energies: Pick<
+    LiveStatusResource["energies"],
+    "anisotropy" | "demag" | "dmi" | "exchange" | "total" | "zeeman"
+  > | null;
+  metrics: Pick<LiveStatusResource["metrics"], "steps_per_second" | "total_steps">;
+  run: Pick<NonNullable<LiveStatusResource["run"]>, "solver_steps" | "solver_time"> | null;
+  solver: Pick<LiveStatusResource["solver"], "converged" | "dt" | "max_torque" | "state">;
+};
+
+export function selectFooterTelemetryStatus(
+  sessionStatus: ResourceResult<LiveStatusResource>,
+): FooterTelemetryStatus | null {
+  const data = sessionStatus.data;
+  if (!data) return null;
+
+  return {
+    energies: data.energies
+      ? {
+          anisotropy: data.energies.anisotropy ?? null,
+          demag: data.energies.demag ?? null,
+          dmi: data.energies.dmi ?? null,
+          exchange: data.energies.exchange ?? null,
+          total: data.energies.total ?? null,
+          zeeman: data.energies.zeeman ?? null,
+        }
+      : null,
+    metrics: {
+      steps_per_second: data.metrics.steps_per_second ?? null,
+      total_steps: data.metrics.total_steps,
+    },
+    run: data.run
+      ? {
+          solver_steps: data.run.solver_steps,
+          solver_time: data.run.solver_time,
+        }
+      : null,
+    solver: {
+      converged: data.solver.converged ?? null,
+      dt: data.solver.dt ?? null,
+      max_torque: data.solver.max_torque ?? null,
+      state: data.solver.state,
+    },
+  };
+}
+
+export function footerTelemetryStatusEquals(
+  previous: FooterTelemetryStatus | null,
+  next: FooterTelemetryStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+
+  return (
+    Object.is(previous.metrics.steps_per_second, next.metrics.steps_per_second) &&
+    Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
+    Object.is(previous.run?.solver_steps ?? null, next.run?.solver_steps ?? null) &&
+    Object.is(previous.run?.solver_time ?? null, next.run?.solver_time ?? null) &&
+    Object.is(previous.solver.converged, next.solver.converged) &&
+    Object.is(previous.solver.dt, next.solver.dt) &&
+    Object.is(previous.solver.max_torque, next.solver.max_torque) &&
+    Object.is(previous.solver.state, next.solver.state) &&
+    Object.is(previous.energies?.anisotropy ?? null, next.energies?.anisotropy ?? null) &&
+    Object.is(previous.energies?.demag ?? null, next.energies?.demag ?? null) &&
+    Object.is(previous.energies?.dmi ?? null, next.energies?.dmi ?? null) &&
+    Object.is(previous.energies?.exchange ?? null, next.energies?.exchange ?? null) &&
+    Object.is(previous.energies?.total ?? null, next.energies?.total ?? null) &&
+    Object.is(previous.energies?.zeeman ?? null, next.energies?.zeeman ?? null)
+  );
+}
+
 export function buildFooterTelemetryModel(
-  status: LiveStatusResource | null | undefined,
+  status: FooterTelemetryStatus | null | undefined,
   objectMetrics: ObjectMetricsResource | null | undefined,
 ) {
   const solverState = status?.solver?.state ?? "unknown";

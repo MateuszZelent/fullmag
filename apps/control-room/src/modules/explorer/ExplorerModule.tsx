@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { Search } from "lucide-react";
 
+import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
   useMeshBuildCurrent,
   useMeshSharedDomainManifestResource,
@@ -69,6 +70,51 @@ function qualityStatus(value: unknown): string | null {
   return Array.isArray(checks) && checks.length > 0 ? "pass" : null;
 }
 
+type ExplorerModelRuntimeStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "mesh_build_revision" | "mesh_revision" | "stages_revision"
+  >;
+};
+
+function selectExplorerModelRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): ExplorerModelRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+      stages_revision: status.data.resources.stages_revision,
+    },
+  };
+}
+
+function explorerModelRuntimeStatusEquals(
+  previous: ExplorerModelRuntimeStatus | null,
+  next: ExplorerModelRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.stages_revision === next.resources.stages_revision
+  );
+}
+
 export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const activeTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
   const filterText = useExplorerStoreSelector((explorer) => explorer.filterText);
@@ -79,8 +125,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const modelTabActive = activeTab === "model";
   const sessionStatusData = useSessionStatusSelector(
-    (sessionStatus) => (modelTabActive ? sessionStatus.data : null),
-    { enabled: modelTabActive },
+    selectExplorerModelRuntimeStatus,
+    { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({

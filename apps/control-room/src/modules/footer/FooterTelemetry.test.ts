@@ -8,7 +8,9 @@ import type {
 
 import {
   buildFooterTelemetryModel,
+  footerTelemetryStatusEquals,
   resolvePrimaryTelemetryObjectId,
+  selectFooterTelemetryStatus,
 } from "./FooterTelemetry";
 
 const status: LiveStatusResource = {
@@ -131,7 +133,14 @@ const objectMetrics: ObjectMetricsResource = {
 
 describe("FooterTelemetry", () => {
   it("builds a responsive metric model from live status and object metrics", () => {
-    const model = buildFooterTelemetryModel(status, objectMetrics);
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, objectMetrics);
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(model.statusTitle).toBe("System Status: Running");
@@ -140,6 +149,48 @@ describe("FooterTelemetry", () => {
     expect(byId["avg-mz"]?.value).toBe("0.750");
     expect(byId["energy-total"]?.value).toBe("15");
     expect(byId.step?.value).toBe("99");
+  });
+
+  it("selects only telemetry-relevant status fields", () => {
+    const selected = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const sameTelemetry = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        resources: {
+          ...status.resources,
+          artifact_revision: 99,
+          field_revision: 88,
+          topology_revision: 77,
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 2,
+      status: "ready",
+    });
+    const nextTelemetry = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        solver: {
+          ...status.solver,
+          max_torque: 0.008,
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 3,
+      status: "ready",
+    });
+
+    expect(selected).not.toBe(status);
+    expect(footerTelemetryStatusEquals(selected, sameTelemetry)).toBe(true);
+    expect(footerTelemetryStatusEquals(selected, nextTelemetry)).toBe(false);
   });
 
   it("uses the selected scene object as the telemetry object source", () => {

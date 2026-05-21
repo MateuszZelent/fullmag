@@ -279,9 +279,8 @@ pub(crate) fn validate_executable_outputs(
                     ));
                 }
             }
-            OutputIR::FrequencyResponseOutput { .. } => errors.push(
-                "frequency response outputs require StudyIR::FrequencyResponse".to_string(),
-            ),
+            OutputIR::FrequencyResponseOutput { .. } => errors
+                .push("frequency response outputs require StudyIR::FrequencyResponse".to_string()),
             OutputIR::EigenSpectrum { .. }
             | OutputIR::EigenMode { .. }
             | OutputIR::DispersionCurve { .. }

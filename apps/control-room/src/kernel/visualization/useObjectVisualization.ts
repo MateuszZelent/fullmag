@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import { useKernel } from "../KernelContext";
 import type {
@@ -16,13 +16,31 @@ export const EMPTY_OBJECT_VISUALIZATION_SNAPSHOT: ObjectVisualizationSnapshot = 
 
 export function useObjectVisualizationSelector<T>(
   selector: (snapshot: ObjectVisualizationSnapshot) => T,
+  options: { isEqual?: (previous: T, next: T) => boolean } = {},
 ): T {
   const { visualization } = useKernel();
+  const { isEqual = Object.is } = options;
+  const selectedRef = useRef<{ selected: T } | null>(null);
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => visualization.subscribe(onStoreChange),
+    [visualization],
+  );
+  const getSelectedSnapshot = useCallback(() => {
+    const selected = selector(visualization.getSnapshot());
+    const previous = selectedRef.current;
+    if (previous && isEqual(previous.selected, selected)) {
+      return previous.selected;
+    }
+
+    selectedRef.current = { selected };
+    return selected;
+  }, [isEqual, selector, visualization]);
 
   return useSyncExternalStore(
-    (onStoreChange) => visualization.subscribe(onStoreChange),
-    () => selector(visualization.getSnapshot()),
-    () => selector(visualization.getSnapshot()),
+    subscribe,
+    getSelectedSnapshot,
+    getSelectedSnapshot,
   );
 }
 

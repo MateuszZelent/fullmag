@@ -45,8 +45,18 @@ describe("session status subscription performance contracts", () => {
       expect(source).toContain("useSessionStatusSelector");
     }
 
+    expect(explorerModuleSource).toContain("selectExplorerModelRuntimeStatus");
+    expect(explorerModuleSource).toContain("explorerModelRuntimeStatusEquals");
+    expect(explorerModuleSource).toContain("sessionStatusData");
     expect(explorerModuleSource).not.toContain("const sessionStatus = useSessionStatus()");
+    expect(explorerModuleSource).not.toContain("sessionStatus.data");
+
+    expect(ribbonModuleSource).toContain("selectRibbonRuntimeStatus");
+    expect(ribbonModuleSource).toContain("ribbonRuntimeStatusEquals");
+    expect(ribbonModuleSource).toContain("field_revision");
+    expect(ribbonModuleSource).toContain("fields_revision");
     expect(ribbonModuleSource).not.toContain("const sessionStatus = useSessionStatus()");
+    expect(ribbonModuleSource).not.toContain("sessionStatus.data");
     expect(footerTelemetrySource).not.toContain("const { data: status } = useSessionStatus()");
     expect(statusBarSource).not.toContain("const status = useSessionStatus()");
   });

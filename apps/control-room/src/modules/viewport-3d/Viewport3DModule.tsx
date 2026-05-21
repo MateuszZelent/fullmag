@@ -152,13 +152,15 @@ export default function Viewport3DModule({
       target: [number, number, number];
       up?: [number, number, number];
     }) => {
-      viewport3dStore.setCamera({
+      const nextCamera = {
         position: camera.position,
         target: camera.target,
         up: camera.up ?? VIEWPORT_3D_WORLD_UP,
-      });
+      };
+      viewport3dStore.setCamera(nextCamera);
+      kernel.visualizationSync.queuePatch({ camera: nextCamera });
     },
-    [],
+    [kernel.visualizationSync],
   );
 
   return (

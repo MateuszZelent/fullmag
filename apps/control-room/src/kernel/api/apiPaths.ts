@@ -11,6 +11,10 @@ export const SESSION_STATUS_PATH = openApiV2Path(
   "/v2/sessions/current/status",
 );
 
+export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
+);
+
 export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );

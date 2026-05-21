@@ -111,7 +111,8 @@ fn infer_dispatched_command_completion(
         }
         "compute_energies"
             if command_has_terminal_log(record, snapshot, "Energies computed")
-                || !snapshot.scalar_rows.is_empty() =>
+                || !snapshot.scalar_rows.is_empty()
+                || snapshot_runtime_accepts_commands(snapshot) =>
         {
             Some(CommandCompletionState::Completed)
         }
@@ -177,6 +178,10 @@ fn command_has_terminal_log(
 
 fn snapshot_has_field_readback(snapshot: &SessionStateResponse) -> bool {
     snapshot.latest_fields.len() > 0 || snapshot.preview_cache.iter().next().is_some()
+}
+
+fn snapshot_runtime_accepts_commands(snapshot: &SessionStateResponse) -> bool {
+    snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy
 }
 
 fn solver_profile_command_applied(
@@ -1168,6 +1173,29 @@ mod tests {
             );
             assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
         }
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_ready_compute_energies_terminal_without_scalar_rows() {
+        let mut current = test_current_snapshot();
+        current.session.status = "waiting_for_compute".to_string();
+        current.runtime_status = build_runtime_status_view("waiting_for_compute");
+
+        let mut ledger = VecDeque::from([tracked_command("cmd-energies", "compute_energies")]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        let record = ledger.front().expect("ledger record should remain");
+        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            record.completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
     }
 
     #[test]

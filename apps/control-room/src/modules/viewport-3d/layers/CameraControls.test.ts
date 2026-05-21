@@ -8,6 +8,7 @@ import {
   resolveViewport3DCameraInteractionOptions,
   resolveViewport3DPerspectivePanDistance,
   resolveWheelZoomDistance,
+  shouldApplyViewport3DCameraState,
   resolveViewport3DCameraFit,
   shouldHandleViewport3DNativeCameraPan,
   shouldHandleViewport3DNativeCameraOrbit,
@@ -169,6 +170,28 @@ describe("resolveViewport3DCameraFit", () => {
     );
   });
 
+  it("clamps object-bound orbit pitch so the camera cannot flip over the target", () => {
+    const camera = new PerspectiveCamera(42, 1, 1e-12, 1e-3);
+    const target = new Vector3(0, 0, 0);
+    camera.up.set(0, 0, 1);
+    camera.position.set(1e-6, 0, 0);
+    camera.lookAt(target);
+    camera.updateMatrix();
+
+    applyViewport3DNativeCameraOrbit({
+      camera,
+      deltaX: 0,
+      deltaY: -20_000,
+      rotationMode: "object",
+      target,
+      viewportHeightPixels: 528,
+    });
+
+    const direction = target.clone().sub(camera.position).normalize();
+    expect(Math.abs(direction.dot(new Vector3(0, 0, 1)))).toBeLessThan(0.999);
+    expect(camera.up.toArray()).toEqual([0, 0, 1]);
+  });
+
   it("calibrates pan so a desktop drag can cross a fitted micromagnetic view quickly", () => {
     const distance = resolveViewport3DPerspectivePanDistance({
       cameraDistance: 1.021571e-5,
@@ -263,7 +286,24 @@ describe("resolveViewport3DCameraFit", () => {
     ).toBe(true);
   });
 
-  it("does not write orbit drag-end camera into the module store", () => {
+  it("reapplies the same camera state when projection swaps the Three camera", () => {
+    const cameraState = {
+      position: [1, 2, 3] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    expect(
+      shouldApplyViewport3DCameraState({
+        appliedCamera: "perspective-camera",
+        appliedCameraState: cameraState,
+        currentCamera: "orthographic-camera",
+        nextCameraState: cameraState,
+      }),
+    ).toBe(true);
+  });
+
+  it("writes interaction camera commits into the module store immediately", () => {
     viewport3dStore.resetForTest();
     const onCameraChange = vi.fn();
 
@@ -274,6 +314,13 @@ describe("resolveViewport3DCameraFit", () => {
     });
 
     expect(viewport3dStore.getSnapshot().camera).toEqual(
+      {
+        position: [3, 2, 1],
+        target: [0.5, 0.25, 0],
+        up: [0, 0, 1],
+      },
+    );
+    expect(viewport3dStore.getSnapshot().camera).not.toEqual(
       DEFAULT_VIEWPORT_3D_CAMERA_STATE,
     );
     expect(onCameraChange).toHaveBeenCalledWith({

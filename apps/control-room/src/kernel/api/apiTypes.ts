@@ -33,6 +33,7 @@ export type CheckpointRestoreResponse =
 export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
+export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type GeometryCapabilitiesResource =
   components["schemas"]["GeometryCapabilitiesResource"];
@@ -49,6 +50,9 @@ export type CpuTelemetryResource =
 export type GpuTelemetryResource =
   components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
+export type MagneticResponseSweepResource = JsonObject & {
+  schema_version: string;
+};
 export type SolverProfileResource =
   components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =

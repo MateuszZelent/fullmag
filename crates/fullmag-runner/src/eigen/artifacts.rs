@@ -1,3 +1,4 @@
+use crate::eigen::response_block_real::FieldDrivenResponseSweepArtifact;
 use crate::eigen::types::{PathSolveResult, SingleKModeResult, SingleKSolveResult};
 use serde::Serialize;
 use std::fs;
@@ -123,6 +124,19 @@ fn summarize_mode(sample: &SingleKSolveResult, mode: &SingleKModeResult) -> Mode
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
     }
+}
+
+pub fn write_response_sweep_artifact(
+    base_dir: &Path,
+    artifact: &FieldDrivenResponseSweepArtifact,
+) -> std::io::Result<()> {
+    let response_dir = base_dir.join("response");
+    fs::create_dir_all(&response_dir)?;
+    fs::write(
+        response_dir.join("magnetic_response_sweep.v1.json"),
+        serde_json::to_vec_pretty(artifact).unwrap(),
+    )?;
+    Ok(())
 }
 
 pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
@@ -352,10 +366,15 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eigen::response_block_real::{
+        build_field_driven_response_sweep_artifact, solve_field_driven_block_real_sweep,
+        BlockRealHarmonicTemplate,
+    };
     use crate::eigen::types::{
         EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult,
         SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
     };
+    use nalgebra::{DMatrix, DVector};
     use num_complex::Complex64;
     use serde_json::Value;
     use std::path::PathBuf;
@@ -498,5 +517,53 @@ mod tests {
         assert!(eigen_dir.join("branches.json").is_file());
         assert!(eigen_dir.join("branch_table.csv").is_file());
         assert!(eigen_dir.join("modes/sample_0000/mode_0000.json").is_file());
+    }
+
+    #[test]
+    fn response_artifact_writer_emits_v1_contract_file() {
+        let temp = TempDirGuard::new("response-artifact-v1");
+        let template = BlockRealHarmonicTemplate {
+            stiffness: DMatrix::from_element(1, 1, 4.0),
+            mass: DMatrix::from_element(1, 1, 1.0),
+            damping: Some(DMatrix::from_element(1, 1, 0.5)),
+        };
+        let field_excitation = DVector::from_element(1, Complex64::new(1.0, 0.0));
+        let sweep = solve_field_driven_block_real_sweep(&template, &[2.0], &field_excitation)
+            .expect("field-driven sweep should solve");
+        let artifact = build_field_driven_response_sweep_artifact(
+            &sweep,
+            "runner.dense_block_real",
+            "dense_block_real_lu",
+            "gilbert_linear",
+            "local_validation",
+        );
+
+        write_response_sweep_artifact(&temp.path, &artifact)
+            .expect("response sweep artifact should write");
+
+        let artifact_path = temp.path.join("response/magnetic_response_sweep.v1.json");
+        let value: Value = serde_json::from_slice(
+            &std::fs::read(&artifact_path).expect("response artifact should be written"),
+        )
+        .expect("response artifact should be valid JSON");
+
+        assert_eq!(value["schema_version"], "magnetic_response_sweep.v1");
+        assert_eq!(value["backend_engine_id"], "runner.dense_block_real");
+        assert_eq!(value["point_count"], 1);
+        assert_eq!(value["si_units"]["frequency_hz"], "Hz");
+        assert_eq!(value["points"][0]["angular_frequency_rad_per_s"], 2.0);
+        assert_eq!(
+            value["points"][0]["m_complex"][0],
+            serde_json::json!([0.0, -1.0])
+        );
+        assert_eq!(
+            value["points"][0]["response_phase"][0],
+            -std::f64::consts::FRAC_PI_2
+        );
+        assert_eq!(
+            value["points"][0]["tangent_leakage"]["kind"],
+            "not_evaluated_dense_validation",
+        );
+        assert_eq!(value["points"][0]["excitation_provenance"]["kind"], "field");
     }
 }

@@ -55,14 +55,14 @@ export function applyVertexScalarColorBuffer(
     existing.array instanceof Float32Array;
 
   if (!colorBuffer) {
-    // When the existing buffer matches the current topology, zero-fill it
-    // instead of deleting it.  The material's `vertexColors` flag controls
-    // whether the buffer is actually sampled. This avoids intermediate blank
-    // frames during HSL-to-monochrome transitions.
-    if (hasCompatibleBuffer) {
-      (existing.array as Float32Array).fill(0);
-      existing.needsUpdate = true;
-    } else if (geometry.hasAttribute("color")) {
+    // Leave a compatible buffer intact — its data is still valid or will be
+    // overwritten in the next effect cycle.  The material's `vertexColors`
+    // flag controls whether the buffer is sampled, so preserved data is never
+    // visible when vertex colours are disabled.  Zero-filling the buffer here
+    // caused the surface to flash black when toggling the Surface pass off and
+    // on: React rendered with `vertexColors=true` (effect not yet run) while
+    // the buffer contained zeros.
+    if (!hasCompatibleBuffer && geometry.hasAttribute("color")) {
       // Buffer size does not match the current topology: stale data from a
       // previous mesh.  Remove it.
       geometry.deleteAttribute("color");

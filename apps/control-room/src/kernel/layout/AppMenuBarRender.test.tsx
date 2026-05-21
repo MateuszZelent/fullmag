@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@/design/theme/ThemeProvider";
 import { SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
 import { KernelProvider } from "@/kernel/KernelProvider";
+
+const appMenuBarSourceUrl = new URL("./AppMenuBar.tsx", import.meta.url);
 
 import {
   AppMenuBar,
@@ -13,6 +17,15 @@ import {
 } from "./AppMenuBar";
 
 describe("AppMenuBar", () => {
+  it("selects only header display fields from session status", () => {
+    const source = readFileSync(appMenuBarSourceUrl, "utf8");
+
+    expect(source).toContain("selectHeaderSessionSource");
+    expect(source).toContain("headerSessionSourceEquals");
+    expect(source).toContain("useSessionStatusSelector(selectHeaderSessionSource");
+    expect(source).not.toContain("const sessionStatus = useSessionStatus();");
+  });
+
   it("renders header controls through shared shadcn-style button primitives", () => {
     const html = renderToStaticMarkup(
       <ThemeProvider>

@@ -3,6 +3,8 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
@@ -33,9 +35,11 @@ import type {
   CheckpointListResource,
   CurrentRunResource,
   EngineLogResource,
+  FieldCatalogResource,
   CpuTelemetryResource,
   GpuTelemetryResource,
   LiveStatusResource,
+  MagneticResponseSweepResource,
   ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
@@ -55,7 +59,10 @@ import {
   useMeshSummaryResource,
   useSceneResource,
 } from "./geometryLifecycleResources";
-import { SESSION_STATUS_RESOURCE_KEY, useSessionStatus } from "./useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "./useSessionStatus";
 import { useResource } from "./useResource";
 
 function ignoreMissingResource<T>(error: unknown): T | null {
@@ -79,9 +86,109 @@ export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
   SIMULATION_STAGES_EXECUTION_PATH,
 ] as const;
 
+const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
+  "mesh_build_revision",
+  "mesh_revision",
+  "scene_revision",
+  "stages_revision",
+] as const satisfies ReadonlyArray<keyof LiveStatusResource["resources"]>;
+
+type StudyRuntimeCommandSessionStatus = {
+  capabilities: Pick<
+    LiveStatusResource["capabilities"],
+    "binary_fields" | "explicit_topology"
+  >;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "mesh_build_revision" | "mesh_revision" | "scene_revision" | "stages_revision"
+  >;
+  run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
+};
+
+export function selectStudyRuntimeCommandSessionStatus(status: {
+  data: LiveStatusResource | null;
+}): StudyRuntimeCommandSessionStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      binary_fields: status.data.capabilities.binary_fields,
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+      scene_revision: status.data.resources.scene_revision,
+      stages_revision: status.data.resources.stages_revision,
+    },
+    run: status.data.run ? { run_id: status.data.run.run_id } : null,
+  };
+}
+
+export function studyRuntimeCommandSessionStatusEquals(
+  previous: StudyRuntimeCommandSessionStatus | null,
+  next: StudyRuntimeCommandSessionStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.scene_revision === next.resources.scene_revision &&
+    previous.resources.stages_revision === next.resources.stages_revision &&
+    previous.run?.run_id === next.run?.run_id
+  );
+}
+
+export function selectRuntimeCommandControlSessionStatus(status: {
+  data: LiveStatusResource | null;
+}): LiveStatusResource | null {
+  return status.data;
+}
+
+export function runtimeCommandControlSessionStatusEquals(
+  previous: LiveStatusResource | null,
+  next: LiveStatusResource | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  if (previous.capabilities.binary_fields !== next.capabilities.binary_fields) {
+    return false;
+  }
+  if (
+    previous.capabilities.explicit_topology !==
+    next.capabilities.explicit_topology
+  ) {
+    return false;
+  }
+  if (previous.domain.discretization !== next.domain.discretization) {
+    return false;
+  }
+
+  return RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS.every(
+    (key) => previous.resources[key] === next.resources[key],
+  );
+}
+
 export function shouldLoadRuntimeStageExecution(
   enabled: boolean,
-  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+  status:
+    | {
+        resources: Pick<
+          LiveStatusResource["resources"],
+          "stages_revision"
+        >;
+      }
+    | null
+    | undefined,
 ): boolean {
   if (!enabled) return false;
   return hasPositiveRevision(status?.resources.stages_revision);
@@ -89,7 +196,15 @@ export function shouldLoadRuntimeStageExecution(
 
 export function shouldLoadRuntimeMeshBuild(
   enabled: boolean,
-  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+  status:
+    | {
+        resources: Pick<
+          LiveStatusResource["resources"],
+          "mesh_build_revision"
+        >;
+      }
+    | null
+    | undefined,
 ): boolean {
   if (!enabled) return false;
   return hasPositiveRevision(status?.resources.mesh_build_revision);
@@ -97,7 +212,15 @@ export function shouldLoadRuntimeMeshBuild(
 
 export function shouldLoadRuntimeMeshSummary(
   enabled: boolean,
-  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+  status:
+    | {
+        resources: Pick<
+          LiveStatusResource["resources"],
+          "mesh_build_revision" | "mesh_revision"
+        >;
+      }
+    | null
+    | undefined,
 ): boolean {
   if (!enabled) return false;
   return (
@@ -109,7 +232,14 @@ export function shouldLoadRuntimeMeshSummary(
 export function shouldLoadRuntimeMeshManifest(
   enabled: boolean,
   status:
-    | Pick<LiveStatusResource, "capabilities" | "domain" | "resources">
+    | {
+        capabilities: Pick<
+          LiveStatusResource["capabilities"],
+          "explicit_topology"
+        >;
+        domain: Pick<LiveStatusResource["domain"], "discretization">;
+        resources: Pick<LiveStatusResource["resources"], "mesh_revision">;
+      }
     | null
     | undefined,
 ): boolean {
@@ -125,7 +255,7 @@ export function shouldLoadRuntimeMeshManifest(
 
 export function shouldLoadRuntimeCurrentRun(
   enabled: boolean,
-  status: Pick<LiveStatusResource, "run"> | null | undefined,
+  status: { run?: unknown | null } | null | undefined,
 ): boolean {
   if (!enabled) return false;
   return status?.run != null;
@@ -133,7 +263,15 @@ export function shouldLoadRuntimeCurrentRun(
 
 export function shouldLoadRuntimeScalars(
   enabled: boolean,
-  status: Pick<LiveStatusResource, "resources"> | null | undefined,
+  status:
+    | {
+        resources: Pick<
+          LiveStatusResource["resources"],
+          "scalars_revision"
+        >;
+      }
+    | null
+    | undefined,
 ): boolean {
   if (!enabled) return false;
   return hasPositiveRevision(status?.resources.scalars_revision);
@@ -288,6 +426,43 @@ export function useSolverEnergyHistoryResource(
   });
 }
 
+export function useMagneticResponseSweepResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.analysis.frequencyResponse
+        .magneticSweepV1({ signal })
+        .catch(ignoreMissingResource<MagneticResponseSweepResource>),
+    [api],
+  );
+
+  return useResource<MagneticResponseSweepResource | null>({
+    enabled,
+    load,
+    resourceKey: ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  });
+}
+
+export function useFieldCatalogResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.fields.catalog({ signal }),
+    [api],
+  );
+
+  return useResource<FieldCatalogResource>({
+    enabled,
+    load,
+    resolveRevision: (data) => data.revision,
+    resourceKey: DATA_FIELDS_PATH,
+  });
+}
+
 export function useScalarWindowResource({
   columns,
   enabled = true,
@@ -436,27 +611,30 @@ export function useSolverProfileResource({
 export function useStudyRuntimeCommandResourceData({
   enabled = true,
 }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
-  const sessionStatus = useSessionStatus();
+  const sessionStatus = useSessionStatusSelector(
+    selectStudyRuntimeCommandSessionStatus,
+    { enabled, isEqual: studyRuntimeCommandSessionStatusEquals },
+  );
   const commandQueue = useCommandQueueResource({ enabled });
   const currentRun = useCurrentRunResource({
-    enabled: shouldLoadRuntimeCurrentRun(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeCurrentRun(enabled, sessionStatus),
   });
   const geometryValidation = useGeometryValidationResource({ enabled });
   const meshBuildCurrent = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
   });
   const meshBuildLatest = useMeshBuildLatestSuccessful({
-    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
   });
   const meshSummary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(enabled, sessionStatus),
   });
   const scene = useSceneResource({ enabled });
   const stageExecution = useStageExecutionResource({
-    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus),
   });
   const solverStatus = useSolverStatusResource({ enabled });
   const solverProfile = useSolverProfileResource({ enabled });
@@ -472,7 +650,7 @@ export function useStudyRuntimeCommandResourceData({
       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
       [MODEL_SCENE_PATH]: scene.data,
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus.data : null,
+      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
       [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
@@ -489,7 +667,7 @@ export function useStudyRuntimeCommandResourceData({
       meshManifest.data,
       meshSummary.data,
       scene.data,
-      sessionStatus.data,
+      sessionStatus,
       solverProfile.data,
       solverStatus.data,
       stageExecution.data,
@@ -500,18 +678,20 @@ export function useStudyRuntimeCommandResourceData({
 export function useRuntimeCommandControlResourceData({
   enabled = true,
 }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
-  const sessionStatus = useSessionStatus();
+  const sessionStatus = useSessionStatusSelector(selectRuntimeCommandControlSessionStatus, {
+    isEqual: runtimeCommandControlSessionStatusEquals,
+  });
   const commandQueue = useCommandQueueResource({ enabled });
   const geometryValidation = useGeometryValidationResource({ enabled });
   const meshBuildCurrent = useMeshBuildCurrent({
-    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
   });
   const meshManifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
   });
   const solverStatus = useSolverStatusResource({ enabled });
   const stageExecution = useStageExecutionResource({
-    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus.data),
+    enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus),
   });
 
   return useMemo(
@@ -519,7 +699,7 @@ export function useRuntimeCommandControlResourceData({
       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus.data : null,
+      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
       [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
       [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
@@ -530,7 +710,7 @@ export function useRuntimeCommandControlResourceData({
       geometryValidation.data,
       meshBuildCurrent.data,
       meshManifest.data,
-      sessionStatus.data,
+      sessionStatus,
       solverStatus.data,
       stageExecution.data,
     ],

@@ -153,7 +153,14 @@ model, damping policy, and lane classification.
 - Plots must not synthesize empty spectra or response curves as success.
 
 API resources must expose missing optional artifacts as diagnostic 404 responses
-and keep requested versus resolved backend information visible.
+and keep requested versus resolved backend information visible. The first
+artifact-backed response resource is
+`GET /v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1`, which
+returns `response/magnetic_response_sweep.v1.json` when present and a diagnostic
+404 when absent. Control Room clients should use
+`ControlRoomApi.analysis.frequencyResponse.magneticSweepV1()`,
+`useMagneticResponseSweepResource()`, and the generated path literal instead of
+duplicating the route string.
 
 ## Test Contracts
 

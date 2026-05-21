@@ -109,8 +109,10 @@ function runtimeCommandDisabledReason(
     context,
     SIMULATION_COMMANDS_PATH,
   );
-  const backendReason = backendRuntimeControlDisabledReason(queue, kind);
-  if (backendReason) return backendReason;
+  const backendControl = backendRuntimeControl(queue, kind);
+  if (backendControl && !backendControl.enabled) {
+    return backendControl.reason ?? "Runtime command is unavailable.";
+  }
 
   if (
     kind === "solve" &&
@@ -155,13 +157,11 @@ function runtimeCommandDisabledReason(
   }
 }
 
-function backendRuntimeControlDisabledReason(
+function backendRuntimeControl(
   queue: CommandQueueStatusResource | null | undefined,
   kind: SimpleStudyRuntimeCommandKind,
-): string | null {
-  const control = queue?.runtime_controls?.find((entry) => entry.kind === kind);
-  if (!control || control.enabled) return null;
-  return control.reason ?? "Runtime command is unavailable.";
+): CommandQueueStatusResource["runtime_controls"][number] | null {
+  return queue?.runtime_controls?.find((entry) => entry.kind === kind) ?? null;
 }
 
 function runtimeReadinessDisabledReason(
@@ -204,7 +204,9 @@ function runtimeReadinessDisabledReason(
   );
   if (!manifest) return "Shared-domain mesh manifest is unavailable.";
   if (manifest.source_scene_revision == null) {
-    return "Shared-domain mesh provenance is unavailable; rebuild the mesh.";
+    return sharedDomainMeshReadyWithoutSceneProvenance(context)
+      ? null
+      : "Shared-domain mesh provenance is unavailable; rebuild the mesh.";
   }
   if (manifest.source_scene_revision !== sceneRevision) {
     return "Rebuild the shared-domain mesh for the current scene before running.";
@@ -223,9 +225,47 @@ function isMeshBuildRunning(context: CommandContext): boolean {
     asString(activeBuildRecord?.status) ??
     resolveMeshBuildStatusLabel(
       asRecord(activeBuildRecord?.active_build),
-      normalizeMeshPipelineStatus(activeBuildRecord?.mesh_pipeline_status),
+      activeMeshBuildPhases(activeBuildRecord?.mesh_pipeline_status),
     );
   return meshPipelineStatusIsActive(buildStatus);
+}
+
+function activeMeshBuildPhases(value: unknown) {
+  return normalizeMeshPipelineStatus(value).filter(
+    (phase) => phase.id.toLowerCase() !== "ready",
+  );
+}
+
+function sharedDomainMeshReadyWithoutSceneProvenance(
+  context: CommandContext,
+): boolean {
+  const activeBuild = resourceData<MeshActiveBuildResource>(
+    context,
+    MESHING_BUILDS_CURRENT_PATH,
+  );
+  const activeBuildRecord = asRecord(activeBuild);
+  const status = asString(activeBuildRecord?.status)?.toLowerCase();
+  if (status && meshReadyStatus(status)) return true;
+
+  return normalizeMeshPipelineStatus(
+    activeBuildRecord?.mesh_pipeline_status,
+  ).some(
+    (phase) =>
+      phase.id.toLowerCase() === "ready" &&
+      meshReadyStatus(phase.status.toLowerCase()),
+  );
+}
+
+function meshReadyStatus(status: string): boolean {
+  return (
+    status === "active" ||
+    status === "available" ||
+    status === "completed" ||
+    status === "done" ||
+    status === "ready" ||
+    status === "success" ||
+    status === "succeeded"
+  );
 }
 
 function requiresExplicitMesh(status: LiveStatusResource): boolean {
@@ -572,19 +612,6 @@ function commandRevision(response: { command_id?: string | null }, fallback: str
   return response.command_id ?? `${fallback}:${Date.now()}`;
 }
 
-function invalidateRuntimeResources(
-  context: CommandContext,
-  revision: string | number,
-): void {
-  context.resources?.invalidate(SIMULATION_COMMANDS_PATH, revision);
-  context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
-  context.resources?.invalidate(SIMULATION_RUN_CURRENT_PATH, revision);
-  context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
-  context.resources?.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
-  context.resources?.invalidate(DATA_SCALARS_PATH, revision);
-  context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
-}
-
 function invalidateRuntimeControlResources(
   context: CommandContext,
   revision: string | number,
@@ -735,7 +762,7 @@ async function submitRuntimeCommand(
     };
   }
 
-  invalidateRuntimeResources(
+  invalidateRuntimeControlResources(
     context,
     commandRevision(response, `study:${command.kind}`),
   );

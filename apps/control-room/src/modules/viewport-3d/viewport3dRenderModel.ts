@@ -122,9 +122,39 @@ const partVectorSegmentCache = new WeakMap<
   Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
   WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
 >();
+const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
+const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
+const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
 
 function buildTopologyPositions(topology: DecodedTopology): Float32Array {
-  return Float32Array.from(topology.positions);
+  const cached = topologyPositionCache.get(topology);
+  if (cached) return cached;
+
+  const positions = Float32Array.from(topology.positions);
+  topologyPositionCache.set(topology, positions);
+  return positions;
+}
+
+function buildCachedTopologySurfaceIndices(
+  topology: DecodedTopology,
+): Uint32Array {
+  const cached = topologySurfaceIndexCache.get(topology);
+  if (cached) return cached;
+
+  const surfaceIndices = buildTetraSurfaceIndices(topology.indices);
+  topologySurfaceIndexCache.set(topology, surfaceIndices);
+  return surfaceIndices;
+}
+
+function buildCachedTopologyVolumeEdgeIndices(
+  topology: DecodedTopology,
+): Uint32Array {
+  const cached = topologyVolumeEdgeIndexCache.get(topology);
+  if (cached) return cached;
+
+  const volumeEdgeIndices = buildTetraVolumeEdgeIndices(topology.indices);
+  topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices);
+  return volumeEdgeIndices;
 }
 
 export function buildViewport3DTopologyRenderModel<
@@ -136,7 +166,8 @@ export function buildViewport3DTopologyRenderModel<
 ): Viewport3DTopologyRenderModel<TPart> | null {
   if (!topology) return null;
 
-  const fallbackVolumeEdgeIndices = buildTetraVolumeEdgeIndices(topology.indices);
+  const fallbackSurfaceIndices = buildCachedTopologySurfaceIndices(topology);
+  const fallbackVolumeEdgeIndices = buildCachedTopologyVolumeEdgeIndices(topology);
   const airboxVolumeEdgeFallback =
     airboxParts.length > 0
       ? buildUnclaimedVolumeEdgeIndices(topology, magneticParts) ??
@@ -148,7 +179,7 @@ export function buildViewport3DTopologyRenderModel<
       part,
       ...buildPartTopologyModel(part, topology, airboxVolumeEdgeFallback),
     })),
-    fallbackSurfaceIndices: buildTetraSurfaceIndices(topology.indices),
+    fallbackSurfaceIndices,
     fallbackVolumeEdgeIndices,
     magneticParts: magneticParts.map((part) => ({
       part,

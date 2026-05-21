@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { MetricHistogramChart, SizeDistributionChart } from "./MeshQualityChart";
 
 import type {
   MeshQualityHistogramBin,
@@ -125,23 +125,20 @@ function SizeDistributionCard({
         ) : null}
       </dl>
       {hasHistogram ? (
-        <div className="fm-mesh-quality-histogram" role="list">
-          {distribution.histogram.map((bin) => (
-            <div
-              className="fm-mesh-quality-histogram__bin"
-              key={`${distribution.id}:${bin.label}`}
-              role="listitem"
-              style={
-                {
-                  "--fm-mesh-quality-bin": `${Math.round(bin.fraction * 100)}%`,
-                } as CSSProperties
-              }
-            >
-              <span>{bin.label}</span>
-              <strong>{bin.count.toLocaleString("en-US")}</strong>
-            </div>
-          ))}
-        </div>
+        <>
+          <SizeDistributionChart distribution={distribution} />
+          <ul
+            aria-label={`${distribution.label} histogram bins`}
+            className="fm-mesh-size-distribution__bins"
+          >
+            {distribution.histogram.map((bin) => (
+              <li key={`${bin.lo ?? "min"}:${bin.hi ?? "max"}`}>
+                <span>{bin.label}</span>
+                <strong>{formatCount(bin.count)}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
         <p className="fm-mesh-size-distribution__empty">
           No size-bin histogram is published; showing scalar range only.
@@ -236,23 +233,7 @@ export function MeshQualityStatisticsView({
                     </div>
                   </div>
                 ) : null}
-                <div className="fm-mesh-quality-histogram" role="list">
-                  {metric.histogram.map((bin) => (
-                    <div
-                      className="fm-mesh-quality-histogram__bin"
-                      key={`${metric.id}:${bin.label}`}
-                      role="listitem"
-                      style={
-                        {
-                          "--fm-mesh-quality-bin": `${Math.round(bin.fraction * 100)}%`,
-                        } as CSSProperties
-                      }
-                    >
-                      <span>{bin.label}</span>
-                      <strong>{bin.count.toLocaleString("en-US")}</strong>
-                    </div>
-                  ))}
-                </div>
+                <MetricHistogramChart metric={metric} />
               </section>
             );
           })}

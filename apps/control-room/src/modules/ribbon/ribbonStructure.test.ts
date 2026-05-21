@@ -1495,6 +1495,9 @@ describe("ribbon structure", () => {
     const cameraParametersNode = cameraAction?.menu?.find(
       (node) => node.type === "item" && node.id === "camera:parameters",
     );
+    const viewRotationNode = cameraAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "view-camera:rotation-mode",
+    );
     const hslNode = hslAction?.menu?.find(
       (node) => node.type === "radio-group" && node.id === "orientation:hsl-reference",
     );
@@ -1562,6 +1565,19 @@ describe("ribbon structure", () => {
     expect(cameraParametersNode).toMatchObject({
       commandId: "viewport-3d.open-camera-dialog",
       label: "Camera parameters",
+    });
+    expect(viewRotationNode).toMatchObject({
+      value: "camera",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.rotation-camera",
+          value: "camera",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.rotation-object",
+          value: "object",
+        }),
+      ],
     });
     expect(homeCameraAction).toMatchObject({
       active: true,

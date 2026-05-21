@@ -8,21 +8,45 @@ import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 export type MeshQualityColorMetric = "gamma" | "sicn" | "volume";
 
+type MeshQualityColorCacheEntry = Partial<
+  Record<MeshQualityColorMetric, ScalarColorBuffer | null>
+>;
+
+const meshQualityVertexColorCache = new WeakMap<
+  DecodedTopology,
+  WeakMap<DecodedMeshQualityData, MeshQualityColorCacheEntry>
+>();
+
 export function buildMeshQualityVertexColors(
   topology: DecodedTopology | null | undefined,
   quality: DecodedMeshQualityData | null | undefined,
   metric: MeshQualityColorMetric,
 ): ScalarColorBuffer | null {
-  if (!topology || !quality || quality.elementCount !== topology.elementCount) {
+  if (!topology || !quality) return null;
+
+  const cached = cachedMeshQualityVertexColors(topology, quality, metric);
+  if (cached !== undefined) return cached;
+
+  if (quality.elementCount !== topology.elementCount) {
+    cacheMeshQualityVertexColors(topology, quality, metric, null);
     return null;
   }
 
   const values = quality[metric];
-  if (!values || values.length !== topology.elementCount) return null;
-  if (topology.indices.length !== topology.elementCount * 4) return null;
+  if (!values || values.length !== topology.elementCount) {
+    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    return null;
+  }
+  if (topology.indices.length !== topology.elementCount * 4) {
+    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    return null;
+  }
 
   const range = rangeFor(values);
-  if (!range) return null;
+  if (!range) {
+    cacheMeshQualityVertexColors(topology, quality, metric, null);
+    return null;
+  }
 
   const sums = new Float64Array(topology.nodeCount);
   const counts = new Uint32Array(topology.nodeCount);
@@ -47,7 +71,39 @@ export function buildMeshQualityVertexColors(
     colors[target + 2] = blue;
   }
 
-  return { colors, range };
+  const result = { colors, range };
+  cacheMeshQualityVertexColors(topology, quality, metric, result);
+  return result;
+}
+
+function cachedMeshQualityVertexColors(
+  topology: DecodedTopology,
+  quality: DecodedMeshQualityData,
+  metric: MeshQualityColorMetric,
+): ScalarColorBuffer | null | undefined {
+  const byQuality = meshQualityVertexColorCache.get(topology);
+  if (!byQuality) return undefined;
+  const entry = byQuality.get(quality);
+  if (!entry || !Object.prototype.hasOwnProperty.call(entry, metric)) {
+    return undefined;
+  }
+  return entry[metric] ?? null;
+}
+
+function cacheMeshQualityVertexColors(
+  topology: DecodedTopology,
+  quality: DecodedMeshQualityData,
+  metric: MeshQualityColorMetric,
+  result: ScalarColorBuffer | null,
+): void {
+  let byQuality = meshQualityVertexColorCache.get(topology);
+  if (!byQuality) {
+    byQuality = new WeakMap();
+    meshQualityVertexColorCache.set(topology, byQuality);
+  }
+  const entry = byQuality.get(quality) ?? {};
+  entry[metric] = result;
+  byQuality.set(quality, entry);
 }
 
 function rangeFor(values: Float64Array): { max: number; min: number } | null {

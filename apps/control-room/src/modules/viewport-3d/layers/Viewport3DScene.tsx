@@ -3,7 +3,7 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   Vector3,
   type AxesHelper,
@@ -56,7 +56,7 @@ import {
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
-import { FdmCuboidLayer } from "./FdmCuboidLayer";
+import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import {
   getViewport3DVisualProfile,
@@ -74,6 +74,7 @@ interface Viewport3DSceneProps {
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
   fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
   fieldVector: DecodedFieldVector | null | undefined;
@@ -365,6 +366,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+export function scheduleViewport3DProjectionRenderFrames({
+  frameHost = typeof window === "undefined" ? null : window,
+  invalidate,
+  tracker,
+}: {
+  frameHost?: Pick<Window, "cancelAnimationFrame" | "requestAnimationFrame"> | null;
+  invalidate: () => void;
+  tracker: Pick<Viewport3DResourceTracker, "recordDirtyFrame">;
+}): () => void {
+  tracker.recordDirtyFrame("camera-projection");
+  invalidate();
+
+  if (!frameHost) return () => undefined;
+
+  const frameId = frameHost.requestAnimationFrame(() => {
+    tracker.recordDirtyFrame("camera-projection-followup");
+    invalidate();
+  });
+
+  return () => frameHost.cancelAnimationFrame(frameId);
+}
+
 export function Viewport3DScene({
   bounds,
   cameraProjection,
@@ -372,6 +395,7 @@ export function Viewport3DScene({
   colors,
   airboxSettings,
   fdmDomain,
+  fdmInstanceModel,
   fdmSettings,
   fdmSurfaceColors,
   fieldVector,
@@ -407,7 +431,10 @@ export function Viewport3DScene({
   visualProfileId,
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
+  const setThreeState = useThree((state) => state.set);
   const viewportSize = useThree((state) => state.size);
+  const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
+  const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
   const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
   const cameraClip = useMemo(
     () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
@@ -424,6 +451,19 @@ export function Viewport3DScene({
       ),
     [visualProfileId],
   );
+
+  useLayoutEffect(() => {
+    const activeCamera =
+      cameraProjection === "orthographic"
+        ? orthographicCameraRef.current
+        : perspectiveCameraRef.current;
+    if (!activeCamera) return;
+
+    setThreeState({ camera: activeCamera });
+    activeCamera.updateProjectionMatrix();
+    activeCamera.updateMatrixWorld(true);
+    return scheduleViewport3DProjectionRenderFrames({ invalidate, tracker });
+  }, [cameraProjection, invalidate, setThreeState, tracker]);
 
   // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {
@@ -449,48 +489,45 @@ export function Viewport3DScene({
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
       <CanvasLifecycleProbe tracker={tracker} />
-      {cameraProjection === "orthographic" ? (
-        <OrthographicCamera
-          key="viewport-3d-orthographic-camera"
-          makeDefault
-          bottom={orthographicCameraFrame.bottom}
-          left={orthographicCameraFrame.left}
-          near={cameraClip.near}
-          far={cameraClip.far}
-          position={cameraState.position}
-          right={orthographicCameraFrame.right}
-          top={orthographicCameraFrame.top}
-          up={cameraState.up}
-          zoom={orthographicCameraFrame.zoom}
-          onUpdate={(camera) =>
-            applyViewport3DOrthographicCameraPose(
-              camera,
-              cameraState,
-              cameraClip.near,
-              cameraClip.far,
-            )
-          }
-        />
-      ) : (
-        <PerspectiveCamera
-          key="viewport-3d-perspective-camera"
-          makeDefault
-          far={cameraClip.far}
-          fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
-          near={cameraClip.near}
-          position={cameraState.position}
-          up={cameraState.up}
-          onUpdate={(camera) =>
-            applyViewport3DPerspectiveCameraPose(
-              camera,
-              cameraState,
-              cameraClip.near,
-              cameraClip.far,
-              PERSPECTIVE_CAMERA_FOV_DEGREES,
-            )
-          }
-        />
-      )}
+      <OrthographicCamera
+        key="viewport-3d-orthographic-camera"
+        ref={orthographicCameraRef}
+        bottom={orthographicCameraFrame.bottom}
+        left={orthographicCameraFrame.left}
+        near={cameraClip.near}
+        far={cameraClip.far}
+        position={cameraState.position}
+        right={orthographicCameraFrame.right}
+        top={orthographicCameraFrame.top}
+        up={cameraState.up}
+        zoom={orthographicCameraFrame.zoom}
+        onUpdate={(camera) =>
+          applyViewport3DOrthographicCameraPose(
+            camera,
+            cameraState,
+            cameraClip.near,
+            cameraClip.far,
+          )
+        }
+      />
+      <PerspectiveCamera
+        key="viewport-3d-perspective-camera"
+        ref={perspectiveCameraRef}
+        far={cameraClip.far}
+        fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
+        near={cameraClip.near}
+        position={cameraState.position}
+        up={cameraState.up}
+        onUpdate={(camera) =>
+          applyViewport3DPerspectiveCameraPose(
+            camera,
+            cameraState,
+            cameraClip.near,
+            cameraClip.far,
+            PERSPECTIVE_CAMERA_FOV_DEGREES,
+          )
+        }
+      />
       <CameraController
         bounds={bounds}
         cameraState={cameraState}
@@ -509,6 +546,7 @@ export function Viewport3DScene({
         colors={colors}
         domain={fdmDomain}
         fieldVector={fieldVector}
+        instanceModel={fdmInstanceModel}
         maxVectorGlyphs={maxVectorGlyphs}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}

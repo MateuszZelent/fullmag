@@ -24,14 +24,23 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   shouldLoadRuntimeMeshSummary: () => true,
 }));
 
+const sessionStatusMock = {
+  data: {
+    resources: {
+      mesh_build_revision: 3,
+      mesh_revision: 3,
+    },
+  },
+  error: null,
+  refetch: vi.fn(),
+  revision: 3,
+  status: "ready",
+};
+
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
-  useSessionStatus: () => ({
-    data: { mesh_revision: 3 },
-    error: null,
-    refetch: vi.fn(),
-    revision: 3,
-    status: "ready",
-  }),
+  useSessionStatus: () => sessionStatusMock,
+  useSessionStatusSelector: (selector: (status: typeof sessionStatusMock) => unknown) =>
+    selector(sessionStatusMock),
 }));
 
 const qualityPayload = {

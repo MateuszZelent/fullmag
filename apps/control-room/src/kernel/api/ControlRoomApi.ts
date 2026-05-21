@@ -1,5 +1,7 @@
 import {
+  ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   API_CONTRACT_VERSION_HEADER,
+  DATA_FIELDS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -87,6 +89,7 @@ import type {
   CurrentRunResource,
   DomainMetaResource,
   EngineLogResource,
+  FieldCatalogResource,
   FieldVectorQuery,
   GeometryCapabilitiesResource,
   GeometryDiagnosticsResource,
@@ -97,6 +100,7 @@ import type {
   LiveStatusResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
+  MagneticResponseSweepResource,
   MaterialPatchRequest,
   MaterialResource,
   MeshActiveBuildResource,
@@ -235,6 +239,16 @@ export class ControlRoomApi {
       ),
   };
 
+  readonly analysis = {
+    frequencyResponse: {
+      magneticSweepV1: (options?: RequestOptions) =>
+        this.requestJson<MagneticResponseSweepResource>(
+          ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+          options,
+        ),
+    },
+  };
+
   readonly data = {
     domain: {
       meta: (options?: RequestOptions) =>
@@ -243,6 +257,8 @@ export class ControlRoomApi {
         this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),
     },
     fields: {
+      catalog: (options?: RequestOptions) =>
+        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options),
       vector: (
         quantityId: string,
         query: FieldVectorQuery = {},

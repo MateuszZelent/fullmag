@@ -15,6 +15,13 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('const secondExpectedActive = initialActive === "true" ? "true" : "false"');
     expect(smokeScript).toContain('if (active === firstExpectedActive) return true');
     expect(smokeScript).toContain('if (active === secondExpectedActive) return true');
+    expect(smokeScript).toContain("const initialProjectionSample = await sampleCanvasComposite(page, canvas);");
+    expect(smokeScript).toContain("await waitForCanvasCompositeChange(");
+    expect(smokeScript).toContain("projection canvas renders after first toggle");
+    expect(smokeScript).toContain("projection canvas renders after second toggle");
+    expect(smokeScript).toContain("Viewport canvas did not visually change after first projection toggle");
+    expect(smokeScript).toContain("Viewport canvas did not visually leave orthographic projection after second toggle");
+    expect(smokeScript).toContain("const png = await canvas.screenshot();");
   });
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");

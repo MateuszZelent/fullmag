@@ -136,6 +136,7 @@ export const viewport3dManifest: ModuleManifest = {
             context.visualizationSync.queuePatch({
               camera: { projection: nextProjection },
             });
+            await context.visualizationSync.flushNow();
           } else if (context.api) {
             const state = await context.api.visualization.patch({
               camera: { projection: nextProjection },

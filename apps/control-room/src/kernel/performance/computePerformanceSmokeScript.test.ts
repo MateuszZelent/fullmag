@@ -26,6 +26,11 @@ describe("compute performance smoke script", () => {
     expect(smokeScript).toContain("window.__FULLMAG_REACT_PROFILER__ = true");
     expect(smokeScript).toContain('observePerformanceEntries("longtask"');
     expect(smokeScript).toContain('observePerformanceEntries("measure"');
+    expect(smokeScript).toContain("COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS");
+    expect(smokeScript).toContain("startResponsivenessProbe");
+    expect(smokeScript).toContain("maxResponsivenessDelayMs");
+    expect(smokeScript).toContain("totalResponsivenessDelayMs");
+    expect(smokeScript).toContain("delayedResponsivenessTickCount");
     expect(smokeScript).toContain("reactRenderMeasureTotals");
     expect(smokeScript).toContain("commandRequestCount");
     expect(smokeScript).toContain("waitForEnabledAction");
@@ -33,5 +38,12 @@ describe("compute performance smoke script", () => {
     expect(smokeScript).toContain("waitForCommandSettled");
     expect(smokeScript).toContain("TERMINAL_COMMAND_STATUSES");
     expect(smokeScript).toContain("Active session status is unavailable");
+    expect(smokeScript).toContain("request failed with");
+    expect(smokeScript).toContain("commandResponse.status()");
+    expect(smokeScript).toContain("FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS");
+    expect(smokeScript).toContain("assertNoImmediateResultResourceReloads");
+    expect(smokeScript).toContain("resultResourceRequestCount");
+    expect(smokeScript).toContain(["", "v2", "sessions", "current", "data", "fields"].join("/"));
+    expect(smokeScript).not.toContain("response.status() < 400");
   });
 });

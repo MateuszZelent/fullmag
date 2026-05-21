@@ -10,12 +10,28 @@ import type { ResourceResult } from "./resourceTypes";
 
 export const SESSION_STATUS_RESOURCE_KEY = "session:status";
 
+const SESSION_STATUS_REVISION_RESOURCE_KEYS: Array<
+  keyof LiveStatusResource["resources"]
+> = [
+  "command_completion_revision",
+  "commands_revision",
+  "display_revision",
+  "domain_generation_id",
+  "mesh_build_revision",
+  "mesh_revision",
+  "scene_revision",
+  "solver_profile_revision",
+  "stages_revision",
+  "visualization_state_revision",
+  "workspace_revision",
+];
+
 export function resolveSessionStatusRevision(
   status: LiveStatusResource,
 ): number | null {
-  const revisions = Object.values(status.resources).filter(
-    (revision): revision is number => typeof revision === "number",
-  );
+  const revisions = SESSION_STATUS_REVISION_RESOURCE_KEYS.map(
+    (key) => status.resources[key],
+  ).filter((revision): revision is number => typeof revision === "number");
 
   return revisions.length > 0 ? Math.max(...revisions) : null;
 }

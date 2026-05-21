@@ -16,6 +16,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/analysis/eigenmodes/dispersion",
   "/v2/sessions/current/analysis/eigenmodes/modes/{mode_id}",
   "/v2/sessions/current/analysis/eigenmodes/spectrum",
+  "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
   "/v2/sessions/current/data/artifacts",
   "/v2/sessions/current/data/artifacts/{artifact_id}",
   "/v2/sessions/current/data/domain/meta",

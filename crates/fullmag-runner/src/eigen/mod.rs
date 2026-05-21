@@ -3,12 +3,23 @@ pub mod assembly_scalar;
 pub mod diagnostics;
 pub mod orchestrator;
 pub mod path;
+pub mod response_block_real;
 pub mod tracking;
 pub mod types;
 
-pub use artifacts::{write_branch_bundle, write_mode_bundle, write_path_bundle};
+pub use artifacts::{
+    write_branch_bundle, write_mode_bundle, write_path_bundle, write_response_sweep_artifact,
+};
 pub use orchestrator::{run_path_or_single, SingleKSolver};
 pub use path::expand_k_sampling;
+pub use response_block_real::{
+    build_field_driven_response_sweep_artifact, solve_block_real_harmonic_response,
+    solve_field_driven_block_real_sweep, BlockRealHarmonicSolution, BlockRealHarmonicSystem,
+    BlockRealHarmonicTemplate, BlockRealSweepReuseProvenance, BlockRealWarmStartProvenance,
+    FieldDrivenBlockRealResponsePoint, FieldDrivenResponseSweepArtifact,
+    FieldDrivenResponseSweepPointArtifact, ResponseExcitationProvenanceArtifact,
+    TangentLeakageDiagnosticArtifact,
+};
 pub use tracking::track_branches;
 pub use types::{
     EigenSolverModel, KSampleDescriptor, PathSolveResult, SingleKModeResult, SingleKSolveResult,

@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 
+import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -59,6 +60,67 @@ import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
 
+type RibbonRuntimeStatus = {
+  capabilities: Pick<
+    LiveStatusResource["capabilities"],
+    "binary_fields" | "explicit_topology"
+  >;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<
+    LiveStatusResource["resources"],
+    | "field_revision"
+    | "fields_revision"
+    | "mesh_build_revision"
+    | "mesh_revision"
+    | "scene_revision"
+    | "stages_revision"
+  >;
+};
+
+function selectRibbonRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): RibbonRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      binary_fields: status.data.capabilities.binary_fields,
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      field_revision: status.data.resources.field_revision,
+      fields_revision: status.data.resources.fields_revision,
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+      scene_revision: status.data.resources.scene_revision,
+      stages_revision: status.data.resources.stages_revision,
+    },
+  };
+}
+
+function ribbonRuntimeStatusEquals(
+  previous: RibbonRuntimeStatus | null,
+  next: RibbonRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.binary_fields === next.capabilities.binary_fields &&
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.field_revision === next.resources.field_revision &&
+    previous.resources.fields_revision === next.resources.fields_revision &&
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.scene_revision === next.resources.scene_revision &&
+    previous.resources.stages_revision === next.resources.stages_revision
+  );
+}
+
 export default function RibbonModule({ kernel }: ModuleProps) {
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
@@ -86,9 +148,11 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   });
   const needsSessionStatusResources = needsMeshResources || needsRuntimeResources;
   const sessionStatusData = useSessionStatusSelector(
-    (sessionStatus) =>
-      needsSessionStatusResources ? sessionStatus.data : null,
-    { enabled: needsSessionStatusResources },
+    selectRibbonRuntimeStatus,
+    {
+      enabled: needsSessionStatusResources,
+      isEqual: ribbonRuntimeStatusEquals,
+    },
   );
   const meshBuildCurrent = useMeshBuildCurrent({
     enabled: shouldLoadRuntimeMeshBuild(needsMeshResources, sessionStatusData),

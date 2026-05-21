@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
@@ -13,7 +14,7 @@ import {
   useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { shouldLoadRuntimeMeshSummary } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
@@ -53,6 +54,38 @@ type Feedback =
     }
   | null;
 
+type AirboxMeshPolicyRuntimeStatus = {
+  resources: Pick<
+    LiveStatusResource["resources"],
+    "mesh_build_revision" | "mesh_revision"
+  >;
+};
+
+function selectAirboxMeshPolicyRuntimeStatus(status: {
+  data: LiveStatusResource | null;
+}): AirboxMeshPolicyRuntimeStatus | null {
+  if (!status.data) return null;
+  return {
+    resources: {
+      mesh_build_revision: status.data.resources.mesh_build_revision,
+      mesh_revision: status.data.resources.mesh_revision,
+    },
+  };
+}
+
+function airboxMeshPolicyRuntimeStatusEquals(
+  previous: AirboxMeshPolicyRuntimeStatus | null,
+  next: AirboxMeshPolicyRuntimeStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.resources.mesh_build_revision ===
+      next.resources.mesh_build_revision &&
+    previous.resources.mesh_revision === next.resources.mesh_revision
+  );
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -60,16 +93,19 @@ function errorMessage(error: unknown): string {
 export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   void selection;
   const { api, resources } = useKernel();
-  const sessionStatus = useSessionStatus();
+  const runtimeStatus = useSessionStatusSelector(
+    selectAirboxMeshPolicyRuntimeStatus,
+    { isEqual: airboxMeshPolicyRuntimeStatusEquals },
+  );
   const policy = useUniverseMeshPolicyResource();
   const report = useMeshUniverseReportResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const quality = useMeshUniverseQualityResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const summary = useMeshSummaryResource({
-    enabled: shouldLoadRuntimeMeshSummary(true, sessionStatus.data),
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
   const baseDraft = useMemo(
@@ -123,7 +159,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "controls", "target", "quality-statistics", "transactions"]}
+      defaultValue={["summary", "controls", "geometry", "target", "quality-statistics", "transactions"]}
     >
       <InspectorSection value="summary" title="Universe / Airbox Mesh Policy" badge={policy.status} collapsible defaultCollapsed={false}>
         <FieldRow label="Revision" value={String(resource.revision)} />
@@ -132,23 +168,23 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Quality state" value={quality.status} />
       </InspectorSection>
 
-      <InspectorSection value="controls" title="Airbox Size Controls" badge="FEM domain">
+      <InspectorSection value="controls" title="Element Size Parameters" badge="FEM domain">
         <FormField
-          label="Airbox hmax"
+          label="Maximum element size"
           type="number"
           unit="m"
           value={draft.airboxHmax}
           onChange={(event) => updateDraft({ airboxHmax: event.target.value })}
         />
         <FormField
-          label="Airbox hmin"
+          label="Minimum element size"
           type="number"
           unit="m"
           value={draft.airboxHmin}
           onChange={(event) => updateDraft({ airboxHmin: event.target.value })}
         />
         <FormField
-          label="Airbox growth rate"
+          label="Maximum element growth rate"
           type="number"
           value={draft.airboxGrowthRate}
           onChange={(event) =>
@@ -156,7 +192,23 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
           }
         />
         <FormField
-          label="Airbox grading"
+          label="Curvature factor"
+          type="number"
+          value={draft.curvatureFactor}
+          onChange={(event) =>
+            updateDraft({ curvatureFactor: event.target.value })
+          }
+        />
+        <FormField
+          label="Resolution of narrow regions"
+          type="number"
+          value={draft.narrowRegionResolution}
+          onChange={(event) =>
+            updateDraft({ narrowRegionResolution: event.target.value })
+          }
+        />
+        <FormField
+          label="Element grading"
           type="select"
           value={draft.airboxGrading}
           onChange={(event) =>
@@ -173,15 +225,91 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         </FormField>
       </InspectorSection>
 
+      <InspectorSection value="geometry" title="Airbox Geometry" collapsible defaultCollapsed={true}>
+        <FormField
+          label="Domain mode"
+          type="select"
+          value={draft.airboxMode}
+          onChange={(event) => updateDraft({ airboxMode: event.target.value })}
+        >
+          <option value="">Inherited</option>
+          <option value="auto">Auto</option>
+          <option value="manual">Manual</option>
+        </FormField>
+        <FormField
+          label="Padding X"
+          type="number"
+          unit="m"
+          value={draft.paddingX}
+          onChange={(event) => updateDraft({ paddingX: event.target.value })}
+        />
+        <FormField
+          label="Padding Y"
+          type="number"
+          unit="m"
+          value={draft.paddingY}
+          onChange={(event) => updateDraft({ paddingY: event.target.value })}
+        />
+        <FormField
+          label="Padding Z"
+          type="number"
+          unit="m"
+          value={draft.paddingZ}
+          onChange={(event) => updateDraft({ paddingZ: event.target.value })}
+        />
+        <FormField
+          label="Size X"
+          type="number"
+          unit="m"
+          value={draft.airboxSizeX}
+          onChange={(event) => updateDraft({ airboxSizeX: event.target.value })}
+        />
+        <FormField
+          label="Size Y"
+          type="number"
+          unit="m"
+          value={draft.airboxSizeY}
+          onChange={(event) => updateDraft({ airboxSizeY: event.target.value })}
+        />
+        <FormField
+          label="Size Z"
+          type="number"
+          unit="m"
+          value={draft.airboxSizeZ}
+          onChange={(event) => updateDraft({ airboxSizeZ: event.target.value })}
+        />
+        <FormField
+          label="Center X"
+          type="number"
+          unit="m"
+          value={draft.airboxCenterX}
+          onChange={(event) => updateDraft({ airboxCenterX: event.target.value })}
+        />
+        <FormField
+          label="Center Y"
+          type="number"
+          unit="m"
+          value={draft.airboxCenterY}
+          onChange={(event) => updateDraft({ airboxCenterY: event.target.value })}
+        />
+        <FormField
+          label="Center Z"
+          type="number"
+          unit="m"
+          value={draft.airboxCenterZ}
+          onChange={(event) => updateDraft({ airboxCenterZ: event.target.value })}
+        />
+      </InspectorSection>
+
       <InspectorSection value="target" title="Resolved Airbox Target">
         <MeshResourceFields
           fields={[
             {
-              label: "Effective hmax",
+              label: "Effective max. element size",
               value: formatLength(recordField(effectiveAirbox, "maximum_element_size")),
             },
             {
-              label: "Effective hmin",
+              label: "Effective min. element size",
               value: formatLength(recordField(effectiveAirbox, "minimum_element_size")),
             },
             {

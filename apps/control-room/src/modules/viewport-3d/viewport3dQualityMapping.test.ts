@@ -50,6 +50,24 @@ describe("buildMeshQualityVertexColors", () => {
     );
   });
 
+  it("reuses vertex color buffers for the same topology, quality, and metric", () => {
+    const topology = topologyFixture();
+    const quality = qualityFixture();
+
+    const first = buildMeshQualityVertexColors(topology, quality, "gamma");
+    const second = buildMeshQualityVertexColors(topology, quality, "gamma");
+    const differentMetric = buildMeshQualityVertexColors(topology, quality, "sicn");
+    const differentQuality = buildMeshQualityVertexColors(
+      topology,
+      { ...quality, gamma: new Float64Array([0.1, 0.9]) },
+      "gamma",
+    );
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(differentMetric);
+    expect(first).not.toBe(differentQuality);
+  });
+
   it("rejects missing metric arrays and element-count drift", () => {
     expect(
       buildMeshQualityVertexColors(topologyFixture(), qualityFixture(), "volume"),

@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+import { describe, expect, it, vi } from "vitest";
 import { OrthographicCamera, PerspectiveCamera, Vector3 } from "three";
 
 import {
@@ -8,7 +10,19 @@ import {
   resolveViewport3DProjectionCameraClip,
   resolveViewport3DOrthographicCameraFrame,
   resolveViewport3DOrthographicZoom,
+  scheduleViewport3DProjectionRenderFrames,
 } from "./Viewport3DScene";
+
+function invokeFrameCallback(
+  callback: FrameRequestCallback | null,
+  time: DOMHighResTimeStamp,
+): void {
+  if (!callback) {
+    throw new Error("Expected requestAnimationFrame callback to be scheduled.");
+  }
+
+  callback(time);
+}
 
 describe("Viewport3DScene scale helpers", () => {
   it("uses one-micrometer cells when the universe-sized grid can fit them", () => {
@@ -188,5 +202,49 @@ describe("Viewport3DScene scale helpers", () => {
         }
       }
     }
+  });
+
+  it("keeps projection camera switching deterministic in demand rendering", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("setThreeState({ camera: activeCamera })");
+    expect(source).toContain('tracker.recordDirtyFrame("camera-projection")');
+    expect(source).not.toContain("makeDefault");
+  });
+
+  it("queues a follow-up projection frame for demand-rendered camera swaps", () => {
+    let frameCallback: FrameRequestCallback | null = null;
+    const invalidate = vi.fn();
+    const tracker = { recordDirtyFrame: vi.fn() };
+    const frameHost = {
+      cancelAnimationFrame: vi.fn(),
+      requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => {
+        frameCallback = callback;
+        return 42;
+      }),
+    };
+
+    const cleanup = scheduleViewport3DProjectionRenderFrames({
+      frameHost,
+      invalidate,
+      tracker,
+    });
+
+    expect(tracker.recordDirtyFrame).toHaveBeenCalledWith("camera-projection");
+    expect(invalidate).toHaveBeenCalledTimes(1);
+
+    invokeFrameCallback(frameCallback, 100);
+
+    expect(tracker.recordDirtyFrame).toHaveBeenCalledWith(
+      "camera-projection-followup",
+    );
+    expect(invalidate).toHaveBeenCalledTimes(2);
+
+    cleanup();
+
+    expect(frameHost.cancelAnimationFrame).toHaveBeenCalledWith(42);
   });
 });

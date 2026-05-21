@@ -9,6 +9,19 @@
 use crate::eigen::types::EigenSolverModel;
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PetscSlepcBindingDescriptor {
+    pub operator_family: &'static str,
+    pub matrix_layout: &'static str,
+    pub target_solver: &'static str,
+    pub rows: usize,
+    pub cols: usize,
+    pub mass_rows: usize,
+    pub mass_cols: usize,
+    pub tangent_components_per_node: usize,
+    pub supports_csr_export: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct AssembledScalarOperator {
     pub stiffness: DMatrix<f64>,
@@ -32,6 +45,46 @@ impl AssembledScalarOperator {
 
     pub fn dimension(&self) -> usize {
         self.stiffness.nrows()
+    }
+
+    pub fn petsc_slepc_binding_descriptor(&self) -> PetscSlepcBindingDescriptor {
+        PetscSlepcBindingDescriptor {
+            operator_family: "scalar_projected_tangent_plane",
+            matrix_layout: "assembled_symmetric_generalized",
+            target_solver: "petsc_slepc_eps_shift_invert",
+            rows: self.stiffness.nrows(),
+            cols: self.stiffness.ncols(),
+            mass_rows: self.mass.nrows(),
+            mass_cols: self.mass.ncols(),
+            tangent_components_per_node: 1,
+            supports_csr_export: true,
+        }
+    }
+
+    pub fn validate_petsc_slepc_binding(&self) -> Result<(), String> {
+        let binding = self.petsc_slepc_binding_descriptor();
+        if binding.rows == 0 {
+            return Err("assembled tangent operator must not be empty".to_string());
+        }
+        if binding.rows != binding.cols {
+            return Err(format!(
+                "stiffness matrix must be square, got {}x{}",
+                binding.rows, binding.cols
+            ));
+        }
+        if binding.mass_rows != binding.mass_cols {
+            return Err(format!(
+                "mass matrix must be square, got {}x{}",
+                binding.mass_rows, binding.mass_cols
+            ));
+        }
+        if binding.rows != binding.mass_rows {
+            return Err(format!(
+                "stiffness/mass dimensions must match, got {} and {}",
+                binding.rows, binding.mass_rows
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -78,4 +131,31 @@ pub fn solve_dense_reference_modes(
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     pairs.truncate(count);
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_operator_exposes_petsc_slepc_binding_contract() {
+        let operator = AssembledScalarOperator::new(
+            DMatrix::<f64>::identity(3, 3),
+            DMatrix::<f64>::identity(3, 3),
+        );
+
+        let binding = operator.petsc_slepc_binding_descriptor();
+
+        assert_eq!(binding.operator_family, "scalar_projected_tangent_plane");
+        assert_eq!(binding.matrix_layout, "assembled_symmetric_generalized");
+        assert_eq!(binding.target_solver, "petsc_slepc_eps_shift_invert");
+        assert_eq!(binding.rows, 3);
+        assert_eq!(binding.cols, 3);
+        assert_eq!(binding.mass_rows, 3);
+        assert_eq!(binding.tangent_components_per_node, 1);
+        assert!(binding.supports_csr_export);
+        operator
+            .validate_petsc_slepc_binding()
+            .expect("square stiffness/mass with matching dimensions is bindable");
+    }
 }

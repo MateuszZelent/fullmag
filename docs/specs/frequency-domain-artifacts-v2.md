@@ -16,6 +16,7 @@ artifacts/eigen/spectrum.v2.json
 artifacts/eigen/branches.v2.json
 artifacts/eigen/dispersion.csv
 artifacts/eigen/modes/sample_XXXX_mode_YYYY.json
+artifacts/response/magnetic_response_sweep.v1.json
 artifacts/mesh/periodic_pairs.v1.json
 ```
 
@@ -126,6 +127,48 @@ producing solver for the exported mode. Tangent leakage diagnostics are the
 mean and max absolute `m0 dot dm` over the exported real and imaginary mode
 vectors, and must be emitted whenever the solver reconstructs physical mode
 vectors.
+
+## response/magnetic_response_sweep.v1.json
+
+This artifact is the driven magnetic-only response sweep contract. The current
+runner writer can emit it for dense field-driven validation payloads, and the v2
+API can expose an already-written artifact at
+`GET /v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1`. The
+Control Room client entry point is the generated path literal plus
+`ControlRoomApi.analysis.frequencyResponse.magneticSweepV1()` facade, with
+`useMagneticResponseSweepResource()` as the optional artifact resource hook for
+analysis surfaces; consumers should not duplicate the route string. Runtime execution remains gated until an
+executable response backend is validated. Missing optional response artifacts
+must return diagnostic 404 responses; clients must not synthesize empty response
+curves as success.
+
+Required fields:
+
+- `schema_version = "magnetic_response_sweep.v1"`,
+- `backend_engine_id`,
+- `solver_model`,
+- `damping_policy`,
+- `lane_classification`,
+- `matrix_layout`,
+- `excitation_kind`,
+- `si_units`,
+- `point_count`,
+- `points[]`.
+
+Each point must include:
+
+- `frequency_hz`,
+- `angular_frequency_rad_per_s`,
+- `m_complex` as `[re, im]` pairs,
+- `response_amplitude`,
+- `response_phase`,
+- `susceptibility_tensor` as `[re, im]` pairs,
+- `absorbed_power_density`,
+- `residual_l2_norm`,
+- `relative_residual_l2_norm`,
+- `tangent_leakage` diagnostic status,
+- `excitation_provenance`,
+- `sweep_reuse` provenance.
 
 ## periodic_pairs.v1.json
 

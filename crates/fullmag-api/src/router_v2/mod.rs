@@ -452,6 +452,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_branches_v2),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
+            get(handlers::analysis::get_magnetic_response_sweep_v1),
+        )
+        .route(
             "/v2/sessions/current/persistence/checkpoints",
             get(handlers::persistence::list_checkpoints)
                 .post(handlers::persistence::create_checkpoint),

@@ -93,19 +93,26 @@
 
 ## Task 4: Scalable Magnetic-Only Eigen Backend
 
-- [ ] Keep dense CPU reference eigen as a validation lane and record its problem-size limits in docs.
-- [ ] Introduce an assembled tangent-plane magnetic operator family that can be bound to PETSc/SLEPc on CPU.
-- [x] Preserve `spectrum.v2.json`, `branches.v2.json`, `dispersion.csv`, and mode JSON compatibility.
-- [ ] Add an exchange-only reciprocal dispersion gate where `f(k) = f(-k)` when DMI and other nonreciprocal terms are disabled.
+- [x] Keep dense CPU reference eigen as a validation lane and record its problem-size limits in docs.
+- [x] Introduce an assembled tangent-plane magnetic operator family binding surface that can be bound to PETSc/SLEPc on CPU; current implementation exposes the scalar-projected assembled generalized operator while PETSc/SLEPc execution remains deferred.
+- [x] Preserve `spectrum.v2.json`, `branches.v2.json`, `dispersion.csv`, and mode JSON compatibility, including single-k `DispersionCurve` requests.
+- [x] Add an exchange-only reciprocal dispersion gate where `f(k) = f(-k)` when DMI and other nonreciprocal terms are disabled.
 - [x] Add exported-mode diagnostics for tangent leakage and residual norms.
 - [ ] Do not promote any scalable eigen capability until native build, native tests, and artifact reader tests pass.
 
 ## Task 5: Driven Magnetic-Only Frequency Response
 
 - [ ] Implement a block-real harmonic magnetic solve for tangent-plane perturbations.
+  - [x] Land the first dense runner primitive for `K - omega^2 M + i omega C` as a block-real `2N x 2N` solve with complex excitation/response, dimension validation, and residual norms. This is intentionally not wired to `StudyIR::FrequencyResponse`, sweep artifacts, or capability promotion yet.
 - [ ] Support field excitation first; bind antenna/current-source excitation only after source artifacts are validated.
+  - [x] Add a field-driven sweep wrapper over the dense block-real primitive; antenna/current-source excitation remains unbound.
+  - [x] Reject empty sweeps, non-positive/non-finite frequencies, and non-finite complex excitations before producing response diagnostics.
 - [ ] Export amplitude, phase, absorbed power density, susceptibility diagnostics, and residual per frequency.
+  - [x] Produce amplitude, phase, field-work absorbed-power diagnostic, scalar susceptibility, and residual norms per frequency in the runner primitive result model.
+  - [x] Build and write an artifact-ready `response/magnetic_response_sweep.v1.json` payload for dense field-driven validation, including schema version, SI units, backend engine id, solver model, damping policy, lane classification, Hz/rad-s frequency metadata, response vectors, susceptibility tensor, absorbed-power diagnostic, residuals, excitation provenance, sweep reuse, and explicit tangent-leakage diagnostic status. Runtime integration remains pending.
+  - [x] Expose the optional response sweep artifact through `GET /v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1`, preserving diagnostic 404 behavior when `response/magnetic_response_sweep.v1.json` is absent; generated `apps/control-room` OpenAPI/types/path literals, the `ControlRoomApi.analysis.frequencyResponse.magneticSweepV1()` facade, and the optional `useMagneticResponseSweepResource()` hook are synchronized.
 - [ ] Reuse solver state across frequency sweep points and expose warm-start provenance.
+  - [x] Carry previous-frequency response provenance through the dense field-driven sweep, including warm-start source frequency and residual quality for the candidate state; reusable preconditioner/factorization state remains pending for the scalable backend.
 - [ ] Keep `supports_frequency_response=false` until at least one backend lane passes residual, artifact, and smoke gates.
 
 ## Task 6: Quasistatic Bidirectional Magnetoelasticity

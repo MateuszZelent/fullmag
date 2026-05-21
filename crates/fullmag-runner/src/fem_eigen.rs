@@ -1,3 +1,4 @@
+use crate::eigen::assembly_scalar::AssembledScalarOperator;
 use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
 use fullmag_engine::fem_sparse::{lobpcg_generalized, CsrMatrix};
 use fullmag_engine::periodic::constraints::PeriodicDofMap;
@@ -246,17 +247,22 @@ fn execute_fem_eigen_inner(
             solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
         }
     } else {
-        let (stiffness, mass) = assemble_projected_scalar_operator_real(
+        let operator = assemble_projected_scalar_operator_real(
             plan,
             topology,
             &reduction,
             &observables,
             &equilibrium,
         );
+        operator
+            .validate_petsc_slepc_binding()
+            .map_err(|message| RunError {
+                message: format!("FEM eigen scalar operator is not bindable: {message}"),
+            })?;
         if try_gpu {
             // Attempt GPU dense generalized solve; return error if GPU was
             // explicitly requested but is unavailable or fails.
-            match gpu_solve_real_symmetric_eigenpairs(plan, &stiffness, &mass) {
+            match gpu_solve_real_symmetric_eigenpairs(plan, &operator.stiffness, &operator.mass) {
                 Ok(pairs) => {
                     eprintln!(
                         "info: FEM eigen GPU solve succeeded ({} modes)",
@@ -279,9 +285,14 @@ fn execute_fem_eigen_inner(
                 }
             }
         } else if use_sparse {
-            solve_real_symmetric_eigenpairs_sparse(plan, stiffness, mass, num_modes)?
+            solve_real_symmetric_eigenpairs_sparse(
+                plan,
+                operator.stiffness,
+                operator.mass,
+                num_modes,
+            )?
         } else {
-            solve_real_symmetric_eigenpairs(plan, stiffness, mass)?
+            solve_real_symmetric_eigenpairs(plan, operator.stiffness, operator.mass)?
         }
     };
     if use_sparse {
@@ -535,6 +546,11 @@ fn execute_fem_eigen_inner(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion/branch_table.csv".to_string(),
             bytes: dispersion_csv(plan.k_sampling.as_ref(), &summary_payload["modes"]).into_bytes(),
+        });
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/dispersion.csv".to_string(),
+            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
+                .into_bytes(),
         });
     }
 
@@ -1022,7 +1038,7 @@ fn assemble_projected_scalar_operator_real(
     reduction: &ReductionMap,
     observables: &EffectiveFieldObservables,
     equilibrium: &[Vector3],
-) -> (DMatrix<f64>, DMatrix<f64>) {
+) -> AssembledScalarOperator {
     let active_count = reduction.active_nodes.len();
     let mut stiffness = DMatrix::<f64>::zeros(active_count, active_count);
     let mut mass = DMatrix::<f64>::zeros(active_count, active_count);
@@ -1105,7 +1121,7 @@ fn assemble_projected_scalar_operator_real(
     add_surface_anisotropy_real(plan, topology, reduction, equilibrium, &mut stiffness);
     add_dmi_real(plan, topology, reduction, &mut stiffness);
 
-    (stiffness, mass)
+    AssembledScalarOperator::new(stiffness, mass)
 }
 
 /// Assemble the full 2×2 Herring–Kittel block operator.
@@ -2378,6 +2394,46 @@ fn dispersion_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value) -
                 k_vector[2],
                 entry["frequency_hz"].as_f64().unwrap_or(0.0),
                 entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
+            ));
+        }
+    }
+    csv
+}
+
+fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value) -> String {
+    let k_vector = match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => *k_vector,
+        Some(KSamplingIR::Path { .. }) => [0.0, 0.0, 0.0],
+        None => [0.0, 0.0, 0.0],
+    };
+    let label = if k_vector.iter().all(|value| *value == 0.0) {
+        "Γ"
+    } else {
+        ""
+    };
+    let mut csv = String::from(
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score\n",
+    );
+    if let Some(entries) = modes.as_array() {
+        for entry in entries {
+            let residual_norm = entry["residual_norm"]
+                .as_f64()
+                .map(|value| format!("{value:.16e}"))
+                .unwrap_or_default();
+            csv.push_str(&format!(
+                "0,{:.16e},{:.16e},{:.16e},{:.16e},{},{},{},{:.16e},{:.16e},{},{},{}\n",
+                0.0,
+                k_vector[0],
+                k_vector[1],
+                k_vector[2],
+                label,
+                entry["index"].as_u64().unwrap_or(0),
+                "",
+                entry["frequency_hz"].as_f64().unwrap_or(0.0),
+                entry["angular_frequency_rad_per_s"].as_f64().unwrap_or(0.0),
+                "",
+                residual_norm,
+                "",
             ));
         }
     }

@@ -3,7 +3,7 @@
 import { RotateCcw } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import type { FieldCatalogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
@@ -21,8 +21,11 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
-import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  shouldLoadRuntimeMeshManifest,
+  useFieldCatalogResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
   useVisualizationStateResource,
@@ -69,20 +72,55 @@ const GEOMETRY_SCOPES: Array<{
 
 const VISUALIZATION_NUMBER_COMMIT_DELAY_MS = 120;
 
+type ObjectVisualizationManifestStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
+  resources: Pick<LiveStatusResource["resources"], "mesh_revision">;
+};
+
+function selectObjectVisualizationManifestStatus(status: {
+  data: LiveStatusResource | null;
+}): ObjectVisualizationManifestStatus | null {
+  if (!status.data) return null;
+  return {
+    capabilities: {
+      explicit_topology: status.data.capabilities.explicit_topology,
+    },
+    domain: {
+      discretization: status.data.domain.discretization,
+    },
+    resources: {
+      mesh_revision: status.data.resources.mesh_revision,
+    },
+  };
+}
+
+function objectVisualizationManifestStatusEquals(
+  previous: ObjectVisualizationManifestStatus | null,
+  next: ObjectVisualizationManifestStatus | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  return (
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
+    previous.resources.mesh_revision === next.resources.mesh_revision
+  );
+}
+
 function surfaceFieldStatus(
   source: SurfaceColorSource,
-  status: LiveStatusResource | null,
+  fieldCatalog: FieldCatalogResource | null | undefined,
   fetchStatus: string,
 ): string {
   if (source === "solid") return "not required";
-  const revision = Math.max(
-    typeof status?.resources.field_revision === "number"
-      ? status.resources.field_revision
-      : 0,
-    typeof status?.resources.fields_revision === "number"
-      ? status.resources.fields_revision
-      : 0,
-  );
+  const revision =
+    fieldCatalog?.quantities.reduce(
+      (latest, quantity) =>
+        quantity.available ? Math.max(latest, quantity.field_revision) : latest,
+      0,
+    ) ?? 0;
   if (revision > 0) {
     return `available r${revision}`;
   }
@@ -170,7 +208,7 @@ function VisualizationSurfaceColoringSection({
   patchColor,
   pending,
   sectionDisabled,
-  sessionStatus,
+  fieldCatalog,
   settings,
 }: {
   patch: PatchVisualizationTarget;
@@ -180,7 +218,7 @@ function VisualizationSurfaceColoringSection({
   ) => void;
   pending: boolean;
   sectionDisabled: SectionDisabled;
-  sessionStatus: ReturnType<typeof useSessionStatus>;
+  fieldCatalog: ReturnType<typeof useFieldCatalogResource>;
   settings: VisualizationTargetSettings;
 }) {
   return (
@@ -210,8 +248,8 @@ function VisualizationSurfaceColoringSection({
         label="Field status"
         value={surfaceFieldStatus(
           settings.surfaceColorSource,
-          sessionStatus.data,
-          sessionStatus.status,
+          fieldCatalog.data,
+          fieldCatalog.status,
         )}
       />
     </InspectorSection>
@@ -421,11 +459,13 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const { visualizationSync } = useKernel();
   const { snapshot, visualization } = useObjectVisualizationRegistry();
   const visualizationState = useVisualizationStateResource();
-  const sessionStatus = useSessionStatus();
-  const scene = useSceneResource({ enabled: Boolean(target) });
-  const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), sessionStatus.data),
-  });
+  const manifestStatus = useSessionStatusSelector(
+    selectObjectVisualizationManifestStatus,
+    {
+      enabled: Boolean(target),
+      isEqual: objectVisualizationManifestStatusEquals,
+    },
+  );
   const [feedback, setFeedback] = useState<string | null>(null);
   const pending = false;
   const targetVisualization = target
@@ -437,6 +477,16 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
+  const scene = useSceneResource({ enabled: Boolean(target) });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
+  });
+  const fieldCatalog = useFieldCatalogResource({
+    enabled:
+      Boolean(target) &&
+      settings?.surfaceColorSource !== undefined &&
+      settings.surfaceColorSource !== "solid",
+  });
   const topologyFreshness =
     scene.data && manifest.data
       ? resolveVisualizationTopologyFreshness(scene.data, manifest.data)
@@ -666,7 +716,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         patchColor={patchColor}
         pending={pending}
         sectionDisabled={sectionDisabled}
-        sessionStatus={sessionStatus}
+        fieldCatalog={fieldCatalog}
         settings={settings}
       />
       <VisualizationWireframeSection
