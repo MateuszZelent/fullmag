@@ -151,6 +151,42 @@ describe("FooterTelemetry", () => {
     expect(byId.step?.value).toBe("99");
   });
 
+  it("uses detailed runtime state for the visible compute status", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null, {
+      algorithm: null,
+      can_accept_commands: true,
+      converged: false,
+      dt_seconds: 0,
+      integrator: null,
+      is_busy: false,
+      last_error: null,
+      max_torque: 0,
+      revision: 4,
+      run_id: status.run?.run_id ?? null,
+      runtime_state: "waiting_for_compute",
+      runtime_status_code: "waiting_for_compute",
+      runtime_status_kind: "ready",
+      session_status: "running",
+      sim_time_seconds: 0,
+      stage_kind: "relax",
+      step_index: 0,
+      warnings: [],
+    });
+
+    const dt = model.metrics.find((metric) => metric.id === "dt");
+    expect(model.statusTitle).toBe("System Status: Waiting for compute");
+    expect(model.onlineTitle).toBe("Online / Waiting");
+    expect(model.statusState).toBe("waiting_for_compute");
+    expect(dt?.subdetail).toBe("State: Waiting for compute");
+  });
+
   it("selects only telemetry-relevant status fields", () => {
     const selected = selectFooterTelemetryStatus({
       data: status,

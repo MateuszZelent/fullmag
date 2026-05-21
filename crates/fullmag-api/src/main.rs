@@ -21,7 +21,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep_until, Duration, Instant};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::info;
 
@@ -69,6 +69,7 @@ use types::*;
 
 const CURRENT_LIVE_REALTIME_REPLAY_CAPACITY: usize = 512;
 const CURRENT_LIVE_REALTIME_HEARTBEAT_SECS: u64 = 15;
+const CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS: u32 = 250;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLiveRealtimeState {
@@ -245,7 +246,7 @@ fn current_live_realtime_changes(
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
-            revision: realtime_state.revisions.fields_revision,
+            revision: realtime_state.revisions.field_catalog_revision,
             resource_id: None,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/data/fields".to_string()),
@@ -365,6 +366,64 @@ fn current_live_realtime_changes(
     changes
 }
 
+fn current_live_realtime_changes_since(
+    realtime_state: &CurrentLiveRealtimeState,
+    previous_revisions: Option<&RealtimeResourceRevisionMap>,
+) -> Vec<RealtimeResourceChange> {
+    let changes = current_live_realtime_changes(realtime_state);
+    let Some(previous_revisions) = previous_revisions else {
+        return changes;
+    };
+
+    changes
+        .into_iter()
+        .filter(|change| current_live_realtime_change_revision_changed(previous_revisions, change))
+        .collect()
+}
+
+fn current_live_realtime_change_revision_changed(
+    previous: &RealtimeResourceRevisionMap,
+    change: &RealtimeResourceChange,
+) -> bool {
+    let domain_generation_changed = change
+        .domain_generation_id
+        .is_some_and(|revision| revision != previous.domain_generation_id);
+    match change.resource {
+        RealtimeResourceName::Display => previous.display_revision != change.revision,
+        RealtimeResourceName::VisualizationState => {
+            previous.visualization_state_revision != change.revision
+        }
+        RealtimeResourceName::Workspace => previous.workspace_revision != change.revision,
+        RealtimeResourceName::Fields => {
+            if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/fields") {
+                previous.field_catalog_revision != change.revision || domain_generation_changed
+            } else {
+                previous.field_revision != change.revision || domain_generation_changed
+            }
+        }
+        RealtimeResourceName::Scalars => previous.scalars_revision != change.revision,
+        RealtimeResourceName::Domain => {
+            if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/domain/meta")
+            {
+                previous.domain_generation_id != change.revision
+            } else {
+                previous.topology_revision != change.revision || domain_generation_changed
+            }
+        }
+        RealtimeResourceName::Artifacts => previous.artifacts_revision != change.revision,
+        RealtimeResourceName::Logs => previous.engine_log_revision != change.revision,
+        RealtimeResourceName::Diagnostics => previous.solver_profile_revision != change.revision,
+        RealtimeResourceName::Mesh => {
+            previous.mesh_revision != change.revision || domain_generation_changed
+        }
+        RealtimeResourceName::MeshBuilds => previous.mesh_build_revision != change.revision,
+        RealtimeResourceName::Commands => previous.commands_revision != change.revision,
+        RealtimeResourceName::Stages => previous.stages_revision != change.revision,
+        RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
+        RealtimeResourceName::VisualizationClientAcks => true,
+    }
+}
+
 #[cfg(test)]
 mod realtime_change_tests {
     use super::*;
@@ -423,6 +482,68 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
     }
+
+    #[test]
+    fn realtime_changes_since_omits_unchanged_static_resources() {
+        let mut current_revisions = revisions();
+        current_revisions.field_revision += 1;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current_revisions,
+            field_vector_fetches: vec![
+                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+                    .to_string(),
+            ],
+            mesh_resource_fetches: vec![
+                "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+            ],
+        };
+
+        let fetches = current_live_realtime_changes_since(&state, Some(&revisions()))
+            .into_iter()
+            .filter_map(|change| change.recommended_fetch)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(fetches.len(), 1);
+        assert!(fetches.contains(
+            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+        ));
+        assert!(!fetches.contains("/v2/sessions/current/data/fields"));
+        assert!(!fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
+        assert!(!fetches.contains("/v2/sessions/current/workspace/selection"));
+    }
+
+    #[test]
+    fn realtime_batch_events_carry_coalescing_window_metadata() {
+        let event = LiveRealtimeServerEvent::ResourceBatchChanged {
+            seq: 1,
+            ts: "2026-05-21T00:00:00.000Z".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: None,
+            contract_version: current_live_realtime_contract_version().to_string(),
+            payload: ResourceBatchChangedPayload {
+                changes: Vec::new(),
+                coalesced: true,
+                window_ms: 100,
+            },
+        };
+
+        assert_eq!(
+            current_live_realtime_event_coalesce_window_ms(&event),
+            Some(100)
+        );
+    }
+}
+
+fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
+    if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
+        if payload.coalesced && payload.window_ms > 0 {
+            return Some(payload.window_ms);
+        }
+    }
+    None
 }
 
 async fn publish_current_live_realtime_event(
@@ -435,6 +556,7 @@ async fn publish_current_live_realtime_event(
     let record = CurrentLiveRealtimeEvent {
         seq: event.seq(),
         json,
+        coalesce_window_ms: current_live_realtime_event_coalesce_window_ms(&event),
     };
     {
         let mut replay = state.current_live_realtime_replay.lock().await;
@@ -464,6 +586,24 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     .await
 }
 
+async fn publish_current_live_realtime_batch_changed_since(
+    state: &AppState,
+    realtime_state: &CurrentLiveRealtimeState,
+    previous_revisions: Option<&RealtimeResourceRevisionMap>,
+    coalesced: bool,
+    window_ms: u32,
+) -> Result<(), ApiError> {
+    publish_current_live_realtime_resource_changes(
+        state,
+        realtime_state.session_id.clone(),
+        realtime_state.run_id.clone(),
+        current_live_realtime_changes_since(realtime_state, previous_revisions),
+        coalesced,
+        window_ms,
+    )
+    .await
+}
+
 pub(crate) async fn publish_current_live_realtime_resource_changes(
     state: &AppState,
     session_id: String,
@@ -472,6 +612,10 @@ pub(crate) async fn publish_current_live_realtime_resource_changes(
     coalesced: bool,
     window_ms: u32,
 ) -> Result<(), ApiError> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+
     let seq = state
         .current_live_realtime_next_seq
         .fetch_add(1, Ordering::Relaxed)
@@ -1154,27 +1298,41 @@ where
         clear_preview_cache || selected_cached_display_fields_match_selection;
     let preview_config = display_selection.preview_request();
     let mut current = state.current_live_state.write().await;
-    let mut next = match current.take() {
-        Some(existing) if existing.session.session_id == session_id => existing,
-        _ => default_current_live_state(&CurrentLiveSnapshotRequest {
-            session_id: session_id.to_string(),
-            session: None,
-            session_status: None,
-            metadata: None,
-            mesh_workspace: None,
-            stage_execution: None,
-            run: None,
-            live_state: None,
-            latest_scalar_row: None,
-            latest_fields: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-            engine_log: None,
-            solver_profile: None,
-            fem_mesh: None,
-        }),
+    let (mut next, previous_snapshot) = match current.take() {
+        Some(existing) if existing.session.session_id == session_id => {
+            let previous_snapshot = existing.clone();
+            (existing, Some(previous_snapshot))
+        }
+        _ => (
+            default_current_live_state(&CurrentLiveSnapshotRequest {
+                session_id: session_id.to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            }),
+            None,
+        ),
     };
     let previous_preview = next.preview.clone();
+    let previous_revisions = match previous_snapshot.as_ref() {
+        Some(snapshot) => Some(
+            current_live_realtime_state_from_snapshot(&state, snapshot, display_selection.revision)
+                .await
+                .revisions,
+        ),
+        None => None,
+    };
     let apply_start = std::time::Instant::now();
     apply(&mut next)?;
     let apply_ms = apply_start.elapsed().as_micros();
@@ -1279,7 +1437,14 @@ where
     *current = Some(next);
     drop(current);
 
-    publish_current_live_realtime_batch_changed(&state, &realtime_state, true, 100).await?;
+    publish_current_live_realtime_batch_changed_since(
+        &state,
+        &realtime_state,
+        previous_revisions.as_ref(),
+        true,
+        CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS,
+    )
+    .await?;
 
     let sync_elapsed_us = sync_start.elapsed().as_micros();
     if sync_elapsed_us > 50_000 {
@@ -1437,6 +1602,32 @@ fn encode_current_live_realtime_event(event: &LiveRealtimeServerEvent) -> Result
     })
 }
 
+async fn send_current_live_realtime_record(
+    socket: &mut WebSocket,
+    event: CurrentLiveRealtimeEvent,
+    last_sent_seq: &mut u64,
+) -> bool {
+    if event.seq <= *last_sent_seq {
+        return true;
+    }
+    if socket.send(Message::Text(event.json.into())).await.is_err() {
+        return false;
+    }
+    *last_sent_seq = event.seq;
+    true
+}
+
+async fn flush_pending_current_live_realtime_record(
+    socket: &mut WebSocket,
+    pending_event: &mut Option<CurrentLiveRealtimeEvent>,
+    last_sent_seq: &mut u64,
+) -> bool {
+    let Some(event) = pending_event.take() else {
+        return true;
+    };
+    send_current_live_realtime_record(socket, event, last_sent_seq).await
+}
+
 pub(crate) async fn handle_current_live_realtime_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
@@ -1505,33 +1696,73 @@ pub(crate) async fn handle_current_live_realtime_ws(
                 .collect::<Vec<_>>()
         };
         for event in replay_events {
-            if event.seq <= last_sent_seq {
-                continue;
-            }
-            if socket.send(Message::Text(event.json.into())).await.is_err() {
+            if !send_current_live_realtime_record(&mut socket, event, &mut last_sent_seq).await {
                 return;
             }
-            last_sent_seq = event.seq;
         }
     }
 
     let mut heartbeat = interval(Duration::from_secs(CURRENT_LIVE_REALTIME_HEARTBEAT_SECS));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pending_event: Option<CurrentLiveRealtimeEvent> = None;
+    let mut coalesce_deadline: Option<Instant> = None;
 
     loop {
         tokio::select! {
+            _ = async {
+                if let Some(deadline) = coalesce_deadline {
+                    sleep_until(deadline).await;
+                }
+            }, if coalesce_deadline.is_some() => {
+                coalesce_deadline = None;
+                if !flush_pending_current_live_realtime_record(
+                    &mut socket,
+                    &mut pending_event,
+                    &mut last_sent_seq,
+                ).await {
+                    break;
+                }
+            }
             result = rx.recv() => {
                 match result {
                     Ok(event) => {
                         if event.seq <= last_sent_seq {
                             continue;
                         }
-                        if socket.send(Message::Text(event.json.into())).await.is_err() {
-                            break;
+                        if let Some(window_ms) = event.coalesce_window_ms {
+                            if pending_event.is_none() {
+                                coalesce_deadline = Some(
+                                    Instant::now() + Duration::from_millis(u64::from(window_ms)),
+                                );
+                            }
+                            pending_event = Some(event);
+                        } else {
+                            coalesce_deadline = None;
+                            if !flush_pending_current_live_realtime_record(
+                                &mut socket,
+                                &mut pending_event,
+                                &mut last_sent_seq,
+                            ).await {
+                                break;
+                            }
+                            if !send_current_live_realtime_record(
+                                &mut socket,
+                                event,
+                                &mut last_sent_seq,
+                            ).await {
+                                break;
+                            }
                         }
-                        last_sent_seq = event.seq;
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
+                        coalesce_deadline = None;
+                        if !flush_pending_current_live_realtime_record(
+                            &mut socket,
+                            &mut pending_event,
+                            &mut last_sent_seq,
+                        ).await {
+                            break;
+                        }
                         let resync = build_current_live_realtime_resync_event(
                             &state,
                             session_id.clone(),
@@ -1555,6 +1786,14 @@ pub(crate) async fn handle_current_live_realtime_ws(
                 }
             }
             _ = heartbeat.tick() => {
+                coalesce_deadline = None;
+                if !flush_pending_current_live_realtime_record(
+                    &mut socket,
+                    &mut pending_event,
+                    &mut last_sent_seq,
+                ).await {
+                    break;
+                }
                 let heartbeat_event = LiveRealtimeServerEvent::Heartbeat {
                     seq: state.current_live_realtime_next_seq.load(Ordering::Relaxed),
                     ts: realtime_timestamp_now(),

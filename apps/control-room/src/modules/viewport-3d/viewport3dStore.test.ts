@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   resolveHslReferenceVisible,
+  resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
   viewport3dStore,
@@ -46,6 +47,7 @@ describe("viewport3dStore", () => {
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
       cameraDialogOpen: false,
+      cameraOrthographicScale: null,
       cameraProjection: "perspective",
       dimensionFrameDensity: "auto",
       dimensionFrameMode: "floor",
@@ -69,6 +71,7 @@ describe("viewport3dStore", () => {
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
       cameraDialogOpen: false,
+      cameraOrthographicScale: null,
       cameraProjection: "perspective",
       dimensionFrameDensity: "auto",
       dimensionFrameMode: "floor",
@@ -131,6 +134,7 @@ describe("viewport3dStore", () => {
         target: [1, 2, 3],
         up: [0, 1, 0],
       },
+      orthographicScale: 2.5e-6,
       projection: "orthographic",
     });
 
@@ -141,6 +145,9 @@ describe("viewport3dStore", () => {
     });
     expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
       "orthographic",
+    );
+    expect(viewport3dStore.getSnapshot().widgets.cameraOrthographicScale).toBe(
+      2.5e-6,
     );
   });
 
@@ -169,6 +176,7 @@ describe("viewport3dStore", () => {
       up: [0, 0, 1],
     });
     expect(resolveViewport3DCameraProjection(state)).toBe("orthographic");
+    expect(resolveViewport3DCameraOrthographicScale(state)).toBe(2.5e-6);
   });
 
   it("falls back to local camera defaults when visualization state has no camera", () => {

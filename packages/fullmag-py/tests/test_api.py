@@ -843,6 +843,12 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(loaded.entrypoint_kind, "flat_workspace")
         self.assertEqual(len(loaded.stages), 1)
+        relax_ir = loaded.stages[0].problem.study.to_ir()
+        self.assertEqual(relax_ir["kind"], "relaxation")
+        self.assertAlmostEqual(
+            relax_ir["stop"]["torque_tolerance_apm"],
+            1e-4 / 1.2566e-6,
+        )
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
         per_geometry = mesh_workflow["per_geometry"]
         self.assertEqual(len(per_geometry), 1)

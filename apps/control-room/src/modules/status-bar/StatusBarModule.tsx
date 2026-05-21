@@ -2,7 +2,14 @@
 
 import { useSyncExternalStore } from "react";
 
-import { useCurrentRunResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useCurrentRunResource,
+  useSolverStatusResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import {
+  formatRuntimeStateLabel,
+  resolveEffectiveRuntimeState,
+} from "@/kernel/runtime/runtimeStateDisplay";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
@@ -50,12 +57,17 @@ export default function StatusBarModule() {
     { enabled: mounted },
   );
   const currentRun = useCurrentRunResource({ enabled: mounted });
+  const solverStatus = useSolverStatusResource({ enabled: mounted });
+  const runtimeState = resolveEffectiveRuntimeState({
+    detailedRuntimeState: mounted ? solverStatus.data?.runtime_state : null,
+    sessionSolverState: mounted ? solverState : null,
+  });
   const engine = buildStatusBarEngineModel(
     mounted ? currentRun.data : null,
-    mounted ? solverState : null,
+    mounted ? runtimeState : null,
   );
   const sessionState = mounted
-    ? readString(solverState, sessionResourceStatus)
+    ? formatRuntimeStateLabel(runtimeState, sessionResourceStatus)
     : "loading";
   const sessionName = mounted
     ? readString(sessionStatusName, "session unavailable")

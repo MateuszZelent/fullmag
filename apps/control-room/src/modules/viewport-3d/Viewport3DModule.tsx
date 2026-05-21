@@ -28,6 +28,7 @@ import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { useViewport3DSceneModel } from "./hooks/useViewport3DSceneModel";
 import {
   resolveViewport3DCameraFit,
+  type Viewport3DCameraChange,
   VIEWPORT_3D_WORLD_UP,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
@@ -137,31 +138,62 @@ export default function Viewport3DModule({
     (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
       kernel.cameraRegistry.patchCamera(patch);
       if (patch.position && patch.target) {
-        viewport3dStore.setCamera({
+        const nextCamera = {
           position: toCameraTuple(patch.position),
           target: toCameraTuple(patch.target),
           up: toCameraTuple(patch.up ?? VIEWPORT_3D_WORLD_UP),
-        });
+        };
+        if (patch.projection || "orthographic_scale" in patch) {
+          viewport3dStore.setCameraView({
+            camera: nextCamera,
+            orthographicScale: patch.orthographic_scale,
+            projection:
+              patch.projection ??
+              viewport3dStore.getSnapshot().widgets.cameraProjection,
+          });
+        } else {
+          viewport3dStore.setCamera(nextCamera);
+        }
       }
       if (patch.projection) {
         viewport3dStore.setCameraProjection(patch.projection);
+      }
+      if ("orthographic_scale" in patch) {
+        viewport3dStore.setCameraOrthographicScale(patch.orthographic_scale ?? null);
       }
     },
     [kernel.cameraRegistry],
   );
   const saveCameraState = useCallback(
-    (camera: {
-      position: [number, number, number];
-      target: [number, number, number];
-      up?: [number, number, number];
-    }) => {
+    (camera: Viewport3DCameraChange) => {
       const nextCamera = {
         position: camera.position,
         target: camera.target,
         up: camera.up ?? VIEWPORT_3D_WORLD_UP,
       };
-      viewport3dStore.setCamera(nextCamera);
-      kernel.cameraRegistry.patchCamera(nextCamera);
+      if (
+        camera.projection !== undefined ||
+        camera.orthographicScale !== undefined
+      ) {
+        viewport3dStore.setCameraView({
+          camera: nextCamera,
+          orthographicScale: camera.orthographicScale ?? null,
+          projection:
+            camera.projection ??
+            viewport3dStore.getSnapshot().widgets.cameraProjection,
+        });
+      } else {
+        viewport3dStore.setCamera(nextCamera);
+      }
+      kernel.cameraRegistry.patchCamera({
+        ...nextCamera,
+        ...(camera.projection === undefined
+          ? {}
+          : { projection: camera.projection }),
+        ...(camera.orthographicScale === undefined
+          ? {}
+          : { orthographic_scale: camera.orthographicScale }),
+      });
     },
     [kernel.cameraRegistry],
   );
@@ -354,6 +386,9 @@ function Viewport3DFrame({
     <section
       aria-label="3D viewport"
       className="fm-viewport-3d"
+      data-camera-position={sceneProps.cameraState.position.join(" ")}
+      data-camera-projection={sceneProps.cameraProjection}
+      data-camera-target={sceneProps.cameraState.target.join(" ")}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
       data-visual-profile-id={sceneProps.visualProfileId}
@@ -407,6 +442,7 @@ function Viewport3DFrame({
         </div>
       )}
       <Viewport3DCameraDialog
+        cameraOrthographicScale={sceneProps.cameraOrthographicScale}
         cameraProjection={sceneProps.cameraProjection}
         cameraResource={cameraResource}
         cameraState={cameraDialogState}

@@ -6,6 +6,7 @@ import type { MutableRefObject } from "react";
 import { MOUSE, Vector3, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { clampNumber, nearTuple3, sameTuple3 } from "../viewport3dMath";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
@@ -31,6 +32,11 @@ interface Viewport3DCameraFit {
   near: number;
   position: [number, number, number];
   target: [number, number, number];
+}
+
+export interface Viewport3DCameraChange extends Viewport3DCameraState {
+  orthographicScale?: number | null;
+  projection?: Viewport3DCameraProjection;
 }
 
 type OrbitMouseAction = (typeof MOUSE)[keyof typeof MOUSE];
@@ -75,6 +81,7 @@ const VIEWPORT_3D_ORBIT_ROTATE_SPEED = 1;
 const VIEWPORT_3D_NATIVE_ORBIT_BUTTON = 0;
 const VIEWPORT_3D_NATIVE_PAN_BUTTON = 2;
 const VIEWPORT_3D_DRAG_THRESHOLD_PX = 4;
+const VIEWPORT_3D_LOCAL_CAMERA_SYNC_THROTTLE_MS = 67;
 const VIEWPORT_3D_MIN_POLAR_ANGLE = 0.05;
 const VIEWPORT_3D_MAX_POLAR_ANGLE = Math.PI - 0.05;
 
@@ -101,11 +108,17 @@ export function commitOrbitCameraEnd({
   cameraUp = VIEWPORT_3D_WORLD_UP,
   controlTarget,
   onCameraChange,
+  orthographicScale,
+  projection,
+  syncStore = true,
 }: {
   cameraPosition: [number, number, number];
   cameraUp?: [number, number, number];
   controlTarget: number[];
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
+  orthographicScale?: number | null;
+  projection?: Viewport3DCameraProjection;
+  syncStore?: boolean;
 }): void {
   if (controlTarget.length < 3) return;
 
@@ -117,8 +130,20 @@ export function commitOrbitCameraEnd({
       controlTarget[2] ?? 0,
     ] as [number, number, number],
     up: cameraUp,
+    ...(orthographicScale === undefined ? {} : { orthographicScale }),
+    ...(projection === undefined ? {} : { projection }),
   };
-  viewport3dStore.setCamera(nextCamera);
+  if (syncStore) {
+    if (orthographicScale === undefined || projection === undefined) {
+      viewport3dStore.setCamera(nextCamera);
+    } else {
+      viewport3dStore.setCameraView({
+        camera: nextCamera,
+        orthographicScale,
+        projection,
+      });
+    }
+  }
   void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
 }
 
@@ -266,8 +291,8 @@ function rotateZUpSphericalVector(
   if (!Number.isFinite(radius) || radius <= 0) return null;
 
   const azimuth = Math.atan2(vector.y, vector.x) + yawDelta;
-  const polar = clamp(
-    Math.acos(clamp(vector.z / radius, -1, 1)) + polarDelta,
+  const polar = clampNumber(
+    Math.acos(clampNumber(vector.z / radius, -1, 1)) + polarDelta,
     VIEWPORT_3D_MIN_POLAR_ANGLE,
     VIEWPORT_3D_MAX_POLAR_ANGLE,
   );
@@ -401,7 +426,9 @@ function applyViewport3DCameraUp(
 }
 
 function applyCameraLookAt(camera: Camera, target: Vector3): void {
-  applyViewport3DWorldUp(camera);
+  if (camera.up.lengthSq() <= 0) {
+    applyViewport3DWorldUp(camera);
+  }
   camera.lookAt(target);
   (camera as Camera & { updateProjectionMatrix?: () => void })
     .updateProjectionMatrix?.();
@@ -449,36 +476,18 @@ function applyCameraClipping(camera: Camera, near: number, far: number) {
   clippedCamera.far = far;
 }
 
-function sameVector(
-  left: [number, number, number],
-  right: [number, number, number],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-}
-
-function nearVector(
-  left: [number, number, number],
-  right: [number, number, number],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (value, index) => Math.abs(value - right[index]) <= CAMERA_STATE_EPSILON,
-    )
-  );
-}
-
 function nearCameraState(
   left: Viewport3DCameraState,
   right: Viewport3DCameraState,
 ): boolean {
   return (
-    nearVector(left.position, right.position) &&
-    nearVector(left.target, right.target) &&
-    nearVector(left.up ?? VIEWPORT_3D_WORLD_UP, right.up ?? VIEWPORT_3D_WORLD_UP)
+    nearTuple3(left.position, right.position, CAMERA_STATE_EPSILON) &&
+    nearTuple3(left.target, right.target, CAMERA_STATE_EPSILON) &&
+    nearTuple3(
+      left.up ?? VIEWPORT_3D_WORLD_UP,
+      right.up ?? VIEWPORT_3D_WORLD_UP,
+      CAMERA_STATE_EPSILON,
+    )
   );
 }
 
@@ -502,8 +511,8 @@ export function shouldApplyViewport3DCameraState<TCamera>({
 
 function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
   return (
-    sameVector(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) &&
-    sameVector(cameraState.target, DEFAULT_VIEWPORT_3D_CAMERA_STATE.target)
+    sameTuple3(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) &&
+    sameTuple3(cameraState.target, DEFAULT_VIEWPORT_3D_CAMERA_STATE.target)
   );
 }
 
@@ -519,6 +528,31 @@ export function resolveWheelZoomDistance(
   return Math.max(
     WHEEL_ZOOM_MIN_DISTANCE,
     Math.min(WHEEL_ZOOM_MAX_DISTANCE, currentDistance * scale),
+  );
+}
+
+export function resolveViewport3DOrthographicWheelScale(
+  currentScale: number,
+  deltaY: number,
+): number {
+  if (!Number.isFinite(currentScale) || currentScale <= 0) {
+    return WHEEL_ZOOM_MIN_DISTANCE;
+  }
+  const clampedDelta = Math.max(-1000, Math.min(1000, deltaY));
+  const scale = Math.exp(clampedDelta * WHEEL_ZOOM_INTENSITY);
+  return clampNumber(currentScale * scale, WHEEL_ZOOM_MIN_DISTANCE, 1e12);
+}
+
+export function resolveViewport3DLocalCameraSyncDue({
+  lastSyncedAtMs,
+  nowMs,
+}: {
+  lastSyncedAtMs: number | null;
+  nowMs: number;
+}): boolean {
+  return (
+    lastSyncedAtMs === null ||
+    nowMs - lastSyncedAtMs >= VIEWPORT_3D_LOCAL_CAMERA_SYNC_THROTTLE_MS
   );
 }
 
@@ -553,7 +587,7 @@ export function CameraController({
   bounds: Viewport3DBounds | null;
   cameraState: Viewport3DCameraState;
   fitRevision: number;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -635,7 +669,6 @@ export function CameraController({
     camera.updateProjectionMatrix();
     appliedCameraRef.current = camera;
     appliedCameraStateRef.current = state;
-    viewport3dStore.setCamera(state);
     invalidate();
     tracker.recordDirtyFrame("camera-init");
     // Intentionally runs only on mount.
@@ -659,7 +692,6 @@ export function CameraController({
     camera.updateProjectionMatrix();
     appliedCameraRef.current = camera;
     appliedCameraStateRef.current = cameraState;
-    viewport3dStore.setCamera(cameraState);
     invalidate();
     tracker.recordDirtyFrame("camera-resource");
   }, [camera, cameraState, invalidate, tracker]);
@@ -678,10 +710,16 @@ function useLatestRef<T>(value: T): MutableRefObject<T> {
 function commitCurrentCamera({
   camera,
   onCameraChange,
+  orthographicScale,
+  projection,
+  syncStore,
   target,
 }: {
   camera: Camera;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
+  orthographicScale?: number | null;
+  projection?: Viewport3DCameraProjection;
+  syncStore?: boolean;
   target: Vector3;
 }): void {
   commitOrbitCameraEnd({
@@ -689,14 +727,37 @@ function commitCurrentCamera({
     cameraUp: camera.up.toArray() as [number, number, number],
     controlTarget: target.toArray(),
     onCameraChange,
+    orthographicScale,
+    projection,
+    syncStore,
   });
 }
 
-function syncLocalCameraStore(camera: Camera, target: Vector3): void {
-  viewport3dStore.setCamera({
+function syncLocalCameraStore({
+  camera,
+  orthographicScale,
+  projection,
+  target,
+}: {
+  camera: Camera;
+  orthographicScale?: number | null;
+  projection?: Viewport3DCameraProjection;
+  target: Vector3;
+}): void {
+  const nextCamera = {
     position: camera.position.toArray() as [number, number, number],
     target: target.toArray() as [number, number, number],
     up: camera.up.toArray() as [number, number, number],
+  };
+  if (projection === undefined && orthographicScale === undefined) {
+    viewport3dStore.setCamera(nextCamera);
+    return;
+  }
+
+  viewport3dStore.setCameraView({
+    camera: nextCamera,
+    orthographicScale,
+    projection: projection ?? viewport3dStore.getSnapshot().widgets.cameraProjection,
   });
 }
 
@@ -704,6 +765,18 @@ function stopCameraEvent(event: Event): void {
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
+}
+
+function captureViewport3DPointer(element: HTMLElement, pointerId: number): void {
+  if (!element.hasPointerCapture(pointerId)) {
+    element.setPointerCapture(pointerId);
+  }
+}
+
+function releaseViewport3DPointer(element: HTMLElement, pointerId: number): void {
+  if (element.hasPointerCapture(pointerId)) {
+    element.releasePointerCapture(pointerId);
+  }
 }
 
 function gestureMovedPastThreshold(
@@ -718,6 +791,8 @@ function gestureMovedPastThreshold(
 
 function useNativeCameraGestures({
   camera,
+  cameraOrthographicScaleRef,
+  cameraProjectionRef,
   gl,
   invalidate,
   onCameraChangeRef,
@@ -729,9 +804,11 @@ function useNativeCameraGestures({
   wheelCommitTimerRef,
 }: {
   camera: Camera;
+  cameraOrthographicScaleRef: MutableRefObject<number | null>;
+  cameraProjectionRef: MutableRefObject<Viewport3DCameraProjection>;
   gl: { domElement: HTMLElement };
   invalidate: () => void;
-  onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
+  onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraChange) => Promise<void> | void>;
   onCameraInteractionEndRef: MutableRefObject<(() => void) | undefined>;
   onCameraInteractionStartRef: MutableRefObject<(() => void) | undefined>;
   rotationModeRef: MutableRefObject<Viewport3DRotationMode>;
@@ -742,18 +819,37 @@ function useNativeCameraGestures({
   useEffect(() => {
     const element = gl.domElement;
     const gestureRef: { current: NativeGestureState | null } = { current: null };
+    const localCameraStoreDirtyRef: { current: boolean } = { current: false };
+    const lastLocalCameraSyncAtRef: { current: number | null } = { current: null };
     const onCameraInteractionEndCleanup = onCameraInteractionEndRef.current;
+    const suppressContextMenuUntilRef = { current: 0 };
 
-    const flushWheelCommit = () => {
+    const flushWheelCommit = ({
+      endInteraction,
+    }: {
+      endInteraction: boolean;
+    }) => {
       if (!wheelCommitTimerRef.current) return;
       clearTimeout(wheelCommitTimerRef.current);
       wheelCommitTimerRef.current = null;
+      const isOrthographic = cameraProjectionRef.current === "orthographic";
       commitCurrentCamera({
         camera,
         onCameraChange: onCameraChangeRef.current,
+        orthographicScale: isOrthographic
+          ? resolveViewport3DCurrentOrthographicScale({
+              camera,
+              fallbackScale: cameraOrthographicScaleRef.current,
+              viewportHeightPixels: resolveViewport3DElementSize(element).height,
+            })
+          : undefined,
+        projection: isOrthographic ? "orthographic" : undefined,
+        syncStore: false,
         target: targetRef.current,
       });
-      onCameraInteractionEndRef.current?.();
+      if (endInteraction) {
+        onCameraInteractionEndRef.current?.();
+      }
     };
 
     const handlePointerDown = (event: PointerEvent) => {
@@ -765,10 +861,14 @@ function useNativeCameraGestures({
           : null;
       if (!mode) return;
 
-      flushWheelCommit();
+      flushWheelCommit({ endInteraction: false });
       if (mode === "pan") {
         stopCameraEvent(event);
+        suppressContextMenuUntilRef.current = Date.now() + 1_500;
       }
+      captureViewport3DPointer(element, event.pointerId);
+      localCameraStoreDirtyRef.current = false;
+      lastLocalCameraSyncAtRef.current = null;
       onCameraInteractionStartRef.current?.();
       gestureRef.current = {
         hasDragged: false,
@@ -818,6 +918,20 @@ function useNativeCameraGestures({
       gesture.lastY = event.clientY;
       if (!didMove) return;
 
+      const nowMs =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (
+        resolveViewport3DLocalCameraSyncDue({
+          lastSyncedAtMs: lastLocalCameraSyncAtRef.current,
+          nowMs,
+        })
+      ) {
+        syncLocalCameraStore({ camera, target });
+        localCameraStoreDirtyRef.current = false;
+        lastLocalCameraSyncAtRef.current = nowMs;
+      } else {
+        localCameraStoreDirtyRef.current = true;
+      }
       invalidate();
       trackerRef.current.recordDirtyFrame(
         gesture.mode === "pan" ? "camera-native-pan" : "camera-native-orbit",
@@ -829,6 +943,13 @@ function useNativeCameraGestures({
       if (!gesture || gesture.pointerId !== event.pointerId) return;
 
       gestureRef.current = null;
+      const syncStore = localCameraStoreDirtyRef.current;
+      localCameraStoreDirtyRef.current = false;
+      lastLocalCameraSyncAtRef.current = null;
+      releaseViewport3DPointer(element, event.pointerId);
+      if (gesture.mode === "pan") {
+        suppressContextMenuUntilRef.current = Date.now() + 1_500;
+      }
       if (!gesture.hasDragged && gesture.mode === "orbit") {
         onCameraInteractionEndRef.current?.();
         return;
@@ -838,6 +959,7 @@ function useNativeCameraGestures({
       commitCurrentCamera({
         camera,
         onCameraChange: onCameraChangeRef.current,
+        syncStore,
         target: targetRef.current,
       });
       invalidate();
@@ -850,7 +972,14 @@ function useNativeCameraGestures({
     };
 
     const handleContextMenu = (event: MouseEvent) => {
-      if (event.target !== element) return;
+      const eventTarget = event.target;
+      const isCanvasEvent =
+        eventTarget === element ||
+        eventTarget instanceof Node &&
+          element.contains(eventTarget);
+      const shouldSuppressContextMenu =
+        isCanvasEvent || Date.now() <= suppressContextMenuUntilRef.current;
+      if (!shouldSuppressContextMenu) return;
       stopCameraEvent(event);
     };
 
@@ -862,6 +991,7 @@ function useNativeCameraGestures({
 
     return () => {
       if (gestureRef.current) {
+        releaseViewport3DPointer(element, gestureRef.current.pointerId);
         onCameraInteractionEndCleanup?.();
       }
       gestureRef.current = null;
@@ -873,6 +1003,8 @@ function useNativeCameraGestures({
     };
   }, [
     camera,
+    cameraOrthographicScaleRef,
+    cameraProjectionRef,
     gl.domElement,
     invalidate,
     onCameraChangeRef,
@@ -885,8 +1017,58 @@ function useNativeCameraGestures({
   ]);
 }
 
+function resolveViewport3DCurrentOrthographicScale({
+  camera,
+  fallbackScale,
+  viewportHeightPixels,
+}: {
+  camera: Camera;
+  fallbackScale: number | null;
+  viewportHeightPixels: number;
+}): number {
+  const orthographicCamera = camera as Camera & {
+    isOrthographicCamera?: boolean;
+    zoom?: number;
+  };
+  if (
+    orthographicCamera.isOrthographicCamera &&
+    typeof orthographicCamera.zoom === "number" &&
+    Number.isFinite(orthographicCamera.zoom) &&
+    orthographicCamera.zoom > 0 &&
+    viewportHeightPixels > 0
+  ) {
+    return viewportHeightPixels / orthographicCamera.zoom;
+  }
+
+  return fallbackScale ?? WHEEL_ZOOM_MIN_DISTANCE;
+}
+
+function applyViewport3DOrthographicZoomScale({
+  camera,
+  scale,
+  viewportHeightPixels,
+}: {
+  camera: Camera;
+  scale: number;
+  viewportHeightPixels: number;
+}): void {
+  const orthographicCamera = camera as Camera & {
+    isOrthographicCamera?: boolean;
+    updateProjectionMatrix?: () => void;
+    zoom?: number;
+  };
+  if (!orthographicCamera.isOrthographicCamera || viewportHeightPixels <= 0) {
+    return;
+  }
+
+  orthographicCamera.zoom = clampNumber(viewportHeightPixels / scale, 1e-3, 1e12);
+  orthographicCamera.updateProjectionMatrix?.();
+}
+
 function useWheelZoom({
   camera,
+  cameraOrthographicScaleRef,
+  cameraProjectionRef,
   gl,
   invalidate,
   onCameraChangeRef,
@@ -897,9 +1079,11 @@ function useWheelZoom({
   wheelCommitTimerRef,
 }: {
   camera: Camera;
+  cameraOrthographicScaleRef: MutableRefObject<number | null>;
+  cameraProjectionRef: MutableRefObject<Viewport3DCameraProjection>;
   gl: { domElement: HTMLElement };
   invalidate: () => void;
-  onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraState) => Promise<void> | void>;
+  onCameraChangeRef: MutableRefObject<(camera: Viewport3DCameraChange) => Promise<void> | void>;
   onCameraInteractionEndRef: MutableRefObject<(() => void) | undefined>;
   onCameraInteractionStartRef: MutableRefObject<(() => void) | undefined>;
   targetRef: MutableRefObject<Vector3>;
@@ -917,6 +1101,50 @@ function useWheelZoom({
       onCameraInteractionStartRef.current?.();
 
       const target = targetRef.current;
+      if (cameraProjectionRef.current === "orthographic") {
+        const viewportSize = resolveViewport3DElementSize(element);
+        const currentScale = resolveViewport3DCurrentOrthographicScale({
+          camera,
+          fallbackScale: cameraOrthographicScaleRef.current,
+          viewportHeightPixels: viewportSize.height,
+        });
+        const nextScale = resolveViewport3DOrthographicWheelScale(
+          currentScale,
+          event.deltaY,
+        );
+        applyViewport3DOrthographicZoomScale({
+          camera,
+          scale: nextScale,
+          viewportHeightPixels: viewportSize.height,
+        });
+        applyCameraLookAt(camera, target);
+        syncLocalCameraStore({
+          camera,
+          orthographicScale: nextScale,
+          projection: "orthographic",
+          target,
+        });
+        invalidate();
+        trackerRef.current.recordDirtyFrame("camera-wheel");
+
+        if (wheelCommitTimerRef.current) {
+          clearTimeout(wheelCommitTimerRef.current);
+        }
+        wheelCommitTimerRef.current = setTimeout(() => {
+          wheelCommitTimerRef.current = null;
+          commitCurrentCamera({
+            camera,
+            onCameraChange: onCameraChangeRef.current,
+            orthographicScale: nextScale,
+            projection: "orthographic",
+            syncStore: false,
+            target,
+          });
+          onCameraInteractionEndRef.current?.();
+        }, WHEEL_CAMERA_COMMIT_DELAY_MS);
+        return;
+      }
+
       offset.copy(camera.position).sub(target);
       const currentDistance = offset.length();
       const nextDistance = resolveWheelZoomDistance(currentDistance, event.deltaY);
@@ -925,7 +1153,7 @@ function useWheelZoom({
 
       camera.position.copy(target).addScaledVector(direction, nextDistance);
       applyCameraLookAt(camera, target);
-      syncLocalCameraStore(camera, target);
+      syncLocalCameraStore({ camera, target });
       invalidate();
       trackerRef.current.recordDirtyFrame("camera-wheel");
 
@@ -937,6 +1165,7 @@ function useWheelZoom({
         commitCurrentCamera({
           camera,
           onCameraChange: onCameraChangeRef.current,
+          syncStore: false,
           target,
         });
         onCameraInteractionEndRef.current?.();
@@ -958,6 +1187,8 @@ function useWheelZoom({
     };
   }, [
     camera,
+    cameraOrthographicScaleRef,
+    cameraProjectionRef,
     gl.domElement,
     invalidate,
     onCameraChangeRef,
@@ -970,6 +1201,8 @@ function useWheelZoom({
 }
 
 export function OrbitCameraControls({
+  cameraOrthographicScale,
+  cameraProjection,
   cameraState,
   onCameraChange,
   onCameraInteractionEnd,
@@ -977,9 +1210,10 @@ export function OrbitCameraControls({
   rotationMode,
   tracker,
 }: {
+  cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
   rotationMode: Viewport3DRotationMode;
@@ -991,6 +1225,8 @@ export function OrbitCameraControls({
   const onCameraChangeRef = useLatestRef(onCameraChange);
   const onCameraInteractionEndRef = useLatestRef(onCameraInteractionEnd);
   const onCameraInteractionStartRef = useLatestRef(onCameraInteractionStart);
+  const cameraOrthographicScaleRef = useLatestRef(cameraOrthographicScale);
+  const cameraProjectionRef = useLatestRef(cameraProjection);
   const rotationModeRef = useLatestRef(rotationMode);
   const trackerRef = useLatestRef(tracker);
 
@@ -1014,6 +1250,8 @@ export function OrbitCameraControls({
 
   useNativeCameraGestures({
     camera,
+    cameraOrthographicScaleRef,
+    cameraProjectionRef,
     gl,
     invalidate,
     onCameraChangeRef,
@@ -1027,6 +1265,8 @@ export function OrbitCameraControls({
 
   useWheelZoom({
     camera,
+    cameraOrthographicScaleRef,
+    cameraProjectionRef,
     gl,
     invalidate,
     onCameraChangeRef,
@@ -1038,8 +1278,4 @@ export function OrbitCameraControls({
   });
 
   return null;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }

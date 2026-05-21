@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type { LiveStatusResource } from "../api/apiTypes";
 import type { ResourceResult } from "../resources/resourceTypes";
@@ -118,20 +118,19 @@ function getSimulationStartupSmokeBypassSnapshot(): boolean {
   );
 }
 
-function subscribeSimulationStartupSmokeBypass(): () => void {
-  return () => undefined;
-}
-
-function getSimulationStartupSmokeBypassServerSnapshot(): boolean {
-  return false;
-}
-
 function useAllowMissingSessionSmoke(): boolean {
-  return useSyncExternalStore(
-    subscribeSimulationStartupSmokeBypass,
-    getSimulationStartupSmokeBypassSnapshot,
-    getSimulationStartupSmokeBypassServerSnapshot,
-  );
+  const [allowMissingSessionSmoke, setAllowMissingSessionSmoke] =
+    useState(false);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setAllowMissingSessionSmoke(getSimulationStartupSmokeBypassSnapshot());
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
+  return allowMissingSessionSmoke;
 }
 
 export function SimulationStartupOverlayView({

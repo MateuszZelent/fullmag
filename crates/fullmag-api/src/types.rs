@@ -136,6 +136,7 @@ pub(crate) struct AppState {
 pub(crate) struct CurrentLiveRealtimeEvent {
     pub seq: u64,
     pub json: String,
+    pub coalesce_window_ms: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]

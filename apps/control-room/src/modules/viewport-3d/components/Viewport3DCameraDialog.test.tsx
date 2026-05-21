@@ -17,6 +17,7 @@ describe("Viewport3DCameraDialog", () => {
   it("renders live camera parameters and editable camera fields", () => {
     const html = renderToStaticMarkup(
       <Viewport3DCameraDialog
+        cameraOrthographicScale={null}
         cameraProjection="perspective"
         cameraResource={{
           fov_degrees: 42,

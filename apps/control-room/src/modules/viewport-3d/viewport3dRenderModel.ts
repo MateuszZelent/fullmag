@@ -125,6 +125,15 @@ const partVectorSegmentCache = new WeakMap<
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const topologySurfaceIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
 const topologyVolumeEdgeIndexCache = new WeakMap<DecodedTopology, Uint32Array>();
+const partSurfaceIndexCache = new WeakMap<
+  DecodedTopology,
+  WeakMap<Viewport3DSurfacePart, Uint32Array | null>
+>();
+const partVolumeEdgeIndexCache = new WeakMap<
+  DecodedTopology,
+  WeakMap<Viewport3DSurfacePart, Uint32Array | null>
+>();
+const surfaceEdgeIndexCache = new WeakMap<Uint32Array, Uint32Array | null>();
 const surfaceNodeNormalCache = new WeakMap<
   Viewport3DPositionSource,
   WeakMap<object, Float32Array | null>
@@ -159,6 +168,40 @@ function buildCachedTopologyVolumeEdgeIndices(
   const volumeEdgeIndices = buildTetraVolumeEdgeIndices(topology.indices);
   topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices);
   return volumeEdgeIndices;
+}
+
+function getCachedPartTopologyValue<TValue>(
+  cache: WeakMap<DecodedTopology, WeakMap<Viewport3DSurfacePart, TValue>>,
+  topology: DecodedTopology,
+  part: Viewport3DSurfacePart,
+  build: () => TValue,
+): TValue {
+  let partCache = cache.get(topology);
+  if (!partCache) {
+    partCache = new WeakMap<Viewport3DSurfacePart, TValue>();
+    cache.set(topology, partCache);
+  }
+
+  if (partCache.has(part)) {
+    return partCache.get(part) as TValue;
+  }
+
+  const value = build();
+  partCache.set(part, value);
+  return value;
+}
+
+function buildCachedSurfaceEdgeIndices(
+  surfaceIndices: Uint32Array | null,
+): Uint32Array | null {
+  if (!surfaceIndices) return null;
+  if (surfaceEdgeIndexCache.has(surfaceIndices)) {
+    return surfaceEdgeIndexCache.get(surfaceIndices) ?? null;
+  }
+
+  const edgeIndices = buildSurfaceEdgeIndices(surfaceIndices);
+  surfaceEdgeIndexCache.set(surfaceIndices, edgeIndices);
+  return edgeIndices;
 }
 
 export function buildViewport3DTopologyRenderModel<
@@ -546,6 +589,18 @@ export function buildPartSurfaceIndices(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
 ): Uint32Array | null {
+  return getCachedPartTopologyValue(
+    partSurfaceIndexCache,
+    topology,
+    part,
+    () => buildPartSurfaceIndicesUncached(part, topology),
+  );
+}
+
+function buildPartSurfaceIndicesUncached(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): Uint32Array | null {
   if (part.surface_faces?.length) {
     return flattenSurfaceFaces(part.surface_faces);
   }
@@ -569,6 +624,18 @@ export function buildPartSurfaceIndices(
 }
 
 export function buildPartVolumeEdgeIndices(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): Uint32Array | null {
+  return getCachedPartTopologyValue(
+    partVolumeEdgeIndexCache,
+    topology,
+    part,
+    () => buildPartVolumeEdgeIndicesUncached(part, topology),
+  );
+}
+
+function buildPartVolumeEdgeIndicesUncached(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
 ): Uint32Array | null {
@@ -746,7 +813,7 @@ function buildPartTopologyModel(
 > {
   const surfaceIndices = buildPartSurfaceIndices(part, topology);
   return {
-    edgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
+    edgeIndices: buildCachedSurfaceEdgeIndices(surfaceIndices),
     surfaceIndices,
     surfaceNodeSelection: surfaceIndices
       ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }

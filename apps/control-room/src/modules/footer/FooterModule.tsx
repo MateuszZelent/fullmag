@@ -2,6 +2,8 @@
 
 import {
   Activity,
+  Clipboard,
+  ClipboardCheck,
   FileText,
   Gauge,
   Trash2,
@@ -18,6 +20,7 @@ import {
   filterTransportEntries,
   type FooterChannelFilter,
   type FooterDirectionFilter,
+  serializeTransportEntry,
 } from "./footerModel";
 import { CommandAuditTable } from "./CommandAuditTable";
 import { FooterDiagnostics } from "./FooterDiagnostics";
@@ -94,6 +97,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
   const commandEntries = useCommandDiagnostics(kernel);
   const [direction, setDirection] = useState<FooterDirectionFilter>("all");
   const [channel, setChannel] = useState<FooterChannelFilter>("all");
+  const [copied, setCopied] = useState(false);
   const filteredEntries = useMemo(
     () =>
       filterTransportEntries(entries, {
@@ -102,6 +106,14 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
       }),
     [channel, direction, entries],
   );
+
+  function handleCopyLog() {
+    const text = filteredEntries.map(serializeTransportEntry).join("\n\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(console.error);
+  }
 
   return (
     <>
@@ -149,6 +161,21 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
         >
           Perf
         </FilterButton>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          style={{ marginLeft: "auto" }}
+          aria-label="Copy log to clipboard"
+          title={`Copy ${filteredEntries.length} log entries to clipboard`}
+          onClick={handleCopyLog}
+        >
+          {copied ? (
+            <ClipboardCheck size={14} aria-hidden="true" />
+          ) : (
+            <Clipboard size={14} aria-hidden="true" />
+          )}
+        </Button>
       </div>
       <div className="fm-footer__log-content">
         <CommandAuditTable entries={commandEntries} />

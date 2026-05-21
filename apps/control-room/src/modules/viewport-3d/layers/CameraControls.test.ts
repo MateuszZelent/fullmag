@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
-import { MOUSE, PerspectiveCamera, Vector3 } from "three";
+import { MOUSE, OrthographicCamera, PerspectiveCamera, Vector3 } from "three";
 
 import {
   applyViewport3DNativeCameraPan,
@@ -13,6 +15,8 @@ import {
   shouldHandleViewport3DNativeCameraPan,
   shouldHandleViewport3DNativeCameraOrbit,
   shouldAutoFitViewport3DBoundsChange,
+  resolveViewport3DLocalCameraSyncDue,
+  resolveViewport3DOrthographicWheelScale,
 } from "./CameraControls";
 import { resolveViewport3DCameraOrientation } from "../viewport3dCameraModel";
 import {
@@ -21,6 +25,38 @@ import {
 } from "../viewport3dStore";
 
 describe("resolveViewport3DCameraFit", () => {
+  it("keeps native drag camera props in the local store during interaction", () => {
+    const source = readFileSync(new URL("./CameraControls.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("syncLocalCameraStore({ camera, target });");
+    expect(source.indexOf("syncLocalCameraStore({ camera, target });")).toBeLessThan(
+      source.indexOf("trackerRef.current.recordDirtyFrame("),
+    );
+    expect(source).toContain("resolveViewport3DLocalCameraSyncDue");
+    expect(source).toContain("const syncStore = localCameraStoreDirtyRef.current;");
+    expect(source).toContain("syncStore: false");
+    expect(source).toContain("captureViewport3DPointer(element, event.pointerId);");
+    expect(source).toContain("releaseViewport3DPointer(element, event.pointerId);");
+    expect(source).toContain("suppressContextMenuUntilRef.current = Date.now() + 1_500;");
+  });
+
+  it("keeps wheel-to-drag interaction active instead of ending during pointerdown flush", () => {
+    const source = readFileSync(new URL("./CameraControls.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("flushWheelCommit({ endInteraction: false });");
+    expect(source).toContain("Date.now() <= suppressContextMenuUntilRef.current");
+  });
+
+  it("keeps CameraController from echoing resource cameras back into the module store", () => {
+    const source = readFileSync(new URL("./CameraControls.tsx", import.meta.url), "utf8");
+    const cameraResourceBlock = source.slice(
+      source.indexOf('tracker.recordDirtyFrame("camera-resource")') - 320,
+      source.indexOf('tracker.recordDirtyFrame("camera-resource")') + 80,
+    );
+
+    expect(cameraResourceBlock).not.toContain("viewport3dStore.setCamera(cameraState)");
+  });
+
   it("configures OrbitControls for fast explicit camera manipulation", () => {
     const options = resolveViewport3DCameraInteractionOptions();
 
@@ -102,6 +138,26 @@ describe("resolveViewport3DCameraFit", () => {
     expect(after.distance).toBeCloseTo(before.distance);
     expect(after.yawDegrees).toBeCloseTo(before.yawDegrees);
     expect(after.pitchDegrees).toBeCloseTo(before.pitchDegrees);
+  });
+
+  it("preserves the current camera up vector during native pan", () => {
+    const camera = new PerspectiveCamera(42, 1, 1e-12, 1e-3);
+    const target = new Vector3(0, 0, 0);
+    camera.up.set(0, 1, 0);
+    camera.position.set(1e-6, 0, 0);
+    camera.lookAt(target);
+    camera.updateMatrix();
+
+    applyViewport3DNativeCameraPan({
+      camera,
+      deltaX: 0,
+      deltaY: 24,
+      target,
+      viewportHeightPixels: 600,
+      viewportWidthPixels: 800,
+    });
+
+    expect(camera.up.toArray()).toEqual([0, 1, 0]);
   });
 
   it("rotates the free camera in place instead of orbiting around the world origin", () => {
@@ -212,6 +268,46 @@ describe("resolveViewport3DCameraFit", () => {
   it("zooms decisively for a common mouse wheel notch while preserving bounds", () => {
     expect(resolveWheelZoomDistance(1e-6, 120)).toBeGreaterThan(1.3e-6);
     expect(resolveWheelZoomDistance(1e-6, -120)).toBeLessThan(7.7e-7);
+  });
+
+  it("maps orthographic wheel deltas to bounded visible scales", () => {
+    expect(resolveViewport3DOrthographicWheelScale(1e-6, 120)).toBeGreaterThan(
+      1.3e-6,
+    );
+    expect(resolveViewport3DOrthographicWheelScale(1e-6, -120)).toBeLessThan(
+      7.7e-7,
+    );
+    expect(resolveViewport3DOrthographicWheelScale(0, 120)).toBe(1e-12);
+  });
+
+  it("derives orthographic scale from the active Three camera zoom", () => {
+    const camera = new OrthographicCamera(-400, 400, 300, -300, 1e-12, 1e-3);
+    camera.zoom = 3;
+
+    expect(
+      resolveViewport3DOrthographicWheelScale(600 / camera.zoom, 120),
+    ).toBeGreaterThan(600 / camera.zoom);
+  });
+
+  it("throttles local camera store syncs during native drag", () => {
+    expect(
+      resolveViewport3DLocalCameraSyncDue({
+        lastSyncedAtMs: null,
+        nowMs: 100,
+      }),
+    ).toBe(true);
+    expect(
+      resolveViewport3DLocalCameraSyncDue({
+        lastSyncedAtMs: 100,
+        nowMs: 130,
+      }),
+    ).toBe(false);
+    expect(
+      resolveViewport3DLocalCameraSyncDue({
+        lastSyncedAtMs: 100,
+        nowMs: 170,
+      }),
+    ).toBe(true);
   });
 
   it("fits nanoscale micromagnetic bounds without meter-scale clipping", () => {

@@ -43,6 +43,7 @@ interface RealtimeResyncRequiredEvent {
 }
 
 interface RealtimeInvalidationBridgeOptions {
+  scheduleFlush?: (callback: () => void) => () => void;
   shouldSuppressInvalidation?: (
     resourceKey: string,
     revision: ResourceRevision,
@@ -115,7 +116,34 @@ function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {
   );
 }
 
+function latestRevision(
+  current: ResourceRevision | null,
+  next: ResourceRevision,
+): ResourceRevision {
+  if (typeof current === "number" && typeof next === "number") {
+    return Math.max(current, next);
+  }
+  return next;
+}
+
+function defaultScheduleFlush(callback: () => void): () => void {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.requestAnimationFrame === "function"
+  ) {
+    const frameId = window.requestAnimationFrame(callback);
+    return () => window.cancelAnimationFrame(frameId);
+  }
+
+  callback();
+  return () => {};
+}
+
 export class RealtimeInvalidationBridge {
+  private flushCancel: (() => void) | null = null;
+  private pendingFetches = new Map<string, ResourceRevision>();
+  private pendingStatusRevision: ResourceRevision | null = null;
+
   constructor(
     private readonly resources: ResourceInvalidationController,
     private readonly options: RealtimeInvalidationBridgeOptions = {},
@@ -143,29 +171,27 @@ export class RealtimeInvalidationBridge {
         }
 
         if (shouldInvalidateSessionStatus(change.recommended_fetch)) {
-          statusRevision =
-            statusRevision !== null
-              ? Math.max(statusRevision as number, change.revision as number)
-              : change.revision;
+          statusRevision = latestRevision(statusRevision, change.revision);
         }
         if (change.recommended_fetch) {
-          this.invalidateResource(change.recommended_fetch, change.revision);
-          this.resources.invalidatePrefix(change.recommended_fetch, change.revision);
-          this.invalidateMeshBuildCompletionDependents(
+          this.queueResourceInvalidation(
             change.recommended_fetch,
             change.revision,
           );
-          if (change.recommended_fetch === DATA_SCALARS_PATH) {
-            this.invalidateSimulationStepResources(change.revision);
-          }
         }
         handled = true;
       }
 
       if (statusRevision !== null) {
-        this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, statusRevision);
+        this.pendingStatusRevision = latestRevision(
+          this.pendingStatusRevision,
+          statusRevision,
+        );
       }
 
+      if (handled) {
+        this.scheduleFlush();
+      }
       return handled;
     }
 
@@ -183,6 +209,48 @@ export class RealtimeInvalidationBridge {
 
     this.invalidateResource(event.resource_key, event.revision);
     return true;
+  }
+
+  private queueResourceInvalidation(
+    resourceKey: string,
+    revision: ResourceRevision,
+  ): void {
+    this.pendingFetches.set(
+      resourceKey,
+      latestRevision(this.pendingFetches.get(resourceKey) ?? null, revision),
+    );
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushCancel) return;
+    const scheduleFlush = this.options.scheduleFlush ?? defaultScheduleFlush;
+    let didFlush = false;
+    const cancel = scheduleFlush(() => {
+      didFlush = true;
+      this.flushCancel = null;
+      this.flushPendingInvalidations();
+    });
+    this.flushCancel = didFlush ? null : cancel;
+  }
+
+  private flushPendingInvalidations(): void {
+    const pendingFetches = this.pendingFetches;
+    const statusRevision = this.pendingStatusRevision;
+    this.pendingFetches = new Map<string, ResourceRevision>();
+    this.pendingStatusRevision = null;
+
+    for (const [resourceKey, revision] of pendingFetches) {
+      this.invalidateResource(resourceKey, revision);
+      this.resources.invalidatePrefix(resourceKey, revision);
+      this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
+      if (resourceKey === DATA_SCALARS_PATH) {
+        this.invalidateSimulationStepResources(revision);
+      }
+    }
+
+    if (statusRevision !== null) {
+      this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, statusRevision);
+    }
   }
 
   private invalidateResource(

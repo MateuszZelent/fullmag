@@ -47,6 +47,7 @@ import {
   CameraController,
   OrbitCameraControls,
   resolveViewport3DCameraFit,
+  type Viewport3DCameraChange,
 } from "./CameraControls";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import {
@@ -64,9 +65,11 @@ import {
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { clampNumber } from "../viewport3dMath";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
+  cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   colors: Viewport3DColors;
@@ -92,7 +95,7 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
-  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
   onVisualizationFrameCommitted: (revision: number) => void;
@@ -165,11 +168,20 @@ export function resolveViewport3DOrthographicZoom(
   bounds: Viewport3DBounds | null,
   viewportSize: Viewport3DViewportSize,
   cameraState?: Viewport3DCameraState,
+  orthographicScale?: number | null,
 ): number {
   const width = Math.max(2, viewportSize.width);
   const height = Math.max(2, viewportSize.height);
+  if (
+    typeof orthographicScale === "number" &&
+    Number.isFinite(orthographicScale) &&
+    orthographicScale > 0
+  ) {
+    return clampNumber(height / orthographicScale, 1e-3, 1e12);
+  }
+
   const fitSize = resolveViewport3DOrthographicFitSize(bounds, cameraState);
-  return clamp(
+  return clampNumber(
     Math.min(width / (fitSize.width * 1.6), height / (fitSize.height * 1.6)),
     1e-3,
     1e12,
@@ -180,6 +192,7 @@ export function resolveViewport3DOrthographicCameraFrame(
   bounds: Viewport3DBounds | null,
   viewportSize: Viewport3DViewportSize,
   cameraState?: Viewport3DCameraState,
+  orthographicScale?: number | null,
 ): Viewport3DOrthographicCameraFrame {
   const width = Math.max(2, viewportSize.width);
   const height = Math.max(2, viewportSize.height);
@@ -189,7 +202,12 @@ export function resolveViewport3DOrthographicCameraFrame(
     left: -width / 2,
     right: width / 2,
     top: height / 2,
-    zoom: resolveViewport3DOrthographicZoom(bounds, { height, width }, cameraState),
+    zoom: resolveViewport3DOrthographicZoom(
+      bounds,
+      { height, width },
+      cameraState,
+      orthographicScale,
+    ),
   };
 }
 
@@ -296,10 +314,6 @@ export function applyViewport3DOrthographicCameraPose(
   camera.updateMatrixWorld();
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
 export function scheduleViewport3DProjectionRenderFrames({
   frameHost = typeof window === "undefined" ? null : window,
   invalidate,
@@ -324,6 +338,7 @@ export function scheduleViewport3DProjectionRenderFrames({
 
 export function Viewport3DScene({
   bounds,
+  cameraOrthographicScale,
   cameraProjection,
   cameraState,
   colors,
@@ -380,8 +395,14 @@ export function Viewport3DScene({
     [bounds, cameraState],
   );
   const orthographicCameraFrame = useMemo(
-    () => resolveViewport3DOrthographicCameraFrame(bounds, viewportSize, cameraState),
-    [bounds, cameraState, viewportSize],
+    () =>
+      resolveViewport3DOrthographicCameraFrame(
+        bounds,
+        viewportSize,
+        cameraState,
+        cameraOrthographicScale,
+      ),
+    [bounds, cameraOrthographicScale, cameraState, viewportSize],
   );
   const materialProfile = useMemo(
     () =>
@@ -557,6 +578,7 @@ export function Viewport3DScene({
         unitMode={scaleUnitMode}
       />
       <OrbitCameraControls
+        cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
         cameraState={cameraState}
         onCameraChange={onCameraChange}

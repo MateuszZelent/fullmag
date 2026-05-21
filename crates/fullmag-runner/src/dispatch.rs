@@ -3311,7 +3311,7 @@ fn execute_native_fem(
         };
         eprintln!(
             "[fullmag-runner] native-fem LLG loop: until={} dt_initial={:.4e} \
-             max_steps={} torque_tol={:.4e} adaptive={}",
+             max_steps={} torque_tol_Apm={:.4e} torque_tol_T={:.4e} adaptive={}",
             until_label,
             dt,
             plan.relaxation
@@ -3321,6 +3321,11 @@ fn execute_native_fem(
             plan.relaxation
                 .as_ref()
                 .and_then(|c| c.stop.torque_tolerance_apm)
+                .unwrap_or(0.0),
+            plan.relaxation
+                .as_ref()
+                .and_then(|c| c.stop.torque_tolerance_apm)
+                .map(|value| value * crate::MU0)
                 .unwrap_or(0.0),
             !dt_is_fixed,
         );
@@ -3521,7 +3526,7 @@ fn execute_native_fem(
                             "[fullmag-runner] native-fem relaxation stop at step {}: \
                              max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
                              converged={converged} \
-                             (max_torque_T={:.4e} torque_tol={} energy_tol={})",
+                             (max_torque_T={:.4e} torque_tol_Apm={} torque_tol_T={} energy_tol={})",
                             latest.step,
                             latest.step,
                             control
@@ -3534,6 +3539,11 @@ fn execute_native_fem(
                                 .stop
                                 .torque_tolerance_apm
                                 .map(|value| format!("{value:.4e}"))
+                                .unwrap_or_else(|| "none".to_string()),
+                            control
+                                .stop
+                                .torque_tolerance_apm
+                                .map(|value| format!("{:.4e}", value * crate::MU0))
                                 .unwrap_or_else(|| "none".to_string()),
                             control
                                 .stop

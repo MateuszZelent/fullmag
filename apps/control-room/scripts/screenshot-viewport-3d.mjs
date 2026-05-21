@@ -7,8 +7,11 @@ const apiBase =
   process.env.NEXT_PUBLIC_RUNTIME_HTTP_BASE ??
   process.env.NEXT_PUBLIC_API_URL ??
   null;
+const allowMissingSession =
+  process.env.CONTROL_ROOM_SCREENSHOT_ALLOW_MISSING_SESSION === "1";
+const defaultRequiredScenes = allowMissingSession ? "fdm" : "fdm,fem,object";
 const requiredScenes = new Set(
-  (process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? "fdm,fem,object")
+  (process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? defaultRequiredScenes)
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean),
@@ -41,25 +44,38 @@ const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
 const errors = [];
+const missingSessionFixtureRequests = [];
 
-if (apiBase) {
-  await page.addInitScript((baseUrl) => {
+if (allowMissingSession) {
+  await installFdmFixtureApi(page, missingSessionFixtureRequests);
+}
+
+if (apiBase || allowMissingSession) {
+  await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
-      controlRoomApiBase: baseUrl,
+      ...(baseUrl ? { controlRoomApiBase: baseUrl } : {}),
+      ...(allowMissingSessionSmoke ? { allowMissingSessionSmoke: true } : {}),
     };
-  }, apiBase);
+  }, { allowMissingSessionSmoke: allowMissingSession, baseUrl: apiBase });
 }
 
 page.on("console", (message) => {
-  if (message.type() === "error") errors.push(message.text());
+  if (message.type() === "error") {
+    const text = message.text();
+    if (isIgnorableConsoleError(text)) return;
+    errors.push(text);
+  }
 });
 page.on("pageerror", (error) => {
   errors.push(error.message);
 });
 page.on("response", (response) => {
   const status = response.status();
-  if (status >= 400) errors.push(`${status} ${response.url()}`);
+  if (status < 400 || isAllowedMissingSessionResponse(response.url(), status)) {
+    return;
+  }
+  errors.push(`${status} ${response.url()}`);
 });
 
 try {
@@ -229,6 +245,7 @@ async function installFdmFixtureApi(page, fixtureRequests) {
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
+      allowMissingSessionSmoke: true,
       controlRoomApiBase: baseUrl,
     };
   }, fixtureBase);
@@ -878,4 +895,31 @@ function parseCssRgb(value) {
 
 function pixelDiffers(rgb, backgroundRgb) {
   return rgb.some((channel, index) => Math.abs(channel - backgroundRgb[index]) > 8);
+}
+
+function isIgnorableConsoleError(text) {
+  if (
+    allowMissingSession &&
+    text === "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ) {
+    return true;
+  }
+
+  return (
+    allowMissingSession &&
+    text.includes("/v2/sessions/current/events/ws") &&
+    text.includes("Unexpected response code: 404")
+  );
+}
+
+function isAllowedMissingSessionResponse(responseUrl, status) {
+  if (!allowMissingSession || status !== 404) {
+    return false;
+  }
+
+  try {
+    return new URL(responseUrl).pathname.startsWith("/v2/sessions/current/");
+  } catch {
+    return false;
+  }
 }

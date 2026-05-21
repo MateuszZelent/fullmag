@@ -32,9 +32,12 @@ interface ResourceRuntimeEntry<TData> {
   inflight: Promise<ResourceRuntimeSnapshot<TData>> | null;
   inflightExternalRevision: ResourceRevision | null;
   listeners: Set<ResourceRuntimeListener>;
+  pendingRequest: ResourceRuntimeLoadRequest<TData> | null;
   sequence: number;
   snapshot: ResourceRuntimeSnapshot<TData>;
 }
+
+type StoredResourceRuntimeEntry = ResourceRuntimeEntry<never>;
 
 const INITIAL_RUNTIME_SNAPSHOT: ResourceRuntimeSnapshot<unknown> = {
   data: null,
@@ -55,6 +58,7 @@ function createEntry<TData>(): ResourceRuntimeEntry<TData> {
     inflight: null,
     inflightExternalRevision: null,
     listeners: new Set<ResourceRuntimeListener>(),
+    pendingRequest: null,
     sequence: 0,
     snapshot: createInitialSnapshot<TData>(),
   };
@@ -78,7 +82,7 @@ function settledForExternalRevision<TData>(
 }
 
 export class ResourceRuntimeStore<TData = unknown> {
-  private readonly entries = new Map<ResourceKey, ResourceRuntimeEntry<unknown>>();
+  private readonly entries = new Map<ResourceKey, StoredResourceRuntimeEntry>();
 
   getSnapshot<TSnapshotData = TData>(
     resourceKey: ResourceKey,
@@ -133,10 +137,28 @@ export class ResourceRuntimeStore<TData = unknown> {
       return entry.inflight;
     }
 
+    if (!force && entry.inflight) {
+      entry.pendingRequest = {
+        externalRevision,
+        force: false,
+        load,
+        resolveRevision,
+        resourceKey,
+      };
+      entry.snapshot = {
+        ...markResourceLoading(entry.snapshot, externalRevision),
+        settledExternalRevision: entry.snapshot.settledExternalRevision,
+        settledResourceKey: entry.snapshot.settledResourceKey,
+      };
+      this.notify(entry);
+      return entry.inflight;
+    }
+
     entry.controller?.abort();
     const controller = new AbortController();
     const sequence = entry.sequence + 1;
     entry.controller = controller;
+    entry.pendingRequest = null;
     entry.sequence = sequence;
     entry.inflightExternalRevision = externalRevision;
     entry.snapshot = {
@@ -184,10 +206,22 @@ export class ResourceRuntimeStore<TData = unknown> {
       })
       .finally(() => {
         if (entry.sequence !== sequence) return;
+        const pendingRequest = entry.pendingRequest;
+        entry.pendingRequest = null;
         entry.controller = null;
         entry.inflight = null;
         entry.inflightExternalRevision = null;
         this.notify(entry);
+        if (
+          pendingRequest &&
+          !settledForExternalRevision(
+            entry.snapshot,
+            pendingRequest.resourceKey,
+            pendingRequest.externalRevision,
+          )
+        ) {
+          void this.ensureLoad(pendingRequest);
+        }
       });
 
     entry.inflight = pending;
@@ -203,11 +237,11 @@ export class ResourceRuntimeStore<TData = unknown> {
     if (existing) return existing;
 
     const entry = createEntry<TEntryData>();
-    this.entries.set(resourceKey, entry);
+    this.entries.set(resourceKey, entry as unknown as StoredResourceRuntimeEntry);
     return entry;
   }
 
-  private notify(entry: ResourceRuntimeEntry<unknown>): void {
+  private notify<TEntryData>(entry: ResourceRuntimeEntry<TEntryData>): void {
     for (const listener of entry.listeners) {
       listener();
     }

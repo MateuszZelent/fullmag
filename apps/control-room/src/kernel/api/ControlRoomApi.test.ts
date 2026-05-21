@@ -850,7 +850,7 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
-  it("schedules binary decoding through the configured binary decode scheduler", async () => {
+  it("schedules topology, mesh-quality, and field-vector decoding through the configured binary decode scheduler", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const decodeKinds: string[] = [];
     const api = new ControlRoomApi({
@@ -861,29 +861,66 @@ describe("ControlRoomApi", () => {
         return decodeInline(buffer);
       },
       diagnostics,
-      fetchImpl: async () =>
-        binaryResponse(makeTopologyBuffer(), {
-          headers: { etag: '"topology-scheduled"', ...contractHeaders },
-        }),
-      requestIdFactory: () => "req-scheduled-topology",
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/v2/sessions/current/data/domain/topology") {
+          return binaryResponse(makeTopologyBuffer(), {
+            headers: { etag: '"topology-scheduled"', ...contractHeaders },
+          });
+        }
+        if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element") {
+          return binaryResponse(makeMeshQualityDataBuffer(), {
+            headers: { etag: '"quality-scheduled"', ...contractHeaders },
+          });
+        }
+        if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
+          return binaryResponse(makeFieldVectorBuffer(), {
+            headers: { etag: '"field-vector-scheduled"', ...contractHeaders },
+          });
+        }
+        throw new Error(`Unexpected binary URL ${url}`);
+      },
+      requestIdFactory: () => "req-scheduled-binary",
     });
 
-    const result = await api.data.domain.topology();
+    const topology = await api.data.domain.topology();
+    const quality = await api.meshing.sharedDomain.qualityData();
+    const fieldVector = await api.data.fields.vector("m");
 
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") {
-      throw new Error(`Expected ready topology, received ${result.status}`);
+    expect(topology.status).toBe("ready");
+    expect(quality.status).toBe("ready");
+    expect(fieldVector.status).toBe("ready");
+    if (topology.status !== "ready") {
+      throw new Error(`Expected ready topology, received ${topology.status}`);
     }
-    expect(result.data.nodeCount).toBe(4);
-    expect(decodeKinds).toEqual(["topology"]);
-    expect(diagnostics.list()).toContainEqual(
-      expect.objectContaining({
-        detail: "decoded binary payload",
-        durationMs: expect.any(Number),
-        outcome: "ok",
-        path: "/v2/sessions/current/data/domain/topology",
-      }),
-    );
+    if (quality.status !== "ready") {
+      throw new Error(`Expected ready quality data, received ${quality.status}`);
+    }
+    if (fieldVector.status !== "ready") {
+      throw new Error(`Expected ready field vector, received ${fieldVector.status}`);
+    }
+    expect(topology.data.nodeCount).toBe(4);
+    expect(quality.data.elementCount).toBe(1);
+    expect(fieldVector.data.quantityId).toBe("m");
+    expect(decodeKinds).toEqual([
+      "topology",
+      "mesh-quality-data",
+      "field-vector",
+    ]);
+    for (const path of [
+      "/v2/sessions/current/data/domain/topology",
+      "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+      "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
+    ]) {
+      expect(diagnostics.list()).toContainEqual(
+        expect.objectContaining({
+          detail: "decoded binary payload",
+          durationMs: expect.any(Number),
+          outcome: "ok",
+          path,
+        }),
+      );
+    }
   });
 
   it("preserves binary byte length when the decode scheduler transfers the buffer", async () => {

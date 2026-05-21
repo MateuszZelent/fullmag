@@ -25,7 +25,9 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("projection canvas renders after second toggle");
     expect(smokeScript).toContain("Viewport canvas did not visually change after first projection toggle");
     expect(smokeScript).toContain("Viewport canvas did not visually leave orthographic projection after second toggle");
-    expect(smokeScript).toContain("const png = await canvas.screenshot();");
+    expect(smokeScript).toContain("const png = await withTimeout(");
+    expect(smokeScript).toContain("page.screenshot({");
+    expect(smokeScript).toContain("3D viewport canvas composite screenshot");
   });
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
@@ -55,6 +57,10 @@ describe("viewport smoke projection round-trip", () => {
 
     expect(smokeScript).toContain("allowMissingSessionSmoke");
     expect(smokeScript).toContain("allowMissingSessionSmoke: allowMissingSession");
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_CAMERA_ONLY");
+    expect(smokeScript).toContain(
+      "if (!cameraOnlySmoke && isModelSceneUrl(response.url()) && status < 400)",
+    );
     expect(smokeScript).toContain("window.__FULLMAG_CONFIG__");
   });
 
@@ -66,6 +72,14 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('request.method === "PATCH"');
     expect(smokeScript).toContain("request.path === VISUALIZATION_STATE_PATH");
     expect(smokeScript).toContain("visualization_state_patches=0");
+    expect(smokeScript).toContain('await page.mouse.down({ button: "right" });');
+    expect(smokeScript).toContain(
+      "right-button free-camera pan changes the viewport camera state",
+    );
+    expect(smokeScript).toContain(
+      "Viewport camera state did not change after right-button free-camera pan",
+    );
+    expect(smokeScript).toContain("readViewportCameraSignature");
   });
 
   it("verifies the COMSOL-style dimension frame cage with canvas pixels", () => {
@@ -87,5 +101,21 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain('name: "Floor + vertical"');
     expect(screenshotScript).toContain("viewport-3d.dimension-frame-cage");
     expect(screenshotScript).toContain("dimensionFrameChangedPixels=");
+  });
+
+  it("lets the screenshot gate use a controlled missing-session canvas", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain("CONTROL_ROOM_SCREENSHOT_ALLOW_MISSING_SESSION");
+    expect(screenshotScript).toContain(
+      'const defaultRequiredScenes = allowMissingSession ? "fdm" : "fdm,fem,object";',
+    );
+    expect(screenshotScript).toContain(
+      "process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? defaultRequiredScenes",
+    );
+    expect(screenshotScript).toContain("missingSessionFixtureRequests");
+    expect(screenshotScript).toContain("await installFdmFixtureApi(page, missingSessionFixtureRequests)");
+    expect(screenshotScript).toContain("allowMissingSessionSmoke");
+    expect(screenshotScript).toContain("isAllowedMissingSessionResponse");
   });
 });

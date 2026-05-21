@@ -46,6 +46,58 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
   });
 
+  it("batches backend invalidations until the scheduled frame and keeps the latest revision", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const scheduled: Array<() => void> = [];
+    const bridge = new RealtimeInvalidationBridge(resources, {
+      scheduleFlush: (callback) => {
+        scheduled.push(callback);
+        return () => {};
+      },
+    });
+    let commandInvalidations = 0;
+
+    bus.on("resource:invalidated", ({ resourceKey }) => {
+      if (resourceKey === SIMULATION_COMMANDS_PATH) {
+        commandInvalidations += 1;
+      }
+    });
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_COMMANDS_PATH,
+            resource: "commands",
+            revision: 5,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_COMMANDS_PATH,
+            resource: "commands",
+            revision: 6,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
+
+    scheduled[0]();
+
+    expect(commandInvalidations).toBe(1);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(6);
+  });
+
   it("coalesces session status invalidation once for status-affecting backend batches", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

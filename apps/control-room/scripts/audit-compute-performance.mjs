@@ -1247,6 +1247,15 @@ function checkTopologyIndexBufferCache() {
       "topologyVolumeEdgeIndexCache.set(topology, volumeEdgeIndices)",
     ],
   );
+  requireTokens(source, "viewport3dRenderModel per-part topology index cache", [
+    "const partSurfaceIndexCache = new WeakMap",
+    "const partVolumeEdgeIndexCache = new WeakMap",
+    "const surfaceEdgeIndexCache = new WeakMap<Uint32Array, Uint32Array | null>()",
+    "function getCachedPartTopologyValue",
+    "buildPartSurfaceIndicesUncached(part, topology)",
+    "buildPartVolumeEdgeIndicesUncached(part, topology)",
+    "buildCachedSurfaceEdgeIndices(surfaceIndices)",
+  ]);
 }
 
 function checkVectorSurfaceNormalCache() {

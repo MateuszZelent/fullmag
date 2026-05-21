@@ -1,3 +1,5 @@
+import { clampNumber } from "../viewport3dMath";
+
 export function magnetizationHslRgb(
   mx: number,
   my: number,
@@ -12,8 +14,8 @@ export function magnetizationHslRgb(
   const ny = my / magnitude;
   const nz = mz / magnitude;
   const hueRadians = Math.atan2(ny, nx);
-  const saturation = clamp(Math.hypot(nx, ny), 0, 1);
-  const lightness = clamp(nz * 0.5 + 0.5, 0, 1);
+  const saturation = clampNumber(Math.hypot(nx, ny), 0, 1);
+  const lightness = clampNumber(nz * 0.5 + 0.5, 0, 1);
   return orientationHslToRgb(hueRadians, saturation, lightness);
 }
 
@@ -64,8 +66,4 @@ function orientationHslToRgb(
 function positiveModulo(value: number, modulus: number): number {
   const result = value % modulus;
   return result < 0 ? result + modulus : result;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }

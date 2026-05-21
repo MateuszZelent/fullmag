@@ -184,6 +184,40 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("reuses per-part topology index buffers for repeated model builds", () => {
+    const topology = {
+      ...topologyFixture(),
+      boundaryFaceCount: 2,
+      boundaryFaces: new Uint32Array([
+        0, 1, 2,
+        0, 2, 3,
+      ]),
+      elementCount: 2,
+      indices: new Uint32Array([
+        0, 1, 2, 3,
+        0, 1, 2, 4,
+      ]),
+      nodeCount: 5,
+    };
+    const part = {
+      boundary_face_count: 1,
+      boundary_face_indices: [1],
+      boundary_face_start: 0,
+      element_count: 1,
+      element_start: 1,
+      id: "part-a",
+    };
+
+    const first = buildViewport3DTopologyRenderModel(topology, [part], []);
+    const second = buildViewport3DTopologyRenderModel(topology, [part], []);
+
+    const firstPart = first?.magneticParts[0];
+    const secondPart = second?.magneticParts[0];
+    expect(firstPart?.surfaceIndices).toBe(secondPart?.surfaceIndices);
+    expect(firstPart?.edgeIndices).toBe(secondPart?.edgeIndices);
+    expect(firstPart?.volumeEdgeIndices).toBe(secondPart?.volumeEdgeIndices);
+  });
+
   it("builds sampled normalized vector line segments", () => {
     const segments = buildVectorLineSegments(
       topologyFixture(),

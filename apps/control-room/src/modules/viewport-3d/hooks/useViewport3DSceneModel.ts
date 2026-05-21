@@ -10,6 +10,7 @@ import {
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import type { CameraRegistrySnapshot } from "@/kernel/visualization/CameraRegistryController";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
@@ -89,10 +90,14 @@ import {
 } from "../viewport3dTopologyStaleness";
 import {
   resolveHslReferenceVisible,
+  resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
   viewport3DCameraViewSignature,
   viewport3dStore,
+  type Viewport3DCommandState,
+  type Viewport3DCameraProjection,
+  type Viewport3DCameraState,
   type useViewport3DCommandState,
 } from "../viewport3dStore";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
@@ -198,6 +203,44 @@ function pushViewportVisualizationTarget(
   targets.push(target);
 }
 
+export function resolveViewport3DSceneCameraView({
+  cameraRegistrySnapshot,
+  commandState,
+}: {
+  cameraRegistrySnapshot: Pick<
+    CameraRegistrySnapshot,
+    "camera" | "interactionActive"
+  >;
+  commandState: Pick<Viewport3DCommandState, "camera" | "widgets">;
+}): {
+  cameraOrthographicScale: number | null;
+  cameraProjection: Viewport3DCameraProjection;
+  cameraResource: VisualizationStateResource["camera"];
+  cameraState: Viewport3DCameraState;
+} {
+  if (cameraRegistrySnapshot.interactionActive) {
+    return {
+      cameraOrthographicScale: commandState.widgets.cameraOrthographicScale,
+      cameraProjection: commandState.widgets.cameraProjection,
+      cameraResource: cameraRegistrySnapshot.camera,
+      cameraState: commandState.camera,
+    };
+  }
+
+  return {
+    cameraOrthographicScale: resolveViewport3DCameraOrthographicScale({
+      camera: cameraRegistrySnapshot.camera,
+    }),
+    cameraProjection: resolveViewport3DCameraProjection({
+      camera: cameraRegistrySnapshot.camera,
+    }),
+    cameraResource: cameraRegistrySnapshot.camera,
+    cameraState: resolveViewport3DCameraState({
+      camera: cameraRegistrySnapshot.camera,
+    }),
+  };
+}
+
 export function useViewport3DSceneModel({
   commandState,
   colors,
@@ -213,7 +256,11 @@ export function useViewport3DSceneModel({
   const cameraRegistrySnapshot = useCameraRegistrySnapshot();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const renderingState = visualizationState.data;
-  const cameraResource = cameraRegistrySnapshot.camera;
+  const cameraView = resolveViewport3DSceneCameraView({
+    cameraRegistrySnapshot,
+    commandState,
+  });
+  const cameraResource = cameraView.cameraResource;
   useViewport3DCameraRegistryStoreSync(cameraResource);
   const visualizationRevision = renderingState?.revision ?? null;
   const visualizationError = visualizationState.error?.message ?? null;
@@ -679,9 +726,10 @@ export function useViewport3DSceneModel({
   return {
     airboxSettings,
     bounds,
-    cameraProjection: resolveViewport3DCameraProjection({ camera: cameraResource }),
+    cameraOrthographicScale: cameraView.cameraOrthographicScale,
+    cameraProjection: cameraView.cameraProjection,
     cameraResource,
-    cameraState: resolveViewport3DCameraState({ camera: cameraResource }),
+    cameraState: cameraView.cameraState,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,
@@ -730,11 +778,18 @@ function useViewport3DCameraRegistryStoreSync(
     const projection = resolveViewport3DCameraProjection({
       camera: cameraResource,
     });
-    const signature = viewport3DCameraViewSignature({ camera, projection });
+    const orthographicScale = resolveViewport3DCameraOrthographicScale({
+      camera: cameraResource,
+    });
+    const signature = viewport3DCameraViewSignature({
+      camera,
+      orthographicScale,
+      projection,
+    });
     if (lastRemoteSignatureRef.current === signature) return;
 
     lastRemoteSignatureRef.current = signature;
-    viewport3dStore.setCameraView({ camera, projection });
+    viewport3dStore.setCameraView({ camera, orthographicScale, projection });
   }, [cameraResource]);
 }
 

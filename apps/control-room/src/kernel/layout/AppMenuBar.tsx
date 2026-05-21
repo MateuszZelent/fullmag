@@ -6,12 +6,18 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
   EXPECTED_API_CONTRACT_VERSION,
+  SIMULATION_SOLVER_STATUS_PATH,
   SESSION_STATUS_PATH,
 } from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import { useKernel } from "@/kernel/KernelContext";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+import {
+  formatRuntimeStateLabel,
+  readDetailedRuntimeState,
+  resolveEffectiveRuntimeState,
+} from "@/kernel/runtime/runtimeStateDisplay";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import {
@@ -145,9 +151,14 @@ function readString(value: unknown, fallback: string): string {
 
 export function resolveHeaderSessionDisplay(
   status: HeaderSessionSource,
+  detailedRuntimeState?: string | null,
 ): HeaderSessionDisplay {
   const connected = status.status === "ready";
   const failed = status.status === "error";
+  const runtimeState = resolveEffectiveRuntimeState({
+    detailedRuntimeState,
+    sessionSolverState: status.data?.solver?.state,
+  });
 
   return {
     connectionLabel: connected ? "Local API" : "API pending",
@@ -157,7 +168,9 @@ export function resolveHeaderSessionDisplay(
         ? "Session connected"
         : "Session connecting",
     indicatorStatus: failed ? "error" : connected ? "connected" : "connecting",
-    sessionBadge: readString(status.data?.solver?.state, status.status),
+    sessionBadge: runtimeState
+      ? formatRuntimeStateLabel(runtimeState)
+      : status.status,
     subtitle: readString(
       status.data?.session?.name,
       connected ? "Unnamed session" : "Loading session",
@@ -439,13 +452,16 @@ export function AppMenuBar() {
     sessionStatus,
     hydrated,
   );
-  const sessionDisplay = resolveHeaderSessionDisplay(visibleSessionStatus);
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const [registryOpen, setRegistryOpen] = useState(false);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
   const runtimeResourceData = useRuntimeCommandControlResourceData();
+  const sessionDisplay = resolveHeaderSessionDisplay(
+    visibleSessionStatus,
+    readDetailedRuntimeState(runtimeResourceData[SIMULATION_SOLVER_STATUS_PATH]),
+  );
   const visualizationState = useVisualizationStateResource({ enabled: true });
   const visualizationSyncSnapshot = useSyncExternalStore(
     (onStoreChange) => kernel.visualizationSync.subscribe(onStoreChange),

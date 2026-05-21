@@ -8,6 +8,7 @@ import {
   DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   type Viewport3DVisualProfileId,
 } from "./viewport3dVisualProfile";
+import { sameTuple3 } from "./viewport3dMath";
 
 export interface Viewport3DCameraState {
   position: [number, number, number];
@@ -35,6 +36,7 @@ export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
 
 export interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
+  cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
@@ -66,6 +68,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraDialogOpen: false,
+    cameraOrthographicScale: DEFAULT_CAMERA_REGISTRY_STATE.orthographic_scale ?? null,
     cameraProjection: DEFAULT_CAMERA_REGISTRY_STATE.projection,
     dimensionFrameDensity: "auto",
     dimensionFrameMode: "floor",
@@ -236,14 +239,21 @@ class Viewport3DStore {
 
   setCameraView({
     camera,
+    orthographicScale,
     projection,
   }: {
     camera: Viewport3DCameraState;
+    orthographicScale?: number | null;
     projection: Viewport3DCameraProjection;
   }): void {
+    const nextOrthographicScale =
+      orthographicScale === undefined
+        ? this.snapshot.widgets.cameraOrthographicScale
+        : normalizeOrthographicScale(orthographicScale);
     if (
       sameViewport3DCameraState(this.snapshot.camera, camera) &&
-      this.snapshot.widgets.cameraProjection === projection
+      this.snapshot.widgets.cameraProjection === projection &&
+      this.snapshot.widgets.cameraOrthographicScale === nextOrthographicScale
     ) {
       return;
     }
@@ -253,6 +263,7 @@ class Viewport3DStore {
       camera,
       widgets: {
         ...this.snapshot.widgets,
+        cameraOrthographicScale: nextOrthographicScale,
         cameraProjection: projection,
       },
     };
@@ -279,6 +290,19 @@ class Viewport3DStore {
       widgets: {
         ...this.snapshot.widgets,
         cameraProjection: projection,
+      },
+    };
+    this.notify();
+  }
+
+  setCameraOrthographicScale(scale: number | null): void {
+    const nextScale = normalizeOrthographicScale(scale);
+    if (this.snapshot.widgets.cameraOrthographicScale === nextScale) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        cameraOrthographicScale: nextScale,
       },
     };
     this.notify();
@@ -363,35 +387,31 @@ export function useViewport3DCommandState(): Viewport3DCommandState {
   );
 }
 
-function sameVector(
-  left: [number, number, number],
-  right: [number, number, number],
-): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
 function sameViewport3DCameraState(
   left: Viewport3DCameraState,
   right: Viewport3DCameraState,
 ): boolean {
   return (
-    sameVector(left.position, right.position) &&
-    sameVector(left.target, right.target) &&
-    sameVector(left.up, right.up)
+    sameTuple3(left.position, right.position) &&
+    sameTuple3(left.target, right.target) &&
+    sameTuple3(left.up, right.up)
   );
 }
 
 export function viewport3DCameraViewSignature({
   camera,
+  orthographicScale,
   projection,
 }: {
   camera: Viewport3DCameraState;
+  orthographicScale?: number | null;
   projection: Viewport3DCameraProjection;
 }): string {
   return [
     ...camera.position,
     ...camera.target,
     ...camera.up,
+    orthographicScale ?? "null",
     projection,
   ].join(":");
 }
@@ -426,6 +446,12 @@ export function resolveViewport3DCameraProjection(
     : "perspective";
 }
 
+export function resolveViewport3DCameraOrthographicScale(
+  visualizationState: Pick<VisualizationStateResource, "camera"> | null | undefined,
+): number | null {
+  return normalizeOrthographicScale(visualizationState?.camera?.orthographic_scale);
+}
+
 function vector3(value: readonly number[] | null | undefined): [number, number, number] | null {
   if (!value || value.length < 3) return null;
   const next: [number, number, number] = [
@@ -438,4 +464,10 @@ function vector3(value: readonly number[] | null | undefined): [number, number, 
 
 function tuple3(value: readonly number[]): [number, number, number] {
   return [Number(value[0]), Number(value[1]), Number(value[2])];
+}
+
+function normalizeOrthographicScale(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
 }

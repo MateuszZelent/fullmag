@@ -1,8 +1,8 @@
 "use client";
 
 import { Line, Text } from "@react-three/drei";
-import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useFrame } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { CanvasTexture, Matrix4, Vector3, type Group } from "three";
 
 import type { Viewport3DColors } from "../viewport3dTypes";
@@ -210,26 +210,16 @@ function OrbitRing3D({
   const [hovered, setHovered] = useState(false);
   const isDragging = useRef(false);
   const lastPointer = useRef({ x: 0, y: 0 });
-  const gl = useThree((s) => s.gl);
   const controlsRef = useRef(controls);
-  const onOrbitRef = useRef(onOrbit);
-  const onOrbitEndRef = useRef(onOrbitEnd);
+  const onOrbitRef = useLatestRef(onOrbit);
+  const onOrbitEndRef = useLatestRef(onOrbitEnd);
   const previousControlsEnabledRef = useRef<boolean | null>(null);
-
-  useEffect(() => {
-    onOrbitRef.current = onOrbit;
-  });
-
-  useEffect(() => {
-    onOrbitEndRef.current = onOrbitEnd;
-  });
 
   useEffect(() => {
     controlsRef.current = controls;
   }, [controls]);
 
   useEffect(() => {
-    const canvas = gl.domElement;
     const restoreOrbitControls = () => {
       const orbitControls = controlsRef.current;
       if (
@@ -257,18 +247,16 @@ function OrbitRing3D({
         onOrbitEndRef.current();
       }
     };
-    canvas.addEventListener("pointermove", handleMove);
-    canvas.addEventListener("pointerup", handleUp);
-    canvas.addEventListener("pointercancel", handleUp);
-    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointermove", handleMove, { capture: true });
+    window.addEventListener("pointerup", handleUp, { capture: true });
+    window.addEventListener("pointercancel", handleUp, { capture: true });
     return () => {
-      canvas.removeEventListener("pointermove", handleMove);
-      canvas.removeEventListener("pointerup", handleUp);
-      canvas.removeEventListener("pointercancel", handleUp);
-      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointermove", handleMove, { capture: true });
+      window.removeEventListener("pointerup", handleUp, { capture: true });
+      window.removeEventListener("pointercancel", handleUp, { capture: true });
       restoreOrbitControls();
     };
-  }, [gl]);
+  }, [onOrbitEndRef, onOrbitRef]);
 
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>
@@ -325,6 +313,14 @@ function OrbitRing3D({
       ) : null}
     </group>
   );
+}
+
+function useLatestRef<T>(value: T): MutableRefObject<T> {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref;
 }
 
 function ViewCubeFacePanel({

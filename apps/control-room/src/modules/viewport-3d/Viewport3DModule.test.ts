@@ -44,8 +44,9 @@ describe("Viewport3DModule scene wiring", () => {
     expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).toContain("viewport3dStore.setCamera(nextCamera);");
     expect(saveCameraStateSource).toContain(
-      "kernel.cameraRegistry.patchCamera(nextCamera);",
+      "kernel.cameraRegistry.patchCamera({",
     );
+    expect(saveCameraStateSource).toContain("orthographic_scale");
     expect(saveCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).not.toContain("queuePatch({ camera: nextCamera })");
     expect(source).toContain("kernel.cameraRegistry.beginInteraction();");
@@ -72,5 +73,20 @@ describe("Viewport3DModule scene wiring", () => {
       "scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}",
     );
     expect(source).toContain("scaleUnitMode={commandState.widgets.scaleUnitMode}");
+  });
+
+  it("exposes camera diagnostics for browser smoke checks", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'data-camera-position={sceneProps.cameraState.position.join(" ")}',
+    );
+    expect(source).toContain('data-camera-projection={sceneProps.cameraProjection}');
+    expect(source).toContain(
+      'data-camera-target={sceneProps.cameraState.target.join(" ")}',
+    );
   });
 });

@@ -16,10 +16,20 @@ import type {
   LiveStatusResource,
   ObjectMetricsResource,
   SceneResource,
+  SolverStatusResource,
 } from "@/kernel/api/apiTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
-import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useObjectMetricsResource,
+  useSolverStatusResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import {
+  formatRuntimeStateLabel,
+  isRuntimeStateActive,
+  isRuntimeStateWaitingForCompute,
+  resolveEffectiveRuntimeState,
+} from "@/kernel/runtime/runtimeStateDisplay";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
@@ -42,7 +52,12 @@ export function FooterTelemetry() {
     [scene.data, selectedObjectId],
   );
   const objectMetrics = useObjectMetricsResource(objectId);
-  const telemetry = buildFooterTelemetryModel(status, objectMetrics.data);
+  const solverStatus = useSolverStatusResource({ enabled: Boolean(status) });
+  const telemetry = buildFooterTelemetryModel(
+    status,
+    objectMetrics.data,
+    solverStatus.data,
+  );
 
   return (
     <div className="fm-footer-telemetry" role="status" aria-label="Live telemetry">
@@ -179,23 +194,32 @@ export function footerTelemetryStatusEquals(
 export function buildFooterTelemetryModel(
   status: FooterTelemetryStatus | null | undefined,
   objectMetrics: ObjectMetricsResource | null | undefined,
+  solverStatus?: SolverStatusResource | null,
 ) {
-  const solverState = status?.solver?.state ?? "unknown";
-  const runTimeSeconds = status?.run?.solver_time ?? 0;
-  const totalSteps = status?.run?.solver_steps ?? status?.metrics?.total_steps ?? 0;
+  const runtimeState =
+    resolveEffectiveRuntimeState({
+      detailedRuntimeState: solverStatus?.runtime_state,
+      sessionSolverState: status?.solver?.state,
+    }) ?? "unknown";
+  const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
+  const runTimeSeconds = solverStatus?.sim_time_seconds ?? status?.run?.solver_time ?? 0;
+  const totalSteps =
+    solverStatus?.step_index ??
+    status?.run?.solver_steps ??
+    status?.metrics?.total_steps ??
+    0;
   const stepsPerSecond = status?.metrics?.steps_per_second;
-  const maxTorque = status?.solver?.max_torque;
+  const maxTorque = solverStatus?.max_torque ?? status?.solver?.max_torque;
+  const dt = solverStatus?.dt_seconds ?? status?.solver?.dt;
+  const converged = solverStatus?.converged ?? status?.solver?.converged;
   const totalEnergy = objectMetrics?.energies.total ?? status?.energies?.total;
-  const runtimeState = status?.solver?.state ?? "unknown";
   const magnetization = objectMetrics?.magnetization_average;
   const magnetizationMagnitude = magnetization
     ? Math.hypot(magnetization.mx, magnetization.my, magnetization.mz)
     : null;
-  const statusTitle =
-    solverState === "running"
-      ? "System Status: Running"
-      : `System Status: ${titleCase(solverState)}`;
-  const online = solverState === "running" || solverState === "idle";
+  const statusTitle = `System Status: ${runtimeStateLabel}`;
+  const active = isRuntimeStateActive(runtimeState);
+  const waitingForCompute = isRuntimeStateWaitingForCompute(runtimeState);
   const energySource = objectMetrics
     ? `Object: ${objectMetrics.object_id}`
     : "Session summary";
@@ -231,16 +255,16 @@ export function buildFooterTelemetryModel(
         icon: <Clock3 size={13} aria-hidden="true" />,
         id: "dt",
         label: "dt",
-        subdetail: `State: ${titleCase(runtimeState)}`,
+        subdetail: `State: ${runtimeStateLabel}`,
         unit: "s",
-        value: formatScientific(status?.solver?.dt, "0.000e+0"),
+        value: formatScientific(dt, "0.000e+0"),
       },
       {
         detail: "Peak Load",
         icon: <Gauge size={13} aria-hidden="true" />,
         id: "max-torque",
         label: "Max Torque",
-        subdetail: `Converged: ${formatBoolean(status?.solver?.converged)}`,
+        subdetail: `Converged: ${formatBoolean(converged)}`,
         value: formatScientific(maxTorque, "0.000e+0"),
       },
       {
@@ -331,9 +355,13 @@ export function buildFooterTelemetryModel(
       },
     ] satisfies FooterTelemetryMetric[],
     onlineDetail: status ? "Live session channel" : "Awaiting session",
-    onlineTitle: online ? "Online / Active" : "Local / Standby",
+    onlineTitle: waitingForCompute
+      ? "Online / Waiting"
+      : active
+        ? "Online / Active"
+        : "Local / Standby",
     statusDetail: status ? "Runtime telemetry" : "Waiting for runtime",
-    statusState: solverState,
+    statusState: runtimeState,
     statusTitle,
   };
 }
@@ -459,12 +487,6 @@ function formatBoolean(value: boolean | null | undefined): string {
   if (value === true) return "yes";
   if (value === false) return "no";
   return "unknown";
-}
-
-function titleCase(value: string): string {
-  return value
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

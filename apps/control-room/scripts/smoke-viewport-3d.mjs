@@ -11,6 +11,7 @@ const allowMissingSession =
   process.env.CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION === "1";
 const requireGeometryFlow =
   !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
+const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
@@ -115,7 +116,7 @@ page.on("websocket", (websocket) => {
 });
 page.on("response", (response) => {
   const status = response.status();
-  if (isModelSceneUrl(response.url()) && status < 400) {
+  if (!cameraOnlySmoke && isModelSceneUrl(response.url()) && status < 400) {
     const sequence = sceneResponseSequence;
     const timestamp = Date.now();
     sceneResponseSequence += 1;
@@ -204,21 +205,25 @@ try {
     throw new Error("Browser console errors:\n" + errors.join("\n"));
   }
   await verifyCameraGesturesStayLocal({ canvas, page });
-  await verifyProjectionRoundTrip({ canvas, page });
-  await verifyDimensionFrameCage({ canvas, page });
-  if (requireGeometryFlow) {
-    await verifyGeometryAuthoringFlow({
-      canvas,
-      canvasBaseline: pixelSample,
-      page,
-      realtimeMessages,
-      sceneResponses,
-    });
-  }
+  if (cameraOnlySmoke) {
+    console.log(`Viewport 3D camera smoke passed at ${url}.`);
+  } else {
+    await verifyProjectionRoundTrip({ canvas, page });
+    await verifyDimensionFrameCage({ canvas, page });
+    if (requireGeometryFlow) {
+      await verifyGeometryAuthoringFlow({
+        canvas,
+        canvasBaseline: pixelSample,
+        page,
+        realtimeMessages,
+        sceneResponses,
+      });
+    }
 
-  const computeMetrics = await collectComputePerformanceProbe(page, "viewport-3d-smoke");
-  logComputePerformanceProbe(computeMetrics);
-  console.log(`Viewport 3D smoke passed at ${url}.`);
+    const computeMetrics = await collectComputePerformanceProbe(page, "viewport-3d-smoke");
+    logComputePerformanceProbe(computeMetrics);
+    console.log(`Viewport 3D smoke passed at ${url}.`);
+  }
 } finally {
   await browser.close();
 }
@@ -231,6 +236,7 @@ async function verifyCameraGesturesStayLocal({ canvas, page }) {
   const x = box.x + box.width * 0.5;
   const y = box.y + box.height * 0.5;
   const startIndex = cameraGestureRequests.length;
+  const initialCameraSignature = await readViewportCameraSignature(page);
 
   recordCameraGestureRequests = true;
   try {
@@ -239,13 +245,31 @@ async function verifyCameraGesturesStayLocal({ canvas, page }) {
       await page.mouse.wheel(0, -240);
     }
     await delay(300);
-    await page.mouse.down();
+  } finally {
+    recordCameraGestureRequests = false;
+  }
+  const wheelCameraSignature = await waitForCameraSignatureChange(
+    page,
+    initialCameraSignature,
+    "camera wheel changes the viewport camera state",
+    "Viewport camera state did not change after camera wheel",
+  );
+
+  recordCameraGestureRequests = true;
+  try {
+    await page.mouse.down({ button: "right" });
     await page.mouse.move(x + 80, y + 36, { steps: 8 });
-    await page.mouse.up();
+    await page.mouse.up({ button: "right" });
     await delay(300);
   } finally {
     recordCameraGestureRequests = false;
   }
+  await waitForCameraSignatureChange(
+    page,
+    wheelCameraSignature,
+    "right-button free-camera pan changes the viewport camera state",
+    "Viewport camera state did not change after right-button free-camera pan",
+  );
 
   const gestureRequests = cameraGestureRequests.slice(startIndex);
   const visualizationStatePatches = gestureRequests.filter(
@@ -270,6 +294,16 @@ async function verifyCameraGesturesStayLocal({ canvas, page }) {
   }
   console.log(
     `Camera gesture smoke passed: visualization_state_patches=0 session_requests=${gestureRequests.length}`,
+  );
+}
+
+async function readViewportCameraSignature(page) {
+  return page.locator(".fm-viewport-3d").evaluate((node) =>
+    [
+      node.getAttribute("data-camera-position") ?? "",
+      node.getAttribute("data-camera-target") ?? "",
+      node.getAttribute("data-camera-projection") ?? "",
+    ].join("|"),
   );
 }
 
@@ -910,6 +944,14 @@ async function waitForCanvasChange(page, canvas, baseline, label) {
   });
 }
 
+async function waitForCameraSignatureChange(page, baseline, label, failureMessage) {
+  return waitForCondition(label, async () => {
+    const current = await readViewportCameraSignature(page);
+    if (current !== baseline) return current;
+    throw new Error(failureMessage + `: camera=${current}.`);
+  });
+}
+
 async function waitForCondition(label, predicate) {
   const deadline = Date.now() + GEOMETRY_FLOW_TIMEOUT_MS;
   let lastError = null;
@@ -930,6 +972,20 @@ async function waitForCondition(label, predicate) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 async function sampleCanvasComposite(page, canvas) {
@@ -953,7 +1009,18 @@ async function sampleCanvasComposite(page, canvas) {
     return viewport ? getComputedStyle(viewport).backgroundColor : "";
   });
   const backgroundRgb = parseCssRgb(background);
-  const png = await canvas.screenshot();
+  const png = await withTimeout(
+    page.screenshot({
+      clip: {
+        height: Math.max(1, box.height),
+        width: Math.max(1, box.width),
+        x: box.x,
+        y: box.y,
+      },
+    }),
+    5_000,
+    "3D viewport canvas composite screenshot",
+  );
   const bitmap = parsePng(png);
   const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
   const signature = [];

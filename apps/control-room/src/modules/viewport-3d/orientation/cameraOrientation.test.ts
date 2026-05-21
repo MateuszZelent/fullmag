@@ -7,6 +7,7 @@ import {
   resolveCameraUpForDirection,
   resolveViewCubeCurrentCameraState,
   rotateCameraAroundCenter,
+  rotateFreeCameraTarget,
   snapCameraToDirection,
 } from "./cameraOrientation";
 
@@ -98,6 +99,32 @@ describe("camera orientation math", () => {
     expect(next.position[1]).toBeCloseTo(0);
     expect(next.position[2]).toBe(2);
     expect(next.target).toEqual([2, 2, 0]);
+  });
+
+  it("rotates the free-camera target as a 3D direction without changing distance or Z offset", () => {
+    const current = {
+      position: [4, -3, 2] as [number, number, number],
+      target: [7, -1, 8] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+    const beforeDistance = Math.hypot(
+      current.target[0] - current.position[0],
+      current.target[1] - current.position[1],
+      current.target[2] - current.position[2],
+    );
+
+    const next = rotateFreeCameraTarget(current, -Math.PI, 0.5);
+    const afterDistance = Math.hypot(
+      next.target[0] - next.position[0],
+      next.target[1] - next.position[1],
+      next.target[2] - next.position[2],
+    );
+
+    expect(next.position).toEqual(current.position);
+    expect(next.target[0]).toBeCloseTo(2);
+    expect(next.target[1]).toBeCloseTo(0);
+    expect(next.target[2] - next.position[2]).toBeCloseTo(6);
+    expect(afterDistance).toBeCloseTo(beforeDistance);
   });
 
   it("uses the live viewport camera target for 3DBox snaps when OrbitControls is absent", () => {

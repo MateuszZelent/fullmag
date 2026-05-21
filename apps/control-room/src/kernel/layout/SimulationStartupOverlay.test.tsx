@@ -97,9 +97,12 @@ describe("SimulationStartupOverlay", () => {
   });
 
   it("hydrates the smoke bypass from browser config after startup", () => {
-    expect(source).toContain("useSyncExternalStore(");
-    expect(source).toContain("getSimulationStartupSmokeBypassSnapshot");
-    expect(source).toContain("getSimulationStartupSmokeBypassServerSnapshot");
+    expect(source).toContain("useState(false)");
+    expect(source).toContain("useEffect(() => {");
+    expect(source).toContain("window.setTimeout(() => {");
+    expect(source).toContain("setAllowMissingSessionSmoke(");
+    expect(source).toContain("getSimulationStartupSmokeBypassSnapshot()");
+    expect(source).toContain("window.clearTimeout(timeoutId)");
   });
 
   it("allows controlled offline smoke tests to bypass the startup gate", () => {

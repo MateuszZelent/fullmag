@@ -57,6 +57,9 @@ jobs:
       - name: Check control-room compute performance
         run: pnpm --dir apps/control-room audit:compute-performance
 
+      - name: Benchmark control-room compute performance
+        run: pnpm --dir apps/control-room bench:compute-performance
+
       - name: Typecheck control-room app
         run: pnpm --dir apps/control-room typecheck
 

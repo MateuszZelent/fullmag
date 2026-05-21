@@ -108,22 +108,51 @@ export function rotateFreeCameraTarget(
   deltaX: number,
   sensitivity: number,
 ): Viewport3DCameraState {
-  const x = current.target[0] - current.position[0];
-  const y = current.target[1] - current.position[1];
-  const z = current.target[2] - current.position[2];
   const radians = -deltaX * sensitivity;
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
+  const nextDirection = rotateDirectionAroundAxis(
+    [
+      current.target[0] - current.position[0],
+      current.target[1] - current.position[1],
+      current.target[2] - current.position[2],
+    ],
+    [0, 0, 1],
+    radians,
+  );
 
   return {
     position: current.position,
     target: [
-      current.position[0] + x * cos - y * sin,
-      current.position[1] + x * sin + y * cos,
-      current.position[2] + z,
+      current.position[0] + nextDirection[0],
+      current.position[1] + nextDirection[1],
+      current.position[2] + nextDirection[2],
     ],
     up: current.up,
   };
+}
+
+function rotateDirectionAroundAxis(
+  direction: Direction3,
+  axis: Direction3,
+  radians: number,
+): Direction3 {
+  const normalizedAxis = normalizeDirection(axis);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dot =
+    direction[0] * normalizedAxis[0] +
+    direction[1] * normalizedAxis[1] +
+    direction[2] * normalizedAxis[2];
+  const cross: Direction3 = [
+    normalizedAxis[1] * direction[2] - normalizedAxis[2] * direction[1],
+    normalizedAxis[2] * direction[0] - normalizedAxis[0] * direction[2],
+    normalizedAxis[0] * direction[1] - normalizedAxis[1] * direction[0],
+  ];
+
+  return [
+    direction[0] * cos + cross[0] * sin + normalizedAxis[0] * dot * (1 - cos),
+    direction[1] * cos + cross[1] * sin + normalizedAxis[1] * dot * (1 - cos),
+    direction[2] * cos + cross[2] * sin + normalizedAxis[2] * dot * (1 - cos),
+  ];
 }
 
 export function normalizeDirection(direction: Direction3): Direction3 {

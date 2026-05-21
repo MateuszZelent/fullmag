@@ -63,6 +63,30 @@ describe("Viewport3DScene scale helpers", () => {
     expect(frame.zoom).toBeCloseTo(600 / (1e-7 * 1.6));
   });
 
+  it("lets an explicit orthographic scale control the visible zoom", () => {
+    expect(
+      resolveViewport3DOrthographicZoom(
+        {
+          center: [0, 0, 0],
+          radius: 5e-8,
+          size: [1e-7, 1e-7, 1e-8],
+        },
+        { height: 600, width: 800 },
+        undefined,
+        2e-7,
+      ),
+    ).toBeCloseTo(600 / 2e-7);
+
+    const frame = resolveViewport3DOrthographicCameraFrame(
+      null,
+      { height: 600, width: 800 },
+      undefined,
+      3e-7,
+    );
+
+    expect(frame.zoom).toBeCloseTo(600 / 3e-7);
+  });
+
   it("aims the orthographic camera at the active viewport target", () => {
     const camera = new OrthographicCamera(-1, 1, 1, -1, 1e-12, 1e-3);
     const cameraState = {

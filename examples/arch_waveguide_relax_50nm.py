@@ -24,6 +24,8 @@ ARCH_HEIGHT = 50e-9
 Z0 = -ARCH_HEIGHT / 2.0
 
 B_EXT_T = 1e-7
+RELAX_TORQUE_TOLERANCE_T = 1e-4
+RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 G_FACTOR = 2.115
 GAMMA = MU0 * G_FACTOR * MU_B / HBAR
 
@@ -108,7 +110,8 @@ waveguide.mesh.size_field(core_relaxation["kind"], **core_relaxation["params"])
 study.b_ext(0.0, 0.0, B_EXT_T)
 study.demag(realization="poisson_robin")
 
-# Demag solver tuning: rtol=1e-6 is sufficient for relaxation (tol=1e-4).
+# Demag solver tuning: rtol=1e-6 is sufficient for relaxation
+# (max_torque[T] < 1e-4). The public RelaxStop threshold is in A/m.
 # Keep interactive terminals quiet by default; set FULLMAG_DEMAG_PRINT_LEVEL=1
 # to inspect per-solve Hypre/PCG convergence.
 fm.fem_demag_solver(rtol=1e-6, max_iterations=200, print_level=DEMAG_PRINT_LEVEL)
@@ -126,6 +129,6 @@ study.save("m", every=250e-12)
 # Stage
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    tol=1e-4,
+    tol=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=5000,
 )

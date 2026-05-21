@@ -14,4 +14,11 @@ describe("compute performance CI coverage", () => {
       "pnpm --dir apps/control-room audit:compute-performance",
     );
   });
+
+  it("runs the compute-performance microbench in the control-room bootstrap lane", () => {
+    expect(bootstrapWorkflow).toContain("Benchmark control-room compute performance");
+    expect(bootstrapWorkflow).toContain(
+      "pnpm --dir apps/control-room bench:compute-performance",
+    );
+  });
 });

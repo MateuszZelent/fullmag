@@ -69,6 +69,7 @@ const DEFAULT_FOV_DEGREES = 42;
 
 export function Viewport3DCameraDialog({
   cameraResource,
+  cameraOrthographicScale,
   cameraProjection,
   cameraState,
   onCameraPatch,
@@ -76,6 +77,7 @@ export function Viewport3DCameraDialog({
   open,
 }: {
   cameraResource: CameraResource | null;
+  cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   onCameraPatch: (patch: CameraPatch) => void;
@@ -92,8 +94,14 @@ export function Viewport3DCameraDialog({
     startY: number;
   } | null>(null);
   const snapshot = useMemo(
-    () => buildCameraDialogSnapshot(cameraState, cameraProjection, cameraResource),
-    [cameraProjection, cameraResource, cameraState],
+    () =>
+      buildCameraDialogSnapshot(
+        cameraState,
+        cameraProjection,
+        cameraResource,
+        cameraOrthographicScale,
+      ),
+    [cameraOrthographicScale, cameraProjection, cameraResource, cameraState],
   );
   const liveOrientation = useMemo(
     () =>
@@ -401,10 +409,11 @@ function buildCameraDialogSnapshot(
   cameraState: Viewport3DCameraState,
   cameraProjection: Viewport3DCameraProjection,
   cameraResource: CameraResource | null,
+  cameraOrthographicScale: number | null,
 ): CameraDialogSnapshot {
   return {
     fovDegrees: cameraResource?.fov_degrees ?? DEFAULT_FOV_DEGREES,
-    orthographicScale: cameraResource?.orthographic_scale ?? null,
+    orthographicScale: cameraOrthographicScale ?? cameraResource?.orthographic_scale ?? null,
     position: cameraState.position,
     projection: cameraProjection,
     target: cameraState.target,

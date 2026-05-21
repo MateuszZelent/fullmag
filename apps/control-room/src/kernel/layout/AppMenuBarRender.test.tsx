@@ -59,7 +59,28 @@ describe("AppMenuBar", () => {
       connectionLabel: "Local API",
       indicatorLabel: "Session connected",
       indicatorStatus: "connected",
-      sessionBadge: "running",
+      sessionBadge: "Running",
+      subtitle: "Spin-torque run",
+    });
+  });
+
+  it("lets detailed solver runtime state override a thin running session badge", () => {
+    expect(
+      resolveHeaderSessionDisplay(
+        {
+          data: {
+            session: {
+              name: "Spin-torque run",
+            },
+            solver: { state: "running" },
+          },
+          status: "ready",
+        },
+        "waiting_for_compute",
+      ),
+    ).toMatchObject({
+      connectionLabel: "Local API",
+      sessionBadge: "Waiting for compute",
       subtitle: "Spin-torque run",
     });
   });
@@ -89,7 +110,7 @@ describe("AppMenuBar", () => {
         resolveHydrationSafeHeaderSessionSource(readyStatus, true),
       ),
     ).toMatchObject({
-      sessionBadge: "relaxed",
+      sessionBadge: "Relaxed",
       subtitle: "arch_waveguide_relax_50nm",
     });
   });
