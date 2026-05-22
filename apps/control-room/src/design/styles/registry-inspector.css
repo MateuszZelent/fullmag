@@ -196,16 +196,16 @@ details[open] > .fm-registry-tree__summary .fm-registry-tree__compact {
 }
 
 .fm-registry-tree__string {
-  color: var(--fm-success, #a6e3a1);
+  color: var(--fm-success);
   word-break: break-all;
 }
 
 .fm-registry-tree__number {
-  color: var(--fm-info, #89dceb);
+  color: var(--fm-info);
 }
 
 .fm-registry-tree__bool {
-  color: var(--fm-warning, #f9e2af);
+  color: var(--fm-warning);
   font-weight: 600;
 }
 

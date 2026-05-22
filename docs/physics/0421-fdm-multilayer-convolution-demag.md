@@ -171,17 +171,49 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
   tensor spectra into the native backend without overloading the legacy
   single-grid plan.
 - [x] Add the native v2 creation/validation entrypoint with explicit validation
-  errors and explicit unsupported status for valid multilayer plans.
+  errors and a staged execution scope for valid multilayer plans.
 - [x] Add the native v2 device upload/staging path for layers and tensor kernels.
 - [x] Add the first native CUDA demag owner for identity-grid `push_m`,
   tensor multiplication, and `pull_h` boundaries in fp64/fp32.
+- [x] Transform all three vector components through forward and inverse cuFFT in
+  the native identity-grid multilayer demag operator before tensor multiply and
+  pull-back.
+- [x] Validate native identity transfer against `native_grid == convolution_grid`
+  while allowing the tensor-kernel FFT grid to be padded.
 - [x] Prepare a shared native cuFFT workspace for staged v2 multilayer tensor
   kernels when all layer-pair kernels use one `fft_grid`.
-- [x] Wire staged v2 handles through `step()` far enough to refresh native
-  multilayer demag before returning explicit unsupported for incomplete
-  timestep execution.
-- [ ] Add heterogeneous native transfer maps, per-grid multilayer FFT workspace
-  planning, and timestep execution wiring.
+- [x] Wire staged v2 handles through `step()` for the first native timestep
+  slices: Heun and RK4 over staged multilayer layers in fp64/fp32 with demag
+  and layer-local exchange fields; adaptive and multistep integrators are still
+  rejected explicitly.
+- [x] Add an explicit `fullmag_fdm_backend_refresh_multilayer_demag` ABI so the
+  CUDA-assisted identity-grid path refreshes staged v2 demag without using
+  `step(0)` as an operator call.
+- [x] Expose per-layer v2 `M`, `H_EX`, and `H_DEMAG` copy entrypoints so
+  refreshed native multilayer fields are observable outside private `Context`
+  state.
+- [x] Expose per-layer v2 magnetization upload and route identity-grid
+  CUDA-assisted multilayer demag through the staged native v2 handle, with
+  provenance distinguishing native cuFFT demag from the Rust fallback.
+- [x] Carry explicit `transfer_kind` through the native C ABI, Rust FFI, Rust
+  runner wrapper, and native `Context` staging so `identity` and `push_pull`
+  route through separate native transfer boundaries.
+- [x] Add native CUDA `push_pull` transfer kernels with the same V1 semantics as
+  `fullmag-fdm-demag`: volume-weighted native-to-convolution `push_m` and
+  trilinear convolution-to-native `pull_h` for fp64/fp32 staged v2 demag refresh.
+- [x] Precompute staged heterogeneous transfer maps in native `Context` upload:
+  sparse push offsets/indices/weights and padded-FFT pull indices/weights are
+  consumed by fp64/fp32 CUDA refresh kernels instead of rebuilding overlap maps
+  inside the timestep launch.
+- [x] Add a layer-local native CUDA exchange field owner for staged v2 layers:
+  uniform-A six-neighbor stencil on each layer native grid, open Neumann
+  boundary clamping, and active-mask clamping.
+- [x] Add native CUDA RK4 timestep ownership for staged v2 layers, using
+  per-layer `k1`/`k2`/`k3`/`k4` stage fields and the same demag plus
+  layer-local exchange RHS as the Heun slice.
+- [ ] Add per-grid multilayer FFT workspace planning, optimized interpolation
+  backends, remaining local-field RHS coverage beyond layer-local exchange, and
+  the remaining v2 integrators beyond Heun/RK4.
 
 ### Phase 1: Data model
 - [ ] Add `Layer` concept to `ExchangeLlgProblem` (rect, cell count, cell size per layer)

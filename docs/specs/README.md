@@ -63,7 +63,7 @@ It defines:
 If the core concept of the application changes, these files must be updated.
 
 The frontend v2 specs define the target modular control-room frontend, the
-temporary `apps/web` legacy-reference policy, module-kernel boundaries, and
+temporary `apps/legacy_web` legacy-reference policy, module-kernel boundaries, and
 cutover acceptance. They do not override the resource-first API contract.
 
 ### 2. Solver architecture

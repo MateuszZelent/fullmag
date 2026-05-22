@@ -56,6 +56,11 @@ typedef enum {
 } fullmag_fdm_plan_kind;
 
 typedef enum {
+    FULLMAG_FDM_TRANSFER_IDENTITY = 0,
+    FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+} fullmag_fdm_transfer_kind;
+
+typedef enum {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
     FULLMAG_FDM_INTEGRATOR_ABM3 = 3,
@@ -121,6 +126,7 @@ typedef struct {
 typedef struct {
     fullmag_fdm_grid_desc      native_grid;
     fullmag_fdm_grid_desc      convolution_grid;
+    fullmag_fdm_transfer_kind  transfer_kind;
     uint32_t                   layer_index;
     int32_t                    z_offset_cells;
     fullmag_fdm_material_desc  material;
@@ -463,6 +469,32 @@ int fullmag_fdm_backend_copy_field_f32(
     uint64_t               out_len);
 
 /**
+ * Copy a v2 multilayer layer field observable from device to host as f64.
+ * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX, and
+ * FULLMAG_FDM_OBSERVABLE_H_DEMAG.
+ * out_xyz length must be 3 * the selected layer native cell count.
+ */
+int fullmag_fdm_backend_copy_layer_field_f64(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    fullmag_fdm_observable observable,
+    double                *out_xyz,
+    uint64_t               out_len);
+
+/**
+ * Copy a v2 multilayer layer field observable from device to host as f32.
+ * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX, and
+ * FULLMAG_FDM_OBSERVABLE_H_DEMAG.
+ * out_xyz length must be 3 * the selected layer native cell count.
+ */
+int fullmag_fdm_backend_copy_layer_field_f32(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    fullmag_fdm_observable observable,
+    float                 *out_xyz,
+    uint64_t               out_len);
+
+/**
  * Copy a downsampled preview of a field observable from device to host as f64.
  * The preview grid is defined by preview_nx * preview_ny * preview_nz bins.
  * For each preview bin the backend returns the arithmetic average of the source
@@ -591,6 +623,37 @@ int fullmag_fdm_backend_upload_magnetization_f32(
     fullmag_fdm_backend   *handle,
     const float           *m_xyz,
     uint64_t               len);
+
+/**
+ * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.
+ * This does not advance time; refresh native multilayer demag before copying
+ * H_DEMAG for the uploaded state.
+ */
+int fullmag_fdm_backend_upload_layer_magnetization_f64(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    const double          *m_xyz,
+    uint64_t               len);
+
+/**
+ * Replace one v2 multilayer layer magnetization from host-side f32 AoS storage.
+ * This does not advance time; refresh native multilayer demag before copying
+ * H_DEMAG for the uploaded state.
+ */
+int fullmag_fdm_backend_upload_layer_magnetization_f32(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    const float           *m_xyz,
+    uint64_t               len);
+
+/**
+ * Recompute staged v2 multilayer H_DEMAG without taking a time step.
+ *
+ * This entrypoint is valid only for handles created with
+ * fullmag_fdm_backend_create_v2.
+ */
+int fullmag_fdm_backend_refresh_multilayer_demag(
+    fullmag_fdm_backend   *handle);
 
 /**
  * Recompute observables for the current magnetization state without taking a

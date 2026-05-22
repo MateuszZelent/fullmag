@@ -1,9 +1,8 @@
 /*
  * multilayer_create_v2_contract.cpp - native FDM v2 create contract.
  *
- * The v2 entrypoint must validate multilayer plans explicitly and report that
- * native multilayer execution is not implemented yet.  It must not silently
- * reinterpret a multilayer plan as the legacy single-grid ABI.
+ * The v2 entrypoint must validate multilayer plans explicitly and keep staged
+ * multilayer execution out of the legacy single-grid ABI.
  */
 
 #include "fullmag_fdm.h"
@@ -31,6 +30,7 @@ fullmag_fdm_layer_desc_v2 make_layer(uint32_t index, const double *m) {
     fullmag_fdm_layer_desc_v2 layer{};
     layer.native_grid = {1, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
     layer.convolution_grid = {1, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    layer.transfer_kind = FULLMAG_FDM_TRANSFER_IDENTITY;
     layer.layer_index = index;
     layer.z_offset_cells = static_cast<int32_t>(index);
     layer.material = {800000.0, 1.3e-11, 0.02, 2.211e5};
@@ -61,7 +61,7 @@ fullmag_fdm_tensor_kernel_desc_v2 make_kernel(
     const fullmag_fdm_complex64 *component)
 {
     fullmag_fdm_tensor_kernel_desc_v2 kernel{};
-    kernel.fft_grid = {1, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    kernel.fft_grid = {2, 2, 2, 1.0e-9, 1.0e-9, 1.0e-9};
     kernel.dst_layer = dst_layer;
     kernel.src_layer = src_layer;
     kernel.kernel_xx = component;
@@ -70,7 +70,7 @@ fullmag_fdm_tensor_kernel_desc_v2 make_kernel(
     kernel.kernel_xy = component;
     kernel.kernel_xz = component;
     kernel.kernel_yz = component;
-    kernel.kernel_len = 1;
+    kernel.kernel_len = 8;
     return kernel;
 }
 
@@ -86,7 +86,19 @@ void invalid_plan_reports_validation_error() {
     fullmag_fdm_backend_destroy(handle);
 }
 
-void valid_plan_reports_unimplemented_execution() {
+void invalid_transfer_kind_reports_validation_error() {
+    const double m0[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, m0);
+    layer.transfer_kind = static_cast<fullmag_fdm_transfer_kind>(999);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "invalid transfer_kind should return an error handle");
+    check_error_contains(handle, "unknown layer transfer_kind in v2 plan");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void valid_plan_runs_heun_step_with_demag_and_exchange() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("valid create_v2 upload check skipped: CUDA backend unavailable\n");
         return;
@@ -98,7 +110,10 @@ void valid_plan_reports_unimplemented_execution() {
         make_layer(0, m0),
         make_layer(1, m1),
     };
-    const fullmag_fdm_complex64 kernel_component[1] = {{1.0, 0.0}};
+    const fullmag_fdm_complex64 kernel_component[8] = {
+        {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
+        {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
+    };
     const fullmag_fdm_tensor_kernel_desc_v2 kernels[4] = {
         make_kernel(0, 0, kernel_component),
         make_kernel(0, 1, kernel_component),
@@ -106,14 +121,53 @@ void valid_plan_reports_unimplemented_execution() {
         make_kernel(1, 1, kernel_component),
     };
     fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(layers, 2);
+    plan.enable_exchange = 1;
     plan.enable_demag = 1;
     plan.kernels = kernels;
     plan.kernel_count = 4;
 
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
-    check(handle != nullptr, "valid create_v2 plan should return an explicit unsupported handle");
+    check(handle != nullptr, "valid create_v2 plan should return a staged v2 handle");
     check_error_contains(handle, "uploaded 2 layers and 4 tensor kernels");
-    check_error_contains(handle, "native multilayer CUDA execution is not implemented");
+    check_error_contains(handle, "native Heun/RK4 timestep with demag and layer-local exchange is available");
+
+    const int refresh_status = fullmag_fdm_backend_refresh_multilayer_demag(handle);
+    check(
+        refresh_status == FULLMAG_FDM_OK,
+        "explicit v2 multilayer demag refresh should succeed for staged handles");
+
+    fullmag_fdm_step_stats stats{};
+    const int step_status = fullmag_fdm_backend_step(handle, 1.0e-13, &stats);
+    check(step_status == FULLMAG_FDM_OK, "v2 multilayer Heun step with exchange should succeed");
+    check(stats.step == 1, "v2 multilayer Heun step should advance step metadata");
+    check(stats.time_seconds > 0.0, "v2 multilayer Heun step should advance time metadata");
+
+    double h_demag[3] = {};
+    const int h_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+        h_demag,
+        3);
+    check(h_status == FULLMAG_FDM_OK, "copy layer H_DEMAG should succeed after demag refresh");
+
+    double h_ex[3] = {};
+    const int h_ex_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_EX,
+        h_ex,
+        3);
+    check(h_ex_status == FULLMAG_FDM_OK, "copy layer H_EX should succeed after Heun step");
+
+    double m_copy[3] = {};
+    const int m_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_M,
+        m_copy,
+        3);
+    check(m_status == FULLMAG_FDM_OK, "copy layer M should succeed for v2 multilayer handles");
     fullmag_fdm_backend_destroy(handle);
 }
 
@@ -121,7 +175,8 @@ void valid_plan_reports_unimplemented_execution() {
 
 int main() {
     invalid_plan_reports_validation_error();
-    valid_plan_reports_unimplemented_execution();
+    invalid_transfer_kind_reports_validation_error();
+    valid_plan_runs_heun_step_with_demag_and_exchange();
     std::printf("multilayer create_v2 contract: PASS\n");
     return 0;
 }

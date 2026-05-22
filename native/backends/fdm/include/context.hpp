@@ -41,18 +41,41 @@ struct DeviceDemagKernel {
     void *yz = nullptr;
 };
 
+struct DeviceMultilayerPushMap {
+    uint64_t cell_count = 0;
+    uint64_t entry_count = 0;
+    uint64_t *offsets = nullptr;
+    uint64_t *indices = nullptr;
+    double *weights = nullptr;
+};
+
+struct DeviceMultilayerPullMap {
+    uint64_t cell_count = 0;
+    uint64_t *indices = nullptr;
+    double *weights = nullptr;
+};
+
 struct DeviceMultilayerLayer {
     fullmag_fdm_grid_desc native_grid{};
     fullmag_fdm_grid_desc convolution_grid{};
+    fullmag_fdm_transfer_kind transfer_kind = FULLMAG_FDM_TRANSFER_IDENTITY;
     uint32_t layer_index = 0;
     int32_t z_offset_cells = 0;
     fullmag_fdm_material_desc material{};
     uint64_t cell_count = 0;
     uint64_t convolution_cell_count = 0;
     DeviceVectorField m;
+    DeviceVectorField h_ex;
     DeviceVectorField h_demag;
+    DeviceVectorField tmp;
+    DeviceVectorField k1;
+    DeviceVectorField k2;
+    DeviceVectorField k3;
+    DeviceVectorField k4;
     uint8_t *active_mask = nullptr;
     bool has_active_mask = false;
+    DeviceMultilayerPushMap push_map;
+    DeviceMultilayerPullMap pull_map;
 };
 
 struct DeviceMultilayerTensorKernel {
@@ -282,9 +305,8 @@ struct Context {
     // Error state
     std::string last_error;
 
-    // Native FDM ABI v2 multilayer staging.  These buffers are uploaded and
-    // validated separately from the legacy single-grid state until the
-    // multilayer CUDA execution path is wired.
+    // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
+    // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
     std::vector<DeviceMultilayerLayer> multilayer_layers;
     std::vector<DeviceMultilayerTensorKernel> multilayer_kernels;
@@ -296,6 +318,8 @@ struct Context {
 };
 
 #if FULLMAG_HAS_CUDA
+bool context_create_compute_stream(Context &ctx);
+void context_destroy_compute_stream(Context &ctx);
 cudaStream_t context_compute_stream(Context &ctx);
 #endif
 bool context_begin_compute_stream_work(Context &ctx, const char *operation);
@@ -516,6 +540,20 @@ bool context_upload_magnetization_f64(Context &ctx, const double *m_xyz, uint64_
 /// Upload initial magnetization (AoS f32 host → SoA device).
 bool context_upload_magnetization_f32(Context &ctx, const float *m_xyz, uint64_t len);
 
+/// Upload a v2 multilayer layer magnetization from host f64 AoS storage.
+bool context_upload_layer_magnetization_f64(
+    Context &ctx,
+    uint32_t layer_index,
+    const double *m_xyz,
+    uint64_t len);
+
+/// Upload a v2 multilayer layer magnetization from host f32 AoS storage.
+bool context_upload_layer_magnetization_f32(
+    Context &ctx,
+    uint32_t layer_index,
+    const float *m_xyz,
+    uint64_t len);
+
 /// Upload active cell mask (host u8 -> device u8).
 bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
 
@@ -604,6 +642,22 @@ bool context_download_field_f32(
     float *out_xyz,
     uint64_t out_len);
 
+/// Download a v2 multilayer layer field observable from device to host as f64 AoS.
+bool context_download_layer_field_f64(
+    Context &ctx,
+    uint32_t layer_index,
+    fullmag_fdm_observable observable,
+    double *out_xyz,
+    uint64_t out_len);
+
+/// Download a v2 multilayer layer field observable from device to host as f32 AoS.
+bool context_download_layer_field_f32(
+    Context &ctx,
+    uint32_t layer_index,
+    fullmag_fdm_observable observable,
+    float *out_xyz,
+    uint64_t out_len);
+
 /// Download a downsampled preview of a field observable from device to host.
 bool context_download_field_preview_f64(
     Context &ctx,
@@ -636,6 +690,9 @@ bool context_refresh_observables(Context &ctx);
 
 /// Populate only H_demag for the current state without advancing time.
 bool context_refresh_demag_observable(Context &ctx);
+
+/// Populate full current-step diagnostics from the current device state.
+bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats);
 
 /// Begin an asynchronous field snapshot with private staging + pinned host storage.
 AsyncFieldSnapshot *context_begin_async_field_snapshot(

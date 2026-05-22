@@ -30,40 +30,10 @@ extern void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stat
 extern void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_multilayer_demag_field_fp64(Context &ctx);
 extern void launch_multilayer_demag_field_fp32(Context &ctx);
-extern double launch_exchange_energy_fp64(Context &ctx);
-extern double launch_exchange_energy_fp32(Context &ctx);
-extern double launch_demag_energy_fp64(Context &ctx);
-extern double launch_demag_energy_fp32(Context &ctx);
-extern double launch_external_energy_fp64(Context &ctx);
-extern double launch_external_energy_fp32(Context &ctx);
-extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
-extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
-extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
-extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
-extern double reduce_dmi_energy_fp64(Context &ctx);
-extern double reduce_dmi_energy_fp32(Context &ctx);
-extern double reduce_max_norm_fp64(
-    Context &ctx,
-    const void *vx,
-    const void *vy,
-    const void *vz,
-    uint64_t n);
-extern double reduce_max_norm_fp32(
-    Context &ctx,
-    const void *vx,
-    const void *vy,
-    const void *vz,
-    uint64_t n);
-extern double reduce_max_cross_norm_fp64(
-    Context &ctx,
-    const void *ax, const void *ay, const void *az,
-    const void *bx, const void *by, const void *bz,
-    uint64_t n);
-extern double reduce_max_cross_norm_fp32(
-    Context &ctx,
-    const void *ax, const void *ay, const void *az,
-    const void *bx, const void *by, const void *bz,
-    uint64_t n);
+extern void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 #if FULLMAG_HAS_CUDA
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 #endif
@@ -102,73 +72,18 @@ bool select_cuda_device_if_requested(Context &ctx) {
 #endif
 
 #if FULLMAG_HAS_CUDA
-bool fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats) {
-    if (!context_refresh_observables(ctx)) {
-        return false;
+bool refresh_multilayer_demag(Context &ctx) {
+    ctx.last_error.clear();
+    if (!ctx.enable_demag) {
+        return true;
     }
-
-    std::memset(out_stats, 0, sizeof(*out_stats));
-    out_stats->step = ctx.step_count;
-    out_stats->time_seconds = ctx.current_time;
 
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        out_stats->exchange_energy_joules =
-            ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
-        out_stats->demag_energy_joules =
-            ctx.enable_demag ? launch_demag_energy_fp64(ctx) : 0.0;
-        out_stats->external_energy_joules = launch_external_energy_fp64(ctx);
-        out_stats->anisotropy_energy_joules = reduce_uniaxial_anisotropy_energy_fp64(ctx);
-        out_stats->cubic_energy_joules = reduce_cubic_anisotropy_energy_fp64(ctx);
-        out_stats->dmi_energy_joules = reduce_dmi_energy_fp64(ctx);
-        out_stats->max_effective_field_amplitude =
-            reduce_max_norm_fp64(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
-        out_stats->max_demag_field_amplitude = ctx.enable_demag
-            ? reduce_max_norm_fp64(
-                ctx,
-                ctx.h_demag.x,
-                ctx.h_demag.y,
-                ctx.h_demag.z,
-                ctx.cell_count)
-            : 0.0;
-        out_stats->max_torque_Apm = reduce_max_cross_norm_fp64(
-            ctx,
-            ctx.m.x, ctx.m.y, ctx.m.z,
-            ctx.work.x, ctx.work.y, ctx.work.z,
-            ctx.cell_count);
+        launch_multilayer_demag_field_fp64(ctx);
     } else {
-        out_stats->exchange_energy_joules =
-            ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
-        out_stats->demag_energy_joules =
-            ctx.enable_demag ? launch_demag_energy_fp32(ctx) : 0.0;
-        out_stats->external_energy_joules = launch_external_energy_fp32(ctx);
-        out_stats->anisotropy_energy_joules = reduce_uniaxial_anisotropy_energy_fp32(ctx);
-        out_stats->cubic_energy_joules = reduce_cubic_anisotropy_energy_fp32(ctx);
-        out_stats->dmi_energy_joules = reduce_dmi_energy_fp32(ctx);
-        out_stats->max_effective_field_amplitude =
-            reduce_max_norm_fp32(ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
-        out_stats->max_demag_field_amplitude = ctx.enable_demag
-            ? reduce_max_norm_fp32(
-                ctx,
-                ctx.h_demag.x,
-                ctx.h_demag.y,
-                ctx.h_demag.z,
-                ctx.cell_count)
-            : 0.0;
-        out_stats->max_torque_Apm = reduce_max_cross_norm_fp32(
-            ctx,
-            ctx.m.x, ctx.m.y, ctx.m.z,
-            ctx.work.x, ctx.work.y, ctx.work.z,
-            ctx.cell_count);
+        launch_multilayer_demag_field_fp32(ctx);
     }
-
-    out_stats->total_energy_joules =
-        out_stats->exchange_energy_joules +
-        out_stats->demag_energy_joules +
-        out_stats->external_energy_joules +
-        out_stats->anisotropy_energy_joules +
-        out_stats->cubic_energy_joules +
-        out_stats->dmi_energy_joules;
-    return true;
+    return ctx.last_error.empty();
 }
 #endif
 
@@ -210,6 +125,11 @@ bool valid_integrator(fullmag_fdm_integrator integrator) {
     }
 }
 
+bool valid_transfer_kind(fullmag_fdm_transfer_kind transfer_kind) {
+    return transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY ||
+        transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL;
+}
+
 bool validate_multilayer_plan_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 &plan,
     std::string &error)
@@ -240,6 +160,10 @@ bool validate_multilayer_plan_v2(
         if (!validate_grid_desc(layer.native_grid, "layer native_grid", error) ||
             !validate_grid_desc(layer.convolution_grid, "layer convolution_grid", error))
         {
+            return false;
+        }
+        if (!valid_transfer_kind(layer.transfer_kind)) {
+            error = "unknown layer transfer_kind in v2 plan";
             return false;
         }
         if (layer.material.saturation_magnetisation <= 0.0) {
@@ -797,7 +721,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->last_error =
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
-        + " tensor kernels; prepared shared FFT workspace; native multilayer CUDA execution is not implemented for fullmag_fdm_backend_create_v2";
+        + " tensor kernels; prepared shared FFT workspace; native Heun/RK4 timestep with demag and layer-local exchange is available for v2 multilayer handles";
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
@@ -817,24 +741,40 @@ int fullmag_fdm_backend_step(
     auto *ctx = reinterpret_cast<Context *>(handle);
     ctx->step_interrupted = false;
     if (ctx->has_multilayer_plan_v2) {
-        fullmag_fdm_fill_step_stats_metadata(*ctx, out_stats, dt_seconds);
-        ctx->last_error.clear();
-        bool refreshed_demag = false;
-        if (ctx->enable_demag) {
-            if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-                launch_multilayer_demag_field_fp64(*ctx);
-            } else {
-                launch_multilayer_demag_field_fp32(*ctx);
-            }
-            if (!ctx->last_error.empty()) {
-                return FULLMAG_FDM_ERR_CUDA;
-            }
-            refreshed_demag = true;
+        if (dt_seconds <= 0.0) {
+            ctx->last_error = "v2 multilayer step requires dt_seconds > 0";
+            return FULLMAG_FDM_ERR_INVALID;
         }
-        ctx->last_error = refreshed_demag
-            ? "native multilayer demag refreshed; native multilayer timestep execution is not implemented for fullmag_fdm_backend_step"
-            : "native multilayer timestep execution is not implemented for fullmag_fdm_backend_step";
-        return FULLMAG_FDM_ERR_INVALID;
+        if (ctx->integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
+            ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK4)
+        {
+            ctx->last_error =
+                "native v2 multilayer timestep currently supports only Heun and RK4 integrators";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        if (!ctx->enable_demag) {
+            ctx->last_error =
+                "native v2 multilayer timestep currently requires enable_demag = 1";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+
+        if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+                launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, out_stats);
+            } else {
+                launch_multilayer_heun_step_fp64(*ctx, dt_seconds, out_stats);
+            }
+        } else {
+            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+                launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, out_stats);
+            } else {
+                launch_multilayer_heun_step_fp32(*ctx, dt_seconds, out_stats);
+            }
+        }
+        if (!ctx->last_error.empty()) {
+            return FULLMAG_FDM_ERR_CUDA;
+        }
+        return FULLMAG_FDM_OK;
     }
 
     if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
@@ -879,7 +819,7 @@ int fullmag_fdm_backend_step(
     }
 
     if (ctx->step_interrupted) {
-        if (!fill_current_stats(*ctx, out_stats)) {
+        if (!context_fill_current_stats(*ctx, out_stats)) {
             return FULLMAG_FDM_ERR_CUDA;
         }
         out_stats->dt_seconds = 0.0;
@@ -967,6 +907,50 @@ int fullmag_fdm_backend_copy_field_f32(
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)observable; (void)out_xyz; (void)out_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_copy_layer_field_f64(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    fullmag_fdm_observable observable,
+    double                *out_xyz,
+    uint64_t               out_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!context_download_layer_field_f64(*ctx, layer_index, observable, out_xyz, out_len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)layer_index; (void)observable; (void)out_xyz; (void)out_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_copy_layer_field_f32(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    fullmag_fdm_observable observable,
+    float                 *out_xyz,
+    uint64_t               out_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!context_download_layer_field_f32(*ctx, layer_index, observable, out_xyz, out_len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)layer_index; (void)observable; (void)out_xyz; (void)out_len;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }
@@ -1274,6 +1258,71 @@ int fullmag_fdm_backend_upload_magnetization_f32(
 #endif
 }
 
+int fullmag_fdm_backend_upload_layer_magnetization_f64(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    const double          *m_xyz,
+    uint64_t               len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!context_upload_layer_magnetization_f64(*ctx, layer_index, m_xyz, len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)layer_index; (void)m_xyz; (void)len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_upload_layer_magnetization_f32(
+    fullmag_fdm_backend   *handle,
+    uint32_t               layer_index,
+    const float           *m_xyz,
+    uint64_t               len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!context_upload_layer_magnetization_f32(*ctx, layer_index, m_xyz, len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)layer_index; (void)m_xyz; (void)len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_refresh_multilayer_demag(
+    fullmag_fdm_backend *handle)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+
+    if (!ctx->has_multilayer_plan_v2) {
+        ctx->last_error =
+            "explicit multilayer demag refresh requires a staged v2 multilayer plan";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!refresh_multilayer_demag(*ctx)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_refresh_observables(
     fullmag_fdm_backend *handle)
 {
@@ -1318,7 +1367,7 @@ int fullmag_fdm_backend_snapshot_stats(
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
 
-    if (!fill_current_stats(*ctx, out_stats)) {
+    if (!context_fill_current_stats(*ctx, out_stats)) {
         return FULLMAG_FDM_ERR_CUDA;
     }
 

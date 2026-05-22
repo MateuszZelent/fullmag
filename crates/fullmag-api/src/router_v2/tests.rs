@@ -6712,6 +6712,43 @@ async fn commands_endpoint_enqueues_single_command() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_converts_relax_torque_tolerance_t_to_apm() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "relax",
+                        "torque_tolerance_T": 1.0e-5
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    let torque_tolerance = queue
+        .front()
+        .and_then(|command| command.torque_tolerance)
+        .expect("relax command should store canonical A/m torque tolerance");
+    let expected = 1.0e-5 / (4.0 * std::f64::consts::PI * 1.0e-7);
+    assert!(
+        (torque_tolerance - expected).abs() < 1.0e-12,
+        "expected {expected}, got {torque_tolerance}"
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_enqueues_compute_fields_command() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
@@ -7496,7 +7533,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 requested_at_unix_ms: None,
                 until_seconds: None,
                 max_steps: None,
-                torque_tolerance: None,
+                torque_tolerance: Some(7.5),
                 energy_tolerance: None,
                 integrator: None,
                 fixed_timestep: None,
@@ -7548,6 +7585,8 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
     assert_eq!(json["accepted_at_unix_ms"], 1_700_000_000_000u64);
     assert_eq!(json["started_at_unix_ms"], 1_700_000_000_100u64);
     assert_eq!(json["terminal_at_unix_ms"], 1_700_000_001_000u64);
+    assert_eq!(json["torque_tolerance_apm"], 7.5);
+    assert_eq!(json["torque_tolerance"], 7.5);
 }
 
 #[tokio::test]
@@ -7680,6 +7719,9 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["integrator"], "rk45");
     assert_eq!(json["step_index"], 42);
+    assert_eq!(json["max_torque_T"], 14.0);
+    assert_eq!(json["max_torque_Apm"], 13.0);
+    assert_eq!(json["max_torque"], 14.0);
     assert_eq!(json["last_error"], "latest runtime error");
 }
 

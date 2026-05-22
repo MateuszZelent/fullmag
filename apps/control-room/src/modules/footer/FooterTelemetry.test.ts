@@ -104,7 +104,7 @@ const status: LiveStatusResource = {
     algorithm: null,
     converged: false,
     dt: 1e-12,
-    max_torque: 0.006,
+    max_torque_T: 0.006,
     state: "running",
   },
 };
@@ -148,6 +148,7 @@ describe("FooterTelemetry", () => {
     expect(byId["avg-my"]?.value).toBe("-0.500");
     expect(byId["avg-mz"]?.value).toBe("0.750");
     expect(byId["energy-total"]?.value).toBe("15");
+    expect(byId["max-torque"]?.value).toBe("6.000e-3 T");
     expect(byId.step?.value).toBe("99");
   });
 
@@ -167,7 +168,7 @@ describe("FooterTelemetry", () => {
       integrator: null,
       is_busy: false,
       last_error: null,
-      max_torque: 0,
+      max_torque_T: 0,
       revision: 4,
       run_id: status.run?.run_id ?? null,
       runtime_state: "waiting_for_compute",
@@ -215,7 +216,7 @@ describe("FooterTelemetry", () => {
         ...status,
         solver: {
           ...status.solver,
-          max_torque: 0.008,
+          max_torque_T: 0.008,
         },
       },
       error: null,

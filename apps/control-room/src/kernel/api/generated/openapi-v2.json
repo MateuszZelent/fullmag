@@ -1185,6 +1185,13 @@
               "null"
             ]
           },
+          "torque_tolerance_apm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "until_seconds": {
             "format": "double",
             "type": [
@@ -8700,6 +8707,20 @@
               "null"
             ]
           },
+          "max_torque_Apm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_T": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -8785,6 +8806,20 @@
             ]
           },
           "max_torque": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_Apm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_T": {
             "format": "double",
             "type": [
               "number",
@@ -9084,6 +9119,20 @@
                     ]
                   },
                   "torque_tolerance": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance_T": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance_apm": {
                     "format": "double",
                     "type": [
                       "number",

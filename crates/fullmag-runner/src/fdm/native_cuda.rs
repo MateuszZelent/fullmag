@@ -57,6 +57,17 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
         && plan.stt_lambda.is_some()
 }
 
+#[cfg(feature = "cuda")]
+fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunError> {
+    match kind {
+        "identity" => Ok(ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_IDENTITY),
+        "push_pull" => Ok(ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_PUSH_PULL),
+        other => Err(RunError {
+            message: format!("unsupported native FDM multilayer transfer_kind '{other}'"),
+        }),
+    }
+}
+
 /// Safe wrapper around the native FDM backend handle.
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
@@ -90,6 +101,16 @@ struct NativeFieldSnapshotReady {
     /// FFI boundary.  No raw pointer escapes after `ensure_ready` returns.
     data: Vec<u8>,
     info: NativeFieldSnapshotInfo,
+}
+
+#[cfg(feature = "cuda")]
+struct NativeMultilayerTensorKernelHost {
+    k_xx: Vec<ffi::fullmag_fdm_complex64>,
+    k_yy: Vec<ffi::fullmag_fdm_complex64>,
+    k_zz: Vec<ffi::fullmag_fdm_complex64>,
+    k_xy: Vec<ffi::fullmag_fdm_complex64>,
+    k_xz: Vec<ffi::fullmag_fdm_complex64>,
+    k_yz: Vec<ffi::fullmag_fdm_complex64>,
 }
 
 #[cfg(feature = "cuda")]
@@ -138,6 +159,209 @@ impl NativeFdmBackend {
         } else {
             0
         }
+    }
+
+    pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
+        let precision = match plan.precision {
+            fullmag_ir::ExecutionPrecision::Single => {
+                ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE
+            }
+            fullmag_ir::ExecutionPrecision::Double => {
+                ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE
+            }
+        };
+
+        let integrator = match plan.integrator {
+            fullmag_ir::IntegratorChoice::Heun => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN
+            }
+            fullmag_ir::IntegratorChoice::Rk4 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4
+            }
+            fullmag_ir::IntegratorChoice::Rk23 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK23
+            }
+            fullmag_ir::IntegratorChoice::Rk45 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_DP45
+            }
+            fullmag_ir::IntegratorChoice::Abm3 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_ABM3
+            }
+        };
+
+        let magnetization_storage = plan
+            .layers
+            .iter()
+            .map(|layer| flatten_vectors_f64(&layer.initial_magnetization))
+            .collect::<Vec<_>>();
+        let active_mask_storage = plan
+            .layers
+            .iter()
+            .map(|layer| {
+                layer.native_active_mask.as_ref().map(|mask| {
+                    mask.iter()
+                        .map(|is_active| if *is_active { 1u8 } else { 0u8 })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let layer_descs = plan
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| {
+                let z_offset_cells = ((layer.native_origin[2] - layer.convolution_origin[2])
+                    / layer.convolution_cell_size[2])
+                    .round() as i32;
+                Ok(ffi::fullmag_fdm_layer_desc_v2 {
+                    native_grid: ffi_grid(layer.native_grid, layer.native_cell_size),
+                    convolution_grid: ffi_grid(layer.convolution_grid, layer.convolution_cell_size),
+                    transfer_kind: ffi_transfer_kind(&layer.transfer_kind)?,
+                    layer_index: index as u32,
+                    z_offset_cells,
+                    material: ffi::fullmag_fdm_material_desc {
+                        saturation_magnetisation: layer.material.saturation_magnetisation,
+                        exchange_stiffness: layer.material.exchange_stiffness,
+                        damping: layer.material.damping,
+                        gyromagnetic_ratio: plan.gyromagnetic_ratio,
+                    },
+                    initial_magnetization_xyz: magnetization_storage[index].as_ptr(),
+                    initial_magnetization_len: magnetization_storage[index].len() as u64,
+                    active_mask: active_mask_storage[index]
+                        .as_ref()
+                        .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+                    active_mask_len: active_mask_storage[index]
+                        .as_ref()
+                        .map_or(0, |mask| mask.len() as u64),
+                })
+            })
+            .collect::<Result<Vec<_>, RunError>>()?;
+
+        let conv_grid = [
+            plan.common_cells[0] as usize,
+            plan.common_cells[1] as usize,
+            plan.common_cells[2] as usize,
+        ];
+        let conv_cell_size = plan
+            .layers
+            .first()
+            .map(|layer| layer.convolution_cell_size)
+            .unwrap_or([1.0, 1.0, 1.0]);
+
+        let mut kernel_payloads = Vec::new();
+        let mut kernel_descs = Vec::new();
+        if plan.enable_demag {
+            kernel_payloads.reserve(plan.layers.len() * plan.layers.len());
+            for (src_index, src_layer) in plan.layers.iter().enumerate() {
+                for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
+                    let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
+                    let kernel = if src_index == dst_index {
+                        fullmag_fdm_demag::compute_exact_self_kernel(
+                            conv_grid[0],
+                            conv_grid[1],
+                            conv_grid[2],
+                            conv_cell_size[0],
+                            conv_cell_size[1],
+                            conv_cell_size[2],
+                        )
+                    } else {
+                        fullmag_fdm_demag::compute_shifted_kernel(
+                            conv_grid,
+                            conv_cell_size,
+                            z_shift,
+                        )
+                    };
+                    kernel_payloads.push(NativeMultilayerTensorKernelHost {
+                        k_xx: ffi_complex64_vec(&kernel.k_xx),
+                        k_yy: ffi_complex64_vec(&kernel.k_yy),
+                        k_zz: ffi_complex64_vec(&kernel.k_zz),
+                        k_xy: ffi_complex64_vec(&kernel.k_xy),
+                        k_xz: ffi_complex64_vec(&kernel.k_xz),
+                        k_yz: ffi_complex64_vec(&kernel.k_yz),
+                    });
+                    let payload = kernel_payloads.last().expect("just pushed kernel payload");
+                    kernel_descs.push(ffi::fullmag_fdm_tensor_kernel_desc_v2 {
+                        fft_grid: ffi_grid(
+                            [
+                                kernel.fft_shape[0] as u32,
+                                kernel.fft_shape[1] as u32,
+                                kernel.fft_shape[2] as u32,
+                            ],
+                            conv_cell_size,
+                        ),
+                        dst_layer: dst_index as u32,
+                        src_layer: src_index as u32,
+                        z_shift_meters: z_shift,
+                        kernel_xx: payload.k_xx.as_ptr(),
+                        kernel_yy: payload.k_yy.as_ptr(),
+                        kernel_zz: payload.k_zz.as_ptr(),
+                        kernel_xy: payload.k_xy.as_ptr(),
+                        kernel_xz: payload.k_xz.as_ptr(),
+                        kernel_yz: payload.k_yz.as_ptr(),
+                        kernel_len: payload.k_xx.len() as u64,
+                    });
+                }
+            }
+        }
+
+        let plan_desc = ffi::fullmag_fdm_multilayer_plan_desc_v2 {
+            kind: ffi::fullmag_fdm_plan_kind::FULLMAG_FDM_PLAN_MULTILAYER_CONV,
+            precision,
+            integrator,
+            disable_precession: if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+                1
+            } else {
+                0
+            },
+            enable_exchange: if plan.enable_exchange { 1 } else { 0 },
+            enable_demag: if plan.enable_demag { 1 } else { 0 },
+            layers: layer_descs.as_ptr(),
+            layer_count: layer_descs.len() as u32,
+            kernels: if kernel_descs.is_empty() {
+                std::ptr::null()
+            } else {
+                kernel_descs.as_ptr()
+            },
+            kernel_count: kernel_descs.len() as u32,
+            adaptive_max_error: 0.0,
+            adaptive_dt_min: 0.0,
+            adaptive_dt_max: 0.0,
+            adaptive_headroom: 0.0,
+            stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
+            stats_stride: 1,
+        };
+
+        let handle = unsafe { ffi::fullmag_fdm_backend_create_v2(&plan_desc) };
+        if handle.is_null() {
+            return Err(RunError {
+                message: "CUDA FDM backend_create_v2 returned null".to_string(),
+            });
+        }
+
+        let err = unsafe { ffi::fullmag_fdm_backend_last_error(handle) };
+        if !err.is_null() {
+            let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
+            if !msg.contains(
+                "native Heun/RK4 timestep with demag and layer-local exchange is available",
+            ) && !msg
+                .contains("native Heun timestep with demag and layer-local exchange is available")
+                && !msg.contains("native demag-only Heun timestep is available")
+                && !msg.contains("native multilayer CUDA execution is not implemented")
+            {
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message: msg });
+            }
+        }
+
+        let first_material = plan.layers.first().map(|layer| &layer.material);
+        Ok(Self {
+            handle,
+            precision: plan.precision,
+            damping: first_material.map_or(0.0, |material| material.damping),
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+        })
     }
 
     /// Create a new backend from an FDM execution plan.
@@ -708,6 +932,56 @@ impl NativeFdmBackend {
         Ok(unpack_flat_f32(&flat))
     }
 
+    pub fn copy_layer_field(
+        &self,
+        layer_index: u32,
+        observable: ffi::fullmag_fdm_observable,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        let len = cell_count * 3;
+        let mut flat = vec![0.0f64; len];
+
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_copy_layer_field_f64(
+                self.handle as *mut _,
+                layer_index,
+                observable,
+                flat.as_mut_ptr(),
+                len as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("copy_layer_field failed"));
+        }
+
+        Ok(unpack_flat_f64(&flat))
+    }
+
+    pub fn copy_layer_field_f32(
+        &self,
+        layer_index: u32,
+        observable: ffi::fullmag_fdm_observable,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        let len = cell_count * 3;
+        let mut flat = vec![0.0f32; len];
+
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_copy_layer_field_f32(
+                self.handle as *mut _,
+                layer_index,
+                observable,
+                flat.as_mut_ptr(),
+                len as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("copy_layer_field_f32 failed"));
+        }
+
+        Ok(unpack_flat_f32(&flat))
+    }
+
     pub fn copy_m(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
@@ -780,6 +1054,30 @@ impl NativeFdmBackend {
     #[allow(dead_code)]
     pub fn copy_h_demag_f32(&self, cell_count: usize) -> Result<Vec<[f32; 3]>, RunError> {
         self.copy_field_f32(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_demag(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_demag_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
             cell_count,
         )
@@ -975,6 +1273,54 @@ impl NativeFdmBackend {
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("upload_magnetization_f32 failed"));
+        }
+        Ok(())
+    }
+
+    pub fn upload_layer_magnetization(
+        &mut self,
+        layer_index: u32,
+        magnetization: &[[f64; 3]],
+    ) -> Result<(), RunError> {
+        let flat = flatten_vectors_f64(magnetization);
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_upload_layer_magnetization_f64(
+                self.handle as *mut _,
+                layer_index,
+                flat.as_ptr(),
+                flat.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("upload_layer_magnetization failed"));
+        }
+        Ok(())
+    }
+
+    pub fn upload_layer_magnetization_f32(
+        &mut self,
+        layer_index: u32,
+        magnetization: &[[f32; 3]],
+    ) -> Result<(), RunError> {
+        let flat = flatten_vectors_f32(magnetization);
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_upload_layer_magnetization_f32(
+                self.handle as *mut _,
+                layer_index,
+                flat.as_ptr(),
+                flat.len() as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("upload_layer_magnetization_f32 failed"));
+        }
+        Ok(())
+    }
+
+    pub fn refresh_multilayer_demag(&mut self) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fdm_backend_refresh_multilayer_demag(self.handle) };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("refresh_multilayer_demag failed"));
         }
         Ok(())
     }
@@ -1282,6 +1628,29 @@ pub(crate) struct DeviceInfo {
     pub compute_capability: String,
     pub driver_version: i32,
     pub runtime_version: i32,
+}
+
+#[cfg(feature = "cuda")]
+fn ffi_grid(cells: [u32; 3], cell_size: [f64; 3]) -> ffi::fullmag_fdm_grid_desc {
+    ffi::fullmag_fdm_grid_desc {
+        nx: cells[0],
+        ny: cells[1],
+        nz: cells[2],
+        dx: cell_size[0],
+        dy: cell_size[1],
+        dz: cell_size[2],
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn ffi_complex64_vec(values: &[num_complex::Complex<f64>]) -> Vec<ffi::fullmag_fdm_complex64> {
+    values
+        .iter()
+        .map(|value| ffi::fullmag_fdm_complex64 {
+            re: value.re,
+            im: value.im,
+        })
+        .collect()
 }
 
 #[cfg(feature = "cuda")]

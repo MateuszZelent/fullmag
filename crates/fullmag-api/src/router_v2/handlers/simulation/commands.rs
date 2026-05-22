@@ -18,6 +18,8 @@ use fullmag_authoring::{
 };
 use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, RegionIR};
 
+const MU0_T_PER_APM: f64 = 4.0 * std::f64::consts::PI * 1.0e-7;
+
 #[utoipa::path(
     post,
     path = "/v2/sessions/current/simulation/commands",
@@ -885,6 +887,8 @@ fn command_from_structured(
             intent,
             until_seconds,
             max_steps,
+            torque_tolerance_apm,
+            torque_tolerance_t,
             torque_tolerance,
             energy_tolerance,
             relax_algorithm,
@@ -900,7 +904,9 @@ fn command_from_structured(
             );
             command.until_seconds = until_seconds;
             command.max_steps = max_steps;
-            command.torque_tolerance = torque_tolerance;
+            command.torque_tolerance = torque_tolerance_apm
+                .or(torque_tolerance)
+                .or_else(|| torque_tolerance_t.map(|value| value / MU0_T_PER_APM));
             command.energy_tolerance = energy_tolerance;
             command.relax_algorithm = relax_algorithm;
             command.relax_alpha = relax_alpha;

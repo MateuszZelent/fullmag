@@ -22,14 +22,15 @@ use fullmag_ir::{
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
+use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
+use crate::fdm::schedules::record_due_fields;
 use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
 };
-use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
-    OutputSchedule,
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
@@ -51,6 +52,11 @@ struct LayerContext {
 struct LayerGpuContext {
     backend: NativeFdmBackend,
     cell_count: usize,
+}
+
+struct NativeMultilayerDemagOperator {
+    backend: NativeFdmBackend,
+    layer_cell_counts: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,11 +132,12 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
         );
     }
 
+    let native_demag = build_native_multilayer_demag_operator(plan)?;
     let gpu_contexts = build_gpu_contexts(plan)?;
     match plan.precision {
         ExecutionPrecision::Double => {
             let (contexts, states) = build_contexts_and_states(plan, pure_damping_relax)?;
-            let demag_runtime = if plan.enable_demag {
+            let demag_runtime = if plan.enable_demag && native_demag.is_none() {
                 Some(build_multilayer_demag_runtime(plan)?)
             } else {
                 None
@@ -146,11 +153,12 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
                 states,
                 gpu_contexts,
                 demag_runtime,
+                native_demag,
             )
         }
         ExecutionPrecision::Single => {
             let (contexts, states) = build_contexts_and_states(plan, pure_damping_relax)?;
-            let demag_runtime = if plan.enable_demag {
+            let demag_runtime = if plan.enable_demag && native_demag.is_none() {
                 Some(build_multilayer_demag_runtime_f32(plan)?)
             } else {
                 None
@@ -173,6 +181,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
                 single_states,
                 gpu_contexts,
                 demag_runtime,
+                native_demag,
             )
         }
     }
@@ -305,6 +314,75 @@ fn build_gpu_contexts(plan: &FdmMultilayerPlanIR) -> Result<Vec<LayerGpuContext>
         .collect()
 }
 
+fn build_native_multilayer_demag_operator(
+    plan: &FdmMultilayerPlanIR,
+) -> Result<Option<NativeMultilayerDemagOperator>, RunError> {
+    if !plan.enable_demag {
+        return Ok(None);
+    }
+    if plan
+        .layers
+        .iter()
+        .any(|layer| layer.transfer_kind != "identity")
+    {
+        return Ok(None);
+    }
+
+    let layer_cell_counts = plan
+        .layers
+        .iter()
+        .map(|layer| {
+            (layer.native_grid[0] as usize)
+                * (layer.native_grid[1] as usize)
+                * (layer.native_grid[2] as usize)
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(NativeMultilayerDemagOperator {
+        backend: NativeFdmBackend::create_multilayer_v2(plan)?,
+        layer_cell_counts,
+    }))
+}
+
+impl NativeMultilayerDemagOperator {
+    fn compute_demag_fields(
+        &mut self,
+        states: &[ExchangeLlgState],
+    ) -> Result<Vec<Vec<[f64; 3]>>, RunError> {
+        for (layer_index, state) in states.iter().enumerate() {
+            self.backend
+                .upload_layer_magnetization(layer_index as u32, state.magnetization())?;
+        }
+        self.backend.refresh_multilayer_demag()?;
+        self.layer_cell_counts
+            .iter()
+            .enumerate()
+            .map(|(layer_index, cell_count)| {
+                self.backend
+                    .copy_layer_h_demag(layer_index as u32, *cell_count)
+            })
+            .collect()
+    }
+
+    fn compute_demag_fields_f32(
+        &mut self,
+        states: &[LayerStateSingle],
+    ) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
+        for (layer_index, state) in states.iter().enumerate() {
+            self.backend
+                .upload_layer_magnetization_f32(layer_index as u32, &state.magnetization)?;
+        }
+        self.backend.refresh_multilayer_demag()?;
+        self.layer_cell_counts
+            .iter()
+            .enumerate()
+            .map(|(layer_index, cell_count)| {
+                self.backend
+                    .copy_layer_h_demag_f32(layer_index as u32, *cell_count)
+            })
+            .collect()
+    }
+}
+
 fn execute_cuda_assisted_multilayer_double(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
@@ -316,6 +394,7 @@ fn execute_cuda_assisted_multilayer_double(
     mut states: Vec<ExchangeLlgState>,
     mut gpu_contexts: Vec<LayerGpuContext>,
     demag_runtime: Option<MultilayerDemagRuntime>,
+    mut native_demag: Option<NativeMultilayerDemagOperator>,
 ) -> Result<ExecutedRun, RunError> {
     let device_info = gpu_contexts
         .first()
@@ -330,7 +409,9 @@ fn execute_cuda_assisted_multilayer_double(
     let dt = plan.fixed_timestep.unwrap_or(1e-13);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
-    let provenance = assisted_multilayer_provenance(plan, device_info.clone());
+    let native_demag_enabled = native_demag.is_some();
+    let provenance =
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -346,6 +427,7 @@ fn execute_cuda_assisted_multilayer_double(
         &mut gpu_contexts,
         &states,
         demag_runtime.as_ref(),
+        native_demag.as_mut(),
     )?;
     if default_scalar_trace {
         let stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
@@ -371,6 +453,7 @@ fn execute_cuda_assisted_multilayer_double(
             &mut gpu_contexts,
             &mut states,
             demag_runtime.as_ref(),
+            native_demag.as_mut(),
             dt_step,
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
@@ -381,6 +464,7 @@ fn execute_cuda_assisted_multilayer_double(
             &mut gpu_contexts,
             &states,
             demag_runtime.as_ref(),
+            native_demag.as_mut(),
         )?;
         let latest_stats = make_step_stats(
             step_count,
@@ -451,6 +535,7 @@ fn execute_cuda_assisted_multilayer_double(
         &mut gpu_contexts,
         &states,
         demag_runtime.as_ref(),
+        native_demag.as_mut(),
     )?;
     let final_stats = make_step_stats(
         step_count,
@@ -474,7 +559,7 @@ fn execute_cuda_assisted_multilayer_double(
         {
             continue;
         }
-        let values = select_field_values(&final_observables, &schedule.name)?;
+        let values = select_state_observable_field(&final_observables, &schedule.name, false)?;
         artifacts.record_field_snapshot(FieldSnapshot {
             name: schedule.name.clone(),
             step: final_stats.step,
@@ -530,6 +615,7 @@ fn execute_cuda_assisted_multilayer_single(
     mut states: Vec<LayerStateSingle>,
     mut gpu_contexts: Vec<LayerGpuContext>,
     demag_runtime: Option<MultilayerDemagRuntimeF32>,
+    mut native_demag: Option<NativeMultilayerDemagOperator>,
 ) -> Result<ExecutedRun, RunError> {
     let device_info = gpu_contexts
         .first()
@@ -539,7 +625,9 @@ fn execute_cuda_assisted_multilayer_single(
     let dt = plan.fixed_timestep.unwrap_or(1e-13);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
-    let provenance = assisted_multilayer_provenance(plan, device_info.clone());
+    let native_demag_enabled = native_demag.is_some();
+    let provenance =
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -555,6 +643,7 @@ fn execute_cuda_assisted_multilayer_single(
         &mut gpu_contexts,
         &states,
         demag_runtime.as_ref(),
+        native_demag.as_mut(),
     )?;
     if default_scalar_trace {
         let stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
@@ -580,6 +669,7 @@ fn execute_cuda_assisted_multilayer_single(
             &mut gpu_contexts,
             &mut states,
             demag_runtime.as_ref(),
+            native_demag.as_mut(),
             dt_step,
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
@@ -590,6 +680,7 @@ fn execute_cuda_assisted_multilayer_single(
             &mut gpu_contexts,
             &states,
             demag_runtime.as_ref(),
+            native_demag.as_mut(),
         )?;
         let latest_stats = make_step_stats(
             step_count,
@@ -660,6 +751,7 @@ fn execute_cuda_assisted_multilayer_single(
         &mut gpu_contexts,
         &states,
         demag_runtime.as_ref(),
+        native_demag.as_mut(),
     )?;
     let final_stats = make_step_stats(
         step_count,
@@ -683,7 +775,7 @@ fn execute_cuda_assisted_multilayer_single(
         {
             continue;
         }
-        let values = select_field_values(&final_observables, &schedule.name)?;
+        let values = select_state_observable_field(&final_observables, &schedule.name, false)?;
         artifacts.record_field_snapshot(FieldSnapshot {
             name: schedule.name.clone(),
             step: final_stats.step,
@@ -726,17 +818,32 @@ fn execute_cuda_assisted_multilayer_single(
 fn assisted_multilayer_provenance(
     plan: &FdmMultilayerPlanIR,
     device_info: Option<crate::native_fdm::DeviceInfo>,
+    native_demag_enabled: bool,
 ) -> ExecutionProvenance {
     ExecutionProvenance {
         execution_engine: "cuda_assisted_multilayer".to_string(),
         precision: precision_name(plan.precision).to_string(),
         demag_operator_kind: if plan.enable_demag {
-            Some("multilayer_tensor_fft_newell".to_string())
+            Some(
+                if native_demag_enabled {
+                    "native_multilayer_tensor_fft_newell"
+                } else {
+                    "multilayer_tensor_fft_newell"
+                }
+                .to_string(),
+            )
         } else {
             None
         },
         fft_backend: if plan.enable_demag {
-            Some("rustfft".to_string())
+            Some(
+                if native_demag_enabled {
+                    "cuFFT"
+                } else {
+                    "rustfft"
+                }
+                .to_string(),
+            )
         } else {
             None
         },
@@ -1121,7 +1228,7 @@ fn execute_native_stacked_cuda_multilayer(
             step: final_stats.step,
             time: final_stats.time,
             solver_dt: final_stats.dt,
-            values: select_field_values(&final_observables, &schedule.name)?,
+            values: select_state_observable_field(&final_observables, &schedule.name, false)?,
         })?;
     }
 
@@ -1314,8 +1421,13 @@ fn observe_multilayer_cuda(
     gpu_contexts: &mut [LayerGpuContext],
     states: &[ExchangeLlgState],
     demag_runtime: Option<&MultilayerDemagRuntime>,
+    native_demag: Option<&mut NativeMultilayerDemagOperator>,
 ) -> Result<StateObservables, RunError> {
-    let mut layer_demag = compute_demag_fields(contexts, states, demag_runtime);
+    let mut layer_demag = if let Some(native_demag) = native_demag {
+        native_demag.compute_demag_fields(states)?
+    } else {
+        compute_demag_fields(contexts, states, demag_runtime)
+    };
     let mut magnetization = Vec::new();
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
@@ -1470,13 +1582,20 @@ fn step_multilayer_cuda(
     gpu_contexts: &mut [LayerGpuContext],
     states: &mut [ExchangeLlgState],
     demag_runtime: Option<&MultilayerDemagRuntime>,
+    mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization().to_vec())
         .collect::<Vec<_>>();
-    let k1 = llg_rhs_multilayer_cuda(contexts, gpu_contexts, &m0, demag_runtime)?;
+    let k1 = llg_rhs_multilayer_cuda(
+        contexts,
+        gpu_contexts,
+        &m0,
+        demag_runtime,
+        native_demag.as_mut().map(|operator| &mut **operator),
+    )?;
     let predicted = m0
         .iter()
         .zip(k1.iter())
@@ -1489,7 +1608,13 @@ fn step_multilayer_cuda(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|message| RunError { message })?;
-    let k2 = llg_rhs_multilayer_cuda(contexts, gpu_contexts, &predicted, demag_runtime)?;
+    let k2 = llg_rhs_multilayer_cuda(
+        contexts,
+        gpu_contexts,
+        &predicted,
+        demag_runtime,
+        native_demag.as_mut().map(|operator| &mut **operator),
+    )?;
     let corrected = m0
         .iter()
         .zip(k1.iter().zip(k2.iter()))
@@ -1519,6 +1644,7 @@ fn llg_rhs_multilayer_cuda(
     gpu_contexts: &mut [LayerGpuContext],
     magnetizations: &[Vec<[f64; 3]>],
     demag_runtime: Option<&MultilayerDemagRuntime>,
+    native_demag: Option<&mut NativeMultilayerDemagOperator>,
 ) -> Result<Vec<Vec<[f64; 3]>>, RunError> {
     let mut states = Vec::with_capacity(contexts.len());
     for (context, magnetization) in contexts.iter().zip(magnetizations.iter()) {
@@ -1534,7 +1660,11 @@ fn llg_rhs_multilayer_cuda(
                 })?,
         );
     }
-    let mut layer_demag = compute_demag_fields(contexts, &states, demag_runtime);
+    let mut layer_demag = if let Some(native_demag) = native_demag {
+        native_demag.compute_demag_fields(&states)?
+    } else {
+        compute_demag_fields(contexts, &states, demag_runtime)
+    };
     let mut rhs_layers = Vec::with_capacity(contexts.len());
     for ((context, gpu), state) in contexts
         .iter()
@@ -1630,8 +1760,13 @@ fn observe_multilayer_cuda_single(
     gpu_contexts: &mut [LayerGpuContext],
     states: &[LayerStateSingle],
     demag_runtime: Option<&MultilayerDemagRuntimeF32>,
+    native_demag: Option<&mut NativeMultilayerDemagOperator>,
 ) -> Result<StateObservables, RunError> {
-    let mut layer_demag = compute_demag_fields_single(contexts, states, demag_runtime);
+    let mut layer_demag = if let Some(native_demag) = native_demag {
+        native_demag.compute_demag_fields_f32(states)?
+    } else {
+        compute_demag_fields_single(contexts, states, demag_runtime)
+    };
     let mut magnetization = Vec::new();
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
@@ -1771,13 +1906,20 @@ fn step_multilayer_cuda_single(
     gpu_contexts: &mut [LayerGpuContext],
     states: &mut [LayerStateSingle],
     demag_runtime: Option<&MultilayerDemagRuntimeF32>,
+    mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization.clone())
         .collect::<Vec<_>>();
-    let k1 = llg_rhs_multilayer_cuda_single(contexts, gpu_contexts, &m0, demag_runtime)?;
+    let k1 = llg_rhs_multilayer_cuda_single(
+        contexts,
+        gpu_contexts,
+        &m0,
+        demag_runtime,
+        native_demag.as_mut().map(|operator| &mut **operator),
+    )?;
     let dt_f32 = dt as f32;
     let predicted = m0
         .iter()
@@ -1791,7 +1933,13 @@ fn step_multilayer_cuda_single(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|message| RunError { message })?;
-    let k2 = llg_rhs_multilayer_cuda_single(contexts, gpu_contexts, &predicted, demag_runtime)?;
+    let k2 = llg_rhs_multilayer_cuda_single(
+        contexts,
+        gpu_contexts,
+        &predicted,
+        demag_runtime,
+        native_demag.as_mut().map(|operator| &mut **operator),
+    )?;
     let corrected = m0
         .iter()
         .zip(k1.iter().zip(k2.iter()))
@@ -1819,9 +1967,20 @@ fn llg_rhs_multilayer_cuda_single(
     gpu_contexts: &mut [LayerGpuContext],
     magnetizations: &[Vec<[f32; 3]>],
     demag_runtime: Option<&MultilayerDemagRuntimeF32>,
+    native_demag: Option<&mut NativeMultilayerDemagOperator>,
 ) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
-    let mut layer_demag =
-        compute_demag_fields_single_from_m(contexts, magnetizations, demag_runtime);
+    let mut layer_demag = if let Some(native_demag) = native_demag {
+        let states = magnetizations
+            .iter()
+            .map(|magnetization| LayerStateSingle {
+                magnetization: magnetization.clone(),
+                time_seconds: 0.0,
+            })
+            .collect::<Vec<_>>();
+        native_demag.compute_demag_fields_f32(&states)?
+    } else {
+        compute_demag_fields_single_from_m(contexts, magnetizations, demag_runtime)
+    };
     let mut rhs_layers = Vec::with_capacity(contexts.len());
     for ((context, gpu), magnetization) in contexts
         .iter()
@@ -2172,76 +2331,6 @@ fn max_rhs_norm_from_full(
         .fold(0.0, f64::max)
 }
 
-fn record_due_fields(
-    observables: &StateObservables,
-    step: u64,
-    time: f64,
-    solver_dt: f64,
-    field_schedules: &mut [OutputSchedule],
-    artifacts: &mut ArtifactRecorder,
-) -> Result<(), RunError> {
-    let due_field_names = field_schedules
-        .iter()
-        .filter(|schedule| is_due(time, schedule.next_time))
-        .map(|schedule| schedule.name.clone())
-        .collect::<Vec<_>>();
-    for name in due_field_names {
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: name.clone(),
-            step,
-            time,
-            solver_dt,
-            values: select_field_values(observables, &name)?,
-        })?;
-    }
-    advance_due_schedules(field_schedules, time);
-    Ok(())
-}
-
-fn select_field_values(
-    observables: &StateObservables,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    // Handle component-qualified names from fm.snapshot(), e.g. "m.z"
-    if let Some(dot_pos) = name.find('.') {
-        let base = &name[..dot_pos];
-        let comp = &name[dot_pos + 1..];
-        let full = select_base_field(observables, base)?;
-        let idx = match comp {
-            "x" => 0,
-            "y" => 1,
-            "z" => 2,
-            _ => {
-                return Err(RunError {
-                    message: format!("unsupported snapshot component '{}' in '{}'", comp, name),
-                })
-            }
-        };
-        // Store extracted scalar in x-component, zero the rest
-        return Ok(full.iter().map(|v| [v[idx], 0.0, 0.0]).collect());
-    }
-    select_base_field(observables, name)
-}
-
-fn select_base_field(
-    observables: &StateObservables,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    Ok(match name {
-        "m" => observables.magnetization.clone(),
-        "H_ex" => observables.exchange_field.clone(),
-        "H_demag" => observables.demag_field.clone(),
-        "H_ext" => observables.external_field.clone(),
-        "H_eff" => observables.effective_field.clone(),
-        "torque" => observables.torque_field.clone(),
-        other => {
-            return Err(RunError {
-                message: format!("unsupported multilayer field snapshot '{}'", other),
-            })
-        }
-    })
-}
-
 fn current_time(states: &[ExchangeLlgState]) -> f64 {
     states
         .first()
@@ -2286,32 +2375,6 @@ fn precision_name(value: ExecutionPrecision) -> &'static str {
         ExecutionPrecision::Single => "single",
         ExecutionPrecision::Double => "double",
     }
-}
-
-fn make_step_stats(
-    step: u64,
-    time: f64,
-    solver_dt: f64,
-    wall_time_ns: u64,
-    observables: &StateObservables,
-) -> StepStats {
-    let mut stats = StepStats {
-        step,
-        time,
-        dt: solver_dt,
-        e_ex: observables.exchange_energy,
-        e_demag: observables.demag_energy,
-        e_ext: observables.external_energy,
-        e_total: observables.total_energy,
-        max_dm_dt: observables.max_dm_dt,
-        max_h_eff: observables.max_h_eff,
-        max_h_demag: observables.max_h_demag,
-        wall_time_ns,
-        ..StepStats::default()
-    };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
-    stats.per_object_scalars = observables.per_object_scalars.clone();
-    stats
 }
 
 fn zero_outside_active(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
@@ -2862,6 +2925,11 @@ mod tests {
             single_run.provenance.execution_engine,
             "cuda_assisted_multilayer"
         );
+        assert_eq!(
+            double_run.provenance.demag_operator_kind.as_deref(),
+            Some("native_multilayer_tensor_fft_newell")
+        );
+        assert_eq!(double_run.provenance.fft_backend.as_deref(), Some("cuFFT"));
         assert_eq!(single_run.provenance.precision, "single");
 
         let max_m_diff = max_vector_component_diff(

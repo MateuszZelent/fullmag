@@ -182,4 +182,4 @@ Removing a manifest disables the module. Capability gates only hide modules when
 - Viewport renderer class: 400 lines hard review threshold.
 - Kernel service: 300 lines hard review threshold.
 
-Crossing a threshold requires splitting before merge unless an ADR explains why the file must remain larger.
+Crossing a threshold requires splitting before merge unless an ADR explains why the file must remain larger. The current migration-only exception set is bounded by `docs/adr/0015-frontend-v2-migration-governance-boundary.md`; no new oversized file is covered by that ADR.

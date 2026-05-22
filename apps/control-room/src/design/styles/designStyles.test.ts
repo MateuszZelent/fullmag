@@ -57,9 +57,11 @@ describe("control-room design styles", () => {
     expect(tokensCss).toContain("--fm-bg-viewport: #11111b;");
     expect(tokensCss).toContain("--fm-text-primary: #cdd6f4;");
     expect(tokensCss).toContain("--fm-accent: #89b4fa;");
+    expect(tokensCss).toContain("--fm-info: #89dceb;");
     expect(themeCss).toContain("--fm-bg-app: #eff1f5;");
     expect(themeCss).toContain("--fm-bg-viewport: #dce0e8;");
     expect(themeCss).toContain("--fm-text-primary: #4c4f69;");
     expect(themeCss).toContain("--fm-accent: #1e66f5;");
+    expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 });

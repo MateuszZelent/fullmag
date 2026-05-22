@@ -1,4 +1,5 @@
 import type { StageExecutionResource } from "@/kernel/api/apiTypes";
+import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 
 import type {
   ExplorerNodeStatus,
@@ -358,9 +359,20 @@ function sceneStudyStageSnapshot(
     kind,
     maxSteps: scalarText(stage.max_steps),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
-    torqueTolerance: scalarText(stage.torque_tolerance),
+    torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };
+}
+
+function stageTorqueToleranceApm(
+  stage: Record<string, unknown>,
+): string | number | null {
+  const explicitApm = scalarText(stage.torque_tolerance_apm);
+  if (explicitApm != null) return explicitApm;
+  const legacyApm = scalarText(stage.torque_tolerance);
+  if (legacyApm != null) return legacyApm;
+  const explicitT = finiteNumberFromScalar(stage.torque_tolerance_T);
+  return explicitT === null ? null : apmFromTesla(explicitT);
 }
 
 function geometryKind(value: unknown): string | null {
@@ -412,6 +424,16 @@ function stringValue(value: unknown): string | null {
 
 function scalarText(value: unknown): string | number | null {
   return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function finiteNumberFromScalar(value: unknown): number | null {
+  let parsed = NaN;
+  if (typeof value === "number") {
+    parsed = value;
+  } else if (typeof value === "string") {
+    parsed = Number(value);
+  }
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function vector3(value: unknown): [number, number, number] | null {

@@ -219,6 +219,8 @@ pub async fn get_solver_status(
         dt_seconds: latest.map(|value| value.dt),
         sim_time_seconds: latest.map(|value| value.time),
         step_index: latest.map(|value| value.step),
+        max_torque_t: latest.map(|value| value.max_torque_T),
+        max_torque_apm: latest.map(|value| value.max_torque_Apm),
         max_torque: latest.map(|value| value.max_torque_T),
         converged: latest.map(|value| value.finished),
         last_error: snapshot
@@ -714,6 +716,7 @@ pub async fn get_command_detail(
         error: record.error.clone(),
         until_seconds: record.command.until_seconds,
         max_steps: record.command.max_steps,
+        torque_tolerance_apm: record.command.torque_tolerance,
         torque_tolerance: record.command.torque_tolerance,
         energy_tolerance: record.command.energy_tolerance,
         integrator: record.command.integrator.clone(),

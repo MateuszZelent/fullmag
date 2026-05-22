@@ -1,0 +1,24 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  apmFromTesla,
+  formatTorquePairFromApm,
+  formatTorqueT,
+  teslaFromApm,
+} from "./torqueUnits";
+
+describe("torqueUnits", () => {
+  it("converts torque residuals between mumax-compatible T and canonical A/m", () => {
+    const apm = apmFromTesla(1e-5);
+
+    expect(apm).toBeCloseTo(7.957747154594767, 12);
+    expect(teslaFromApm(apm)).toBeCloseTo(1e-5, 18);
+  });
+
+  it("formats torque values with explicit units", () => {
+    expect(formatTorqueT(1e-5)).toBe("1.000e-5 T");
+    expect(formatTorquePairFromApm(apmFromTesla(1e-5))).toBe(
+      "1.000e-5 T / 7.958e0 A/m",
+    );
+  });
+});

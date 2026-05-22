@@ -2134,6 +2134,8 @@ export interface components {
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */
+            torque_tolerance_apm?: number | null;
+            /** Format: double */
             until_seconds?: number | null;
         };
         CommandDiagnosticReferenceResource: {
@@ -4088,6 +4090,10 @@ export interface components {
             last_error?: string | null;
             /** Format: double */
             max_torque?: number | null;
+            /** Format: double */
+            max_torque_Apm?: number | null;
+            /** Format: double */
+            max_torque_T?: number | null;
             /** Format: int64 */
             revision: number;
             run_id?: string | null;
@@ -4109,6 +4115,10 @@ export interface components {
             dt?: number | null;
             /** Format: double */
             max_torque?: number | null;
+            /** Format: double */
+            max_torque_Apm?: number | null;
+            /** Format: double */
+            max_torque_T?: number | null;
             /** @description idle | running | paused | finished | error */
             state: string;
         };
@@ -4175,6 +4185,10 @@ export interface components {
             relax_alpha?: number | null;
             /** Format: double */
             torque_tolerance?: number | null;
+            /** Format: double */
+            torque_tolerance_T?: number | null;
+            /** Format: double */
+            torque_tolerance_apm?: number | null;
             /** Format: double */
             until_seconds?: number | null;
         } & {

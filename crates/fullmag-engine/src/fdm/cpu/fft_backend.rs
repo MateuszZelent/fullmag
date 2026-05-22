@@ -11,7 +11,7 @@ use crate::VectorFieldSoA;
 ///
 /// Backends receive this so they can apply the spectral tensor multiply.
 /// The data format is interleaved complex: [re0, im0, re1, im1, …].
-pub use super::DemagKernelSpectra;
+pub use super::fft::DemagKernelSpectra;
 
 // ──────────────────────────────────────────────────────────────────────
 // Backend trait
@@ -50,7 +50,7 @@ pub trait FdmFftBackend: Send + Sync {
 // RustFftBackend — wraps the existing FftWorkspace
 // ──────────────────────────────────────────────────────────────────────
 
-use super::FftWorkspace;
+use super::fft::FftWorkspace;
 
 /// Default CPU backend using `rustfft` 6.x with Rayon parallelism on
 /// the `parallel` feature flag.

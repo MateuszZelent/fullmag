@@ -6,6 +6,8 @@ import {
   modelTreeSnapshotWithStageExecution,
 } from "./sceneModelTreeAdapter";
 
+const TORQUE_TOLERANCE_FOR_1E_4_T = 1e-4 / (4 * Math.PI * 1e-7);
+
 describe("buildModelTree", () => {
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
     const nodes = buildModelTree({
@@ -268,7 +270,7 @@ describe("buildModelTree", () => {
             stage_id: "stage-relax",
             kind: "relax",
             max_steps: "2000",
-            torque_tolerance: "1e-4",
+            torque_tolerance_apm: TORQUE_TOLERANCE_FOR_1E_4_T,
           },
           {
             kind: "run",
@@ -297,7 +299,7 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === "model:study:stage:stage-relax"),
     ).toMatchObject({
-      badge: "tol 1e-4",
+      badge: "tau 1.000e-4 T",
       kind: "study.stage.relax",
       label: "Relax 1",
     });

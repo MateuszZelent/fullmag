@@ -3,9 +3,18 @@ import type {
   CurrentRunResource,
   JsonObject,
   SceneResource,
+  SolverEnergyHistoryResource,
   SolverStatusResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
+import {
+  apmFromTesla,
+  formatScientific,
+  formatTorquePairFromApm,
+  formatTorquePairFromTesla,
+  formatTorqueT,
+  teslaFromApm,
+} from "@/shared/domain/physics/torqueUnits";
 
 interface StudyStageSnapshot {
   algorithm: string | null;
@@ -46,6 +55,18 @@ export interface StudyInspectorSnapshot {
   stages: StudyStageSnapshot[];
 }
 
+export interface StudyRelaxEnergyStopModel {
+  current: string;
+  status: string;
+  threshold: string;
+}
+
+export interface StudyRelaxTimeStopModel {
+  budget: string;
+  elapsed: string;
+  status: string;
+}
+
 export interface StudyInspectorModel {
   boundary: StudyInspectorSnapshot["boundary"];
   requested: StudyInspectorSnapshot["requested"];
@@ -57,6 +78,8 @@ export interface StudyInspectorModel {
     commandLabel: string;
     maxTorque: string;
     progressPercent: number;
+    relaxEnergyStop: StudyRelaxEnergyStopModel | null;
+    relaxTimeStop: StudyRelaxTimeStopModel | null;
     relaxTorqueStop: StudyRelaxTorqueStopModel | null;
     runId: string;
     state: string;
@@ -68,6 +91,7 @@ export interface StudyInspectorModel {
 interface ResolveStudyInspectorModelInput {
   commandQueue?: CommandQueueStatusResource | null;
   currentRun: CurrentRunResource | null;
+  energyHistory?: SolverEnergyHistoryResource | null;
   selectedNodeId: string | null;
   snapshot: StudyInspectorSnapshot;
   solverStatus: SolverStatusResource | null;
@@ -100,6 +124,7 @@ export function studySnapshotFromScene(
 export function resolveStudyInspectorModel({
   commandQueue,
   currentRun,
+  energyHistory,
   selectedNodeId,
   snapshot,
   solverStatus,
@@ -117,21 +142,41 @@ export function resolveStudyInspectorModel({
     solverStatus,
     selectedStage: activeStageSnapshot,
   });
-  const stages = snapshot.stages.map((stage) => ({
-    ...stage,
-    label: stageLabel(stage),
-    progressPercent: stage.index === activeStageIndex ? progressPercent : 0,
-    stageId: stageExecution?.stages[stage.index]?.stage_id ?? stage.stageId,
-    status: stageExecution?.stage_statuses[stage.index] ?? stage.status,
-  }));
+  const stages = snapshot.stages.map((stage) => {
+    const status = stageExecution?.stage_statuses[stage.index] ?? stage.status;
+    const isCompleted = status.toLowerCase() === "completed";
+    return {
+      ...stage,
+      label: stageLabel(stage),
+      progressPercent: isCompleted
+        ? 100
+        : stage.index === activeStageIndex
+          ? progressPercent
+          : 0,
+      stageId: stageExecution?.stages[stage.index]?.stage_id ?? stage.stageId,
+      status,
+    };
+  });
   const selectedStage =
     stages[selectedStageIndex ?? activeStageIndex ?? -1] ?? null;
   const activeStage = stages[activeStageIndex ?? -1] ?? null;
   const commandSummary = resolveCommandSummary(commandQueue);
+  const maxTorqueT = solverMaxTorqueT(solverStatus);
   const relaxTorqueStop = resolveRelaxTorqueStop({
     activeStage,
     activeStageKind: stageExecution?.active_stage_kind ?? null,
-    currentTorqueT: solverStatus?.max_torque ?? null,
+    currentTorqueT: maxTorqueT,
+  });
+  const relaxEnergyStop = resolveRelaxEnergyStop({
+    activeStage,
+    activeStageKind: stageExecution?.active_stage_kind ?? null,
+    energyHistory: energyHistory ?? null,
+  });
+  const relaxTimeStop = resolveRelaxTimeStop({
+    activeStage,
+    activeStageKind: stageExecution?.active_stage_kind ?? null,
+    currentSimTime:
+      solverStatus?.sim_time_seconds ?? currentRun?.solver_time_seconds ?? null,
   });
 
   return {
@@ -143,8 +188,10 @@ export function resolveStudyInspectorModel({
       commandError: commandSummary.error,
       commandId: commandSummary.commandId,
       commandLabel: commandSummary.label,
-      maxTorque: formatTorque(solverStatus?.max_torque),
+      maxTorque: formatTorque(maxTorqueT),
       progressPercent,
+      relaxEnergyStop,
+      relaxTimeStop,
       relaxTorqueStop,
       runId: currentRun?.run_id ?? "none",
       state:
@@ -157,8 +204,6 @@ export function resolveStudyInspectorModel({
     stages,
   };
 }
-
-const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
 
 type CommandQueueEntry = CommandQueueStatusResource["commands"][number];
 
@@ -228,16 +273,12 @@ function commandSummaryFromEntry(command: CommandQueueEntry): CommandSummary {
 function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
   const stage = asRecord(value);
   const kind = stringValue(stage?.kind ?? stage?.entrypoint_kind, "stage");
-  const rawTorque = optionalScalarText(stage?.torque_tolerance);
-  const torqueApm = finiteNumberFromText(rawTorque);
+  const torqueApm = stageTorqueToleranceApm(stage);
+  const rawTorque = torqueApm === null ? null : String(torqueApm);
   const torqueToleranceFormatted =
-    torqueApm === null
-      ? null
-      : `${formatScientific(torqueApm * MU0_T_PER_APM)} T / ${formatScientific(
-          torqueApm,
-        )} A/m`;
+    torqueApm === null ? null : formatTorquePairFromApm(torqueApm);
   const torqueToleranceShortFormatted =
-    torqueApm === null ? null : `${formatScientific(torqueApm * MU0_T_PER_APM)} T`;
+    torqueApm === null ? null : formatTorqueT(teslaFromApm(torqueApm));
 
   return {
     algorithm: optionalString(stage?.relax_algorithm ?? stage?.algorithm),
@@ -250,8 +291,44 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     torqueTolerance: rawTorque,
     torqueToleranceFormatted,
     torqueToleranceShortFormatted,
-    untilSeconds: optionalScalarText(stage?.until_seconds),
+    untilSeconds: optionalScalarText(
+      stage?.until_seconds ??
+      stage?.max_physical_time_s ??
+      stage?.max_pseudotime_s
+    ),
   };
+}
+
+function stageTorqueToleranceApm(stage: JsonRecord | null): number | null {
+  const explicitApm = finiteNumberFromText(
+    optionalScalarText(stage?.torque_tolerance_apm),
+  );
+  if (explicitApm !== null) return explicitApm;
+
+  const legacyApm = finiteNumberFromText(
+    optionalScalarText(stage?.torque_tolerance),
+  );
+  if (legacyApm !== null) return legacyApm;
+
+  const explicitT = finiteNumberFromText(
+    optionalScalarText(stage?.torque_tolerance_T),
+  );
+  return explicitT === null ? null : apmFromTesla(explicitT);
+}
+
+function solverMaxTorqueT(
+  solverStatus: SolverStatusResource | null,
+): number | null {
+  const status = solverStatus as
+    | (SolverStatusResource & {
+        max_torque_Apm?: number | null;
+        max_torque_T?: number | null;
+      })
+    | null;
+  const explicitT = finiteNumber(status?.max_torque_T);
+  if (explicitT !== null) return explicitT;
+  const canonicalApm = finiteNumber(status?.max_torque_Apm);
+  return canonicalApm === null ? null : teslaFromApm(canonicalApm);
 }
 
 function stageLabel(stage: StudyStageSnapshot): string {
@@ -284,7 +361,7 @@ function resolveRelaxTorqueStop({
   const currentT = finiteNumber(currentTorqueT);
   const thresholdApm = finiteNumberFromText(activeStage.torqueTolerance);
   const thresholdT =
-    thresholdApm === null ? null : thresholdApm * MU0_T_PER_APM;
+    thresholdApm === null ? null : teslaFromApm(thresholdApm);
 
   return {
     current:
@@ -295,6 +372,97 @@ function resolveRelaxTorqueStop({
         ? "not set"
         : formatTorquePairFromApm(thresholdApm),
   };
+}
+
+function resolveRelaxEnergyStop({
+  activeStage,
+  activeStageKind,
+  energyHistory,
+}: {
+  activeStage: StudyStageModel | null;
+  activeStageKind: string | null;
+  energyHistory: SolverEnergyHistoryResource | null;
+}): StudyRelaxEnergyStopModel | null {
+  if (
+    !activeStage ||
+    (!isRelaxStageKind(activeStage.kind) &&
+      !isRelaxStageKind(activeStageKind ?? ""))
+  ) {
+    return null;
+  }
+
+  const thresholdJ = finiteNumberFromText(activeStage.energyTolerance);
+  const rows = energyHistory?.rows ?? [];
+
+  if (rows.length < 50) {
+    return {
+      current: "accumulating steps (need 50)",
+      status: "pending history",
+      threshold: thresholdJ === null ? "not set" : `${formatScientific(thresholdJ)} J`,
+    };
+  }
+
+  const last50 = rows.slice(-50);
+  const totals = last50.map((r) => r.total);
+  const minE = Math.min(...totals);
+  const maxE = Math.max(...totals);
+  const plateauVal = maxE - minE;
+
+  return {
+    current: `${formatScientific(plateauVal)} J`,
+    status: formatEnergyStopStatus(plateauVal, thresholdJ),
+    threshold: thresholdJ === null ? "not set" : `${formatScientific(thresholdJ)} J`,
+  };
+}
+
+function formatEnergyStopStatus(
+  current: number,
+  threshold: number | null,
+): string {
+  if (threshold === null) return "threshold not set";
+  if (current <= threshold) {
+    return `${formatThresholdRatio(current, threshold)} of threshold`;
+  }
+  return `${formatThresholdRatio(current, threshold)} above threshold`;
+}
+
+function resolveRelaxTimeStop({
+  activeStage,
+  activeStageKind,
+  currentSimTime,
+}: {
+  activeStage: StudyStageModel | null;
+  activeStageKind: string | null;
+  currentSimTime: number | null;
+}): StudyRelaxTimeStopModel | null {
+  if (
+    !activeStage ||
+    (!isRelaxStageKind(activeStage.kind) &&
+      !isRelaxStageKind(activeStageKind ?? ""))
+  ) {
+    return null;
+  }
+
+  const elapsed = finiteNumber(currentSimTime);
+  const budget = finiteNumberFromText(activeStage.untilSeconds);
+
+  return {
+    budget: budget === null ? "not set" : `${formatScientific(budget)} s`,
+    elapsed: elapsed === null ? "unavailable" : `${formatScientific(elapsed)} s`,
+    status: formatTimeStopStatus(elapsed, budget),
+  };
+}
+
+function formatTimeStopStatus(
+  elapsed: number | null,
+  budget: number | null,
+): string {
+  if (budget === null) return "budget not set";
+  if (elapsed === null) return "elapsed unavailable";
+  if (elapsed <= budget) {
+    return `${formatThresholdRatio(elapsed, budget)} of budget`;
+  }
+  return `${formatThresholdRatio(elapsed, budget)} above budget`;
 }
 
 function isRelaxStageKind(kind: string): boolean {
@@ -348,20 +516,8 @@ function formatExternalField(value: unknown): string {
 
 function formatTorque(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
-    ? `${formatScientific(value)} T`
+    ? formatTorqueT(value)
     : "unavailable";
-}
-
-function formatTorquePairFromTesla(value: number): string {
-  return `${formatScientific(value)} T / ${formatScientific(
-    value / MU0_T_PER_APM,
-  )} A/m`;
-}
-
-function formatTorquePairFromApm(value: number): string {
-  return `${formatScientific(value * MU0_T_PER_APM)} T / ${formatScientific(
-    value,
-  )} A/m`;
 }
 
 function formatTorqueStopStatus(
@@ -381,10 +537,6 @@ function formatThresholdRatio(currentT: number, thresholdT: number): string {
   const ratio = currentT / thresholdT;
   if (ratio <= 1) return `${(ratio * 100).toPrecision(3)}%`;
   return `${ratio.toPrecision(3)}x`;
-}
-
-function formatScientific(value: number): string {
-  return value.toExponential(3).replace("e+", "e");
 }
 
 function titleCase(value: string): string {

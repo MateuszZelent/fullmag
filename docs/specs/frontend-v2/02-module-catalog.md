@@ -1,9 +1,26 @@
 # Frontend v2 - Module Catalog
 
-**Status:** Proposed architecture
-**Date:** 2026-05-11
+**Status:** Active migration contract
+**Date:** 2026-05-22
 
 Each module below maps to `apps/control-room/src/modules/<module-id>/`. Modules are optional at registration time, but the shell must remain stable when any non-core module is disabled.
+
+## 0. Current Implementation Snapshot
+
+As of 2026-05-22, `apps/control-room` registers these manifests through `src/modules/index.ts`:
+
+| Manifest id | Directory | Slot | Status |
+|---|---|---|---|
+| `app-menu` | `src/modules/app-menu` | `app-menu` | implemented |
+| `ribbon` | `src/modules/ribbon` | `ribbon` | implemented |
+| `explorer` | `src/modules/explorer` | `panel-left` | implemented |
+| `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
+| `inspector` | `src/modules/inspector` | `panel-right` | implemented |
+| `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented as the current footer/log dock |
+| `command-palette` | `src/modules/overlay` | `overlay` | implemented as the current overlay module |
+| `status-bar` | `src/modules/status-bar` | `status-bar` | implemented |
+
+The modules listed in later sections remain the target catalog. A target module that is not in this snapshot is deferred, not silently dropped. Cutover acceptance still depends on the required workflows in `21-cutover-acceptance.md`, not on this snapshot alone.
 
 ## 1. Core Shell Modules
 

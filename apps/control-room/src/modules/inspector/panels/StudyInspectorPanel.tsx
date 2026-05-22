@@ -367,6 +367,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const model = resolveStudyInspectorModel({
     commandQueue: commandQueue.data,
     currentRun: currentRun.data,
+    energyHistory: energyHistory.data,
     selectedNodeId: selection.nodeId,
     snapshot,
     solverStatus: solverStatus.data,
@@ -604,6 +605,38 @@ function StudyRuntimeSection({
           <FieldRow
             label="Relax stop"
             value={model.runtime.relaxTorqueStop.status}
+          />
+        </>
+      ) : null}
+      {model.runtime.relaxEnergyStop ? (
+        <>
+          <FieldRow
+            label="Energy plateau"
+            value={model.runtime.relaxEnergyStop.current}
+          />
+          <FieldRow
+            label="Energy threshold"
+            value={model.runtime.relaxEnergyStop.threshold}
+          />
+          <FieldRow
+            label="Energy stop"
+            value={model.runtime.relaxEnergyStop.status}
+          />
+        </>
+      ) : null}
+      {model.runtime.relaxTimeStop ? (
+        <>
+          <FieldRow
+            label="Physical time"
+            value={model.runtime.relaxTimeStop.elapsed}
+          />
+          <FieldRow
+            label="Time budget"
+            value={model.runtime.relaxTimeStop.budget}
+          />
+          <FieldRow
+            label="Time status"
+            value={model.runtime.relaxTimeStop.status}
           />
         </>
       ) : null}

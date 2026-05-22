@@ -14,19 +14,15 @@ mod antenna_fields;
 pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;
-mod cpu_reference;
 mod derived_fields;
 mod dispatch;
 pub mod eigen;
+mod fdm;
 #[path = "fem_reference.rs"]
 mod fem_baseline;
 mod fem_eigen;
 pub mod interactive;
 mod interactive_runtime;
-#[cfg(feature = "cuda")]
-mod multilayer_cuda;
-mod multilayer_reference;
-mod native_fdm;
 mod native_fem;
 mod preview;
 pub mod quantities;
@@ -36,6 +32,23 @@ mod scalar_metrics;
 mod schedules;
 mod solver_profile;
 mod types;
+
+mod cpu_reference {
+    pub(crate) use crate::fdm::cpu_reference::*;
+}
+
+#[cfg(feature = "cuda")]
+mod multilayer_cuda {
+    pub(crate) use crate::fdm::multilayer_cuda::*;
+}
+
+mod multilayer_reference {
+    pub(crate) use crate::fdm::multilayer_reference::*;
+}
+
+mod native_fdm {
+    pub(crate) use crate::fdm::native_cuda::*;
+}
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
 /// Default maximum timestep for adaptive stepping when the user provides none.

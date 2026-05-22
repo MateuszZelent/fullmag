@@ -9,6 +9,10 @@ import type {
 } from "../explorerTypes";
 
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
+import {
+  formatTorqueT,
+  teslaFromApm,
+} from "@/shared/domain/physics/torqueUnits";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -372,7 +376,10 @@ function studyStageKind(kind: string): ExplorerNode["kind"] {
 
 function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
   if (stage.kind === "relax") {
-    if (stage.torqueTolerance != null) return `tol ${stage.torqueTolerance}`;
+    const torqueToleranceApm = finiteNumberFromScalar(stage.torqueTolerance);
+    if (torqueToleranceApm !== null) {
+      return `tau ${formatTorqueT(teslaFromApm(torqueToleranceApm))}`;
+    }
     if (stage.maxSteps != null) return `${stage.maxSteps} steps`;
     return "relax";
   }
@@ -382,6 +389,12 @@ function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
     return "time domain";
   }
   return stage.artifactName ?? stage.kind;
+}
+
+function finiteNumberFromScalar(value: string | number | null | undefined): number | null {
+  if (value == null) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {

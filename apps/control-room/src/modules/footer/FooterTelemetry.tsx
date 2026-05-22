@@ -33,6 +33,7 @@ import {
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
+import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
@@ -127,7 +128,10 @@ type FooterTelemetryStatus = {
   > | null;
   metrics: Pick<LiveStatusResource["metrics"], "steps_per_second" | "total_steps">;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "solver_steps" | "solver_time"> | null;
-  solver: Pick<LiveStatusResource["solver"], "converged" | "dt" | "max_torque" | "state">;
+  solver: Pick<
+    LiveStatusResource["solver"],
+    "converged" | "dt" | "max_torque_T" | "state"
+  >;
 };
 
 export function selectFooterTelemetryStatus(
@@ -160,7 +164,7 @@ export function selectFooterTelemetryStatus(
     solver: {
       converged: data.solver.converged ?? null,
       dt: data.solver.dt ?? null,
-      max_torque: data.solver.max_torque ?? null,
+      max_torque_T: data.solver.max_torque_T ?? null,
       state: data.solver.state,
     },
   };
@@ -180,7 +184,7 @@ export function footerTelemetryStatusEquals(
     Object.is(previous.run?.solver_time ?? null, next.run?.solver_time ?? null) &&
     Object.is(previous.solver.converged, next.solver.converged) &&
     Object.is(previous.solver.dt, next.solver.dt) &&
-    Object.is(previous.solver.max_torque, next.solver.max_torque) &&
+    Object.is(previous.solver.max_torque_T, next.solver.max_torque_T) &&
     Object.is(previous.solver.state, next.solver.state) &&
     Object.is(previous.energies?.anisotropy ?? null, next.energies?.anisotropy ?? null) &&
     Object.is(previous.energies?.demag ?? null, next.energies?.demag ?? null) &&
@@ -209,7 +213,7 @@ export function buildFooterTelemetryModel(
     status?.metrics?.total_steps ??
     0;
   const stepsPerSecond = status?.metrics?.steps_per_second;
-  const maxTorque = solverStatus?.max_torque ?? status?.solver?.max_torque;
+  const maxTorqueT = solverStatus?.max_torque_T ?? status?.solver?.max_torque_T;
   const dt = solverStatus?.dt_seconds ?? status?.solver?.dt;
   const converged = solverStatus?.converged ?? status?.solver?.converged;
   const totalEnergy = objectMetrics?.energies.total ?? status?.energies?.total;
@@ -265,7 +269,7 @@ export function buildFooterTelemetryModel(
         id: "max-torque",
         label: "Max Torque",
         subdetail: `Converged: ${formatBoolean(converged)}`,
-        value: formatScientific(maxTorque, "0.000e+0"),
+        value: formatTorqueTelemetry(maxTorqueT),
       },
       {
         detail: "Average magnetization",
@@ -481,6 +485,12 @@ function formatScientific(
     return COMPACT_DECIMAL_FORMAT.format(value);
   }
   return value.toExponential(3);
+}
+
+function formatTorqueTelemetry(valueT: number | null | undefined): string {
+  return typeof valueT === "number" && Number.isFinite(valueT)
+    ? formatTorqueT(valueT)
+    : "0.000e+0 T";
 }
 
 function formatBoolean(value: boolean | null | undefined): string {

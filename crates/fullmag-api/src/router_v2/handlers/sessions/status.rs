@@ -98,6 +98,8 @@ pub(crate) fn build_live_status(
             .unwrap_or_else(|| "idle".into()),
         algorithm: None,
         dt: latest.map(|s| s.dt),
+        max_torque_t: latest.map(|s| s.max_torque_T),
+        max_torque_apm: latest.map(|s| s.max_torque_Apm),
         max_torque: latest.map(|s| s.max_torque_T),
         converged: latest.map(|s| s.finished),
     };

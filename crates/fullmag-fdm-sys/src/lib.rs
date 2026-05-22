@@ -38,6 +38,13 @@ pub enum fullmag_fdm_plan_kind {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_transfer_kind {
+    FULLMAG_FDM_TRANSFER_IDENTITY = 0,
+    FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_integrator {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
@@ -122,6 +129,7 @@ pub struct fullmag_fdm_complex32 {
 pub struct fullmag_fdm_layer_desc_v2 {
     pub native_grid: fullmag_fdm_grid_desc,
     pub convolution_grid: fullmag_fdm_grid_desc,
+    pub transfer_kind: fullmag_fdm_transfer_kind,
     pub layer_index: u32,
     pub z_offset_cells: i32,
     pub material: fullmag_fdm_material_desc,
@@ -411,6 +419,22 @@ extern "C" {
         out_len: u64,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_copy_layer_field_f64(
+        handle: *mut fullmag_fdm_backend,
+        layer_index: u32,
+        observable: fullmag_fdm_observable,
+        out_xyz: *mut f64,
+        out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_copy_layer_field_f32(
+        handle: *mut fullmag_fdm_backend,
+        layer_index: u32,
+        observable: fullmag_fdm_observable,
+        out_xyz: *mut f32,
+        out_len: u64,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_copy_field_preview_f64(
         handle: *mut fullmag_fdm_backend,
         observable: fullmag_fdm_observable,
@@ -479,6 +503,22 @@ extern "C" {
         m_xyz: *const f32,
         len: u64,
     ) -> i32;
+
+    pub fn fullmag_fdm_backend_upload_layer_magnetization_f64(
+        handle: *mut fullmag_fdm_backend,
+        layer_index: u32,
+        m_xyz: *const f64,
+        len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_upload_layer_magnetization_f32(
+        handle: *mut fullmag_fdm_backend,
+        layer_index: u32,
+        m_xyz: *const f32,
+        len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_refresh_multilayer_demag(handle: *mut fullmag_fdm_backend) -> i32;
 
     pub fn fullmag_fdm_backend_refresh_observables(handle: *mut fullmag_fdm_backend) -> i32;
 

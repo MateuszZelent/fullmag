@@ -40,6 +40,18 @@ void launch_newell_compute_spectra_fp32(Context &ctx);
 void launch_multilayer_demag_field_fp64(Context &ctx);
 void launch_multilayer_demag_field_fp32(Context &ctx);
 
+// Native multilayer exchange field over staged layer-local grids.
+void launch_multilayer_exchange_field_fp64(Context &ctx);
+void launch_multilayer_exchange_field_fp32(Context &ctx);
+
+// First native v2 timestep slice: Heun over staged multilayer layers with
+// demag and layer-local exchange fields. Other v2 integrators stay explicitly
+// rejected at the C API boundary.
+void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_multilayer_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_multilayer_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_multilayer_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+
 // DP45 adaptive integrators
 void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);

@@ -3,6 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+import {
+  DATA_SCALARS_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+} from "../api/apiPaths";
+
 const packageJsonUrl = new URL("../../../package.json", import.meta.url);
 const auditScriptUrl = new URL(
   "../../../scripts/audit-compute-performance.mjs",
@@ -150,9 +156,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS");
     expect(auditScript).toContain("assertNoImmediateResultResourceReloads");
     expect(auditScript).toContain("resultResourceRequestCount");
-    expect(auditScript).toContain("/v2/sessions/current/data/scalars");
-    expect(auditScript).toContain("/v2/sessions/current/simulation/solver/energies/current");
-    expect(auditScript).toContain("/v2/sessions/current/simulation/solver/energies/history");
+    expect(auditScript).toContain(DATA_SCALARS_PATH);
+    expect(auditScript).toContain(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH);
+    expect(auditScript).toContain(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH);
     expect(auditScript).toContain("simulation\\\\/objects\\\\/[^/]+\\\\/metrics");
     expect(auditScript).toContain("checkShellSelectorHooks");
     expect(auditScript).toContain("checkObjectVisualizationSelectorHooks");

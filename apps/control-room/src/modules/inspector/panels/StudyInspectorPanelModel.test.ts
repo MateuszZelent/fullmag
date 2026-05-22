@@ -25,7 +25,8 @@ describe("StudyInspectorPanelModel", () => {
             kind: "relax",
             max_steps: "200",
             relax_algorithm: "llg_overdamped",
-            torque_tolerance: TORQUE_TOLERANCE_FOR_1E_4_T,
+            torque_tolerance_apm: TORQUE_TOLERANCE_FOR_1E_4_T,
+            max_physical_time_s: "2e-9",
           },
           {
             entrypoint_kind: "run",
@@ -52,12 +53,21 @@ describe("StudyInspectorPanelModel", () => {
         status: "running",
         total_steps: 12,
       } as never,
+      energyHistory: {
+        returned_rows: 50,
+        total_rows: 50,
+        rows: Array.from({ length: 50 }, (_, i) => ({
+          step: i,
+          total: i === 49 ? 1.00000001e-7 : 1e-7,
+        })),
+      } as never,
       selectedNodeId: "model:study:stage:runtime-run",
       snapshot,
       solverStatus: {
         can_accept_commands: true,
         is_busy: true,
-        max_torque: 0.003,
+        max_torque_Apm: 0.003 / (4 * Math.PI * 1e-7),
+        max_torque_T: 0.003,
         revision: 4,
         runtime_state: "running",
         runtime_status_code: "running",
@@ -65,6 +75,7 @@ describe("StudyInspectorPanelModel", () => {
         session_status: "running",
         step_index: 50,
         warnings: [],
+        sim_time_seconds: 5e-10,
       } as never,
       stageExecution: {
         active_stage_index: 0,
@@ -72,10 +83,10 @@ describe("StudyInspectorPanelModel", () => {
         completed_stage_indexes: [],
         revision: 5,
         runtime_state: "running",
-        stage_statuses: ["running", "queued"],
+        stage_statuses: ["completed", "running"],
         stages: [
-          { stage_id: "runtime-relax", status: "running" },
-          { stage_id: "runtime-run", status: "queued" },
+          { stage_id: "runtime-relax", status: "completed" },
+          { stage_id: "runtime-run", status: "running" },
         ],
         total_stages: 2,
       } as never,
@@ -87,9 +98,10 @@ describe("StudyInspectorPanelModel", () => {
       label: "Run 2",
       progressPercent: 0,
       stageId: "runtime-run",
-      status: "queued",
+      status: "running",
       untilSeconds: "5e-9",
     });
+    expect(model.stages[0].progressPercent).toBe(100);
     expect(model.boundary).toEqual({
       demagRealization: "poisson_robin",
       externalField: "0.01, 0, -0.002 T",
@@ -112,6 +124,16 @@ describe("StudyInspectorPanelModel", () => {
         current: "3.000e-3 T / 2.387e3 A/m",
         status: "30.0x above threshold",
         threshold: "1.000e-4 T / 7.958e1 A/m",
+      },
+      relaxEnergyStop: {
+        current: "1.000e-15 J",
+        status: "0.0000100% of threshold",
+        threshold: "1.000e-8 J",
+      },
+      relaxTimeStop: {
+        budget: "2.000e-9 s",
+        elapsed: "5.000e-10 s",
+        status: "25.0% of budget",
       },
       runId: "run-1",
       state: "running",

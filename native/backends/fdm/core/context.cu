@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -42,113 +43,6 @@ static size_t scalar_size(fullmag_fdm_precision prec) {
 
 static size_t complex_size(fullmag_fdm_precision prec) {
     return (prec == FULLMAG_FDM_PRECISION_SINGLE) ? sizeof(cufftComplex) : sizeof(cufftDoubleComplex);
-}
-
-static bool create_compute_stream(Context &ctx) {
-    if (ctx.compute_stream) {
-        return true;
-    }
-
-    cudaStream_t compute_stream{};
-    cudaError_t err = cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaStreamCreate(compute_stream)", err);
-        return false;
-    }
-    ctx.compute_stream = reinterpret_cast<void *>(compute_stream);
-
-    cudaEvent_t ready_event{};
-    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaEventCreate(compute_ready_event)", err);
-        cudaStreamDestroy(compute_stream);
-        ctx.compute_stream = nullptr;
-        return false;
-    }
-    ctx.compute_ready_event = reinterpret_cast<void *>(ready_event);
-
-    cudaEvent_t done_event{};
-    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "cudaEventCreate(compute_done_event)", err);
-        cudaEventDestroy(ready_event);
-        ctx.compute_ready_event = nullptr;
-        cudaStreamDestroy(compute_stream);
-        ctx.compute_stream = nullptr;
-        return false;
-    }
-    ctx.compute_done_event = reinterpret_cast<void *>(done_event);
-
-    return true;
-}
-
-static void destroy_compute_stream(Context &ctx) {
-    if (ctx.compute_stream) {
-        cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
-        cudaStreamSynchronize(nullptr);
-    }
-    if (ctx.compute_done_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_done_event));
-        ctx.compute_done_event = nullptr;
-    }
-    if (ctx.compute_ready_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_ready_event));
-        ctx.compute_ready_event = nullptr;
-    }
-    if (ctx.compute_stream) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
-        ctx.compute_stream = nullptr;
-    }
-}
-
-cudaStream_t context_compute_stream(Context &ctx) {
-    return reinterpret_cast<cudaStream_t>(ctx.compute_stream);
-}
-
-bool context_begin_compute_stream_work(Context &ctx, const char *operation) {
-    auto stream = context_compute_stream(ctx);
-    auto ready_event = reinterpret_cast<cudaEvent_t>(ctx.compute_ready_event);
-    if (!stream || !ready_event) {
-        ctx.last_error = std::string(operation) + ": compute stream not initialized";
-        return false;
-    }
-
-    cudaError_t err = cudaEventRecord(ready_event, nullptr);
-    if (err != cudaSuccess) {
-        std::string label = std::string(operation) + ": cudaEventRecord(compute_ready_event)";
-        set_cuda_error(ctx, label.c_str(), err);
-        return false;
-    }
-    err = cudaStreamWaitEvent(stream, ready_event, 0);
-    if (err != cudaSuccess) {
-        std::string label = std::string(operation) + ": cudaStreamWaitEvent(compute_ready_event)";
-        set_cuda_error(ctx, label.c_str(), err);
-        return false;
-    }
-    return true;
-}
-
-bool context_end_compute_stream_work(Context &ctx, const char *operation) {
-    auto stream = context_compute_stream(ctx);
-    auto done_event = reinterpret_cast<cudaEvent_t>(ctx.compute_done_event);
-    if (!stream || !done_event) {
-        ctx.last_error = std::string(operation) + ": compute stream not initialized";
-        return false;
-    }
-
-    cudaError_t err = cudaEventRecord(done_event, stream);
-    if (err != cudaSuccess) {
-        std::string label = std::string(operation) + ": cudaEventRecord(compute_done_event)";
-        set_cuda_error(ctx, label.c_str(), err);
-        return false;
-    }
-    err = cudaStreamWaitEvent(nullptr, done_event, 0);
-    if (err != cudaSuccess) {
-        std::string label = std::string(operation) + ": cudaStreamWaitEvent(compute_done_event)";
-        set_cuda_error(ctx, label.c_str(), err);
-        return false;
-    }
-    return true;
 }
 
 /* ── Allocate one SoA vector field (3 components) ── */
@@ -269,6 +163,52 @@ static bool upload_vector_field_aos_f64(
     return true;
 }
 
+template <typename HostScalar>
+static bool upload_vector_field_aos_host(
+    Context &ctx,
+    DeviceVectorField &dst,
+    const HostScalar *src_xyz,
+    uint64_t cell_count,
+    const char *label)
+{
+    if (!src_xyz) {
+        ctx.last_error = std::string(label) + " source is null";
+        return false;
+    }
+
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        std::vector<double> hx(cell_count), hy(cell_count), hz(cell_count);
+        for (uint64_t i = 0; i < cell_count; ++i) {
+            hx[i] = static_cast<double>(src_xyz[i * 3 + 0]);
+            hy[i] = static_cast<double>(src_xyz[i * 3 + 1]);
+            hz[i] = static_cast<double>(src_xyz[i * 3 + 2]);
+        }
+        const size_t bytes = cell_count * sizeof(double);
+        cudaError_t err = cudaMemcpy(dst.x, hx.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".x").c_str(), err); return false; }
+        err = cudaMemcpy(dst.y, hy.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".y").c_str(), err); return false; }
+        err = cudaMemcpy(dst.z, hz.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".z").c_str(), err); return false; }
+        return true;
+    }
+
+    std::vector<float> hx(cell_count), hy(cell_count), hz(cell_count);
+    for (uint64_t i = 0; i < cell_count; ++i) {
+        hx[i] = static_cast<float>(src_xyz[i * 3 + 0]);
+        hy[i] = static_cast<float>(src_xyz[i * 3 + 1]);
+        hz[i] = static_cast<float>(src_xyz[i * 3 + 2]);
+    }
+    const size_t bytes = cell_count * sizeof(float);
+    cudaError_t err = cudaMemcpy(dst.x, hx.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".x").c_str(), err); return false; }
+    err = cudaMemcpy(dst.y, hy.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".y").c_str(), err); return false; }
+    err = cudaMemcpy(dst.z, hz.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".z").c_str(), err); return false; }
+    return true;
+}
+
 static bool alloc_tensor_kernel_cells(
     Context &ctx,
     DeviceDemagKernel &kernel,
@@ -300,6 +240,251 @@ static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
     if (kernel.xy) { cudaFree(kernel.xy); kernel.xy = nullptr; }
     if (kernel.xz) { cudaFree(kernel.xz); kernel.xz = nullptr; }
     if (kernel.yz) { cudaFree(kernel.yz); kernel.yz = nullptr; }
+}
+
+static void free_device_transfer_maps(DeviceMultilayerLayer &layer) {
+    if (layer.push_map.offsets) {
+        cudaFree(layer.push_map.offsets);
+        layer.push_map.offsets = nullptr;
+    }
+    if (layer.push_map.indices) {
+        cudaFree(layer.push_map.indices);
+        layer.push_map.indices = nullptr;
+    }
+    if (layer.push_map.weights) {
+        cudaFree(layer.push_map.weights);
+        layer.push_map.weights = nullptr;
+    }
+    layer.push_map.cell_count = 0;
+    layer.push_map.entry_count = 0;
+
+    if (layer.pull_map.indices) {
+        cudaFree(layer.pull_map.indices);
+        layer.pull_map.indices = nullptr;
+    }
+    if (layer.pull_map.weights) {
+        cudaFree(layer.pull_map.weights);
+        layer.pull_map.weights = nullptr;
+    }
+    layer.pull_map.cell_count = 0;
+}
+
+static uint64_t flatten_grid_index(uint32_t x, uint32_t y, uint32_t z, const fullmag_fdm_grid_desc &grid) {
+    return (static_cast<uint64_t>(z) * grid.ny + y) * grid.nx + x;
+}
+
+static uint64_t clamp_grid_index(int64_t value, uint32_t upper) {
+    if (value < 0) return 0;
+    const uint64_t last = upper > 0 ? static_cast<uint64_t>(upper - 1) : 0;
+    const uint64_t as_u64 = static_cast<uint64_t>(value);
+    return as_u64 > last ? last : as_u64;
+}
+
+static bool upload_u64_array(
+    Context &ctx,
+    uint64_t *&dst,
+    const std::vector<uint64_t> &src,
+    const char *label)
+{
+    if (src.empty()) {
+        return true;
+    }
+    cudaError_t err = cudaMalloc(
+        reinterpret_cast<void **>(&dst),
+        src.size() * sizeof(uint64_t));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, label, err);
+        return false;
+    }
+    err = cudaMemcpy(dst, src.data(), src.size() * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, label, err);
+        return false;
+    }
+    return true;
+}
+
+static bool upload_f64_vector(
+    Context &ctx,
+    double *&dst,
+    const std::vector<double> &src,
+    const char *label)
+{
+    if (src.empty()) {
+        return true;
+    }
+    cudaError_t err = cudaMalloc(
+        reinterpret_cast<void **>(&dst),
+        src.size() * sizeof(double));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, label, err);
+        return false;
+    }
+    err = cudaMemcpy(dst, src.data(), src.size() * sizeof(double), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, label, err);
+        return false;
+    }
+    return true;
+}
+
+static void build_push_map_host(
+    const fullmag_fdm_grid_desc &native_grid,
+    const fullmag_fdm_grid_desc &convolution_grid,
+    std::vector<uint64_t> &offsets,
+    std::vector<uint64_t> &indices,
+    std::vector<double> &weights)
+{
+    const uint64_t conv_cells = grid_cell_count(convolution_grid);
+    offsets.assign(conv_cells + 1, 0);
+    indices.clear();
+    weights.clear();
+
+    for (uint32_t cz = 0; cz < convolution_grid.nz; ++cz) {
+        for (uint32_t cy = 0; cy < convolution_grid.ny; ++cy) {
+            for (uint32_t cx = 0; cx < convolution_grid.nx; ++cx) {
+                const uint64_t conv_idx = flatten_grid_index(cx, cy, cz, convolution_grid);
+                offsets[conv_idx] = indices.size();
+
+                const double c_lo_x = static_cast<double>(cx) * convolution_grid.dx;
+                const double c_lo_y = static_cast<double>(cy) * convolution_grid.dy;
+                const double c_lo_z = static_cast<double>(cz) * convolution_grid.dz;
+                const double c_hi_x = c_lo_x + convolution_grid.dx;
+                const double c_hi_y = c_lo_y + convolution_grid.dy;
+                const double c_hi_z = c_lo_z + convolution_grid.dz;
+
+                const int64_t nx_lo = static_cast<int64_t>(std::floor(c_lo_x / native_grid.dx));
+                const int64_t nx_hi = static_cast<int64_t>(std::ceil(c_hi_x / native_grid.dx));
+                const int64_t ny_lo = static_cast<int64_t>(std::floor(c_lo_y / native_grid.dy));
+                const int64_t ny_hi = static_cast<int64_t>(std::ceil(c_hi_y / native_grid.dy));
+                const int64_t nz_lo = static_cast<int64_t>(std::floor(c_lo_z / native_grid.dz));
+                const int64_t nz_hi = static_cast<int64_t>(std::ceil(c_hi_z / native_grid.dz));
+
+                for (int64_t nz = nz_lo; nz < nz_hi; ++nz) {
+                    if (nz < 0 || nz >= static_cast<int64_t>(native_grid.nz)) continue;
+                    const double n_lo_z = static_cast<double>(nz) * native_grid.dz;
+                    const double n_hi_z = n_lo_z + native_grid.dz;
+                    const double oz = std::max(0.0, std::min(c_hi_z, n_hi_z) - std::max(c_lo_z, n_lo_z));
+                    if (oz <= 0.0) continue;
+                    for (int64_t ny = ny_lo; ny < ny_hi; ++ny) {
+                        if (ny < 0 || ny >= static_cast<int64_t>(native_grid.ny)) continue;
+                        const double n_lo_y = static_cast<double>(ny) * native_grid.dy;
+                        const double n_hi_y = n_lo_y + native_grid.dy;
+                        const double oy = std::max(0.0, std::min(c_hi_y, n_hi_y) - std::max(c_lo_y, n_lo_y));
+                        if (oy <= 0.0) continue;
+                        for (int64_t nx = nx_lo; nx < nx_hi; ++nx) {
+                            if (nx < 0 || nx >= static_cast<int64_t>(native_grid.nx)) continue;
+                            const double n_lo_x = static_cast<double>(nx) * native_grid.dx;
+                            const double n_hi_x = n_lo_x + native_grid.dx;
+                            const double ox = std::max(0.0, std::min(c_hi_x, n_hi_x) - std::max(c_lo_x, n_lo_x));
+                            if (ox <= 0.0) continue;
+
+                            indices.push_back(flatten_grid_index(
+                                static_cast<uint32_t>(nx),
+                                static_cast<uint32_t>(ny),
+                                static_cast<uint32_t>(nz),
+                                native_grid));
+                            weights.push_back(ox * oy * oz);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    offsets[conv_cells] = indices.size();
+}
+
+static void build_pull_map_host(
+    const fullmag_fdm_grid_desc &native_grid,
+    const fullmag_fdm_grid_desc &convolution_grid,
+    const fullmag_fdm_grid_desc &fft_grid,
+    std::vector<uint64_t> &indices,
+    std::vector<double> &weights)
+{
+    const uint64_t native_cells = grid_cell_count(native_grid);
+    indices.assign(native_cells * 8, 0);
+    weights.assign(native_cells * 8, 0.0);
+
+    for (uint32_t nz = 0; nz < native_grid.nz; ++nz) {
+        for (uint32_t ny = 0; ny < native_grid.ny; ++ny) {
+            for (uint32_t nx = 0; nx < native_grid.nx; ++nx) {
+                const uint64_t native_idx = flatten_grid_index(nx, ny, nz, native_grid);
+                const double fx = ((static_cast<double>(nx) + 0.5) * native_grid.dx) / convolution_grid.dx - 0.5;
+                const double fy = ((static_cast<double>(ny) + 0.5) * native_grid.dy) / convolution_grid.dy - 0.5;
+                const double fz = ((static_cast<double>(nz) + 0.5) * native_grid.dz) / convolution_grid.dz - 0.5;
+
+                const double x_floor = std::floor(fx);
+                const double y_floor = std::floor(fy);
+                const double z_floor = std::floor(fz);
+                const int64_t x0 = static_cast<int64_t>(x_floor);
+                const int64_t y0 = static_cast<int64_t>(y_floor);
+                const int64_t z0 = static_cast<int64_t>(z_floor);
+                const double wx = fx - x_floor;
+                const double wy = fy - y_floor;
+                const double wz = fz - z_floor;
+
+                uint64_t corner = 0;
+                for (int dz = 0; dz < 2; ++dz) {
+                    const uint32_t iz = static_cast<uint32_t>(clamp_grid_index(z0 + dz, convolution_grid.nz));
+                    const double wz_i = dz == 0 ? 1.0 - wz : wz;
+                    for (int dy = 0; dy < 2; ++dy) {
+                        const uint32_t iy = static_cast<uint32_t>(clamp_grid_index(y0 + dy, convolution_grid.ny));
+                        const double wy_i = dy == 0 ? 1.0 - wy : wy;
+                        for (int dx = 0; dx < 2; ++dx) {
+                            const uint32_t ix = static_cast<uint32_t>(clamp_grid_index(x0 + dx, convolution_grid.nx));
+                            const double wx_i = dx == 0 ? 1.0 - wx : wx;
+                            const uint64_t dst = native_idx * 8 + corner;
+                            indices[dst] = flatten_grid_index(ix, iy, iz, fft_grid);
+                            weights[dst] = wx_i * wy_i * wz_i;
+                            ++corner;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static bool build_and_upload_transfer_maps(
+    Context &ctx,
+    DeviceMultilayerLayer &layer,
+    const fullmag_fdm_grid_desc &fft_grid)
+{
+    if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        return true;
+    }
+
+    std::vector<uint64_t> push_offsets;
+    std::vector<uint64_t> push_indices;
+    std::vector<double> push_weights;
+    build_push_map_host(
+        layer.native_grid,
+        layer.convolution_grid,
+        push_offsets,
+        push_indices,
+        push_weights);
+
+    layer.push_map.cell_count = layer.convolution_cell_count;
+    layer.push_map.entry_count = push_indices.size();
+    if (!upload_u64_array(ctx, layer.push_map.offsets, push_offsets, "cudaMemcpy(multilayer_push_map_offsets)") ||
+        !upload_u64_array(ctx, layer.push_map.indices, push_indices, "cudaMemcpy(multilayer_push_map_indices)") ||
+        !upload_f64_vector(ctx, layer.push_map.weights, push_weights, "cudaMemcpy(multilayer_push_map_weights)"))
+    {
+        return false;
+    }
+
+    std::vector<uint64_t> pull_indices;
+    std::vector<double> pull_weights;
+    build_pull_map_host(
+        layer.native_grid,
+        layer.convolution_grid,
+        fft_grid,
+        pull_indices,
+        pull_weights);
+
+    layer.pull_map.cell_count = layer.cell_count;
+    return upload_u64_array(ctx, layer.pull_map.indices, pull_indices, "cudaMemcpy(multilayer_pull_map_indices)") &&
+        upload_f64_vector(ctx, layer.pull_map.weights, pull_weights, "cudaMemcpy(multilayer_pull_map_weights)");
 }
 
 static bool upload_tensor_kernel_component(
@@ -347,7 +532,14 @@ static bool upload_tensor_kernel_component(
 static void free_multilayer_plan_v2(Context &ctx) {
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         free_vector_field(layer.m);
+        free_vector_field(layer.h_ex);
         free_vector_field(layer.h_demag);
+        free_vector_field(layer.tmp);
+        free_vector_field(layer.k1);
+        free_vector_field(layer.k2);
+        free_vector_field(layer.k3);
+        free_vector_field(layer.k4);
+        free_device_transfer_maps(layer);
         if (layer.active_mask) {
             cudaFree(layer.active_mask);
             layer.active_mask = nullptr;
@@ -801,7 +993,7 @@ static void free_fft_workspace(Context &ctx) {
 /* ── Public context functions ── */
 
 bool context_alloc_device(Context &ctx) {
-    if (!create_compute_stream(ctx)) return false;
+    if (!context_create_compute_stream(ctx)) return false;
     if (!alloc_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
     if (!alloc_exchange_lut(ctx)) return false;
@@ -886,7 +1078,7 @@ bool context_alloc_device(Context &ctx) {
 }
 
 void context_free_device(Context &ctx) {
-    destroy_compute_stream(ctx);
+    context_destroy_compute_stream(ctx);
     free_multilayer_plan_v2(ctx);
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
@@ -1065,6 +1257,7 @@ bool context_upload_multilayer_plan_v2(
         DeviceMultilayerLayer &dst = ctx.multilayer_layers.back();
         dst.native_grid = src.native_grid;
         dst.convolution_grid = src.convolution_grid;
+        dst.transfer_kind = src.transfer_kind;
         dst.layer_index = src.layer_index;
         dst.z_offset_cells = src.z_offset_cells;
         dst.material = src.material;
@@ -1075,7 +1268,25 @@ bool context_upload_multilayer_plan_v2(
         if (!alloc_vector_field_cells(ctx, dst.m, dst.cell_count, "multilayer_m")) {
             return fail();
         }
+        if (!alloc_vector_field_cells(ctx, dst.h_ex, dst.cell_count, "multilayer_h_ex")) {
+            return fail();
+        }
         if (!alloc_vector_field_cells(ctx, dst.h_demag, dst.cell_count, "multilayer_h_demag")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.tmp, dst.cell_count, "multilayer_tmp")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.k1, dst.cell_count, "multilayer_k1")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.k2, dst.cell_count, "multilayer_k2")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.k3, dst.cell_count, "multilayer_k3")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.k4, dst.cell_count, "multilayer_k4")) {
             return fail();
         }
         if (!upload_vector_field_aos_f64(
@@ -1088,7 +1299,22 @@ bool context_upload_multilayer_plan_v2(
             return fail();
         }
         const size_t layer_bytes = dst.cell_count * scalar_size(ctx.precision);
-        cudaError_t zero_err = cudaMemset(dst.h_demag.x, 0, layer_bytes);
+        cudaError_t zero_err = cudaMemset(dst.h_ex.x, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ex.x)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_ex.y, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ex.y)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_ex.z, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ex.z)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_demag.x, 0, layer_bytes);
         if (zero_err != cudaSuccess) {
             set_cuda_error(ctx, "cudaMemset(multilayer_h_demag.x)", zero_err);
             return fail();
@@ -1159,6 +1385,26 @@ bool context_upload_multilayer_plan_v2(
         }
     }
 
+    if (ctx.enable_demag && !ctx.multilayer_kernels.empty()) {
+        const fullmag_fdm_grid_desc &fft_grid = ctx.multilayer_kernels.front().fft_grid;
+        for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+            if (kernel.fft_grid.nx != fft_grid.nx ||
+                kernel.fft_grid.ny != fft_grid.ny ||
+                kernel.fft_grid.nz != fft_grid.nz ||
+                kernel.kernel_len != grid_cell_count(fft_grid))
+            {
+                ctx.last_error =
+                    "multilayer transfer maps require a shared fft_grid until heterogeneous workspace support is implemented";
+                return fail();
+            }
+        }
+        for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+            if (!build_and_upload_transfer_maps(ctx, layer, fft_grid)) {
+                return fail();
+            }
+        }
+    }
+
     return true;
 }
 
@@ -1184,7 +1430,7 @@ bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
         }
     }
 
-    if (!create_compute_stream(ctx)) {
+    if (!context_create_compute_stream(ctx)) {
         return false;
     }
 
@@ -1575,6 +1821,54 @@ bool context_upload_magnetization_f32(Context &ctx, const float *m_xyz, uint64_t
 }
 
 template <typename HostScalar>
+static bool context_upload_layer_magnetization_impl(
+    Context &ctx,
+    uint32_t layer_index,
+    const HostScalar *m_xyz,
+    uint64_t len)
+{
+    if (!ctx.has_multilayer_plan_v2) {
+        ctx.last_error = "per-layer magnetization upload requires a staged v2 multilayer plan";
+        return false;
+    }
+    if (layer_index >= ctx.multilayer_layers.size()) {
+        ctx.last_error = "layer_index out of range";
+        return false;
+    }
+
+    DeviceMultilayerLayer &layer = ctx.multilayer_layers[layer_index];
+    if (!m_xyz || len != layer.cell_count * 3) {
+        ctx.last_error = "layer magnetization length mismatch";
+        return false;
+    }
+
+    return upload_vector_field_aos_host(
+        ctx,
+        layer.m,
+        m_xyz,
+        layer.cell_count,
+        "cudaMemcpy(multilayer_layer_m)");
+}
+
+bool context_upload_layer_magnetization_f64(
+    Context &ctx,
+    uint32_t layer_index,
+    const double *m_xyz,
+    uint64_t len)
+{
+    return context_upload_layer_magnetization_impl(ctx, layer_index, m_xyz, len);
+}
+
+bool context_upload_layer_magnetization_f32(
+    Context &ctx,
+    uint32_t layer_index,
+    const float *m_xyz,
+    uint64_t len)
+{
+    return context_upload_layer_magnetization_impl(ctx, layer_index, m_xyz, len);
+}
+
+template <typename HostScalar>
 static bool context_download_field_impl(
     const Context &ctx,
     fullmag_fdm_observable observable,
@@ -1707,6 +2001,99 @@ bool context_download_field_f32(
     uint64_t out_len)
 {
     return context_download_field_impl(ctx, observable, out_xyz, out_len);
+}
+
+template <typename HostScalar>
+static bool context_download_layer_field_impl(
+    Context &ctx,
+    uint32_t layer_index,
+    fullmag_fdm_observable observable,
+    HostScalar *out_xyz,
+    uint64_t out_len)
+{
+    if (!ctx.has_multilayer_plan_v2) {
+        ctx.last_error = "per-layer field copy requires a staged v2 multilayer plan";
+        return false;
+    }
+    if (layer_index >= ctx.multilayer_layers.size()) {
+        ctx.last_error = "layer_index out of range";
+        return false;
+    }
+
+    const DeviceMultilayerLayer &layer = ctx.multilayer_layers[layer_index];
+    if (!out_xyz || out_len != layer.cell_count * 3) {
+        ctx.last_error = "layer out_len mismatch";
+        return false;
+    }
+
+    const DeviceVectorField *field = nullptr;
+        switch (observable) {
+        case FULLMAG_FDM_OBSERVABLE_M:
+            field = &layer.m;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EX:
+            field = &layer.h_ex;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            field = &layer.h_demag;
+            break;
+        default:
+            ctx.last_error = "unsupported multilayer layer observable";
+            return false;
+    }
+
+    auto copy_components = [&](auto tag) -> bool {
+        using DeviceScalar = decltype(tag);
+        const uint64_t n = layer.cell_count;
+        std::vector<DeviceScalar> hx(n), hy(n), hz(n);
+        const size_t bytes = static_cast<size_t>(n) * sizeof(DeviceScalar);
+        cudaError_t err = cudaMemcpy(hx.data(), field->x, bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(multilayer_layer_field.x)", err);
+            return false;
+        }
+        err = cudaMemcpy(hy.data(), field->y, bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(multilayer_layer_field.y)", err);
+            return false;
+        }
+        err = cudaMemcpy(hz.data(), field->z, bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(multilayer_layer_field.z)", err);
+            return false;
+        }
+        for (uint64_t i = 0; i < n; ++i) {
+            out_xyz[i * 3 + 0] = static_cast<HostScalar>(hx[i]);
+            out_xyz[i * 3 + 1] = static_cast<HostScalar>(hy[i]);
+            out_xyz[i * 3 + 2] = static_cast<HostScalar>(hz[i]);
+        }
+        return true;
+    };
+
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        return copy_components(double{});
+    }
+    return copy_components(float{});
+}
+
+bool context_download_layer_field_f64(
+    Context &ctx,
+    uint32_t layer_index,
+    fullmag_fdm_observable observable,
+    double *out_xyz,
+    uint64_t out_len)
+{
+    return context_download_layer_field_impl(ctx, layer_index, observable, out_xyz, out_len);
+}
+
+bool context_download_layer_field_f32(
+    Context &ctx,
+    uint32_t layer_index,
+    fullmag_fdm_observable observable,
+    float *out_xyz,
+    uint64_t out_len)
+{
+    return context_download_layer_field_impl(ctx, layer_index, observable, out_xyz, out_len);
 }
 
 template <typename HostScalar>

@@ -47,8 +47,8 @@ import {
   CameraController,
   OrbitCameraControls,
   resolveViewport3DCameraFit,
-  type Viewport3DOrbitDebugAngles,
   type Viewport3DCameraChange,
+  type Viewport3DOrbitDebugAngles,
 } from "./CameraControls";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import {
@@ -160,9 +160,10 @@ export function resolveViewport3DProjectionCameraClip(
     new Vector3(...cameraState.target),
   );
   const radius = Math.max(bounds?.radius ?? FALLBACK_GRID_SIZE / 2, 1e-12);
-  const orbitFar = Number.isFinite(distance) && distance > 0
-    ? distance + radius * 4
-    : fit.far;
+  const orbitFar =
+    Number.isFinite(distance) && distance > 0
+      ? distance + radius * 4
+      : fit.far;
 
   return {
     near: fit.near,
@@ -325,7 +326,9 @@ export function scheduleViewport3DProjectionRenderFrames({
   invalidate,
   tracker,
 }: {
-  frameHost?: Pick<Window, "cancelAnimationFrame" | "requestAnimationFrame"> | null;
+  frameHost?:
+    | Pick<Window, "cancelAnimationFrame" | "requestAnimationFrame">
+    | null;
   invalidate: () => void;
   tracker: Pick<Viewport3DResourceTracker, "recordDirtyFrame">;
 }): () => void {
@@ -507,11 +510,15 @@ export function Viewport3DScene({
         vectorColorMode={vectorColorMode}
         vectorScale={vectorScale}
         vectorStyle={vectorStyle}
-        voxelFillRatio={getViewport3DVisualProfile(visualProfileId).voxelFillRatio}
+        voxelFillRatio={
+          getViewport3DVisualProfile(visualProfileId).voxelFillRatio
+        }
         voxelMagnitudeThreshold={
           getViewport3DVisualProfile(visualProfileId).voxelMagnitudeThreshold
         }
-        voxelTopography={getViewport3DVisualProfile(visualProfileId).voxelTopography}
+        voxelTopography={
+          getViewport3DVisualProfile(visualProfileId).voxelTopography
+        }
       />
       <AirboxLayer
         colors={colors}

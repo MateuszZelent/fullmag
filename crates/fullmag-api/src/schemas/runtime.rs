@@ -130,6 +130,12 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "max_torque_T")]
+    pub max_torque_t: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "max_torque_Apm")]
+    pub max_torque_apm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_torque: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub converged: Option<bool>,
@@ -331,6 +337,8 @@ pub struct CommandDetailResource {
     pub until_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub torque_tolerance_apm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torque_tolerance: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

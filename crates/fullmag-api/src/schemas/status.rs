@@ -67,6 +67,10 @@ pub struct SolverSummary {
     pub state: String,
     pub algorithm: Option<String>,
     pub dt: Option<f64>,
+    #[serde(rename = "max_torque_T")]
+    pub max_torque_t: Option<f64>,
+    #[serde(rename = "max_torque_Apm")]
+    pub max_torque_apm: Option<f64>,
     pub max_torque: Option<f64>,
     pub converged: Option<bool>,
 }

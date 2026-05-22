@@ -48,6 +48,13 @@ Phase 2 local gate status on 2026-05-11:
 - `pnpm --dir apps/control-room generate:api`, `typecheck`, `lint`, `test`, and `check:api-hygiene` pass.
 - `pnpm --dir apps/control-room build` passes when run outside the restricted sandbox. Inside the sandbox, Turbopack/PostCSS still cannot create its helper process and fails with `Operation not permitted (os error 1)`.
 
+Frontend v2 governance gate status on 2026-05-22:
+
+- `pnpm --dir apps/control-room typecheck`, `lint`, `test`, `check:api-hygiene`, `check:architecture-hygiene`, `audit:idle-performance`, `audit:compute-performance`, and `audit:viewport-3d-profile-switch` pass.
+- `pnpm --dir apps/control-room build` passes outside the restricted sandbox. Inside the sandbox, Turbopack/PostCSS still fails with `Operation not permitted (os error 1)` while creating its helper process.
+- `CONTROL_ROOM_URL=http://localhost:3101/workspace CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1 pnpm --dir apps/control-room smoke:viewport-3d` passes against a freshly started dev server outside the restricted sandbox.
+- Current oversized migration files are governed by `docs/adr/0015-frontend-v2-migration-governance-boundary.md`, not considered cutover-complete.
+
 ## Phase 3 - Shell, Menu, Ribbon, Status, Visual Foundation
 
 - [ ] Expand shadcn/ui component coverage with menu, ribbon controls, command, dialog, dropdown, context menu, tabs, tooltip, switch, segmented control, and resizable panel primitives.

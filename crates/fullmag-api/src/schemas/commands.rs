@@ -78,6 +78,10 @@ pub enum StructuredCommandRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_steps: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        torque_tolerance_apm: Option<f64>,
+        #[serde(rename = "torque_tolerance_T", skip_serializing_if = "Option::is_none")]
+        torque_tolerance_t: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         torque_tolerance: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         energy_tolerance: Option<f64>,

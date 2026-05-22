@@ -33,7 +33,7 @@ obsługiwane są tylko:
 - brak nakładania warstw w `z`,
 - `Box`, `Cylinder`, `Difference` oraz opcjonalne `Translate`,
 - `ImportedGeometry` tylko przez precomputed FDM grid asset,
-- `Heun` + `double`,
+- `Heun`/`RK4` + `double`/`single` at the native v2 staged layer boundary,
 - CPU reference oraz dwa tory CUDA:
   - `cuda_native_multilayer_single_grid` dla kompatybilnych z-stacków dających się złożyć do
     jednego globalnego grida z `active_mask + region_mask`,
@@ -132,6 +132,7 @@ Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, obja
 - Dodać logikę użycia mapowania (np. hash key) po `KernelReuseKey` w celu oszczędzenia powtórnych wyliczeń tych samych dystansów międzywarstwowych.
 
 #### [MODIFY] crates/fullmag-engine/src/lib.rs
+- [x] Przenieść współdzielone `VectorFieldSoA`, `ExchangeLlgProblem`, `StepReport`/observables, `EffectiveFieldTerms`/term configs i typy FDM do `src/fdm/shared/` oraz CPU execution files (`fft`, `fft_backend`, `fields`, `integrators`, `state`) do `src/fdm/cpu/`, z publicznymi re-eksportami zachowanymi przez `fdm/mod.rs`.
 - Zmienić nazwę i logikę `ExchangeLlgProblem` by odzwierciedlały nową semantykę. Nowa architektura:
   ```rust
   pub struct FdmLlgProblem {
@@ -157,23 +158,47 @@ Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, obja
 - [x] Zadeklarować enum typu planu: `fullmag_fdm_plan_kind` (`FULLMAG_FDM_PLAN_UNIFORM_GRID`, `FULLMAG_FDM_PLAN_MULTILAYER_CONV`).
 - [x] Opisać `fullmag_fdm_layer_desc_v2` (posiadające i grid natywny, i wirtualny convolution_grid).
 - [x] Opisać `fullmag_fdm_tensor_kernel_desc_v2` oraz `fullmag_fdm_multilayer_plan_desc_v2` przechowujące referencję na tablice `kernels` pre-kalkulowanych z Rust na hoscie.
-- [x] Dodać wykonawczy entrypoint `fullmag_fdm_backend_create_v2` oraz walidację planu po stronie native CUDA z jawnym statusem unsupported dla poprawnych planów multilayer.
+- [x] Dodać wykonawczy entrypoint `fullmag_fdm_backend_create_v2` oraz walidację planu po stronie native CUDA z jawnym staged execution scope dla poprawnych planów multilayer.
 - [x] Dodać upload/staging warstw i tensor-kerneli do urządzenia w `Context`.
 - [x] Dodać pierwszego właściciela CUDA dla identity-grid `push_m`, `multiply_demag_tensor_kernel(...)` i `pull_h` w fp64/fp32.
 - [x] Przygotować shared cuFFT workspace dla v2 multilayer, gdy wszystkie pary warstw używają jednego `fft_grid`.
-- [x] Wpiąć staged v2 handle w `step()` do poziomu odświeżenia natywnego multilayer demag przed jawnym unsupported dla nieukończonego timestep execution.
-- [ ] Dodać właściwy native CUDA execution path dla `multilayer_convolution`: workspace/plany FFT per przypadek, transfer maps dla heterogenicznych siatek i wpięcie w timestep.
+- [x] Wpiąć staged v2 handle w `step()` do pierwszych natywnych timestep slices: Heun i RK4 w fp64/fp32 dla staged multilayer layers z demag i layer-local exchange, z jawnym odrzuceniem adaptacyjnych i wielokrokowych integratorów.
+- [x] Wystawić jawny `fullmag_fdm_backend_refresh_multilayer_demag`, żeby CUDA-assisted path odświeżał staged v2 demag bez używania `step(0)` jako operatora demag.
+- [x] Wystawić per-layer copy ABI dla `M`, `H_EX` i `H_DEMAG`, żeby odświeżone native multilayer fields były widoczne poza prywatnym `Context`.
+- [x] Wystawić per-layer upload ABI dla aktualnej magnetyzacji i użyć staged native v2 handle jako demag operatora w identity-grid CUDA-assisted multilayer path.
+- [x] Przenieść `transfer_kind` z `FdmLayerPlanIR` przez Rust wrapper, C ABI i native `Context`, żeby `identity` oraz `push_pull` były jawnym kontraktem wykonania zamiast inferencją z rozmiarów siatek.
+- [x] Dodać fp64/fp32 CUDA `push_pull` transfer kernels dla staged v2 demag refresh: volume-weighted `push_m` native->convolution oraz trilinear `pull_h` convolution->native.
+- [x] Zbudować i wgrać staged precomputed transfer maps dla heterogenicznych siatek w native `Context`: push offsets/indices/weights oraz padded-FFT pull indices/weights.
+- [ ] Dodać pełny native CUDA execution path dla `multilayer_convolution`: workspace/plany FFT per przypadek, zoptymalizowane interpolation backends, pozostałe local-field RHS coverage oraz pozostałe integratory poza Heun/RK4.
 
 #### [MODIFY] native/backends/fdm/api, native/backends/fdm/core, native/backends/fdm/cuda/... (C/CUDA)
 - Przepisać deskryptory setupu pod v2 logic.
 - Dodać kopiowanie z Host to Device prekompilowanych struktur tensorów multi-level `kernels`.
 - [x] Wdrożyć w CUDA pierwszy kernel mnożący `multiply_demag_tensor_kernel(...)` dla identity-grid slice.
 - [x] Wdrożyć identity-grid `push_m` / `pull_h` boundary w `cuda/demag/multilayer_convolution.cu`.
-- [ ] Zaimplementować fast memory `push_m` dla niezgodnych siatek przez transfer maps oraz interpolacje sprzętową z CUDA dla `pull_h`.
+- [x] Wykonać forward i inverse cuFFT dla wszystkich składowych `M_x/M_y/M_z` w natywnym identity-grid multilayer demag, zamiast transformować tylko komponent `x`.
+- [x] Poprawić walidację identity transfer: `native_grid == convolution_grid`, a tensor-kernel `fft_grid` może być padded i musi tylko obejmować convolution grid.
+- [x] Dodać routing `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` przez native `Context` dla warstwowego `M`, `H_EX` i `H_DEMAG`.
+- [x] Dodać routing `fullmag_fdm_backend_upload_layer_magnetization_f64/f32(...)` przez native `Context` oraz Rust wrapper `create_multilayer_v2`.
+- [x] Dodać routing `fullmag_fdm_backend_refresh_multilayer_demag(...)` przez native `Context` i Rust FFI, bez przeciążania semantyki timestepu.
+- [x] Dodać jawny `transfer_kind` do v2 layer descriptor i zachować go w staged native layer state, z routingiem `identity` oraz `push_pull`.
+- [x] Zaimplementować pierwsze native CUDA `push_m` dla niezgodnych siatek przez volume-weighted overlap oraz `pull_h` przez trilinear interpolation na urządzeniu.
+- [x] Zaimplementować staged memory transfer maps dla niezgodnych siatek, żeby CUDA refresh konsumował gotowe mapy zamiast liczyć overlap/trilinear neighborhood w kernelu.
+- [x] Dodać osobnego właściciela `cuda/integrators/multilayer_heun.cu` dla v2 Heun timestepu z demag i layer-local exchange, z per-layer `tmp`/`k1`/`k2` w `Context`.
+- [x] Dodać osobnego właściciela `cuda/integrators/multilayer_rk4.cu` dla v2 RK4 timestepu z demag i layer-local exchange, z per-layer `k1`/`k2`/`k3`/`k4` w `Context`.
+- [x] Dodać osobnego właściciela `cuda/interactions/multilayer_exchange.cu` dla uniform-A layer-local exchange na staged v2 layer native grids.
+- [ ] Zaimplementować zoptymalizowane sprzętowe/interpolacyjne `pull_h` ponad obecnym staged-map fallbackiem.
 
-#### [MODIFY] crates/fullmag-runner/src/native_fdm.rs
-- Wypełnić wywołania API nowymi tablicami wskaźników z pamięci Rust do memory C używając structów v2.
-- Pobierać tablicowe dane kroków per sub-layer zamiast pojedynczej tablicy grid.
+#### [MODIFY] crates/fullmag-runner/src/fdm/native_cuda.rs
+- [x] Wypełnić wywołania API nowymi tablicami wskaźników z pamięci Rust do memory C używając structów v2 dla identity-grid native demag boundary.
+- [x] Pobierać `H_DEMAG` per sub-layer z native v2 handle w CUDA-assisted path, gdy transfer_kind jest `identity`.
+- Pobierać tablicowe dane kroków per sub-layer zamiast pojedynczej tablicy grid dla pełnego native timestep path.
+
+#### [MODIFY] crates/fullmag-runner/src/fdm
+- [x] Przenieść FDM CPU reference, multilayer reference, CUDA-assisted multilayer i native CUDA wrapper pod jeden owner module `src/fdm/`, zostawiając prywatne shimy kompatybilności w root runnera.
+- [x] Przenieść współdzieloną selekcję artifact field snapshots z lokalnych runnerów do `src/fdm/artifacts.rs`, żeby CPU, multilayer reference i CUDA-assisted multilayer nie duplikowały semantyki nazw pól.
+- [x] Przenieść wspólne zapisywanie due field snapshots dla ścieżek multilayer do `src/fdm/schedules.rs`, żeby reference i CUDA-assisted multilayer używały jednego helpera schedule/artifact.
+- [x] Przenieść wspólny builder `StepStats` dla ścieżek multilayer do `src/fdm/multilayer.rs`, żeby reference i CUDA-assisted multilayer nie duplikowały scalar trace semantics.
 
 ---
 

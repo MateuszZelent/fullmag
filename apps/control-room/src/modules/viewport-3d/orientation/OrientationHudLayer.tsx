@@ -131,8 +131,9 @@ export function OrientationHudLayer({
       camera.updateProjectionMatrix();
       controls?.target?.set(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
       controls?.update?.();
-      onCameraInteractionStart?.();
-      viewport3dStore.setCamera(nextCamera);
+      if (!pendingOrbitCameraRef.current) {
+        onCameraInteractionStart?.();
+      }
       pendingOrbitCameraRef.current = nextCamera;
       invalidate();
     },
@@ -152,6 +153,7 @@ export function OrientationHudLayer({
       return;
     }
     pendingOrbitCameraRef.current = null;
+    viewport3dStore.setCamera(nextCamera);
     void Promise.resolve(onCameraChange(nextCamera))
       .catch(() => undefined)
       .finally(() => onCameraInteractionEnd?.());

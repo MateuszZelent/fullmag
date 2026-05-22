@@ -43,6 +43,7 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
+import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
 import {
   applyControlRoomUiState,
   exportControlRoomUiState,
@@ -70,7 +71,7 @@ const DEFAULT_RELAX_STAGE: JsonObject = {
   max_pseudotime_s: "",
   max_steps: "10000",
   relax_algorithm: "llg_overdamped",
-  torque_tolerance: "1e-4",
+  torque_tolerance_apm: DEFAULT_RELAX_TORQUE_APM,
 };
 
 const DEFAULT_RUN_STAGE: JsonObject = {

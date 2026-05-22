@@ -18,13 +18,14 @@ use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, Outp
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::compute_torque_field;
 use crate::derived_fields::max_torque_residual_apm_from_field;
+use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
+use crate::fdm::schedules::record_due_fields;
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
 };
-use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
-    OutputSchedule,
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, RunError, RunResult, RunStatus,
@@ -267,7 +268,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         {
             continue;
         }
-        let values = select_field_values(&final_observables, &schedule.name)?;
+        let values = select_state_observable_field(&final_observables, &schedule.name, false)?;
         artifacts.record_field_snapshot(FieldSnapshot {
             name: schedule.name.clone(),
             step: final_stats.step,
@@ -798,74 +799,6 @@ fn compute_demag_fields(
     zero
 }
 
-fn record_due_fields(
-    observables: &StateObservables,
-    step: u64,
-    time: f64,
-    solver_dt: f64,
-    field_schedules: &mut [OutputSchedule],
-    artifacts: &mut ArtifactRecorder,
-) -> Result<(), RunError> {
-    let due_field_names = field_schedules
-        .iter()
-        .filter(|schedule| is_due(time, schedule.next_time))
-        .map(|schedule| schedule.name.clone())
-        .collect::<Vec<_>>();
-    for name in due_field_names {
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: name.clone(),
-            step,
-            time,
-            solver_dt,
-            values: select_field_values(observables, &name)?,
-        })?;
-    }
-    advance_due_schedules(field_schedules, time);
-    Ok(())
-}
-
-fn select_field_values(
-    observables: &StateObservables,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    if let Some(dot_pos) = name.find('.') {
-        let base = &name[..dot_pos];
-        let comp = &name[dot_pos + 1..];
-        let full = select_base_field(observables, base)?;
-        let idx = match comp {
-            "x" => 0,
-            "y" => 1,
-            "z" => 2,
-            _ => {
-                return Err(RunError {
-                    message: format!("unsupported snapshot component '{}' in '{}'", comp, name),
-                })
-            }
-        };
-        return Ok(full.iter().map(|v| [v[idx], 0.0, 0.0]).collect());
-    }
-    select_base_field(observables, name)
-}
-
-fn select_base_field(
-    observables: &StateObservables,
-    name: &str,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    Ok(match name {
-        "m" => observables.magnetization.clone(),
-        "H_ex" => observables.exchange_field.clone(),
-        "H_demag" => observables.demag_field.clone(),
-        "H_ext" => observables.external_field.clone(),
-        "H_eff" => observables.effective_field.clone(),
-        "torque" => observables.torque_field.clone(),
-        other => {
-            return Err(RunError {
-                message: format!("unsupported multilayer field snapshot '{}'", other),
-            })
-        }
-    })
-}
-
 fn current_time(states: &[ExchangeLlgState]) -> f64 {
     states
         .first()
@@ -889,32 +822,6 @@ fn flatten_layers(layers: &[Vec<[f64; 3]>]) -> Vec<[f64; 3]> {
         .iter()
         .flat_map(|layer| layer.iter().copied())
         .collect()
-}
-
-fn make_step_stats(
-    step: u64,
-    time: f64,
-    solver_dt: f64,
-    wall_time_ns: u64,
-    observables: &StateObservables,
-) -> StepStats {
-    let mut stats = StepStats {
-        step,
-        time,
-        dt: solver_dt,
-        e_ex: observables.exchange_energy,
-        e_demag: observables.demag_energy,
-        e_ext: observables.external_energy,
-        e_total: observables.total_energy,
-        max_dm_dt: observables.max_dm_dt,
-        max_h_eff: observables.max_h_eff,
-        max_h_demag: observables.max_h_demag,
-        wall_time_ns,
-        ..StepStats::default()
-    };
-    apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
-    stats.per_object_scalars = observables.per_object_scalars.clone();
-    stats
 }
 
 fn zero_outside_active(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {

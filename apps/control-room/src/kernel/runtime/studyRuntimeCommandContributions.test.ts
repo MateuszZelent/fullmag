@@ -29,6 +29,9 @@ import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 import { STUDY_RUNTIME_COMMANDS } from "./studyRuntimeCommandContributions";
 
+const DEFAULT_RELAX_TORQUE_T = 1e-5;
+const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
+
 function registryWithStudyRuntimeCommands(): CommandRegistry {
   const registry = new CommandRegistry();
   registry.attach(new EventBus<KernelEventMap>());
@@ -164,6 +167,40 @@ function runtimeResourceData({
 }
 
 describe("study runtime command contributions", () => {
+  it("adds relax stages with mumax-compatible torque tolerance stored in A/m", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const scene = vi.fn(async () => ({ scene_revision: 3, study: { stages: [] } }));
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 4 }));
+
+    const result = await registry.execute("study.add-relax-stage", {
+      api: {
+        model: { scene, commitTransaction },
+      } as never,
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Relax stage added.",
+      status: "completed",
+    });
+    const [[request]] = commitTransaction.mock.calls as unknown as [[
+      { merge_patch?: { study?: { stages?: Array<Record<string, unknown>> } } },
+    ]];
+    const stage = request.merge_patch?.study?.stages?.[0];
+    expect(stage).toMatchObject({
+      kind: "relax",
+      torque_tolerance_apm: expect.any(Number),
+    });
+    expect(stage).not.toHaveProperty("torque_tolerance");
+    expect(stage?.torque_tolerance_apm).toBeCloseTo(
+      DEFAULT_RELAX_TORQUE_T / MU0_T_PER_APM,
+      12,
+    );
+  });
+
   it("enables solver profiling through the runtime command queue and diagnostics resources", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();

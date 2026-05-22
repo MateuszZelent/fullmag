@@ -15,10 +15,13 @@ set(FDM_SOURCES
 if(FULLMAG_ENABLE_CUDA)
     list(APPEND FDM_SOURCES
         core/context.cu
+        core/telemetry.cu
         cuda/runtime/device_info.cpp
+        cuda/runtime/streams.cu
         cuda/runtime/reductions_fp64.cu
         cuda/interactions/exchange_fp64.cu
         cuda/interactions/exchange_fp32.cu
+        cuda/interactions/multilayer_exchange.cu
         cuda/interactions/exchange_t0_fp64.cu
         cuda/interactions/exchange_t1_fp64.cu
         cuda/interactions/demag_fp64.cu
@@ -34,6 +37,8 @@ if(FULLMAG_ENABLE_CUDA)
         cuda/integrators/llg_rk23_fp32.cu
         cuda/integrators/llg_abm3_fp64.cu
         cuda/integrators/llg_abm3_fp32.cu
+        cuda/integrators/multilayer_heun.cu
+        cuda/integrators/multilayer_rk4.cu
         cuda/demag/multilayer_convolution.cu
         cuda/demag/newell_gpu_fp64.cu
         cuda/demag/newell_gpu_fp32.cu
