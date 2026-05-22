@@ -1,10 +1,10 @@
 "use client";
 
 import { OrbitControls } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import type { ComponentRef } from "react";
-import { MOUSE, type Camera } from "three";
+import { MathUtils, MOUSE, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
@@ -28,7 +28,17 @@ export interface Viewport3DCameraChange extends Viewport3DCameraState {
   projection?: Viewport3DCameraProjection;
 }
 
-type OrbitControlsHandle = ComponentRef<typeof OrbitControls>;
+export interface Viewport3DOrbitDebugAngles {
+  azimuth: number;
+  polar: number;
+}
+
+type OrbitControlsHandle = ComponentRef<typeof OrbitControls> & {
+  getAzimuthalAngle?: () => number;
+  getPolarAngle?: () => number;
+  rotateLeft?: (angle: number) => void;
+  rotateUp?: (angle: number) => void;
+};
 
 type OrbitMouseAction = (typeof MOUSE)[keyof typeof MOUSE];
 
@@ -53,6 +63,16 @@ const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
 };
 export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
 const CAMERA_STATE_EPSILON = 1e-7;
+const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
+const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
+const ORBIT_DEBUG_DAMPING = 18;
+const ORBIT_DEBUG_TWO_PI = Math.PI * 2;
+export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
+  azimuthMax: ORBIT_DEBUG_TWO_PI,
+  azimuthMin: 0,
+  polarMax: Math.PI,
+  polarMin: 0,
+} as const;
 
 const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
   enableDamping: false,
@@ -70,6 +90,135 @@ const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
 
 export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
   return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
+}
+
+export function shouldSyncOrbitControlsTarget(
+  currentTarget: readonly number[],
+  nextTarget: readonly number[],
+): boolean {
+  return !nearTuple3(
+    tuple3(currentTarget),
+    tuple3(nextTarget),
+    ORBIT_TARGET_SYNC_EPSILON,
+  );
+}
+
+export function normalizeViewport3DOrbitDebugAngles(
+  angles: Partial<Viewport3DOrbitDebugAngles> | null | undefined,
+): Viewport3DOrbitDebugAngles {
+  return {
+    azimuth: clampOrbitDebugAngle(
+      angles?.azimuth,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMin,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMax,
+      0,
+    ),
+    polar: clampOrbitDebugAngle(
+      angles?.polar,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.polarMin,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.polarMax,
+      Math.PI / 2,
+    ),
+  };
+}
+
+export function shouldApplyViewport3DOrbitDebugAngles(
+  currentAngles: Viewport3DOrbitDebugAngles | null,
+  nextAngles: Viewport3DOrbitDebugAngles,
+): boolean {
+  if (!currentAngles) return true;
+  return (
+    Math.abs(shortestOrbitDebugAzimuthDelta(currentAngles.azimuth, nextAngles.azimuth)) >
+      ORBIT_DEBUG_ANGLE_EPSILON ||
+    Math.abs(currentAngles.polar - nextAngles.polar) >
+      ORBIT_DEBUG_ANGLE_EPSILON
+  );
+}
+
+function readViewport3DOrbitDebugAngles(
+  controls: OrbitControlsHandle | null,
+): Viewport3DOrbitDebugAngles | null {
+  if (!controls?.getAzimuthalAngle || !controls.getPolarAngle) return null;
+  return normalizeViewport3DOrbitDebugAngles({
+    azimuth: normalizeOrbitDebugAzimuthFromControls(
+      controls.getAzimuthalAngle(),
+    ),
+    polar: controls.getPolarAngle(),
+  });
+}
+
+export function resolveViewport3DOrbitDebugStep({
+  currentAngles,
+  deltaSeconds,
+  targetAngles,
+}: {
+  currentAngles: Viewport3DOrbitDebugAngles;
+  deltaSeconds: number;
+  targetAngles: Viewport3DOrbitDebugAngles;
+}): Viewport3DOrbitDebugAngles {
+  if (!shouldApplyViewport3DOrbitDebugAngles(currentAngles, targetAngles)) {
+    return targetAngles;
+  }
+  const safeDelta = Math.min(Math.max(deltaSeconds, 0), 0.05);
+  const dampingFactor = 1 - Math.exp(-ORBIT_DEBUG_DAMPING * safeDelta);
+  const nextAngles = {
+    azimuth: clampOrbitDebugAngle(
+      currentAngles.azimuth +
+        shortestOrbitDebugAzimuthDelta(
+          currentAngles.azimuth,
+          targetAngles.azimuth,
+        ) *
+          dampingFactor,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMin,
+      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMax,
+      currentAngles.azimuth,
+    ),
+    polar: MathUtils.damp(
+      currentAngles.polar,
+      targetAngles.polar,
+      ORBIT_DEBUG_DAMPING,
+      safeDelta,
+    ),
+  };
+  return shouldApplyViewport3DOrbitDebugAngles(nextAngles, targetAngles)
+    ? nextAngles
+    : targetAngles;
+}
+
+export function resolveViewport3DOrbitDebugControlDeltas({
+  currentAngles,
+  targetAngles,
+}: {
+  currentAngles: Viewport3DOrbitDebugAngles;
+  targetAngles: Viewport3DOrbitDebugAngles;
+}): { rotateLeft: number; rotateUp: number } {
+  return {
+    rotateLeft: -shortestOrbitDebugAzimuthDelta(
+      currentAngles.azimuth,
+      targetAngles.azimuth,
+    ),
+    rotateUp: currentAngles.polar - targetAngles.polar,
+  };
+}
+
+function applyViewport3DOrbitDebugControlAngles({
+  controls,
+  targetAngles,
+}: {
+  controls: OrbitControlsHandle;
+  targetAngles: Viewport3DOrbitDebugAngles;
+}): boolean {
+  if (!controls.rotateLeft || !controls.rotateUp) return false;
+  const currentAngles = readViewport3DOrbitDebugAngles(controls);
+  if (!currentAngles) return false;
+  const deltas = resolveViewport3DOrbitDebugControlDeltas({
+    currentAngles,
+    targetAngles,
+  });
+  controls.rotateLeft(deltas.rotateLeft);
+  controls.rotateUp(deltas.rotateUp);
+  controls.update();
+  return true;
 }
 
 export function commitOrbitCameraEnd({
@@ -235,6 +384,7 @@ export function CameraController({
   bounds,
   cameraState,
   fitRevision,
+  interactionActive,
   onCameraChange,
   resetCameraRevision,
   tracker,
@@ -242,6 +392,7 @@ export function CameraController({
   bounds: Viewport3DBounds | null;
   cameraState: Viewport3DCameraState;
   fitRevision: number;
+  interactionActive: boolean;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
@@ -331,6 +482,7 @@ export function CameraController({
   }, []);
 
   useEffect(() => {
+    if (interactionActive) return;
     if (
       !shouldApplyViewport3DCameraState({
         appliedCamera: appliedCameraRef.current,
@@ -349,7 +501,7 @@ export function CameraController({
     appliedCameraStateRef.current = cameraState;
     invalidate();
     tracker.recordDirtyFrame("camera-resource");
-  }, [camera, cameraState, invalidate, tracker]);
+  }, [camera, cameraState, interactionActive, invalidate, tracker]);
 
   return null;
 }
@@ -384,30 +536,142 @@ export function OrbitCameraControls({
   cameraOrthographicScale,
   cameraProjection,
   cameraState,
+  interactionActive,
+  orbitDebugAngles,
+  orbitDebugCommitRevision,
+  orbitDebugRevision,
   onCameraChange,
   onCameraInteractionEnd,
   onCameraInteractionStart,
+  onOrbitDebugAnglesChange,
   tracker,
 }: {
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
+  interactionActive: boolean;
+  orbitDebugAngles: Viewport3DOrbitDebugAngles;
+  orbitDebugCommitRevision: number;
+  orbitDebugRevision: number;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
+  onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   tracker: Viewport3DResourceTracker;
 }) {
   const { camera, invalidate, size } = useThree();
   const controlsRef = useRef<OrbitControlsHandle>(null);
+  const handledOrbitDebugRevisionRef = useRef(orbitDebugRevision);
+  const handledOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
+  const pendingOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
+  const orbitDebugAnimatingRef = useRef(false);
+  const orbitDebugTargetRef = useRef(
+    normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
+  );
 
   useEffect(() => {
+    if (interactionActive) return;
     const controls = controlsRef.current;
     if (!controls) return;
-    controls.target.set(...cameraState.target);
+    if (!shouldSyncOrbitControlsTarget(controls.target.toArray(), cameraState.target)) {
+      return;
+    }
+    const [x, y, z] = cameraState.target;
+    controls.target.set(x, y, z);
     controls.update();
     invalidate();
     tracker.recordDirtyFrame("camera-control-target");
-  }, [cameraState.target, invalidate, tracker]);
+  }, [cameraState.target, interactionActive, invalidate, tracker]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const currentAngles = readViewport3DOrbitDebugAngles(controls);
+    if (currentAngles) {
+      onOrbitDebugAnglesChange?.(currentAngles);
+    }
+  }, [onOrbitDebugAnglesChange]);
+
+  useEffect(() => {
+    if (handledOrbitDebugRevisionRef.current === orbitDebugRevision) return;
+    handledOrbitDebugRevisionRef.current = orbitDebugRevision;
+    orbitDebugTargetRef.current = normalizeViewport3DOrbitDebugAngles(orbitDebugAngles);
+    orbitDebugAnimatingRef.current = true;
+    invalidate();
+    tracker.recordDirtyFrame("camera-orbit-debug-request");
+  }, [
+    invalidate,
+    orbitDebugAngles,
+    orbitDebugRevision,
+    tracker,
+  ]);
+
+  useEffect(() => {
+    if (pendingOrbitDebugCommitRevisionRef.current === orbitDebugCommitRevision) {
+      return;
+    }
+    pendingOrbitDebugCommitRevisionRef.current = orbitDebugCommitRevision;
+    orbitDebugAnimatingRef.current = true;
+    invalidate();
+    tracker.recordDirtyFrame("camera-orbit-debug-commit");
+  }, [invalidate, orbitDebugCommitRevision, tracker]);
+
+  useFrame((_, deltaSeconds) => {
+    if (!orbitDebugAnimatingRef.current) return;
+
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const targetAngles = orbitDebugTargetRef.current;
+    const currentAngles =
+      readViewport3DOrbitDebugAngles(controls) ?? targetAngles;
+    const nextAngles = resolveViewport3DOrbitDebugStep({
+      currentAngles,
+      deltaSeconds,
+      targetAngles,
+    });
+
+    if (
+      !applyViewport3DOrbitDebugControlAngles({
+        controls,
+        targetAngles: nextAngles,
+      })
+    ) {
+      return;
+    }
+
+    const settled = !shouldApplyViewport3DOrbitDebugAngles(
+      nextAngles,
+      targetAngles,
+    );
+    orbitDebugAnimatingRef.current = !settled;
+    if (
+      settled &&
+      handledOrbitDebugCommitRevisionRef.current !==
+        pendingOrbitDebugCommitRevisionRef.current
+    ) {
+      handledOrbitDebugCommitRevisionRef.current =
+        pendingOrbitDebugCommitRevisionRef.current;
+      commitOrbitCameraEnd({
+        cameraPosition: tuple3(camera.position.toArray()),
+        cameraUp: tuple3(camera.up.toArray()),
+        controlTarget: controls.target.toArray(),
+        onCameraChange,
+        orthographicScale:
+          cameraProjection === "orthographic"
+            ? resolveViewport3DCurrentOrthographicScale({
+                camera,
+                fallbackScale: cameraOrthographicScale,
+                viewportHeightPixels: size.height,
+              })
+            : undefined,
+        projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
+      });
+      onCameraInteractionEnd?.();
+    }
+
+    invalidate();
+    tracker.recordDirtyFrame("camera-orbit-debug");
+  });
 
   const handleChange = useCallback(() => {
     invalidate();
@@ -436,6 +700,10 @@ export function OrbitCameraControls({
       orthographicScale,
       projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
     });
+    const currentAngles = readViewport3DOrbitDebugAngles(controlsRef.current);
+    if (currentAngles) {
+      onOrbitDebugAnglesChange?.(currentAngles);
+    }
     onCameraInteractionEnd?.();
   }, [
     camera,
@@ -444,6 +712,7 @@ export function OrbitCameraControls({
     cameraState.target,
     onCameraChange,
     onCameraInteractionEnd,
+    onOrbitDebugAnglesChange,
     size.height,
   ]);
 
@@ -459,7 +728,7 @@ export function OrbitCameraControls({
       panSpeed={options.panSpeed}
       rotateSpeed={options.rotateSpeed}
       screenSpacePanning={options.screenSpacePanning}
-      target={cameraState.target}
+      zoomToCursor
       onChange={handleChange}
       onEnd={handleEnd}
       onStart={handleStart}
@@ -473,4 +742,35 @@ function tuple3(values: readonly number[]): [number, number, number] {
     values[1] ?? 0,
     values[2] ?? 0,
   ];
+}
+
+function clampOrbitDebugAngle(
+  value: number | null | undefined,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeOrbitDebugAzimuthFromControls(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const wrapped = value % ORBIT_DEBUG_TWO_PI;
+  return wrapped < 0 ? wrapped + ORBIT_DEBUG_TWO_PI : wrapped;
+}
+
+function shortestOrbitDebugAzimuthDelta(from: number, to: number): number {
+  const rawDelta = to - from;
+  const wrappedDelta =
+    ((rawDelta + Math.PI) % ORBIT_DEBUG_TWO_PI + ORBIT_DEBUG_TWO_PI) %
+      ORBIT_DEBUG_TWO_PI -
+    Math.PI;
+  if (
+    Math.abs(wrappedDelta + Math.PI) <= ORBIT_DEBUG_ANGLE_EPSILON &&
+    rawDelta > 0
+  ) {
+    return Math.PI;
+  }
+  return wrappedDelta;
 }

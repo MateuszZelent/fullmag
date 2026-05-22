@@ -435,8 +435,12 @@ void launch_demag_field_fp32(Context &ctx) {
     int grid_padded = (total_padded + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int total_physical = static_cast<int>(ctx.cell_count);
     int grid_physical = (total_physical + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    cudaStream_t stream = context_compute_stream(ctx);
+    if (!context_begin_compute_stream_work(ctx, "launch_demag_field_fp32")) {
+        return;
+    }
 
-    pack_magnetization_fft_fp32_kernel<<<grid_padded, BLOCK_SIZE>>>(
+    pack_magnetization_fft_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
         static_cast<const float*>(ctx.m.x),
         static_cast<const float*>(ctx.m.y),
         static_cast<const float*>(ctx.m.z),
@@ -453,18 +457,19 @@ void launch_demag_field_fp32(Context &ctx) {
         ctx.has_active_mask ? 1 : 0,
         static_cast<float>(ctx.Ms));
 
-    cufftResult err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_x),
-                                   static_cast<cufftComplex*>(ctx.fft_x), CUFFT_FORWARD);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(x, forward)", err); return; }
-    err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_y),
-                       static_cast<cufftComplex*>(ctx.fft_y), CUFFT_FORWARD);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(y, forward)", err); return; }
-    err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_z),
-                       static_cast<cufftComplex*>(ctx.fft_z), CUFFT_FORWARD);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(z, forward)", err); return; }
+    cufftResult err = cufftExecC2C(
+        ctx.fft_plan,
+        static_cast<cufftComplex*>(ctx.fft_x),
+        static_cast<cufftComplex*>(ctx.fft_x),
+        CUFFT_FORWARD);
+    if (err != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftExecC2C(batch, forward)", err);
+        context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
+        return;
+    }
 
     if (ctx.has_demag_tensor_kernel) {
-        tensor_convolution_fp32_kernel<<<grid_padded, BLOCK_SIZE>>>(
+        tensor_convolution_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftComplex*>(ctx.fft_x),
             static_cast<cufftComplex*>(ctx.fft_y),
             static_cast<cufftComplex*>(ctx.fft_z),
@@ -476,7 +481,7 @@ void launch_demag_field_fp32(Context &ctx) {
             static_cast<const cufftComplex*>(ctx.demag_kernel.yz),
             total_padded);
     } else {
-        spectral_projection_fp32_kernel<<<grid_padded, BLOCK_SIZE>>>(
+        spectral_projection_fp32_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
             static_cast<cufftComplex*>(ctx.fft_x),
             static_cast<cufftComplex*>(ctx.fft_y),
             static_cast<cufftComplex*>(ctx.fft_z),
@@ -488,17 +493,18 @@ void launch_demag_field_fp32(Context &ctx) {
             static_cast<float>(ctx.dz));
     }
 
-    err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_x),
-                       static_cast<cufftComplex*>(ctx.fft_x), CUFFT_INVERSE);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(x, inverse)", err); return; }
-    err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_y),
-                       static_cast<cufftComplex*>(ctx.fft_y), CUFFT_INVERSE);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(y, inverse)", err); return; }
-    err = cufftExecC2C(ctx.fft_plan, static_cast<cufftComplex*>(ctx.fft_z),
-                       static_cast<cufftComplex*>(ctx.fft_z), CUFFT_INVERSE);
-    if (err != CUFFT_SUCCESS) { set_cufft_error(ctx, "cufftExecC2C(z, inverse)", err); return; }
+    err = cufftExecC2C(
+        ctx.fft_plan,
+        static_cast<cufftComplex*>(ctx.fft_x),
+        static_cast<cufftComplex*>(ctx.fft_x),
+        CUFFT_INVERSE);
+    if (err != CUFFT_SUCCESS) {
+        set_cufft_error(ctx, "cufftExecC2C(batch, inverse)", err);
+        context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
+        return;
+    }
 
-    unpack_demag_fft_fp32_kernel<<<grid_physical, BLOCK_SIZE>>>(
+    unpack_demag_fft_fp32_kernel<<<grid_physical, BLOCK_SIZE, 0, stream>>>(
         static_cast<const cufftComplex*>(ctx.fft_x),
         static_cast<const cufftComplex*>(ctx.fft_y),
         static_cast<const cufftComplex*>(ctx.fft_z),
@@ -513,6 +519,8 @@ void launch_demag_field_fp32(Context &ctx) {
         static_cast<int>(ctx.fft_ny),
         ctx.has_active_mask ? 1 : 0,
         1.0f / static_cast<float>(ctx.fft_cell_count));
+
+    context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
 }
 
 /* ── Axpy kernel: dst += scale * src  (for Oersted field addition) ── */

@@ -85,6 +85,8 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let dt = plan.fixed_timestep.unwrap_or(1e-13);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
+    let fft_backend =
+        crate::cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let provenance = ExecutionProvenance {
         execution_engine: "cpu_reference_multilayer".to_string(),
         precision: "double".to_string(),
@@ -93,11 +95,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         } else {
             None
         },
-        fft_backend: if plan.enable_demag {
-            Some("rustfft".to_string())
-        } else {
-            None
-        },
+        fft_backend,
         device_name: None,
         compute_capability: None,
         cuda_driver_version: None,

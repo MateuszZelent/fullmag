@@ -140,7 +140,37 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   }),
   useObjectMeshPolicyResource: (objectId: string) => ({
     data: {
-      config: null,
+      config: {
+        algorithm_2d: 6,
+        algorithm_3d: 1,
+        compute_quality: true,
+        curvature_factor: "0.35",
+        maximum_element_growth_rate: "1.22",
+        maximum_element_size: "6e-09",
+        minimum_element_size: "1.8e-09",
+        narrow_regions: 2,
+        narrow_region_resolution: "1",
+        optimize: "Netgen",
+        optimize_iterations: 8,
+        per_element_quality: true,
+        size_fields: [
+          {
+            kind: "ObjectCoreRelaxation",
+            params: {
+              GeometryName: objectId,
+              core_maximum_element_size: 6e-9,
+              edge_distance: 50e-9,
+              edge_maximum_element_size: 1.8e-9,
+              sampling_edge: 40,
+              sampling_surface: 20,
+              surface_distance: 80e-9,
+              surface_maximum_element_size: 2e-9,
+            },
+          },
+        ],
+        size_from_curvature: 16,
+        smoothing_steps: 8,
+      },
       object_id: objectId,
       revision: 3,
     },
@@ -181,7 +211,24 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     data: {
       object_id: objectId,
       revision: 3,
-      size_field: null,
+      size_field: {
+        operations: [],
+        size_fields: [
+          {
+            kind: "ObjectCoreRelaxation",
+            params: {
+              GeometryName: objectId,
+              core_maximum_element_size: 6e-9,
+              edge_distance: 50e-9,
+              edge_maximum_element_size: 1.8e-9,
+              sampling_edge: 40,
+              sampling_surface: 20,
+              surface_distance: 80e-9,
+              surface_maximum_element_size: 2e-9,
+            },
+          },
+        ],
+      },
     },
     error: null,
     refetch: vi.fn(),
@@ -244,6 +291,13 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Below target");
     expect(html).toContain("Element size distributions");
     expect(html).toContain("object:waveguide");
+    expect(html).toContain("Size from curvature");
+    expect(html).toContain("Narrow regions");
+    expect(html).toContain("Object Core Relaxation");
+    expect(html).toContain("Core maximum element size");
+    expect(html).toContain("Edge distance");
+    expect(html).toContain("Size-field kinds");
+    expect(html).toContain("ObjectCoreRelaxation");
   });
 
   it("renders airbox quality histograms in the airbox mesh panel", () => {

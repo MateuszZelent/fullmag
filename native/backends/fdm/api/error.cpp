@@ -9,7 +9,7 @@
 namespace fullmag {
 namespace fdm {
 
-#ifdef FULLMAG_HAS_CUDA
+#if FULLMAG_HAS_CUDA
 
 void set_cuda_error(Context &ctx, const char *operation, cudaError_t err) {
     char buf[512];

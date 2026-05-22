@@ -192,6 +192,28 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).not.toContain("makeDefault");
   });
 
+  it("keeps camera pose out of declarative camera props so OrbitControls owns active gestures", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const orthographicBlock = source.slice(
+      source.indexOf("<OrthographicCamera"),
+      source.indexOf("/>", source.indexOf("<OrthographicCamera")),
+    );
+    const perspectiveBlock = source.slice(
+      source.indexOf("<PerspectiveCamera"),
+      source.indexOf("/>", source.indexOf("<PerspectiveCamera")),
+    );
+
+    expect(orthographicBlock).not.toContain("position={cameraState.position}");
+    expect(orthographicBlock).not.toContain("up={cameraState.up}");
+    expect(orthographicBlock).not.toContain("onUpdate=");
+    expect(perspectiveBlock).not.toContain("position={cameraState.position}");
+    expect(perspectiveBlock).not.toContain("up={cameraState.up}");
+    expect(perspectiveBlock).not.toContain("onUpdate=");
+  });
+
   it("queues a follow-up projection frame for demand-rendered camera swaps", () => {
     let frameCallback: FrameRequestCallback | null = null;
     const invalidate = vi.fn();

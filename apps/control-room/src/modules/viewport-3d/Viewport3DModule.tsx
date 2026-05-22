@@ -5,7 +5,10 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type ComponentProps,
+  type FocusEvent as ReactFocusEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import type {
@@ -28,8 +31,12 @@ import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { useViewport3DSceneModel } from "./hooks/useViewport3DSceneModel";
 import {
   resolveViewport3DCameraFit,
+  normalizeViewport3DOrbitDebugAngles,
+  shouldApplyViewport3DOrbitDebugAngles,
   type Viewport3DCameraChange,
+  type Viewport3DOrbitDebugAngles,
   VIEWPORT_3D_WORLD_UP,
+  VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
@@ -84,7 +91,12 @@ export function resolveViewport3DMeshQualityLegend(
 interface Viewport3DFrameProps
   extends Omit<
     Viewport3DSceneProps,
-    "colors" | "onVisualizationFrameCommitted"
+    | "colors"
+    | "onOrbitDebugAnglesChange"
+    | "onVisualizationFrameCommitted"
+    | "orbitDebugAngles"
+    | "orbitDebugCommitRevision"
+    | "orbitDebugRevision"
   > {
   cameraDialogOpen: boolean;
   cameraDialogState: Viewport3DSceneProps["cameraState"];
@@ -326,6 +338,12 @@ function Viewport3DFrame({
     visualProfile,
     effectAntialias,
   );
+  const [orbitDebugAngles, setOrbitDebugAngles] =
+    useState<Viewport3DOrbitDebugAngles>(() =>
+      normalizeViewport3DOrbitDebugAngles(null),
+    );
+  const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
+  const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const discretizationKind = sceneProps.fdmDomain
@@ -381,6 +399,28 @@ function Viewport3DFrame({
       window.clearTimeout(captureTimer);
     };
   }, [captureRevision]);
+  const syncOrbitDebugAngles = useCallback(
+    (angles: Viewport3DOrbitDebugAngles) => {
+      const nextAngles = normalizeViewport3DOrbitDebugAngles(angles);
+      setOrbitDebugAngles((currentAngles) =>
+        shouldApplyViewport3DOrbitDebugAngles(currentAngles, nextAngles)
+          ? nextAngles
+          : currentAngles,
+      );
+    },
+    [],
+  );
+  const applyOrbitDebugAngles = useCallback(
+    (angles: Viewport3DOrbitDebugAngles) => {
+      const nextAngles = normalizeViewport3DOrbitDebugAngles(angles);
+      setOrbitDebugAngles(nextAngles);
+      setOrbitDebugRevision((revision) => revision + 1);
+    },
+    [],
+  );
+  const commitOrbitDebugAngles = useCallback(() => {
+    setOrbitDebugCommitRevision((revision) => revision + 1);
+  }, []);
 
   return (
     <section
@@ -426,6 +466,10 @@ function Viewport3DFrame({
           <Viewport3DScene
             {...sceneProps}
             colors={colors}
+            orbitDebugAngles={orbitDebugAngles}
+            orbitDebugCommitRevision={orbitDebugCommitRevision}
+            orbitDebugRevision={orbitDebugRevision}
+            onOrbitDebugAnglesChange={syncOrbitDebugAngles}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -441,6 +485,14 @@ function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
+      {clientReady && colors ? (
+        <Viewport3DOrbitDebugPanel
+          angles={orbitDebugAngles}
+          onAnglesChange={applyOrbitDebugAngles}
+          onAnglesCommit={commitOrbitDebugAngles}
+          onInteractionStart={sceneProps.onCameraInteractionStart}
+        />
+      ) : null}
       <Viewport3DCameraDialog
         cameraOrthographicScale={sceneProps.cameraOrthographicScale}
         cameraProjection={sceneProps.cameraProjection}
@@ -452,5 +504,129 @@ function Viewport3DFrame({
       />
       <Viewport3DSettingsDialog />
     </section>
+  );
+}
+
+function Viewport3DOrbitDebugPanel({
+  angles,
+  onAnglesChange,
+  onAnglesCommit,
+  onInteractionStart,
+}: {
+  angles: Viewport3DOrbitDebugAngles;
+  onAnglesChange: (angles: Viewport3DOrbitDebugAngles) => void;
+  onAnglesCommit: () => void;
+  onInteractionStart?: () => void;
+}) {
+  const updateAngle = useCallback(
+    (axis: keyof Viewport3DOrbitDebugAngles, value: string) => {
+      onAnglesChange(
+        normalizeViewport3DOrbitDebugAngles({
+          ...angles,
+          [axis]: Number(value),
+        }),
+      );
+    },
+    [angles, onAnglesChange],
+  );
+
+  function beginInputInteraction(
+    event: ReactPointerEvent<HTMLInputElement>,
+  ): void {
+    event.stopPropagation();
+    onInteractionStart?.();
+  }
+
+  function beginKeyboardInteraction(
+    event: ReactFocusEvent<HTMLInputElement>,
+  ): void {
+    event.stopPropagation();
+    onInteractionStart?.();
+  }
+
+  function endInputInteraction(
+    event:
+      | ReactFocusEvent<HTMLInputElement>
+      | ReactPointerEvent<HTMLInputElement>,
+  ): void {
+    event.stopPropagation();
+    onAnglesCommit();
+  }
+
+  return (
+    <aside
+      aria-label="Temporary orbit controls"
+      className="fm-viewport-3d__orbit-debug"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <div className="fm-viewport-3d__orbit-debug-header">
+        <strong>Orbit Debug</strong>
+        <span>rad</span>
+      </div>
+      <Viewport3DOrbitDebugSlider
+        label="Azimuth"
+        max={VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMax}
+        min={VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMin}
+        value={angles.azimuth}
+        onChange={(value) => updateAngle("azimuth", value)}
+        onInteractionBegin={beginKeyboardInteraction}
+        onInteractionEnd={endInputInteraction}
+        onInteractionStart={beginInputInteraction}
+      />
+      <Viewport3DOrbitDebugSlider
+        label="Polar"
+        max={VIEWPORT_3D_ORBIT_DEBUG_LIMITS.polarMax}
+        min={VIEWPORT_3D_ORBIT_DEBUG_LIMITS.polarMin}
+        value={angles.polar}
+        onChange={(value) => updateAngle("polar", value)}
+        onInteractionBegin={beginKeyboardInteraction}
+        onInteractionEnd={endInputInteraction}
+        onInteractionStart={beginInputInteraction}
+      />
+    </aside>
+  );
+}
+
+function Viewport3DOrbitDebugSlider({
+  label,
+  max,
+  min,
+  onChange,
+  onInteractionBegin,
+  onInteractionEnd,
+  onInteractionStart,
+  value,
+}: {
+  label: string;
+  max: number;
+  min: number;
+  onChange: (value: string) => void;
+  onInteractionBegin: (event: ReactFocusEvent<HTMLInputElement>) => void;
+  onInteractionEnd: (
+    event:
+      | ReactFocusEvent<HTMLInputElement>
+      | ReactPointerEvent<HTMLInputElement>,
+  ) => void;
+  onInteractionStart: (event: ReactPointerEvent<HTMLInputElement>) => void;
+  value: number;
+}) {
+  return (
+    <label className="fm-viewport-3d__orbit-debug-field">
+      <span>{label}</span>
+      <output>{value.toFixed(3)}</output>
+      <input
+        max={max}
+        min={min}
+        step="0.001"
+        type="range"
+        value={value}
+        onBlur={onInteractionEnd}
+        onChange={(event) => onChange(event.target.value)}
+        onFocus={onInteractionBegin}
+        onPointerCancel={onInteractionEnd}
+        onPointerDown={onInteractionStart}
+        onPointerUp={onInteractionEnd}
+      />
+    </label>
   );
 }

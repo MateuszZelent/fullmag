@@ -171,6 +171,8 @@ function ObjectMeshSizeSemanticsSection({
       <FormField disabled={!draft.present} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
       <FormField disabled={!draft.present} label="Curvature factor" type="number" value={draft.curvatureFactor} onChange={(event) => updateDraft({ curvatureFactor: event.target.value })} />
+      <FormField disabled={!draft.present} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
+      <FormField disabled={!draft.present} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
       <FormField disabled={!draft.present} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
       <FormField disabled={!draft.present} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
     </InspectorSection>
@@ -276,6 +278,37 @@ function ObjectMeshBackendParametersSection({
           { label: "Size-field kinds", value: sizeFieldKinds.length ? sizeFieldKinds.join(", ") : "none" },
         ]}
       />
+    </InspectorSection>
+  );
+}
+
+function ObjectMeshCoreRelaxationSection({
+  draft,
+  updateDraft,
+}: {
+  draft: ObjectMeshPolicyDraft;
+  updateDraft: UpdateObjectMeshPolicyDraft;
+}) {
+  const disabled = !draft.present || !draft.coreRelaxationEnabled;
+  return (
+    <InspectorSection value="core-relaxation" title="Object Core Relaxation" badge="size field">
+      <FormField
+        checked={draft.coreRelaxationEnabled}
+        disabled={!draft.present}
+        label="Use object core relaxation"
+        type="checkbox"
+        onChange={(event) =>
+          updateDraft({ coreRelaxationEnabled: event.target.checked })
+        }
+      />
+      <FormField disabled={disabled} label="Geometry name" type="text" value={draft.coreRelaxationGeometryName} onChange={(event) => updateDraft({ coreRelaxationGeometryName: event.target.value })} />
+      <FormField disabled={disabled} label="Core maximum element size" type="number" unit="m" value={draft.coreRelaxationMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} label="Surface maximum element size" type="number" unit="m" value={draft.coreRelaxationSurfaceMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationSurfaceMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} label="Surface distance" type="number" unit="m" value={draft.coreRelaxationSurfaceDistance} onChange={(event) => updateDraft({ coreRelaxationSurfaceDistance: event.target.value })} />
+      <FormField disabled={disabled} label="Edge maximum element size" type="number" unit="m" value={draft.coreRelaxationEdgeMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationEdgeMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} label="Edge distance" type="number" unit="m" value={draft.coreRelaxationEdgeDistance} onChange={(event) => updateDraft({ coreRelaxationEdgeDistance: event.target.value })} />
+      <FormField disabled={disabled} label="Surface sampling" type="number" value={draft.coreRelaxationSamplingSurface} onChange={(event) => updateDraft({ coreRelaxationSamplingSurface: event.target.value })} />
+      <FormField disabled={disabled} label="Edge sampling" type="number" value={draft.coreRelaxationSamplingEdge} onChange={(event) => updateDraft({ coreRelaxationSamplingEdge: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -533,7 +566,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "override", "preset", "semantics", "backend", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
+      defaultValue={["summary", "override", "preset", "semantics", "backend", "core-relaxation", "manual-size-field", "target", "topology", "object-quality-statistics", "transactions"]}
     >
       <ObjectMeshPolicySummarySection
         hasConfig={Boolean(resource.config)}
@@ -554,6 +587,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         sizeFieldKinds={sizeFieldKinds}
         sizeFieldsLength={sizeFields.length}
       />
+      <ObjectMeshCoreRelaxationSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshManualSizeFieldSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshEdgeCornerSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshEffectiveTargetSection

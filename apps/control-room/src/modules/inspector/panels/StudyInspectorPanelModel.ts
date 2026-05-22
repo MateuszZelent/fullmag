@@ -16,6 +16,8 @@ interface StudyStageSnapshot {
   stageId: string | null;
   status: string;
   torqueTolerance: string | null;
+  torqueToleranceFormatted: string | null;
+  torqueToleranceShortFormatted: string | null;
   untilSeconds: string | null;
 }
 
@@ -226,6 +228,16 @@ function commandSummaryFromEntry(command: CommandQueueEntry): CommandSummary {
 function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
   const stage = asRecord(value);
   const kind = stringValue(stage?.kind ?? stage?.entrypoint_kind, "stage");
+  const rawTorque = optionalScalarText(stage?.torque_tolerance);
+  const torqueApm = finiteNumberFromText(rawTorque);
+  const torqueToleranceFormatted =
+    torqueApm === null
+      ? null
+      : `${formatScientific(torqueApm * MU0_T_PER_APM)} T / ${formatScientific(
+          torqueApm,
+        )} A/m`;
+  const torqueToleranceShortFormatted =
+    torqueApm === null ? null : `${formatScientific(torqueApm * MU0_T_PER_APM)} T`;
 
   return {
     algorithm: optionalString(stage?.relax_algorithm ?? stage?.algorithm),
@@ -235,7 +247,9 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     maxSteps: optionalScalarText(stage?.max_steps),
     stageId: optionalString(stage?.stage_id ?? stage?.id),
     status: "queued",
-    torqueTolerance: optionalScalarText(stage?.torque_tolerance),
+    torqueTolerance: rawTorque,
+    torqueToleranceFormatted,
+    torqueToleranceShortFormatted,
     untilSeconds: optionalScalarText(stage?.until_seconds),
   };
 }

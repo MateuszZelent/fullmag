@@ -248,7 +248,12 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
 1.  **Compute effective field and tangent gradient**:
 
     $$
-    \boldsymbol{H}_{\mathrm{eff}} = \boldsymbol{H}_{\mathrm{ex}} + \boldsymbol{H}_{\mathrm{demag}} + \boldsymbol{H}_{\mathrm{ext}},
+    \boldsymbol{H}_{\mathrm{eff}} =
+    \boldsymbol{H}_{\mathrm{ex}} +
+    \boldsymbol{H}_{\mathrm{demag}} +
+    \boldsymbol{H}_{\mathrm{ext}} +
+    \boldsymbol{H}_{\mathrm{ani}} +
+    \boldsymbol{H}_{\mathrm{mel}},
     \qquad
     \boldsymbol{g}_i = -P_{\boldsymbol{m}_i}\,\boldsymbol{H}_{\mathrm{eff},i}.
     $$
@@ -266,6 +271,47 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
 
     where $c_1 = 10^{-4}$ (Armijo parameter).
     If the condition fails, halve $\lambda_k$ and repeat (up to 20 backtracks).
+    The CPU FDM line-search energy includes exchange, demag, external field,
+    uniaxial/cubic anisotropy, prescribed-strain magnetoelastic energy, and
+    interfacial/bulk DMI energy when those terms are active. The DMI scalar
+    terms use the same cell-centered centered-derivative reduction as the native
+    CUDA scalar stats contract. Oersted remains a field observable in the
+    current public contract and does not publish a separate conservative scalar
+    energy term for direct-minimizer line search.
+
+    For LLG time-stepping, full CPU step reports publish anisotropy and DMI
+    scalar terms alongside exchange, demag, external and total energy.
+    Scalar-only scheduled CPU rows and scalar-only live updates may reuse that
+    `StepReport` plus the current magnetization averages instead of recomputing
+    full observables for the row. CPU FDM live execution should refresh full
+    observables only when a heavy field payload or non-scalar preview is due.
+    Scheduled and final CPU artifact snapshots for the magnetization field
+    itself (`m` or `m.x/y/z`) may read the current state directly and pair
+    scheduled rows with `StepReport` scalars. `H_ext` snapshots may use the
+    direct external-field accessor, preserving uniform field, per-node field,
+    component projection, and inactive-mask semantics without full observables.
+    Scheduled `H_ex` snapshots may use the direct exchange-field accessor, and
+    scheduled `H_demag` snapshots may use the direct demag-field accessor.
+    Under the current CPU reference artifact contract, scheduled `H_OE`
+    snapshots expose `problem.terms.per_node_field` with zero fallback and may
+    use that direct source without assembling full observables; this does not
+    redefine the cylindrical-conductor Oersted field contract. Scheduled
+    `H_eff` snapshots may use a field-only observable effective-field accessor,
+    preserving the current observable artifact contract separately from the
+    broader stepping helper; scheduled `torque` snapshots may derive from that
+    observable effective field. Within one direct output pass, base vector
+    fields may be cached so sibling component snapshots and `torque` reuse the
+    same observable `H_eff` assembly instead of recomputing the field per output
+    name. Final output passes should use the last `StepReport` for scalar-only
+    final rows when it matches the final state time, and should treat an
+    existing scalar row at the current final time as authoritative instead of
+    reassembling full observables just to duplicate that row. Standalone and
+    interactive CPU preview snapshots should use the same direct field boundary
+    for `m`, `H_ex`, `H_demag`, `H_ext`, `H_eff`, and `torque`, including
+    shared `H_eff` assembly for cached `H_eff`/`torque` preview fields, with
+    full observables reserved for quantities that have no direct accessor.
+    Interactive CPU step-stat snapshots after a completed step should reuse the
+    last `StepReport` when it matches the current state time.
 
 4.  **Accept step**: $\boldsymbol{m}^{(n+1)} = \mathcal{R}_{\boldsymbol{m}^{(n)}}(-\lambda_k \boldsymbol{g}^{(n)})$.
 
@@ -348,6 +394,8 @@ direction, achieving superlinear convergence near minima.
 
     with $c_1 = 10^{-4}$, maximum 30 backtracks.  Initial step:
     $\lambda_0 = \min(10^{-6},\; 1/\|\boldsymbol{p}_n\|)$.
+    The energy functional is the same CPU FDM scalar functional used by
+    Algorithm B.
 
 5.  **Compute new gradient** $\boldsymbol{g}_{n+1}$ at the accepted point.
 
@@ -533,6 +581,11 @@ The runner (`fullmag-runner/src/cpu_reference.rs`) dispatches:
 - LLG overdamped → existing Heun time-stepping loop
 - BB / NCG → direct minimization path (bypasses time stepping)
 
+CPU FDM run provenance records direct minimization explicitly. BB and NCG runs populate
+`requested_energy_minimizer`, `resolved_energy_minimizer`, and
+`energy_minimizer_realization = "cpu_soa_tangent_gradient"`; LLG time-integration
+relaxation leaves those fields unset and reports the resolved integrator instead.
+
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -566,6 +619,28 @@ torque tolerance $\epsilon_\tau = 10^{-4}$).
 | `ncg_relaxation_stops_on_uniform_state` | NCG | Completes on equilibrium input |
 | `bb_relaxation_decreases_energy_on_random_initial` | BB | $E_{\mathrm{final}} \le E_{\mathrm{initial}}$ |
 | `ncg_relaxation_decreases_energy_on_random_initial` | NCG | $E_{\mathrm{final}} \le E_{\mathrm{initial}}$ |
+| `projected_gradient_bb_soa_matches_aos_reference_path` | BB | SoA direct minimizer matches the old AoS reference path |
+| `nonlinear_cg_soa_matches_aos_reference_path` | NCG | SoA direct minimizer matches the old AoS reference path |
+| `total_energy_helpers_include_local_conservative_terms` | BB/NCG energy helper | Direct-minimizer energy helper matches full observable energy for anisotropy and prescribed-strain magnetoelastic terms |
+| `dmi_scalar_energy_matches_native_centered_density_contract` | BB/NCG energy helper | Direct-minimizer energy helper and full observables match the native centered-density DMI scalar contract |
+| `step_report_carries_anisotropy_energy_for_cpu_scalar_rows` | LLG | Full CPU step reports carry anisotropy energy for scalar rows |
+| `scalar_only_due_outputs_use_step_report_without_reobserving_state` | LLG output scheduling | Scalar-only scheduled rows reuse the step report without a full observables pass |
+| `magnetization_only_due_outputs_read_state_without_reobserving_state` | LLG output scheduling | Scheduled `m`/`m.x/y/z` artifact snapshots read current state without full observables |
+| `final_magnetization_only_outputs_read_state_without_reobserving_state` | LLG output scheduling | Final `m`/`m.x/y/z` artifact snapshots read current state without full observables when no scalar row is due |
+| `external_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_ext`/`H_ext.x/y/z` artifact snapshots use the direct external-field accessor without full observables |
+| `oersted_field_due_outputs_read_per_node_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_OE`/`H_OE.x/y/z` artifact snapshots use the current per-node field artifact source without full observables |
+| `exchange_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_ex`/`H_ex.x/y/z` artifact snapshots use the direct exchange-field accessor without full observables |
+| `demag_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_demag`/`H_demag.x/y/z` artifact snapshots use the direct demag-field accessor without full observables |
+| `effective_field_due_outputs_read_observable_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_eff`/`H_eff.x/y/z` artifact snapshots use the field-only observable effective-field accessor without full observables |
+| `torque_due_outputs_read_observable_effective_field_without_reobserving_state` | LLG output scheduling | Scheduled `torque`/`torque.x/y/z` artifact snapshots derive from the observable effective field without full observables |
+| `effective_field_and_torque_due_outputs_share_direct_effective_field_cache` | LLG output scheduling | A direct output pass reuses one observable effective-field assembly across `H_eff` siblings and `torque` snapshots |
+| `default_final_scalar_trace_uses_last_step_report_without_reobserving_state` | LLG output finalization | Default final scalar trace uses the last `StepReport` instead of reobserving the final state |
+| `final_outputs_do_not_duplicate_current_time_scalar_row_or_reobserve_state` | LLG/direct output finalization | Final output pass skips duplicate scalar rows and full observables when a current-time scalar row already exists |
+| `snapshot_preview_m_uses_direct_state_without_reobserving_state` | CPU preview snapshot | Magnetization preview snapshots read current state without full observables |
+| `snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state` | CPU cached preview snapshot | Cached `H_eff` and `torque` preview fields share one direct effective-field assembly without full observables |
+| `cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state` | Interactive CPU preview snapshot | Interactive magnetization preview snapshots read current state without full observables |
+| `cpu_interactive_snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state` | Interactive CPU cached preview snapshot | Interactive cached `H_eff` and `torque` preview fields share one direct effective-field assembly without full observables |
+| `cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state` | Interactive CPU scalar snapshot | Interactive step-stat snapshots reuse the last matching `StepReport` without full observables |
 | `all_algorithms_converge_to_similar_equilibrium` | All 3 | $|E_i - E_{\mathrm{LLG}}|/|E_{\mathrm{LLG}}| < 20\%$ |
 | `llg_overdamped_relaxation_stops_before_time_limit_on_uniform_state` | LLG | Stops early on equilibrium |
 | `uniform_relaxation_produces_stable_energy` | LLG | Energy stable on equilibrium |
@@ -583,7 +658,7 @@ torque tolerance $\epsilon_\tau = 10^{-4}$).
 - [ ] FEM backend
 - [ ] Hybrid backend
 - [x] Outputs / observables (energy, torque, magnetization)
-- [x] Tests / benchmarks (8 regression tests)
+- [x] Tests / benchmarks (direct-relaxation regression and SoA/AoS parity tests)
 - [x] Documentation (this note)
 
 ## 7. Known limits and deferred work

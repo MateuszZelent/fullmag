@@ -217,6 +217,7 @@ export function resolveViewport3DSceneCameraView({
   cameraProjection: Viewport3DCameraProjection;
   cameraResource: VisualizationStateResource["camera"];
   cameraState: Viewport3DCameraState;
+  interactionActive: boolean;
 } {
   if (cameraRegistrySnapshot.interactionActive) {
     return {
@@ -224,6 +225,7 @@ export function resolveViewport3DSceneCameraView({
       cameraProjection: commandState.widgets.cameraProjection,
       cameraResource: cameraRegistrySnapshot.camera,
       cameraState: commandState.camera,
+      interactionActive: true,
     };
   }
 
@@ -238,6 +240,7 @@ export function resolveViewport3DSceneCameraView({
     cameraState: resolveViewport3DCameraState({
       camera: cameraRegistrySnapshot.camera,
     }),
+    interactionActive: false,
   };
 }
 
@@ -744,6 +747,7 @@ export function useViewport3DSceneModel({
     getObjectSettings,
     getPartSettings,
     hslReferenceVisible,
+    interactionActive: cameraView.interactionActive,
     magnetizationTexturePreviews,
     maxVectorGlyphs: fdmSettings.vectorBudget,
     meshQualityColors,

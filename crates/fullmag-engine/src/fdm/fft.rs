@@ -17,6 +17,10 @@ use crate::Vector3;
 /// into [`ExchangeLlgProblem::step`].  This avoids rebuilding `FftPlanner`
 /// and re-planning every call to `demag_field_from_vectors`.
 pub struct FftWorkspace {
+    /// Physical grid dimensions before demag padding.
+    pub(crate) nx: usize,
+    pub(crate) ny: usize,
+    pub(crate) nz: usize,
     pub(crate) fwd_x: Arc<dyn Fft<f64>>,
     pub(crate) fwd_y: Arc<dyn Fft<f64>>,
     pub(crate) fwd_z: Arc<dyn Fft<f64>>,
@@ -104,6 +108,9 @@ impl FftWorkspace {
         let kern_yz = fft_kernel(nk.n_yz);
 
         Self {
+            nx,
+            ny,
+            nz,
             fwd_x,
             fwd_y: planner.plan_fft_forward(py),
             fwd_z: planner.plan_fft_forward(pz),
@@ -202,6 +209,9 @@ impl FftWorkspace {
         let kern_yz = fft_kernel(nk.n_yz);
 
         Self {
+            nx,
+            ny,
+            nz,
             fwd_x,
             fwd_y: planner.plan_fft_forward(py),
             fwd_z: planner.plan_fft_forward(pz),

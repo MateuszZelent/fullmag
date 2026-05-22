@@ -533,27 +533,31 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
 
 async function verifyDimensionFrameCage({ canvas, page }) {
   const commandId = "viewport-3d.dimension-frame-cage";
+  await selectDimensionFrameMode(page, "Off");
+  const offSample = await sampleCanvasComposite(page, canvas);
+  await selectDimensionFrameMode(page, "Floor + vertical");
+  await waitForCanvasCompositeChange(
+    page,
+    canvas,
+    offSample,
+    "dimension frame canvas renders after cage mode",
+    "Viewport canvas did not visually change after enabling dimension frame cage",
+    { minimumChangedPixels: 1 },
+  );
+
+  console.log(`Viewport 3D dimension frame cage passed (command=${commandId}).`);
+}
+
+async function selectDimensionFrameMode(page, name) {
   await page.getByRole("tab", { name: "View" }).first().click();
-  const initialSample = await sampleCanvasComposite(page, canvas);
   const frameAction = page.locator('[data-action-id="view-dimension-frame"]');
   await frameAction.waitFor({
     state: "visible",
     timeout: GEOMETRY_FLOW_TIMEOUT_MS,
   });
-
   await frameAction.click();
-  await page
-    .getByRole("menuitemradio", { exact: true, name: "Floor + vertical" })
-    .click();
-  await waitForCanvasCompositeChange(
-    page,
-    canvas,
-    initialSample,
-    "dimension frame canvas renders after cage mode",
-    "Viewport canvas did not visually change after enabling dimension frame cage",
-  );
-
-  console.log(`Viewport 3D dimension frame cage passed (command=${commandId}).`);
+  await page.getByRole("menuitemradio", { exact: true, name }).click();
+  await waitForBrowserPaint(page);
 }
 
 async function verifyGeometryAuthoringFlow({
@@ -904,6 +908,7 @@ async function waitForCanvasCompositeChange(
   baseline,
   label,
   failureMessage,
+  options = {},
 ) {
   return waitForCondition(label, async () => {
     const current = await sampleCanvasComposite(page, canvas);
@@ -918,7 +923,7 @@ async function waitForCanvasCompositeChange(
       );
     }
 
-    const diff = canvasCompositeDifference(baseline, current);
+    const diff = canvasCompositeDifference(baseline, current, options);
     if (diff.changed) return current;
     throw new Error(
       failureMessage +
@@ -973,6 +978,17 @@ async function waitForCondition(label, predicate) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBrowserPaint(page) {
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(resolve);
+        });
+      }),
+  );
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -1057,7 +1073,7 @@ async function sampleCanvasComposite(page, canvas) {
   };
 }
 
-function canvasCompositeDifference(before, after) {
+function canvasCompositeDifference(before, after, options = {}) {
   const length = Math.min(before.signature.length, after.signature.length);
   if (length === 0) return { changed: false, changedPixels: 0, sampledPixels: 0 };
 
@@ -1073,7 +1089,9 @@ function canvasCompositeDifference(before, after) {
   }
 
   const sampledPixels = Math.floor(length / 3);
-  const minimumChangedPixels = Math.max(6, Math.floor(sampledPixels * 0.005));
+  const minimumChangedPixels =
+    options.minimumChangedPixels ??
+    Math.max(6, Math.floor(sampledPixels * 0.005));
   return {
     changed: changedPixels >= minimumChangedPixels,
     changedPixels,

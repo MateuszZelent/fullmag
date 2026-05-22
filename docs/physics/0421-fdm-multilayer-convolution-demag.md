@@ -161,6 +161,28 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
 
 ## 7. Implementation Plan for Fullmag
 
+### Phase 0: Native ABI boundary
+- [x] Expose `fullmag_fdm_plan_kind` with explicit `UNIFORM_GRID` and
+  `MULTILAYER_CONV` variants.
+- [x] Expose `fullmag_fdm_layer_desc_v2` with both native and convolution grids,
+  per-layer material, initial magnetization, active mask, and z-offset metadata.
+- [x] Expose `fullmag_fdm_tensor_kernel_desc_v2` and
+  `fullmag_fdm_multilayer_plan_desc_v2` so Rust can pass precomputed layer-pair
+  tensor spectra into the native backend without overloading the legacy
+  single-grid plan.
+- [x] Add the native v2 creation/validation entrypoint with explicit validation
+  errors and explicit unsupported status for valid multilayer plans.
+- [x] Add the native v2 device upload/staging path for layers and tensor kernels.
+- [x] Add the first native CUDA demag owner for identity-grid `push_m`,
+  tensor multiplication, and `pull_h` boundaries in fp64/fp32.
+- [x] Prepare a shared native cuFFT workspace for staged v2 multilayer tensor
+  kernels when all layer-pair kernels use one `fft_grid`.
+- [x] Wire staged v2 handles through `step()` far enough to refresh native
+  multilayer demag before returning explicit unsupported for incomplete
+  timestep execution.
+- [ ] Add heterogeneous native transfer maps, per-grid multilayer FFT workspace
+  planning, and timestep execution wiring.
+
 ### Phase 1: Data model
 - [ ] Add `Layer` concept to `ExchangeLlgProblem` (rect, cell count, cell size per layer)
 - [ ] Add `TransferMesh` for interpolation between native and convolution grids

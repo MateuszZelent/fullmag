@@ -13,10 +13,11 @@
 #include <cstdint>
 #include <cstddef>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
-#ifdef FULLMAG_HAS_CUDA
+#if FULLMAG_HAS_CUDA
 #include <cuda_runtime.h>
 #include <cufft.h>
 #endif
@@ -38,6 +39,35 @@ struct DeviceDemagKernel {
     void *xy = nullptr;
     void *xz = nullptr;
     void *yz = nullptr;
+};
+
+struct DeviceMultilayerLayer {
+    fullmag_fdm_grid_desc native_grid{};
+    fullmag_fdm_grid_desc convolution_grid{};
+    uint32_t layer_index = 0;
+    int32_t z_offset_cells = 0;
+    fullmag_fdm_material_desc material{};
+    uint64_t cell_count = 0;
+    uint64_t convolution_cell_count = 0;
+    DeviceVectorField m;
+    DeviceVectorField h_demag;
+    uint8_t *active_mask = nullptr;
+    bool has_active_mask = false;
+};
+
+struct DeviceMultilayerTensorKernel {
+    fullmag_fdm_grid_desc fft_grid{};
+    uint32_t dst_layer = 0;
+    uint32_t src_layer = 0;
+    double z_shift_meters = 0.0;
+    uint64_t kernel_len = 0;
+    DeviceDemagKernel tensor;
+};
+
+struct AdaptiveErrorPolicy {
+    double error = 0.0;
+    double dt_candidate = 0.0;
+    int accepted = 0;
 };
 
 struct Context {
@@ -141,6 +171,8 @@ struct Context {
     // Execution
     fullmag_fdm_precision precision;
     fullmag_fdm_integrator integrator;
+    fullmag_fdm_stats_mode stats_mode = FULLMAG_FDM_STATS_FULL;
+    uint32_t stats_stride = 1;
     bool disable_precession = false;
 
 
@@ -212,6 +244,9 @@ struct Context {
 
     double *reduction_scratch = nullptr;
     uint64_t reduction_scratch_len = 0;
+    double *reduction_scratch_aux = nullptr;
+    uint64_t reduction_scratch_aux_len = 0;
+    double *adaptive_policy_scratch = nullptr;
     void *preview_download_scratch = nullptr;
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
@@ -222,12 +257,23 @@ struct Context {
     uint32_t fft_ny = 0;
     uint32_t fft_nz = 0;
     uint64_t fft_cell_count = 0;
+    uint64_t fft_component_stride = 0;
     void *fft_x = nullptr;
     void *fft_y = nullptr;
     void *fft_z = nullptr;
+    void *fft_work_area = nullptr;
+    uint64_t fft_work_area_bytes = 0;
     DeviceDemagKernel demag_kernel;
+#if FULLMAG_HAS_CUDA
     cufftHandle fft_plan = 0;
+#else
+    void *fft_plan = nullptr;
+#endif
     bool fft_plan_valid = false;
+    bool fft_components_share_allocation = false;
+    void *compute_stream = nullptr;      // cudaStream_t
+    void *compute_ready_event = nullptr; // cudaEvent_t
+    void *compute_done_event = nullptr;  // cudaEvent_t
 
     // Device info cache
     fullmag_fdm_device_info device_info_cache;
@@ -236,11 +282,24 @@ struct Context {
     // Error state
     std::string last_error;
 
+    // Native FDM ABI v2 multilayer staging.  These buffers are uploaded and
+    // validated separately from the legacy single-grid state until the
+    // multilayer CUDA execution path is wired.
+    bool has_multilayer_plan_v2 = false;
+    std::vector<DeviceMultilayerLayer> multilayer_layers;
+    std::vector<DeviceMultilayerTensorKernel> multilayer_kernels;
+
     // Cooperative interrupt hook for interactive control-plane.
     fullmag_fdm_interrupt_poll_fn interrupt_poll = nullptr;
     void *interrupt_poll_user_data = nullptr;
     bool step_interrupted = false;
 };
+
+#if FULLMAG_HAS_CUDA
+cudaStream_t context_compute_stream(Context &ctx);
+#endif
+bool context_begin_compute_stream_work(Context &ctx, const char *operation);
+bool context_end_compute_stream_work(Context &ctx, const char *operation);
 
 struct AsyncFieldSnapshot {
     fullmag_fdm_precision precision = FULLMAG_FDM_PRECISION_DOUBLE;
@@ -250,6 +309,7 @@ struct AsyncFieldSnapshot {
     size_t host_soa_len_bytes = 0;
     void *stream = nullptr;      // cudaStream_t
     void *ready_event = nullptr; // cudaEvent_t
+    void *staging_done_event = nullptr; // cudaEvent_t
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
 };
@@ -262,6 +322,7 @@ struct AsyncPreviewSnapshot {
     size_t host_xyz_len_bytes = 0;
     void *stream = nullptr;      // cudaStream_t
     void *ready_event = nullptr; // cudaEvent_t
+    void *staging_done_event = nullptr; // cudaEvent_t
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
 };
@@ -342,6 +403,34 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
     return p;
 }
 
+inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint64_t step) {
+    if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+        return false;
+    }
+    const uint32_t stride = ctx.stats_stride == 0 ? 1 : ctx.stats_stride;
+    return stride <= 1 || (step % stride) == 0;
+}
+
+inline bool fullmag_fdm_should_fill_step_stats(const Context &ctx) {
+    return fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count);
+}
+
+inline void fullmag_fdm_fill_step_stats_metadata(
+    const Context &ctx,
+    fullmag_fdm_step_stats *stats,
+    double dt,
+    double suggested_next_dt = 0.0)
+{
+    if (stats == nullptr) {
+        return;
+    }
+    std::memset(stats, 0, sizeof(*stats));
+    stats->step = ctx.step_count;
+    stats->time_seconds = ctx.current_time;
+    stats->dt_seconds = dt;
+    stats->suggested_next_dt = suggested_next_dt;
+}
+
 /// Plain-old-data copy of SOT fields from Context.
 /// Passed by value to CUDA kernels so they don't need host-side Context access.
 struct SotParams {
@@ -375,7 +464,7 @@ inline SotParams sot_params_from_ctx(const Context &ctx) {
     return p;
 }
 
-#ifdef FULLMAG_HAS_CUDA
+#if FULLMAG_HAS_CUDA
 inline bool poll_interrupt(Context &ctx) {
     if (ctx.interrupt_poll == nullptr) {
         return false;
@@ -413,7 +502,7 @@ inline bool abort_step_from_tmp(Context &ctx, bool invalidate_fsal = true) {
 }
 #endif
 
-#ifdef FULLMAG_HAS_CUDA
+#if FULLMAG_HAS_CUDA
 
 /// Allocate all device buffers.
 bool context_alloc_device(Context &ctx);
@@ -446,6 +535,14 @@ bool context_upload_demag_kernel_spectra(
     const double *kxz,
     const double *kyz,
     uint64_t len);
+
+/// Upload v2 multilayer layer state and tensor-kernel payloads.
+bool context_upload_multilayer_plan_v2(
+    Context &ctx,
+    const fullmag_fdm_multilayer_plan_desc_v2 &plan);
+
+/// Prepare the shared cuFFT workspace used by staged v2 multilayer tensor kernels.
+bool context_prepare_multilayer_fft_workspace_v2(Context &ctx);
 
 /// Upload boundary correction geometry data (T0/T1).
 bool context_upload_boundary_correction(

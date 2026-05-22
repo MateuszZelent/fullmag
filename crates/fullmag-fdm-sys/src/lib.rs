@@ -31,6 +31,13 @@ pub enum fullmag_fdm_precision {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_plan_kind {
+    FULLMAG_FDM_PLAN_UNIFORM_GRID = 0,
+    FULLMAG_FDM_PLAN_MULTILAYER_CONV = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_integrator {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
@@ -65,6 +72,13 @@ pub enum fullmag_fdm_boundary_correction {
     FULLMAG_FDM_BOUNDARY_FULL = 2,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_stats_mode {
+    FULLMAG_FDM_STATS_FULL = 0,
+    FULLMAG_FDM_STATS_NONE = 1,
+}
+
 pub type fullmag_fdm_interrupt_poll_fn = Option<unsafe extern "C" fn(*mut c_void) -> i32>;
 
 // ── Descriptors ──
@@ -87,6 +101,71 @@ pub struct fullmag_fdm_material_desc {
     pub exchange_stiffness: f64,
     pub damping: f64,
     pub gyromagnetic_ratio: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_complex64 {
+    pub re: f64,
+    pub im: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_complex32 {
+    pub re: f32,
+    pub im: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_layer_desc_v2 {
+    pub native_grid: fullmag_fdm_grid_desc,
+    pub convolution_grid: fullmag_fdm_grid_desc,
+    pub layer_index: u32,
+    pub z_offset_cells: i32,
+    pub material: fullmag_fdm_material_desc,
+    pub initial_magnetization_xyz: *const f64,
+    pub initial_magnetization_len: u64,
+    pub active_mask: *const u8,
+    pub active_mask_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_tensor_kernel_desc_v2 {
+    pub fft_grid: fullmag_fdm_grid_desc,
+    pub dst_layer: u32,
+    pub src_layer: u32,
+    pub z_shift_meters: f64,
+    pub kernel_xx: *const fullmag_fdm_complex64,
+    pub kernel_yy: *const fullmag_fdm_complex64,
+    pub kernel_zz: *const fullmag_fdm_complex64,
+    pub kernel_xy: *const fullmag_fdm_complex64,
+    pub kernel_xz: *const fullmag_fdm_complex64,
+    pub kernel_yz: *const fullmag_fdm_complex64,
+    pub kernel_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_multilayer_plan_desc_v2 {
+    pub kind: fullmag_fdm_plan_kind,
+    pub precision: fullmag_fdm_precision,
+    pub integrator: fullmag_fdm_integrator,
+    pub disable_precession: i32,
+    pub enable_exchange: i32,
+    pub enable_demag: i32,
+    pub layers: *const fullmag_fdm_layer_desc_v2,
+    pub layer_count: u32,
+    pub kernels: *const fullmag_fdm_tensor_kernel_desc_v2,
+    pub kernel_count: u32,
+    pub adaptive_max_error: f64,
+    pub adaptive_dt_min: f64,
+    pub adaptive_dt_max: f64,
+    pub adaptive_headroom: f64,
+    pub stats_mode: fullmag_fdm_stats_mode,
+    pub stats_stride: u32,
 }
 
 #[repr(C)]
@@ -226,6 +305,8 @@ pub struct fullmag_fdm_plan_desc {
     pub adaptive_dt_min: f64,
     pub adaptive_dt_max: f64,
     pub adaptive_headroom: f64,
+    pub stats_mode: fullmag_fdm_stats_mode,
+    pub stats_stride: u32,
 }
 
 // ── Step stats ──
@@ -298,6 +379,10 @@ extern "C" {
 
     pub fn fullmag_fdm_backend_create(
         plan: *const fullmag_fdm_plan_desc,
+    ) -> *mut fullmag_fdm_backend;
+
+    pub fn fullmag_fdm_backend_create_v2(
+        plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
     pub fn fullmag_fdm_backend_step(

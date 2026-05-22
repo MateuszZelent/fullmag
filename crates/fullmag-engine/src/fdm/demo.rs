@@ -48,6 +48,8 @@ pub fn run_reference_exchange_demo(steps: usize, dt: f64) -> Result<ReferenceDem
         exchange_energy_joules: initial_exchange_energy_joules,
         demag_energy_joules: 0.0,
         external_energy_joules: 0.0,
+        anisotropy_energy_joules: 0.0,
+        dmi_energy_joules: 0.0,
         total_energy_joules: initial_exchange_energy_joules,
         max_effective_field_amplitude: 0.0,
         max_demag_field_amplitude: 0.0,

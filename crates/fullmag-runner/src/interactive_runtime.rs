@@ -4,7 +4,10 @@ use std::collections::HashSet;
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::fem::FemBackendId;
 use fullmag_engine::fem::{FemIntegratorWorkspace, FemLlgProblem, FemLlgState};
-use fullmag_engine::{ExchangeLlgProblem, ExchangeLlgState, FftWorkspace, IntegratorBuffers};
+use fullmag_engine::{
+    EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FftWorkspace,
+    IntegratorBuffers, StepReport,
+};
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
 
 use crate::cpu_reference;
@@ -78,12 +81,18 @@ fn build_cached_grid_preview_fields(
     if quantities.is_empty() {
         return None;
     }
+    let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
     let base_request = display_state.preview_request();
     let mut cached = Vec::new();
     for quantity in quantities {
         let mut request = base_request.clone();
         request.quantity = quantity.to_string();
-        let values = select_observables(observables, quantity).ok()?;
+        let Ok(values) = select_observables(observables, quantity) else {
+            continue;
+        };
+        if values.len() != expected_len {
+            continue;
+        }
         cached.push(build_grid_preview_field(
             &request,
             values,
@@ -91,7 +100,7 @@ fn build_cached_grid_preview_fields(
             active_mask,
         ));
     }
-    Some(cached)
+    (!cached.is_empty()).then_some(cached)
 }
 
 fn build_cached_mesh_preview_fields(
@@ -103,19 +112,25 @@ fn build_cached_mesh_preview_fields(
     if quantities.is_empty() {
         return None;
     }
+    let expected_len = mesh.nodes.len();
     let base_request = display_state.preview_request();
     let mut cached = Vec::new();
     for quantity in quantities {
         let mut request = base_request.clone();
         request.quantity = quantity.to_string();
-        let values = select_observables(observables, quantity).ok()?;
+        let Ok(values) = select_observables(observables, quantity) else {
+            continue;
+        };
+        if values.len() != expected_len {
+            continue;
+        }
         cached.push(build_mesh_preview_field_with_active_mask(
             &request,
             values,
             mesh_quantity_active_mask(quantity, mesh),
         ));
     }
-    Some(cached)
+    (!cached.is_empty()).then_some(cached)
 }
 
 pub(crate) fn display_is_global_scalar(display_state: &DisplaySelectionState) -> bool {
@@ -127,8 +142,56 @@ pub(crate) fn display_is_global_scalar(display_state: &DisplaySelectionState) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_display_refresh_due, display_refresh_due};
-    use crate::interactive::display::DisplaySelectionState;
+    use super::{
+        cached_display_refresh_due, display_refresh_due, InteractiveFdmPreviewRuntime,
+        InteractiveFdmPreviewRuntimeInner,
+    };
+    use crate::cpu_reference::{
+        direct_h_eff_assembly_call_count, observe_state_call_count,
+        reset_direct_field_assembly_calls, reset_observe_state_calls,
+    };
+    use crate::dispatch::FdmEngine;
+    use crate::interactive::display::{DisplayKind, DisplaySelectionState};
+    use crate::types::{LivePreviewRequest, StepAction};
+    use fullmag_ir::{
+        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
+        IntegratorChoice,
+    };
+
+    fn make_soa_fdm_plan() -> FdmPlanIR {
+        FdmPlanIR {
+            grid: GridDimensions { cells: [4, 2, 1] },
+            cell_size: [2e-9, 2e-9, 2e-9],
+            region_mask: vec![0; 8],
+            active_mask: None,
+            initial_magnetization: vec![
+                [1.0, 0.1, 0.0],
+                [0.2, 1.0, 0.1],
+                [0.1, 0.0, 1.0],
+                [1.0, -0.2, 0.1],
+                [0.0, 1.0, 0.3],
+                [0.3, 0.2, 1.0],
+                [1.0, 0.0, -0.2],
+                [0.1, 1.0, 0.2],
+            ],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.2,
+                ..Default::default()
+            },
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-14),
+            adaptive_timestep: None,
+            enable_exchange: true,
+            enable_demag: true,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn display_refresh_due_honors_selection_revision_and_every_n() {
@@ -159,6 +222,157 @@ mod tests {
         assert!(!cached_display_refresh_due(Some(3), &display_state, 24, 25));
         assert!(cached_display_refresh_due(Some(3), &display_state, 25, 25));
     }
+
+    #[test]
+    fn cpu_interactive_runtime_keeps_supported_fdm_segment_on_persistent_soa_state() {
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+                .expect("CPU interactive runtime should build");
+        let cpu = match &mut runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => {
+                panic!("CPU engine should build a CPU interactive runtime")
+            }
+        };
+        assert!(cpu.soa_fast_path_active());
+
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        let mut seen_steps = 0;
+        let result = runtime
+            .execute_with_live_preview(
+                &plan,
+                2e-14,
+                plan.grid.cells,
+                8,
+                &display_selection,
+                None,
+                &mut |update| {
+                    seen_steps = seen_steps.max(update.stats.step);
+                    StepAction::Continue
+                },
+            )
+            .expect("CPU interactive runtime should execute");
+
+        assert!(seen_steps > 0);
+        assert!(!result.final_magnetization.is_empty());
+        let cpu = match &mut runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => {
+                panic!("CPU engine should keep a CPU interactive runtime")
+            }
+        };
+        assert!(cpu.soa_fast_path_active());
+    }
+
+    #[test]
+    fn cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state() {
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+                .expect("CPU interactive runtime should build");
+
+        reset_observe_state_calls();
+        let preview = runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "m".to_string(),
+                auto_scale_enabled: false,
+                ..Default::default()
+            })
+            .expect("interactive magnetization preview should build");
+
+        assert_eq!(preview.quantity, "m");
+        assert_eq!(preview.vector_field_values.len(), 8 * 3);
+        assert_eq!(
+            observe_state_call_count(),
+            0,
+            "interactive magnetization preview should read CPU state directly"
+        );
+    }
+
+    #[test]
+    fn cpu_interactive_snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state(
+    ) {
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+                .expect("CPU interactive runtime should build");
+
+        reset_observe_state_calls();
+        reset_direct_field_assembly_calls();
+        let fields = runtime
+            .snapshot_vector_fields(
+                &["H_eff", "torque"],
+                &LivePreviewRequest {
+                    auto_scale_enabled: false,
+                    ..Default::default()
+                },
+            )
+            .expect("interactive vector previews should build");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            vec!["H_eff", "torque"]
+        );
+        assert_eq!(
+            observe_state_call_count(),
+            0,
+            "interactive direct vector previews should not force a full observables pass"
+        );
+        assert_eq!(
+            direct_h_eff_assembly_call_count(),
+            1,
+            "interactive H_eff and torque previews should share one direct effective-field assembly"
+        );
+    }
+
+    #[test]
+    fn cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state() {
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+                .expect("CPU interactive runtime should build");
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        runtime
+            .execute_with_live_preview(
+                &plan,
+                2e-14,
+                plan.grid.cells,
+                8,
+                &display_selection,
+                None,
+                &mut |_| StepAction::Continue,
+            )
+            .expect("CPU interactive runtime should execute");
+
+        reset_observe_state_calls();
+        let stats = runtime
+            .snapshot_step_stats()
+            .expect("interactive step stats snapshot should build");
+
+        assert_eq!(stats.step, 2);
+        assert!(stats.e_total.is_finite());
+        assert_eq!(
+            observe_state_call_count(),
+            0,
+            "interactive step stats snapshot should reuse the last StepReport"
+        );
+    }
 }
 
 pub struct InteractiveFdmPreviewRuntime {
@@ -174,6 +388,8 @@ enum InteractiveFdmPreviewRuntimeInner {
 struct CpuInteractiveFdmPreviewRuntime {
     problem: ExchangeLlgProblem,
     state: ExchangeLlgState,
+    state_soa: Option<ExchangeLlgStateSoA>,
+    last_step_report: Option<StepReport>,
     fft_workspace: FftWorkspace,
     integrator_buffers: IntegratorBuffers,
     original_grid: [u32; 3],
@@ -244,16 +460,24 @@ impl InteractiveFdmPreviewRuntime {
         let inner = match engine {
             FdmEngine::CpuReference => {
                 let (problem, state) = cpu_reference::build_snapshot_problem_and_state(plan)?;
+                let state_soa = if problem.soa_fast_path_supported() {
+                    Some(state.to_soa())
+                } else {
+                    None
+                };
                 let fft_workspace = problem.create_workspace();
                 let integrator_buffers = problem.create_integrator_buffers();
+                let provenance = cpu_execution_provenance(plan)?;
                 InteractiveFdmPreviewRuntimeInner::Cpu(CpuInteractiveFdmPreviewRuntime {
                     problem,
                     state,
+                    state_soa,
+                    last_step_report: None,
                     fft_workspace,
                     integrator_buffers,
                     original_grid: plan.grid.cells,
                     plan_signature: normalize_plan_signature(plan),
-                    provenance: cpu_execution_provenance(plan),
+                    provenance,
                     total_steps: 0,
                 })
             }
@@ -618,7 +842,55 @@ impl CpuInteractiveFdmPreviewRuntime {
             .set_magnetization(magnetization.to_vec())
             .map_err(|error| RunError {
                 message: format!("setting interactive CPU magnetization failed: {}", error),
-            })
+            })?;
+        self.state_soa = if self.problem.soa_fast_path_supported() {
+            Some(self.state.to_soa())
+        } else {
+            None
+        };
+        self.last_step_report = None;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn soa_fast_path_active(&self) -> bool {
+        self.state_soa.is_some()
+    }
+
+    fn step(&mut self, dt_step: f64) -> Result<StepReport, RunError> {
+        if self.state_soa.is_none() && self.problem.soa_fast_path_supported() {
+            self.state_soa = Some(self.state.to_soa());
+        }
+
+        let report = if let Some(state_soa) = self.state_soa.as_mut() {
+            let report = self
+                .problem
+                .step_soa_with_buffers_evaluation(
+                    state_soa,
+                    dt_step,
+                    &mut self.fft_workspace,
+                    &mut self.integrator_buffers,
+                    EvaluationRequest::Full,
+                )
+                .map_err(|error| RunError {
+                    message: format!("interactive CPU step failed: {}", error),
+                })?;
+            state_soa.write_back_to(&mut self.state);
+            report
+        } else {
+            self.problem
+                .step_with_buffers(
+                    &mut self.state,
+                    dt_step,
+                    &mut self.fft_workspace,
+                    &mut self.integrator_buffers,
+                )
+                .map_err(|error| RunError {
+                    message: format!("interactive CPU step failed: {}", error),
+                })?
+        };
+        self.last_step_report = Some(report);
+        Ok(report)
     }
 
     fn snapshot_preview(
@@ -636,13 +908,13 @@ impl CpuInteractiveFdmPreviewRuntime {
                 ),
             });
         }
-        let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
-        Ok(build_grid_preview_field(
+        cpu_reference::snapshot_preview_from_state(
+            &self.problem,
+            &self.state,
             request,
-            select_observables(&observables, &request.quantity)?,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
-        ))
+        )
     }
 
     fn snapshot_vector_fields(
@@ -655,29 +927,31 @@ impl CpuInteractiveFdmPreviewRuntime {
             &self.plan_signature,
             quantities,
         );
-        let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
-        let mut cached = Vec::new();
-        let mut seen = HashSet::new();
-        for quantity in quantities
-            .iter()
-            .filter_map(|quantity| normalized_quantity_name(quantity).ok())
-        {
-            if !seen.insert(quantity) {
-                continue;
-            }
-            let mut preview_request = request.clone();
-            preview_request.quantity = quantity.to_string();
-            cached.push(build_grid_preview_field(
-                &preview_request,
-                select_observables(&observables, quantity)?,
-                self.original_grid,
-                self.plan_signature.active_mask.as_deref(),
-            ));
-        }
-        Ok(cached)
+        cpu_reference::snapshot_vector_fields_from_state(
+            &self.problem,
+            &self.state,
+            &quantities,
+            request,
+            self.original_grid,
+            self.plan_signature.active_mask.as_deref(),
+        )
     }
 
     fn snapshot_step_stats(&mut self) -> Result<StepStats, RunError> {
+        if let Some(report) = self
+            .last_step_report
+            .as_ref()
+            .filter(|report| same_time(report.time_seconds, self.state.time_seconds))
+        {
+            return Ok(make_step_stats_from_report(
+                self.total_steps,
+                self.state.time_seconds,
+                report,
+                0,
+                self.state.magnetization(),
+            ));
+        }
+
         let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
         Ok(make_step_stats(
             self.total_steps,
@@ -815,17 +1089,7 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let wall_start = std::time::Instant::now();
-            let report = self
-                .problem
-                .step_with_buffers(
-                    &mut self.state,
-                    dt_step,
-                    &mut self.fft_workspace,
-                    &mut self.integrator_buffers,
-                )
-                .map_err(|error| RunError {
-                    message: format!("interactive CPU step failed: {}", error),
-                })?;
+            let report = self.step(dt_step)?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
@@ -1138,17 +1402,7 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let wall_start = std::time::Instant::now();
-            let report = self
-                .problem
-                .step_with_buffers(
-                    &mut self.state,
-                    dt_step,
-                    &mut self.fft_workspace,
-                    &mut self.integrator_buffers,
-                )
-                .map_err(|error| RunError {
-                    message: format!("interactive CPU step failed: {}", error),
-                })?;
+            let report = self.step(dt_step)?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             self.total_steps += 1;
             if let Some(next) = report.suggested_next_dt {
@@ -3646,8 +3900,10 @@ fn copy_cuda_base_field_values(
     }
 }
 
-fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
-    ExecutionProvenance {
+fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
+    let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+
+    Ok(ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -3655,11 +3911,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
         } else {
             None
         },
-        fft_backend: if plan.enable_demag {
-            Some("rustfft".to_string())
-        } else {
-            None
-        },
+        fft_backend,
         device_name: None,
         compute_capability: None,
         cuda_driver_version: None,
@@ -3708,7 +3960,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
-    }
+    })
 }
 
 #[cfg(feature = "cuda")]
@@ -3914,6 +4166,8 @@ fn make_step_stats(
         e_ex: observables.exchange_energy,
         e_demag: observables.demag_energy,
         e_ext: observables.external_energy,
+        e_ani: observables.anisotropy_energy,
+        e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
         max_h_eff: observables.max_h_eff,
@@ -3943,6 +4197,8 @@ fn make_step_stats_from_report(
         e_ex: report.exchange_energy_joules,
         e_demag: report.demag_energy_joules,
         e_ext: report.external_energy_joules,
+        e_ani: report.anisotropy_energy_joules,
+        e_dmi: report.dmi_energy_joules,
         e_total: report.total_energy_joules,
         max_dm_dt: report.max_rhs_amplitude,
         max_h_eff: report.max_effective_field_amplitude,

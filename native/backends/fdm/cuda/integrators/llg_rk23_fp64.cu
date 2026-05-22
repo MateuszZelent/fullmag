@@ -40,6 +40,12 @@ extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp64(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern AdaptiveErrorPolicy reduce_adaptive_error_policy(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double dt,
+    double exponent);
 
 // Reuse the LLG RHS kernel declared in llg_fp64.cu
 extern __global__ void llg_rhs_fp64_kernel(
@@ -153,11 +159,11 @@ __global__ void rk23_error_kernel(
 
 /* ── Copy vector field ── */
 
-static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src, uint64_t n) {
+static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src, uint64_t n, cudaStream_t stream) {
     size_t bytes = n * sizeof(double);
-    cudaMemcpy(dst.x, src.x, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dst.y, src.y, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpyAsync(dst.x, src.x, bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(dst.y, src.y, bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice, stream);
 }
 
 /* ── Compute fields + LLG RHS ── */
@@ -206,15 +212,8 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
 
 /* ── Max reduction for error ── */
 
-static double reduce_max_error(Context &ctx, uint64_t n) {
-    std::vector<double> host_err(n);
-    cudaMemcpy(host_err.data(), ctx.reduction_scratch, n * sizeof(double), cudaMemcpyDeviceToHost);
-    double max_err = 0.0;
-    for (uint64_t i = 0; i < n; i++) {
-        double e = sqrt(host_err[i]);
-        if (e > max_err) max_err = e;
-    }
-    return max_err;
+static AdaptiveErrorPolicy reduce_error_policy(Context &ctx, uint64_t n, double dt) {
+    return reduce_adaptive_error_policy(ctx, ctx.reduction_scratch, n, dt, 1.0 / 3.0);
 }
 
 /* ── Full RK23+FSAL step ── */
@@ -232,12 +231,12 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const double B1  = 2.0 / 9.0, B2 = 1.0 / 3.0, B3 = 4.0 / 9.0;
 
     // Save original m
-    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count);
+    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
         // Stage 1 — FSAL: reuse k_fsal if valid
         if (ctx.fsal_valid) {
-            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count);
+            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
             if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha)) return;
         }
@@ -284,23 +283,20 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.reduction_scratch,
             n, dt);
 
-        double error = reduce_max_error(ctx, ctx.cell_count);
+        AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
 
         // Accept or reject
-        if (error <= ctx.adaptive_max_error || dt <= ctx.adaptive_dt_min) {
+        if (policy.accepted) {
             // Accept step
             ctx.step_count++;
             ctx.current_time += dt;
             ctx.fsal_valid = true;
 
-            // Compute optimal dt for next step (growth on accept)
-            double dt_next = dt;
-            if (error > 0.0) {
-                dt_next = ctx.adaptive_headroom * dt * pow(ctx.adaptive_max_error / error, 1.0 / 3.0);
-                dt_next = fmin(dt_next, ctx.adaptive_dt_max);
-                dt_next = fmax(dt_next, ctx.adaptive_dt_min);
-            } else {
-                dt_next = ctx.adaptive_dt_max;
+            double dt_next = policy.dt_candidate;
+
+            if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+                fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt, dt_next);
+                return;
             }
 
             // Diagnostics on accepted state (fields already computed above)
@@ -318,8 +314,6 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
                 ctx.m.x, ctx.m.y, ctx.m.z,
                 ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
             double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k_fsal.x, ctx.k_fsal.y, ctx.k_fsal.z, ctx.cell_count);
-
-            cudaDeviceSynchronize();
 
             stats->step = ctx.step_count;
             stats->time_seconds = ctx.current_time;
@@ -340,14 +334,11 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         // Reject: reduce dt, restore m, invalidate FSAL
-        // For RK23: error ~ O(h^3) so scaling exponent = 1/3
-        double dt_new = ctx.adaptive_headroom * dt * pow(ctx.adaptive_max_error / error, 1.0 / 3.0);
-        dt = fmax(dt_new, ctx.adaptive_dt_min);
-        dt = fmin(dt, ctx.adaptive_dt_max);
+        dt = policy.dt_candidate;
         ctx.fsal_valid = false;
 
         // Restore original m
-        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count);
+        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
     }
 }
 

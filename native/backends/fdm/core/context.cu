@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <vector>
 
@@ -41,6 +42,113 @@ static size_t scalar_size(fullmag_fdm_precision prec) {
 
 static size_t complex_size(fullmag_fdm_precision prec) {
     return (prec == FULLMAG_FDM_PRECISION_SINGLE) ? sizeof(cufftComplex) : sizeof(cufftDoubleComplex);
+}
+
+static bool create_compute_stream(Context &ctx) {
+    if (ctx.compute_stream) {
+        return true;
+    }
+
+    cudaStream_t compute_stream{};
+    cudaError_t err = cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaStreamCreate(compute_stream)", err);
+        return false;
+    }
+    ctx.compute_stream = reinterpret_cast<void *>(compute_stream);
+
+    cudaEvent_t ready_event{};
+    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaEventCreate(compute_ready_event)", err);
+        cudaStreamDestroy(compute_stream);
+        ctx.compute_stream = nullptr;
+        return false;
+    }
+    ctx.compute_ready_event = reinterpret_cast<void *>(ready_event);
+
+    cudaEvent_t done_event{};
+    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaEventCreate(compute_done_event)", err);
+        cudaEventDestroy(ready_event);
+        ctx.compute_ready_event = nullptr;
+        cudaStreamDestroy(compute_stream);
+        ctx.compute_stream = nullptr;
+        return false;
+    }
+    ctx.compute_done_event = reinterpret_cast<void *>(done_event);
+
+    return true;
+}
+
+static void destroy_compute_stream(Context &ctx) {
+    if (ctx.compute_stream) {
+        cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
+        cudaStreamSynchronize(nullptr);
+    }
+    if (ctx.compute_done_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_done_event));
+        ctx.compute_done_event = nullptr;
+    }
+    if (ctx.compute_ready_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_ready_event));
+        ctx.compute_ready_event = nullptr;
+    }
+    if (ctx.compute_stream) {
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
+        ctx.compute_stream = nullptr;
+    }
+}
+
+cudaStream_t context_compute_stream(Context &ctx) {
+    return reinterpret_cast<cudaStream_t>(ctx.compute_stream);
+}
+
+bool context_begin_compute_stream_work(Context &ctx, const char *operation) {
+    auto stream = context_compute_stream(ctx);
+    auto ready_event = reinterpret_cast<cudaEvent_t>(ctx.compute_ready_event);
+    if (!stream || !ready_event) {
+        ctx.last_error = std::string(operation) + ": compute stream not initialized";
+        return false;
+    }
+
+    cudaError_t err = cudaEventRecord(ready_event, nullptr);
+    if (err != cudaSuccess) {
+        std::string label = std::string(operation) + ": cudaEventRecord(compute_ready_event)";
+        set_cuda_error(ctx, label.c_str(), err);
+        return false;
+    }
+    err = cudaStreamWaitEvent(stream, ready_event, 0);
+    if (err != cudaSuccess) {
+        std::string label = std::string(operation) + ": cudaStreamWaitEvent(compute_ready_event)";
+        set_cuda_error(ctx, label.c_str(), err);
+        return false;
+    }
+    return true;
+}
+
+bool context_end_compute_stream_work(Context &ctx, const char *operation) {
+    auto stream = context_compute_stream(ctx);
+    auto done_event = reinterpret_cast<cudaEvent_t>(ctx.compute_done_event);
+    if (!stream || !done_event) {
+        ctx.last_error = std::string(operation) + ": compute stream not initialized";
+        return false;
+    }
+
+    cudaError_t err = cudaEventRecord(done_event, stream);
+    if (err != cudaSuccess) {
+        std::string label = std::string(operation) + ": cudaEventRecord(compute_done_event)";
+        set_cuda_error(ctx, label.c_str(), err);
+        return false;
+    }
+    err = cudaStreamWaitEvent(nullptr, done_event, 0);
+    if (err != cudaSuccess) {
+        std::string label = std::string(operation) + ": cudaStreamWaitEvent(compute_done_event)";
+        set_cuda_error(ctx, label.c_str(), err);
+        return false;
+    }
+    return true;
 }
 
 /* ── Allocate one SoA vector field (3 components) ── */
@@ -94,6 +202,163 @@ static void free_demag_kernel(Context &ctx) {
     if (ctx.demag_kernel.xy) { cudaFree(ctx.demag_kernel.xy); ctx.demag_kernel.xy = nullptr; }
     if (ctx.demag_kernel.xz) { cudaFree(ctx.demag_kernel.xz); ctx.demag_kernel.xz = nullptr; }
     if (ctx.demag_kernel.yz) { cudaFree(ctx.demag_kernel.yz); ctx.demag_kernel.yz = nullptr; }
+}
+
+static uint64_t grid_cell_count(const fullmag_fdm_grid_desc &grid) {
+    return static_cast<uint64_t>(grid.nx) * grid.ny * grid.nz;
+}
+
+static bool alloc_vector_field_cells(
+    Context &ctx,
+    DeviceVectorField &field,
+    uint64_t cell_count,
+    const char *label)
+{
+    size_t bytes = cell_count * scalar_size(ctx.precision);
+    auto alloc_component = [&](void **dst, const char *component) -> bool {
+        cudaError_t err = cudaMalloc(dst, bytes);
+        if (err != cudaSuccess) {
+            std::string name = std::string(label) + "." + component;
+            set_cuda_error(ctx, name.c_str(), err);
+            return false;
+        }
+        return true;
+    };
+    return alloc_component(&field.x, "x") &&
+        alloc_component(&field.y, "y") &&
+        alloc_component(&field.z, "z");
+}
+
+static bool upload_vector_field_aos_f64(
+    Context &ctx,
+    DeviceVectorField &dst,
+    const double *src_xyz,
+    uint64_t cell_count,
+    const char *label)
+{
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        std::vector<double> hx(cell_count), hy(cell_count), hz(cell_count);
+        for (uint64_t i = 0; i < cell_count; ++i) {
+            hx[i] = src_xyz[i * 3 + 0];
+            hy[i] = src_xyz[i * 3 + 1];
+            hz[i] = src_xyz[i * 3 + 2];
+        }
+        const size_t bytes = cell_count * sizeof(double);
+        cudaError_t err = cudaMemcpy(dst.x, hx.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".x").c_str(), err); return false; }
+        err = cudaMemcpy(dst.y, hy.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".y").c_str(), err); return false; }
+        err = cudaMemcpy(dst.z, hz.data(), bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".z").c_str(), err); return false; }
+        return true;
+    }
+
+    std::vector<float> hx(cell_count), hy(cell_count), hz(cell_count);
+    for (uint64_t i = 0; i < cell_count; ++i) {
+        hx[i] = static_cast<float>(src_xyz[i * 3 + 0]);
+        hy[i] = static_cast<float>(src_xyz[i * 3 + 1]);
+        hz[i] = static_cast<float>(src_xyz[i * 3 + 2]);
+    }
+    const size_t bytes = cell_count * sizeof(float);
+    cudaError_t err = cudaMemcpy(dst.x, hx.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".x").c_str(), err); return false; }
+    err = cudaMemcpy(dst.y, hy.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".y").c_str(), err); return false; }
+    err = cudaMemcpy(dst.z, hz.data(), bytes, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) { set_cuda_error(ctx, (std::string(label) + ".z").c_str(), err); return false; }
+    return true;
+}
+
+static bool alloc_tensor_kernel_cells(
+    Context &ctx,
+    DeviceDemagKernel &kernel,
+    uint64_t cell_count,
+    const char *label)
+{
+    const size_t bytes = cell_count * complex_size(ctx.precision);
+    auto alloc_component = [&](void **dst, const char *component) -> bool {
+        cudaError_t err = cudaMalloc(dst, bytes);
+        if (err != cudaSuccess) {
+            std::string name = std::string(label) + "." + component;
+            set_cuda_error(ctx, name.c_str(), err);
+            return false;
+        }
+        return true;
+    };
+    return alloc_component(&kernel.xx, "xx") &&
+        alloc_component(&kernel.yy, "yy") &&
+        alloc_component(&kernel.zz, "zz") &&
+        alloc_component(&kernel.xy, "xy") &&
+        alloc_component(&kernel.xz, "xz") &&
+        alloc_component(&kernel.yz, "yz");
+}
+
+static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
+    if (kernel.xx) { cudaFree(kernel.xx); kernel.xx = nullptr; }
+    if (kernel.yy) { cudaFree(kernel.yy); kernel.yy = nullptr; }
+    if (kernel.zz) { cudaFree(kernel.zz); kernel.zz = nullptr; }
+    if (kernel.xy) { cudaFree(kernel.xy); kernel.xy = nullptr; }
+    if (kernel.xz) { cudaFree(kernel.xz); kernel.xz = nullptr; }
+    if (kernel.yz) { cudaFree(kernel.yz); kernel.yz = nullptr; }
+}
+
+static bool upload_tensor_kernel_component(
+    Context &ctx,
+    void *dst,
+    const fullmag_fdm_complex64 *src,
+    uint64_t len,
+    const char *label)
+{
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        std::vector<cufftDoubleComplex> values(len);
+        for (uint64_t i = 0; i < len; ++i) {
+            values[i].x = src[i].re;
+            values[i].y = src[i].im;
+        }
+        cudaError_t err = cudaMemcpy(
+            dst,
+            values.data(),
+            len * sizeof(cufftDoubleComplex),
+            cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, label, err);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<cufftComplex> values(len);
+    for (uint64_t i = 0; i < len; ++i) {
+        values[i].x = static_cast<float>(src[i].re);
+        values[i].y = static_cast<float>(src[i].im);
+    }
+    cudaError_t err = cudaMemcpy(
+        dst,
+        values.data(),
+        len * sizeof(cufftComplex),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, label, err);
+        return false;
+    }
+    return true;
+}
+
+static void free_multilayer_plan_v2(Context &ctx) {
+    for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        free_vector_field(layer.m);
+        free_vector_field(layer.h_demag);
+        if (layer.active_mask) {
+            cudaFree(layer.active_mask);
+            layer.active_mask = nullptr;
+        }
+    }
+    for (DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+        free_device_demag_kernel(kernel.tensor);
+    }
+    ctx.multilayer_layers.clear();
+    ctx.multilayer_kernels.clear();
+    ctx.has_multilayer_plan_v2 = false;
 }
 
 static bool alloc_active_mask(Context &ctx) {
@@ -165,6 +430,28 @@ static bool alloc_reduction_scratch(Context &ctx) {
         return false;
     }
     ctx.reduction_scratch_len = ctx.cell_count;
+    err = cudaMalloc(reinterpret_cast<void **>(&ctx.reduction_scratch_aux),
+        ctx.cell_count * sizeof(double));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(reduction_scratch_aux)", err);
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+        ctx.reduction_scratch_len = 0;
+        return false;
+    }
+    ctx.reduction_scratch_aux_len = ctx.cell_count;
+    err = cudaMalloc(reinterpret_cast<void **>(&ctx.adaptive_policy_scratch),
+        3 * sizeof(double));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(adaptive_policy_scratch)", err);
+        cudaFree(ctx.reduction_scratch_aux);
+        ctx.reduction_scratch_aux = nullptr;
+        ctx.reduction_scratch_aux_len = 0;
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+        ctx.reduction_scratch_len = 0;
+        return false;
+    }
     return true;
 }
 
@@ -174,6 +461,15 @@ static void free_reduction_scratch(Context &ctx) {
         ctx.reduction_scratch = nullptr;
     }
     ctx.reduction_scratch_len = 0;
+    if (ctx.reduction_scratch_aux) {
+        cudaFree(ctx.reduction_scratch_aux);
+        ctx.reduction_scratch_aux = nullptr;
+    }
+    ctx.reduction_scratch_aux_len = 0;
+    if (ctx.adaptive_policy_scratch) {
+        cudaFree(ctx.adaptive_policy_scratch);
+        ctx.adaptive_policy_scratch = nullptr;
+    }
 }
 
 static bool ensure_preview_download_scratch(Context &ctx, size_t required_bytes) {
@@ -209,6 +505,10 @@ static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
         snapshot.done_event = nullptr;
     }
+    if (snapshot.staging_done_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
+        snapshot.staging_done_event = nullptr;
+    }
     if (snapshot.ready_event) {
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
         snapshot.ready_event = nullptr;
@@ -230,6 +530,10 @@ static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
     if (snapshot.done_event) {
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
         snapshot.done_event = nullptr;
+    }
+    if (snapshot.staging_done_event) {
+        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
+        snapshot.staging_done_event = nullptr;
     }
     if (snapshot.ready_event) {
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
@@ -330,67 +634,141 @@ static bool alloc_fft_workspace(Context &ctx) {
     ctx.fft_cell_count =
         static_cast<uint64_t>(ctx.fft_nx) * ctx.fft_ny * ctx.fft_nz;
 
+    if (ctx.fft_cell_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        ctx.last_error = "demag FFT component stride exceeds cuFFT PlanMany limit";
+        return false;
+    }
+
+    const int rank = ctx.thin_film_2d_demag ? 2 : 3;
+    int dims[3] = {};
+    if (ctx.thin_film_2d_demag) {
+        dims[0] = static_cast<int>(ctx.fft_ny);
+        dims[1] = static_cast<int>(ctx.fft_nx);
+    } else {
+        dims[0] = static_cast<int>(ctx.fft_nz);
+        dims[1] = static_cast<int>(ctx.fft_ny);
+        dims[2] = static_cast<int>(ctx.fft_nx);
+    }
+    int inembed[3] = {dims[0], dims[1], dims[2]};
+    int onembed[3] = {dims[0], dims[1], dims[2]};
+    const int component_stride = static_cast<int>(ctx.fft_cell_count);
+
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         size_t bytes = ctx.fft_cell_count * sizeof(cufftDoubleComplex);
-        cudaError_t err = cudaMalloc(&ctx.fft_x, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_x)", err); return false; }
-        err = cudaMalloc(&ctx.fft_y, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_y)", err); return false; }
-        err = cudaMalloc(&ctx.fft_z, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_z)", err); return false; }
+        cudaError_t err = cudaMalloc(&ctx.fft_x, bytes * 3);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_xyz)", err); return false; }
+        auto *base = static_cast<cufftDoubleComplex*>(ctx.fft_x);
+        ctx.fft_y = base + ctx.fft_cell_count;
+        ctx.fft_z = base + (2 * ctx.fft_cell_count);
+        ctx.fft_component_stride = ctx.fft_cell_count;
+        ctx.fft_components_share_allocation = true;
 
-        cufftResult fft_err =
-            ctx.thin_film_2d_demag
-                ? cufftPlan2d(
-                      &ctx.fft_plan,
-                      static_cast<int>(ctx.fft_ny),
-                      static_cast<int>(ctx.fft_nx),
-                      CUFFT_Z2Z)
-                : cufftPlan3d(
-                      &ctx.fft_plan,
-                      static_cast<int>(ctx.fft_nz),
-                      static_cast<int>(ctx.fft_ny),
-                      static_cast<int>(ctx.fft_nx),
-                      CUFFT_Z2Z);
+        cufftResult fft_err = cufftCreate(&ctx.fft_plan);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(
-                ctx,
-                ctx.thin_film_2d_demag ? "cufftPlan2d(Z2Z)" : "cufftPlan3d(Z2Z)",
-                fft_err);
+            set_cufft_error(ctx, "cufftCreate(Z2Z, batch=3)", fft_err);
+            return false;
+        }
+        ctx.fft_plan_valid = true;
+
+        fft_err = cufftSetAutoAllocation(ctx.fft_plan, 0);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetAutoAllocation(Z2Z, batch=3)", fft_err);
+            return false;
+        }
+
+        size_t work_area_bytes = 0;
+        fft_err = cufftMakePlanMany(
+            ctx.fft_plan,
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            CUFFT_Z2Z,
+            3,
+            &work_area_bytes);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftMakePlanMany(Z2Z, batch=3)", fft_err);
+            return false;
+        }
+
+        ctx.fft_work_area_bytes = static_cast<uint64_t>(work_area_bytes);
+        if (work_area_bytes > 0) {
+            err = cudaMalloc(&ctx.fft_work_area, work_area_bytes);
+            if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_work_area)", err); return false; }
+        }
+        fft_err = cufftSetWorkArea(ctx.fft_plan, ctx.fft_work_area);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetWorkArea(Z2Z, batch=3)", fft_err);
+            return false;
+        }
+        fft_err = cufftSetStream(ctx.fft_plan, context_compute_stream(ctx));
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetStream(Z2Z, batch=3)", fft_err);
             return false;
         }
     } else {
         size_t bytes = ctx.fft_cell_count * sizeof(cufftComplex);
-        cudaError_t err = cudaMalloc(&ctx.fft_x, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_x)", err); return false; }
-        err = cudaMalloc(&ctx.fft_y, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_y)", err); return false; }
-        err = cudaMalloc(&ctx.fft_z, bytes);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_z)", err); return false; }
+        cudaError_t err = cudaMalloc(&ctx.fft_x, bytes * 3);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_xyz)", err); return false; }
+        auto *base = static_cast<cufftComplex*>(ctx.fft_x);
+        ctx.fft_y = base + ctx.fft_cell_count;
+        ctx.fft_z = base + (2 * ctx.fft_cell_count);
+        ctx.fft_component_stride = ctx.fft_cell_count;
+        ctx.fft_components_share_allocation = true;
 
-        cufftResult fft_err =
-            ctx.thin_film_2d_demag
-                ? cufftPlan2d(
-                      &ctx.fft_plan,
-                      static_cast<int>(ctx.fft_ny),
-                      static_cast<int>(ctx.fft_nx),
-                      CUFFT_C2C)
-                : cufftPlan3d(
-                      &ctx.fft_plan,
-                      static_cast<int>(ctx.fft_nz),
-                      static_cast<int>(ctx.fft_ny),
-                      static_cast<int>(ctx.fft_nx),
-                      CUFFT_C2C);
+        cufftResult fft_err = cufftCreate(&ctx.fft_plan);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(
-                ctx,
-                ctx.thin_film_2d_demag ? "cufftPlan2d(C2C)" : "cufftPlan3d(C2C)",
-                fft_err);
+            set_cufft_error(ctx, "cufftCreate(C2C, batch=3)", fft_err);
+            return false;
+        }
+        ctx.fft_plan_valid = true;
+
+        fft_err = cufftSetAutoAllocation(ctx.fft_plan, 0);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetAutoAllocation(C2C, batch=3)", fft_err);
+            return false;
+        }
+
+        size_t work_area_bytes = 0;
+        fft_err = cufftMakePlanMany(
+            ctx.fft_plan,
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            CUFFT_C2C,
+            3,
+            &work_area_bytes);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftMakePlanMany(C2C, batch=3)", fft_err);
+            return false;
+        }
+
+        ctx.fft_work_area_bytes = static_cast<uint64_t>(work_area_bytes);
+        if (work_area_bytes > 0) {
+            err = cudaMalloc(&ctx.fft_work_area, work_area_bytes);
+            if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(fft_work_area)", err); return false; }
+        }
+        fft_err = cufftSetWorkArea(ctx.fft_plan, ctx.fft_work_area);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetWorkArea(C2C, batch=3)", fft_err);
+            return false;
+        }
+        fft_err = cufftSetStream(ctx.fft_plan, context_compute_stream(ctx));
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetStream(C2C, batch=3)", fft_err);
             return false;
         }
     }
 
-    ctx.fft_plan_valid = true;
     return true;
 }
 
@@ -400,15 +778,30 @@ static void free_fft_workspace(Context &ctx) {
         ctx.fft_plan = 0;
         ctx.fft_plan_valid = false;
     }
-    if (ctx.fft_x) { cudaFree(ctx.fft_x); ctx.fft_x = nullptr; }
-    if (ctx.fft_y) { cudaFree(ctx.fft_y); ctx.fft_y = nullptr; }
-    if (ctx.fft_z) { cudaFree(ctx.fft_z); ctx.fft_z = nullptr; }
+    if (ctx.fft_work_area) {
+        cudaFree(ctx.fft_work_area);
+        ctx.fft_work_area = nullptr;
+    }
+    ctx.fft_work_area_bytes = 0;
+    if (ctx.fft_components_share_allocation) {
+        if (ctx.fft_x) { cudaFree(ctx.fft_x); }
+        ctx.fft_x = nullptr;
+        ctx.fft_y = nullptr;
+        ctx.fft_z = nullptr;
+    } else {
+        if (ctx.fft_x) { cudaFree(ctx.fft_x); ctx.fft_x = nullptr; }
+        if (ctx.fft_y) { cudaFree(ctx.fft_y); ctx.fft_y = nullptr; }
+        if (ctx.fft_z) { cudaFree(ctx.fft_z); ctx.fft_z = nullptr; }
+    }
     ctx.fft_cell_count = 0;
+    ctx.fft_component_stride = 0;
+    ctx.fft_components_share_allocation = false;
 }
 
 /* ── Public context functions ── */
 
 bool context_alloc_device(Context &ctx) {
+    if (!create_compute_stream(ctx)) return false;
     if (!alloc_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
     if (!alloc_exchange_lut(ctx)) return false;
@@ -493,6 +886,8 @@ bool context_alloc_device(Context &ctx) {
 }
 
 void context_free_device(Context &ctx) {
+    destroy_compute_stream(ctx);
+    free_multilayer_plan_v2(ctx);
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
@@ -648,6 +1043,157 @@ bool context_upload_demag_kernel_spectra(
         && convert_and_upload(ctx.demag_kernel.xy, kxy, "cudaMemcpy(kern_xy)")
         && convert_and_upload(ctx.demag_kernel.xz, kxz, "cudaMemcpy(kern_xz)")
         && convert_and_upload(ctx.demag_kernel.yz, kyz, "cudaMemcpy(kern_yz)");
+}
+
+bool context_upload_multilayer_plan_v2(
+    Context &ctx,
+    const fullmag_fdm_multilayer_plan_desc_v2 &plan)
+{
+    free_multilayer_plan_v2(ctx);
+    ctx.has_multilayer_plan_v2 = true;
+    ctx.multilayer_layers.reserve(plan.layer_count);
+    ctx.multilayer_kernels.reserve(plan.kernel_count);
+
+    auto fail = [&]() -> bool {
+        free_multilayer_plan_v2(ctx);
+        return false;
+    };
+
+    for (uint32_t i = 0; i < plan.layer_count; ++i) {
+        const fullmag_fdm_layer_desc_v2 &src = plan.layers[i];
+        ctx.multilayer_layers.emplace_back();
+        DeviceMultilayerLayer &dst = ctx.multilayer_layers.back();
+        dst.native_grid = src.native_grid;
+        dst.convolution_grid = src.convolution_grid;
+        dst.layer_index = src.layer_index;
+        dst.z_offset_cells = src.z_offset_cells;
+        dst.material = src.material;
+        dst.cell_count = grid_cell_count(src.native_grid);
+        dst.convolution_cell_count = grid_cell_count(src.convolution_grid);
+        dst.has_active_mask = src.active_mask != nullptr;
+
+        if (!alloc_vector_field_cells(ctx, dst.m, dst.cell_count, "multilayer_m")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.h_demag, dst.cell_count, "multilayer_h_demag")) {
+            return fail();
+        }
+        if (!upload_vector_field_aos_f64(
+                ctx,
+                dst.m,
+                src.initial_magnetization_xyz,
+                dst.cell_count,
+                "cudaMemcpy(multilayer_m)"))
+        {
+            return fail();
+        }
+        const size_t layer_bytes = dst.cell_count * scalar_size(ctx.precision);
+        cudaError_t zero_err = cudaMemset(dst.h_demag.x, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_demag.x)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_demag.y, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_demag.y)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_demag.z, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_demag.z)", zero_err);
+            return fail();
+        }
+        if (dst.has_active_mask) {
+            cudaError_t err = cudaMalloc(
+                reinterpret_cast<void **>(&dst.active_mask),
+                dst.cell_count * sizeof(uint8_t));
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMalloc(multilayer_active_mask)", err);
+                return fail();
+            }
+            err = cudaMemcpy(
+                dst.active_mask,
+                src.active_mask,
+                dst.cell_count * sizeof(uint8_t),
+                cudaMemcpyHostToDevice);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemcpy(multilayer_active_mask)", err);
+                return fail();
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < plan.kernel_count; ++i) {
+        const fullmag_fdm_tensor_kernel_desc_v2 &src = plan.kernels[i];
+        ctx.multilayer_kernels.emplace_back();
+        DeviceMultilayerTensorKernel &dst = ctx.multilayer_kernels.back();
+        dst.fft_grid = src.fft_grid;
+        dst.dst_layer = src.dst_layer;
+        dst.src_layer = src.src_layer;
+        dst.z_shift_meters = src.z_shift_meters;
+        dst.kernel_len = src.kernel_len;
+
+        if (!alloc_tensor_kernel_cells(ctx, dst.tensor, dst.kernel_len, "multilayer_kernel")) {
+            return fail();
+        }
+        if (!upload_tensor_kernel_component(
+                ctx, dst.tensor.xx, src.kernel_xx, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_xx)") ||
+            !upload_tensor_kernel_component(
+                ctx, dst.tensor.yy, src.kernel_yy, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_yy)") ||
+            !upload_tensor_kernel_component(
+                ctx, dst.tensor.zz, src.kernel_zz, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_zz)") ||
+            !upload_tensor_kernel_component(
+                ctx, dst.tensor.xy, src.kernel_xy, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_xy)") ||
+            !upload_tensor_kernel_component(
+                ctx, dst.tensor.xz, src.kernel_xz, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_xz)") ||
+            !upload_tensor_kernel_component(
+                ctx, dst.tensor.yz, src.kernel_yz, dst.kernel_len,
+                "cudaMemcpy(multilayer_kernel_yz)"))
+        {
+            return fail();
+        }
+    }
+
+    return true;
+}
+
+bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
+    if (!ctx.has_multilayer_plan_v2 || !ctx.enable_demag) {
+        return true;
+    }
+    if (ctx.multilayer_kernels.empty()) {
+        ctx.last_error = "multilayer FFT workspace requires at least one tensor kernel";
+        return false;
+    }
+
+    const DeviceMultilayerTensorKernel &first = ctx.multilayer_kernels.front();
+    for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+        if (kernel.fft_grid.nx != first.fft_grid.nx ||
+            kernel.fft_grid.ny != first.fft_grid.ny ||
+            kernel.fft_grid.nz != first.fft_grid.nz ||
+            kernel.kernel_len != first.kernel_len)
+        {
+            ctx.last_error =
+                "multilayer FFT workspace requires a shared fft_grid until heterogeneous workspace support is implemented";
+            return false;
+        }
+    }
+
+    if (!create_compute_stream(ctx)) {
+        return false;
+    }
+
+    free_fft_workspace(ctx);
+    ctx.fft_nx = first.fft_grid.nx;
+    ctx.fft_ny = first.fft_grid.ny;
+    ctx.fft_nz = first.fft_grid.nz;
+    ctx.thin_film_2d_demag = first.fft_grid.nz == 1;
+    return alloc_fft_workspace(ctx);
 }
 
 /* ── Boundary correction upload ── */
@@ -1426,6 +1972,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.ready_event)", err);
     snapshot->ready_event = reinterpret_cast<void *>(ready_event);
 
+    cudaEvent_t staging_done_event{};
+    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.staging_done_event)", err);
+    snapshot->staging_done_event = reinterpret_cast<void *>(staging_done_event);
+
     cudaEvent_t done_event{};
     err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
     if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.done_event)", err);
@@ -1529,21 +2080,27 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             return fail_message("unsupported async snapshot observable");
     }
 
-    err = cudaMemcpyAsync(
-        snapshot->staging.x, field->x, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.x)", err);
-    err = cudaMemcpyAsync(
-        snapshot->staging.y, field->y, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.y)", err);
-    err = cudaMemcpyAsync(
-        snapshot->staging.z, field->z, component_bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.z)", err);
-
     err = cudaEventRecord(ready_event, nullptr);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.ready_event)", err);
 
     err = cudaStreamWaitEvent(io_stream, ready_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.ready_event)", err);
+
+    err = cudaMemcpyAsync(
+        snapshot->staging.x, field->x, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.x)", err);
+    err = cudaMemcpyAsync(
+        snapshot->staging.y, field->y, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.y)", err);
+    err = cudaMemcpyAsync(
+        snapshot->staging.z, field->z, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.z)", err);
+
+    err = cudaEventRecord(staging_done_event, io_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.staging_done_event)", err);
+
+    err = cudaStreamWaitEvent(nullptr, staging_done_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.staging_done_event)", err);
 
     auto *host_bytes = static_cast<unsigned char *>(snapshot->host_soa);
     err = cudaMemcpyAsync(
@@ -1656,6 +2213,30 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return nullptr;
     };
 
+    cudaError_t err =
+        cudaHostAlloc(&snapshot->host_xyz, snapshot->host_xyz_len_bytes, cudaHostAllocDefault);
+    if (err != cudaSuccess) return fail("cudaHostAlloc(preview_snapshot.host_xyz)", err);
+
+    cudaStream_t io_stream{};
+    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
+    if (err != cudaSuccess) return fail("cudaStreamCreate(preview_snapshot.io_stream)", err);
+    snapshot->stream = reinterpret_cast<void *>(io_stream);
+
+    cudaEvent_t ready_event{};
+    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.ready_event)", err);
+    snapshot->ready_event = reinterpret_cast<void *>(ready_event);
+
+    cudaEvent_t staging_done_event{};
+    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.staging_done_event)", err);
+    snapshot->staging_done_event = reinterpret_cast<void *>(staging_done_event);
+
+    cudaEvent_t done_event{};
+    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.done_event)", err);
+    snapshot->done_event = reinterpret_cast<void *>(done_event);
+
     const DeviceVectorField *field = nullptr;
     switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M:
@@ -1728,25 +2309,6 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         default:
             return fail_message("unsupported async preview observable");
     }
-
-    cudaError_t err =
-        cudaHostAlloc(&snapshot->host_xyz, snapshot->host_xyz_len_bytes, cudaHostAllocDefault);
-    if (err != cudaSuccess) return fail("cudaHostAlloc(preview_snapshot.host_xyz)", err);
-
-    cudaStream_t io_stream{};
-    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
-    if (err != cudaSuccess) return fail("cudaStreamCreate(preview_snapshot.io_stream)", err);
-    snapshot->stream = reinterpret_cast<void *>(io_stream);
-
-    cudaEvent_t ready_event{};
-    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.ready_event)", err);
-    snapshot->ready_event = reinterpret_cast<void *>(ready_event);
-
-    cudaEvent_t done_event{};
-    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.done_event)", err);
-    snapshot->done_event = reinterpret_cast<void *>(done_event);
 
     if (observable == FULLMAG_FDM_OBSERVABLE_H_EXT) {
         if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
@@ -1856,11 +2418,17 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
     err = cudaMalloc(&snapshot->device_xyz, snapshot->host_xyz_len_bytes);
     if (err != cudaSuccess) return fail("cudaMalloc(preview_snapshot.device_xyz)", err);
 
+    err = cudaEventRecord(ready_event, nullptr);
+    if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.ready_event)", err);
+
+    err = cudaStreamWaitEvent(io_stream, ready_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(preview_snapshot.ready_event)", err);
+
     constexpr uint32_t threads_per_block = 256;
     uint32_t blocks = static_cast<uint32_t>(
         (snapshot->preview_count + threads_per_block - 1) / threads_per_block);
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        downsample_field_preview_kernel<double, double><<<blocks, threads_per_block>>>(
+        downsample_field_preview_kernel<double, double><<<blocks, threads_per_block, 0, io_stream>>>(
             reinterpret_cast<const double *>(field->x),
             reinterpret_cast<const double *>(field->y),
             reinterpret_cast<const double *>(field->z),
@@ -1874,7 +2442,7 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             z_stride,
             reinterpret_cast<double *>(snapshot->device_xyz));
     } else {
-        downsample_field_preview_kernel<float, float><<<blocks, threads_per_block>>>(
+        downsample_field_preview_kernel<float, float><<<blocks, threads_per_block, 0, io_stream>>>(
             reinterpret_cast<const float *>(field->x),
             reinterpret_cast<const float *>(field->y),
             reinterpret_cast<const float *>(field->z),
@@ -1894,11 +2462,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return fail("downsample_field_preview_kernel(async)", err);
     }
 
-    err = cudaEventRecord(ready_event, nullptr);
-    if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.ready_event)", err);
+    err = cudaEventRecord(staging_done_event, io_stream);
+    if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.staging_done_event)", err);
 
-    err = cudaStreamWaitEvent(io_stream, ready_event, 0);
-    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(preview_snapshot.ready_event)", err);
+    err = cudaStreamWaitEvent(nullptr, staging_done_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(preview_snapshot.staging_done_event)", err);
 
     err = cudaMemcpyAsync(
         snapshot->host_xyz,

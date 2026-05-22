@@ -154,15 +154,22 @@ Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, obja
 
 #### [MODIFY] crates/fullmag-fdm-sys/src/lib.rs
 - Zmodyfikować bindingi C, tworząc wersję 2 API.
-- Zadeklarować enum type the plan: `fullmag_fdm_plan_kind` (`FULLMAG_FDM_PLAN_UNIFORM_GRID`, `FULLMAG_FDM_PLAN_MULTILAYER_CONV`).
-- Opisać `fullmag_fdm_layer_desc_v2` (posiadające i grid natywny, i wirtualny convolution_grid).
-- Opisać `fullmag_fdm_multilayer_plan_desc_v2` przechowujące referencję na tablice `kernels` pre-kalkulowanych z Rust na hoscie.
+- [x] Zadeklarować enum typu planu: `fullmag_fdm_plan_kind` (`FULLMAG_FDM_PLAN_UNIFORM_GRID`, `FULLMAG_FDM_PLAN_MULTILAYER_CONV`).
+- [x] Opisać `fullmag_fdm_layer_desc_v2` (posiadające i grid natywny, i wirtualny convolution_grid).
+- [x] Opisać `fullmag_fdm_tensor_kernel_desc_v2` oraz `fullmag_fdm_multilayer_plan_desc_v2` przechowujące referencję na tablice `kernels` pre-kalkulowanych z Rust na hoscie.
+- [x] Dodać wykonawczy entrypoint `fullmag_fdm_backend_create_v2` oraz walidację planu po stronie native CUDA z jawnym statusem unsupported dla poprawnych planów multilayer.
+- [x] Dodać upload/staging warstw i tensor-kerneli do urządzenia w `Context`.
+- [x] Dodać pierwszego właściciela CUDA dla identity-grid `push_m`, `multiply_demag_tensor_kernel(...)` i `pull_h` w fp64/fp32.
+- [x] Przygotować shared cuFFT workspace dla v2 multilayer, gdy wszystkie pary warstw używają jednego `fft_grid`.
+- [x] Wpiąć staged v2 handle w `step()` do poziomu odświeżenia natywnego multilayer demag przed jawnym unsupported dla nieukończonego timestep execution.
+- [ ] Dodać właściwy native CUDA execution path dla `multilayer_convolution`: workspace/plany FFT per przypadek, transfer maps dla heterogenicznych siatek i wpięcie w timestep.
 
-#### [MODIFY] native/backends/fdm/src/... (C/CUDA)
+#### [MODIFY] native/backends/fdm/api, native/backends/fdm/core, native/backends/fdm/cuda/... (C/CUDA)
 - Przepisać deskryptory setupu pod v2 logic.
 - Dodać kopiowanie z Host to Device prekompilowanych struktur tensorów multi-level `kernels`.
-- Wdrożyć w CUDA generyczny kernel mnożący `multiply_demag_tensor_kernel(...)`.
-- Zaimplementować fast memory `push_m` (scatter/gather z redukcjonalnymi operacjami 3D) i interpolacje sprzętową z CUDA (Texture memory l-erping dla `pull_h`).
+- [x] Wdrożyć w CUDA pierwszy kernel mnożący `multiply_demag_tensor_kernel(...)` dla identity-grid slice.
+- [x] Wdrożyć identity-grid `push_m` / `pull_h` boundary w `cuda/demag/multilayer_convolution.cu`.
+- [ ] Zaimplementować fast memory `push_m` dla niezgodnych siatek przez transfer maps oraz interpolacje sprzętową z CUDA dla `pull_h`.
 
 #### [MODIFY] crates/fullmag-runner/src/native_fdm.rs
 - Wypełnić wywołania API nowymi tablicami wskaźników z pamięci Rust do memory C używając structów v2.

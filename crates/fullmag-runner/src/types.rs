@@ -1116,6 +1116,8 @@ pub struct ExecutionProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
     /// FFT backend used: "rustfft" (CPU) or "cuFFT" (CUDA).
+    /// CPU FDM demag resolves this through `FULLMAG_CPU_FFT_BACKEND`;
+    /// unsupported CPU backends fail instead of silently falling back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fft_backend: Option<String>,
     /// GPU device name, if applicable.

@@ -87,7 +87,10 @@ describe("viewport smoke projection round-trip", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
     expect(smokeScript).toContain("verifyDimensionFrameCage");
-    expect(smokeScript).toContain('name: "Floor + vertical"');
+    expect(smokeScript).toContain("selectDimensionFrameMode(page, \"Off\")");
+    expect(smokeScript).toContain("selectDimensionFrameMode(page, \"Floor + vertical\")");
+    expect(smokeScript).toContain("minimumChangedPixels: 1");
+    expect(smokeScript).toContain("waitForBrowserPaint");
     expect(smokeScript).toContain("viewport-3d.dimension-frame-cage");
     expect(smokeScript).toContain("dimension frame canvas renders after cage mode");
     expect(smokeScript).toContain(

@@ -51,6 +51,11 @@ typedef enum {
 } fullmag_fdm_precision;
 
 typedef enum {
+    FULLMAG_FDM_PLAN_UNIFORM_GRID = 0,
+    FULLMAG_FDM_PLAN_MULTILAYER_CONV = 1,
+} fullmag_fdm_plan_kind;
+
+typedef enum {
     FULLMAG_FDM_INTEGRATOR_HEUN = 1,
     FULLMAG_FDM_INTEGRATOR_DP45 = 2,
     FULLMAG_FDM_INTEGRATOR_ABM3 = 3,
@@ -78,6 +83,11 @@ typedef enum {
     FULLMAG_FDM_BOUNDARY_FULL   = 2,  /* T1: ECB stencil + H_corr    */
 } fullmag_fdm_boundary_correction;
 
+typedef enum {
+    FULLMAG_FDM_STATS_FULL = 0,  /* default: preserve existing per-step diagnostics */
+    FULLMAG_FDM_STATS_NONE = 1,  /* step returns only step/time/dt metadata */
+} fullmag_fdm_stats_mode;
+
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
 /* ── Plan descriptor ── */
@@ -97,6 +107,61 @@ typedef struct {
     double damping;                    /* dimensionless */
     double gyromagnetic_ratio;         /* m/(A·s), Gilbert form */
 } fullmag_fdm_material_desc;
+
+typedef struct {
+    double re;
+    double im;
+} fullmag_fdm_complex64;
+
+typedef struct {
+    float re;
+    float im;
+} fullmag_fdm_complex32;
+
+typedef struct {
+    fullmag_fdm_grid_desc      native_grid;
+    fullmag_fdm_grid_desc      convolution_grid;
+    uint32_t                   layer_index;
+    int32_t                    z_offset_cells;
+    fullmag_fdm_material_desc  material;
+    const double              *initial_magnetization_xyz;
+    uint64_t                   initial_magnetization_len;
+    const uint8_t             *active_mask;
+    uint64_t                   active_mask_len;
+} fullmag_fdm_layer_desc_v2;
+
+typedef struct {
+    fullmag_fdm_grid_desc      fft_grid;
+    uint32_t                   dst_layer;
+    uint32_t                   src_layer;
+    double                     z_shift_meters;
+    const fullmag_fdm_complex64 *kernel_xx;
+    const fullmag_fdm_complex64 *kernel_yy;
+    const fullmag_fdm_complex64 *kernel_zz;
+    const fullmag_fdm_complex64 *kernel_xy;
+    const fullmag_fdm_complex64 *kernel_xz;
+    const fullmag_fdm_complex64 *kernel_yz;
+    uint64_t                   kernel_len;
+} fullmag_fdm_tensor_kernel_desc_v2;
+
+typedef struct {
+    fullmag_fdm_plan_kind      kind;
+    fullmag_fdm_precision      precision;
+    fullmag_fdm_integrator     integrator;
+    int                        disable_precession;
+    int                        enable_exchange;
+    int                        enable_demag;
+    const fullmag_fdm_layer_desc_v2 *layers;
+    uint32_t                   layer_count;
+    const fullmag_fdm_tensor_kernel_desc_v2 *kernels;
+    uint32_t                   kernel_count;
+    double                     adaptive_max_error;
+    double                     adaptive_dt_min;
+    double                     adaptive_dt_max;
+    double                     adaptive_headroom;
+    fullmag_fdm_stats_mode     stats_mode;
+    uint32_t                   stats_stride;
+} fullmag_fdm_multilayer_plan_desc_v2;
 
 typedef struct {
     fullmag_fdm_grid_desc      grid;
@@ -279,6 +344,15 @@ typedef struct {
     double                     adaptive_dt_min;      /* 0 → use default 1e-18 */
     double                     adaptive_dt_max;      /* 0 → use default 1e-10 */
     double                     adaptive_headroom;    /* 0 → use default 0.8 */
+
+    /*
+     * Step-end scalar diagnostics.  FULL preserves legacy behavior.  NONE
+     * avoids expensive energy/norm reductions inside the step path; callers can
+     * use fullmag_fdm_backend_snapshot_stats when full diagnostics are needed.
+     * stats_stride = 0 is treated as 1.
+     */
+    fullmag_fdm_stats_mode     stats_mode;
+    uint32_t                   stats_stride;
 } fullmag_fdm_plan_desc;
 
 /* ── Per-step diagnostics ── */
@@ -340,6 +414,18 @@ int fullmag_fdm_is_available(void);
  */
 fullmag_fdm_backend *fullmag_fdm_backend_create(
     const fullmag_fdm_plan_desc *plan);
+
+/**
+ * Create a backend handle from the v2 executable FDM plan descriptor.
+ *
+ * This entrypoint validates multilayer convolution plans without overloading
+ * the legacy single-grid plan.  Until native multilayer CUDA execution is
+ * implemented, a valid multilayer plan returns a handle carrying a clear
+ * last_error message rather than silently falling back to single-grid
+ * execution.
+ */
+fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
+    const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
 /**
  * Execute one time step of length dt_seconds using the configured integrator.

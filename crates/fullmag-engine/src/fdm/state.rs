@@ -2,7 +2,8 @@
 
 use crate::vector::normalized;
 use crate::{
-    EngineError, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3, VectorFieldSoA,
+    EngineError, EvaluationRequest, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3,
+    VectorFieldSoA,
 };
 
 // ── ExchangeLlgStateSoA ───────────────────────────────────────────────
@@ -49,11 +50,12 @@ impl ExchangeLlgStateSoA {
         }
     }
 
-    /// Write SoA magnetization back into an existing AoS state (no allocation
-    /// if the AoS state already has the correct length).
+    /// Write SoA state back into an existing AoS state.
     pub fn write_back_to(&self, state: &mut ExchangeLlgState) {
         self.magnetization.gather_into_aos(&mut state.magnetization);
         state.time_seconds = self.time_seconds;
+        state.k_fsal = self.k_fsal.as_ref().map(|k| k.gather_to_aos());
+        state.abm_history = self.abm_history.to_aos();
     }
 
     /// Number of cells.
@@ -112,6 +114,44 @@ impl AbmHistorySoA {
     #[allow(dead_code)]
     pub(crate) fn restart(&mut self) {
         *self = Self::new();
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.startup_steps >= 3
+            && self.f_n.is_some()
+            && self.f_n_minus_1.is_some()
+            && self.f_n_minus_2.is_some()
+    }
+
+    pub(crate) fn f_n(&self) -> Option<&VectorFieldSoA> {
+        self.f_n.as_ref()
+    }
+
+    pub(crate) fn f_n_minus_1(&self) -> Option<&VectorFieldSoA> {
+        self.f_n_minus_1.as_ref()
+    }
+
+    pub(crate) fn f_n_minus_2(&self) -> Option<&VectorFieldSoA> {
+        self.f_n_minus_2.as_ref()
+    }
+
+    pub(crate) fn push_copy_from_soa(&mut self, f: &VectorFieldSoA, dt: f64) {
+        // Check if dt has changed significantly — if so, restart.
+        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
+            self.restart();
+        }
+
+        let mut newest = self
+            .f_n_minus_2
+            .take()
+            .unwrap_or_else(|| VectorFieldSoA::zeros(f.len()));
+        newest.copy_from(f);
+
+        self.f_n_minus_2 = self.f_n_minus_1.take();
+        self.f_n_minus_1 = self.f_n.take();
+        self.f_n = Some(newest);
+        self.startup_steps = (self.startup_steps + 1).min(3);
+        self.last_dt = dt;
     }
 }
 
@@ -300,6 +340,8 @@ pub struct StepReport {
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,
+    pub anisotropy_energy_joules: f64,
+    pub dmi_energy_joules: f64,
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
@@ -320,6 +362,8 @@ pub struct EffectiveFieldObservables {
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,
+    pub anisotropy_energy_joules: f64,
+    pub dmi_energy_joules: f64,
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
@@ -336,6 +380,8 @@ pub struct RhsEvaluation {
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,
+    pub anisotropy_energy_joules: f64,
+    pub dmi_energy_joules: f64,
     pub total_energy_joules: f64,
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
@@ -359,6 +405,8 @@ impl RhsEvaluation {
             exchange_energy_joules: self.exchange_energy_joules,
             demag_energy_joules: self.demag_energy_joules,
             external_energy_joules: self.external_energy_joules,
+            anisotropy_energy_joules: self.anisotropy_energy_joules,
+            dmi_energy_joules: self.dmi_energy_joules,
             total_energy_joules: self.total_energy_joules,
             max_effective_field_amplitude: self.max_effective_field_amplitude,
             max_demag_field_amplitude: self.max_demag_field_amplitude,
@@ -375,6 +423,9 @@ impl RhsEvaluation {
 pub struct IntegratorBuffers {
     /// k-stage buffers (k1..k7).  RK45 needs 7, others need fewer.
     pub k: [Vec<Vector3>; 7],
+    /// Structure-of-arrays k/stage buffers for CPU hot paths that avoid AoS
+    /// RHS staging.
+    pub soa: IntegratorBuffersSoA,
     /// Intermediate delta workspace (weighted sum of k-stages × dt).
     pub delta: Vec<Vector3>,
     /// Intermediate magnetization state for sub-stages.
@@ -395,6 +446,7 @@ impl IntegratorBuffers {
         let zero = || vec![[0.0, 0.0, 0.0]; n];
         Self {
             k: [zero(), zero(), zero(), zero(), zero(), zero(), zero()],
+            soa: IntegratorBuffersSoA::new(n),
             delta: zero(),
             m_stage: zero(),
             m0: zero(),
@@ -405,12 +457,37 @@ impl IntegratorBuffers {
     }
 }
 
+/// Structure-of-arrays stage buffers for integrators with SoA hot paths.
+#[derive(Debug, Clone)]
+pub struct IntegratorBuffersSoA {
+    /// k-stage buffers (k1..k7).  RK45 needs 7, others need fewer.
+    pub k: [VectorFieldSoA; 7],
+    /// Intermediate magnetization state for sub-stages.
+    pub m_stage: VectorFieldSoA,
+    /// Backup of initial magnetization at start of step.
+    pub m0: VectorFieldSoA,
+    /// Effective field workspace reused across RHS evaluations.
+    pub h_eff: VectorFieldSoA,
+}
+
+impl IntegratorBuffersSoA {
+    pub fn new(n: usize) -> Self {
+        Self {
+            k: std::array::from_fn(|_| VectorFieldSoA::zeros(n)),
+            m_stage: VectorFieldSoA::zeros(n),
+            m0: VectorFieldSoA::zeros(n),
+            h_eff: VectorFieldSoA::zeros(n),
+        }
+    }
+}
+
 // ── SolverSession ──────────────────────────────────────────────────────
 
 /// Persistent solver session bundling all per-simulation resources.
 pub struct SolverSession {
     problem: ExchangeLlgProblem,
     state: ExchangeLlgState,
+    state_soa: Option<ExchangeLlgStateSoA>,
     fft_ws: FftWorkspace,
     bufs: IntegratorBuffers,
     step_count: u64,
@@ -420,11 +497,17 @@ impl SolverSession {
     /// Create a new solver session with the given problem and initial magnetization.
     pub fn new(problem: ExchangeLlgProblem, magnetization: Vec<Vector3>) -> Result<Self> {
         let state = ExchangeLlgState::new(problem.grid, magnetization)?;
+        let state_soa = if problem.soa_fast_path_supported() {
+            Some(state.to_soa())
+        } else {
+            None
+        };
         let fft_ws = problem.create_workspace();
         let bufs = problem.create_integrator_buffers();
         Ok(Self {
             problem,
             state,
+            state_soa,
             fft_ws,
             bufs,
             step_count: 0,
@@ -433,14 +516,31 @@ impl SolverSession {
 
     /// Advance the simulation by one time step.
     pub fn step(&mut self, dt: f64) -> Result<StepReport> {
-        let report = self.problem.step_with_buffers(
-            &mut self.state,
-            dt,
-            &mut self.fft_ws,
-            &mut self.bufs,
-        )?;
+        if self.state_soa.is_none() && self.problem.soa_fast_path_supported() {
+            self.state_soa = Some(self.state.to_soa());
+        }
+
+        let report = if let Some(state_soa) = self.state_soa.as_mut() {
+            let report = self.problem.step_soa_with_buffers_evaluation(
+                state_soa,
+                dt,
+                &mut self.fft_ws,
+                &mut self.bufs,
+                EvaluationRequest::Full,
+            )?;
+            state_soa.write_back_to(&mut self.state);
+            report
+        } else {
+            self.problem
+                .step_with_buffers(&mut self.state, dt, &mut self.fft_ws, &mut self.bufs)?
+        };
         self.step_count += 1;
         Ok(report)
+    }
+
+    /// Whether the session is currently backed by the persistent SoA state.
+    pub fn soa_fast_path_active(&self) -> bool {
+        self.state_soa.is_some()
     }
 
     /// Current magnetization.
@@ -460,6 +560,7 @@ impl SolverSession {
 
     /// Mutable access to the state.
     pub fn state_mut(&mut self) -> &mut ExchangeLlgState {
+        self.state_soa = None;
         &mut self.state
     }
 

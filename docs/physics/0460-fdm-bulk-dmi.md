@@ -284,6 +284,21 @@ E_{\mathrm{bDMI}}^h
 
 This is the direct discrete analogue of `D m·curl m`.
 
+Current CPU/native scalar reporting uses the same cell-centered centered-derivative
+density as the native CUDA reduction for parity of `E_bDMI` rows:
+
+\[
+E_{\mathrm{bDMI}}^{\mathrm{scalar}}
+=
+\sum_i D V_i\,m_i\cdot(\nabla\times m)_i .
+\]
+
+The centered derivatives use the same periodic/clamped neighbor policy as the
+field stencil; inactive neighbor cells are replaced by the active center value.
+This scalar reduction is the current CPU/GPU reporting and line-search contract.
+The oriented-face form above remains the stricter variational reference for
+future boundary-closure hardening.
+
 #### 3.1.3 Boundary closure with ghost cells
 
 At free boundaries use the coupled boundary law
@@ -376,6 +391,8 @@ Recommended CUDA structure:
 - boundary treatment either through ghost planes or explicit face-aware branches.
 
 Because bulk DMI uses all three spatial directions, halo/ghost treatment must be correct on all six domain faces.
+Until the face-energy reference is promoted into production, CPU and CUDA `E_bDMI`
+scalar reports must match the cell-centered reduction in section 3.1.2.
 
 ### 3.2 FEM
 

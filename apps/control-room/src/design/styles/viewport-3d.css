@@ -105,6 +105,69 @@
   backdrop-filter: blur(4px);
 }
 
+.fm-viewport-3d__orbit-debug {
+  position: absolute;
+  z-index: 3;
+  top: var(--fm-space-3);
+  right: var(--fm-space-3);
+  display: grid;
+  width: min(18rem, calc(100% - var(--fm-space-6)));
+  gap: var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 88%, transparent);
+  box-shadow: var(--fm-shadow-panel);
+  color: var(--fm-text-primary);
+  padding: var(--fm-space-3);
+  backdrop-filter: blur(8px);
+}
+
+.fm-viewport-3d__orbit-debug-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-viewport-3d__orbit-debug-header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fm-font-size-xs);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fm-viewport-3d__orbit-debug-header span {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-viewport-3d__orbit-debug-field {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 1fr) auto;
+  gap: var(--fm-space-2);
+  align-items: center;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+}
+
+.fm-viewport-3d__orbit-debug-field output {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-weight: 600;
+}
+
+.fm-viewport-3d__orbit-debug-field input {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--fm-accent);
+}
+
 .fm-viewport-camera-dialog.fm-dialog {
   width: min(520px, calc(100vw - 24px));
   max-height: min(760px, calc(100vh - 24px));

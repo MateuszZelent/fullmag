@@ -47,6 +47,7 @@ import {
   CameraController,
   OrbitCameraControls,
   resolveViewport3DCameraFit,
+  type Viewport3DOrbitDebugAngles,
   type Viewport3DCameraChange,
 } from "./CameraControls";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
@@ -84,6 +85,7 @@ interface Viewport3DSceneProps {
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
+  interactionActive: boolean;
   getObjectSettings: (
     object: Viewport3DPrimitiveObject,
   ) => VisualizationTargetSettings;
@@ -98,10 +100,14 @@ interface Viewport3DSceneProps {
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
+  onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  orbitDebugAngles: Viewport3DOrbitDebugAngles;
+  orbitDebugCommitRevision: number;
+  orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
@@ -354,6 +360,7 @@ export function Viewport3DScene({
   fieldModel,
   fitRevision,
   fallbackSettings,
+  interactionActive,
   getObjectSettings,
   getPartSettings,
   magnetizationTexturePreviews,
@@ -363,10 +370,14 @@ export function Viewport3DScene({
   onCameraChange,
   onCameraInteractionEnd,
   onCameraInteractionStart,
+  onOrbitDebugAnglesChange,
   onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
   onSelectPart,
+  orbitDebugAngles,
+  orbitDebugCommitRevision,
+  orbitDebugRevision,
   primitiveModel,
   resetCameraRevision,
   resourceFrameKey,
@@ -456,19 +467,9 @@ export function Viewport3DScene({
         left={orthographicCameraFrame.left}
         near={cameraClip.near}
         far={cameraClip.far}
-        position={cameraState.position}
         right={orthographicCameraFrame.right}
         top={orthographicCameraFrame.top}
-        up={cameraState.up}
         zoom={orthographicCameraFrame.zoom}
-        onUpdate={(camera) =>
-          applyViewport3DOrthographicCameraPose(
-            camera,
-            cameraState,
-            cameraClip.near,
-            cameraClip.far,
-          )
-        }
       />
       <PerspectiveCamera
         key="viewport-3d-perspective-camera"
@@ -476,22 +477,12 @@ export function Viewport3DScene({
         far={cameraClip.far}
         fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
         near={cameraClip.near}
-        position={cameraState.position}
-        up={cameraState.up}
-        onUpdate={(camera) =>
-          applyViewport3DPerspectiveCameraPose(
-            camera,
-            cameraState,
-            cameraClip.near,
-            cameraClip.far,
-            PERSPECTIVE_CAMERA_FOV_DEGREES,
-          )
-        }
       />
       <CameraController
         bounds={bounds}
         cameraState={cameraState}
         fitRevision={fitRevision}
+        interactionActive={interactionActive}
         onCameraChange={onCameraChange}
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
@@ -581,9 +572,14 @@ export function Viewport3DScene({
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
         cameraState={cameraState}
+        interactionActive={interactionActive}
+        orbitDebugAngles={orbitDebugAngles}
+        orbitDebugCommitRevision={orbitDebugCommitRevision}
+        orbitDebugRevision={orbitDebugRevision}
         onCameraChange={onCameraChange}
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
+        onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
         tracker={tracker}
       />
       <OrientationHudLayer

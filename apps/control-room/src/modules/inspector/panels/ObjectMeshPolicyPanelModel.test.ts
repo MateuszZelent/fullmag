@@ -88,11 +88,14 @@ describe("ObjectMeshPolicyPanelModel", () => {
     const resource = {
       config: {
         curvature_factor: "0.35",
+        interface_hmax: "2e-9",
         maximum_element_growth_rate: "1.22",
         maximum_element_size: "6e-09",
         minimum_element_size: "1.8e-09",
+        narrow_regions: 2,
         narrow_region_resolution: "1",
         order: 1,
+        size_from_curvature: 16,
         transition_distance: "8e-08",
         transition_growth: 1.18,
       },
@@ -102,13 +105,52 @@ describe("ObjectMeshPolicyPanelModel", () => {
 
     expect(draftFromObjectMeshPolicyResource(resource)).toMatchObject({
       curvatureFactor: "0.35",
+      interfaceMaximumElementSize: "2e-9",
       maximumElementGrowthRate: "1.22",
       maximumElementSize: "6e-09",
       minimumElementSize: "1.8e-09",
+      narrowRegions: "2",
       narrowRegionResolution: "1",
       order: "1",
+      sizeFromCurvature: "16",
       transitionDistance: "8e-08",
       transitionGrowth: "1.18",
+    });
+  });
+
+  it("hydrates the script ObjectCoreRelaxation size field as structured controls", () => {
+    const resource: MeshObjectConfigResource = {
+      config: {
+        size_fields: [
+          {
+            kind: "ObjectCoreRelaxation",
+            params: {
+              GeometryName: "arch_waveguide",
+              core_maximum_element_size: 6e-9,
+              edge_distance: 50e-9,
+              edge_maximum_element_size: 1.8e-9,
+              sampling_edge: 40,
+              sampling_surface: 20,
+              surface_distance: 80e-9,
+              surface_maximum_element_size: 2e-9,
+            },
+          },
+        ],
+      },
+      object_id: "arch_waveguide",
+      revision: 8,
+    };
+
+    expect(draftFromObjectMeshPolicyResource(resource)).toMatchObject({
+      coreRelaxationEnabled: true,
+      coreRelaxationEdgeDistance: "5e-8",
+      coreRelaxationEdgeMaximumElementSize: "1.8e-9",
+      coreRelaxationGeometryName: "arch_waveguide",
+      coreRelaxationMaximumElementSize: "6e-9",
+      coreRelaxationSamplingEdge: "40",
+      coreRelaxationSamplingSurface: "20",
+      coreRelaxationSurfaceDistance: "8e-8",
+      coreRelaxationSurfaceMaximumElementSize: "2e-9",
     });
   });
 
@@ -171,12 +213,15 @@ describe("ObjectMeshPolicyPanelModel", () => {
         boundaryLayerTargetSurfaceTags: "7, 8",
         boundaryLayerThickness: "2e-9",
         computeQuality: "true",
+        interfaceMaximumElementSize: "2e-9",
         maximumElementSize: "5e-9",
         meshStrategy: "swept_prism",
+        narrowRegions: "2",
         optimize: "Netgen",
         optimizeIterations: "3",
         perElementQuality: "true",
         present: true,
+        sizeFromCurvature: "16",
         smoothingSteps: "2",
         sweepFaceMeshing: "triangular",
         throughThicknessDistribution: "fixed",
@@ -193,11 +238,14 @@ describe("ObjectMeshPolicyPanelModel", () => {
           boundary_layer_target_surface_tags: [7, 8],
           boundary_layer_thickness: 2e-9,
           compute_quality: true,
+          interface_hmax: 2e-9,
           maximum_element_size: 5e-9,
           mesh_strategy: "swept_prism",
+          narrow_regions: 2,
           optimize: "Netgen",
           optimize_iterations: 3,
           per_element_quality: true,
+          size_from_curvature: 16,
           smoothing_steps: 2,
           sweep_face_meshing: "triangular",
           through_thickness_distribution: "fixed",
@@ -213,6 +261,73 @@ describe("ObjectMeshPolicyPanelModel", () => {
       })),
     ).toEqual({
       request: { config: null },
+    });
+  });
+
+  it("builds a structured ObjectCoreRelaxation size field without dropping other fields", () => {
+    expect(
+      buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+        configText: JSON.stringify({
+          size_fields: [
+            {
+              kind: "Box",
+              params: {
+                VIn: 4e-9,
+                VOut: 1e22,
+                XMax: 1,
+                XMin: 0,
+                YMax: 1,
+                YMin: 0,
+                ZMax: 1,
+                ZMin: 0,
+              },
+            },
+          ],
+        }),
+        coreRelaxationEdgeDistance: "50e-9",
+        coreRelaxationEdgeMaximumElementSize: "1.8e-9",
+        coreRelaxationEnabled: true,
+        coreRelaxationGeometryName: "arch_waveguide",
+        coreRelaxationMaximumElementSize: "6e-9",
+        coreRelaxationSamplingEdge: "40",
+        coreRelaxationSamplingSurface: "20",
+        coreRelaxationSurfaceDistance: "80e-9",
+        coreRelaxationSurfaceMaximumElementSize: "2e-9",
+        present: true,
+      })),
+    ).toEqual({
+      request: {
+        config: {
+          size_fields: [
+            {
+              kind: "Box",
+              params: {
+                VIn: 4e-9,
+                VOut: 1e22,
+                XMax: 1,
+                XMin: 0,
+                YMax: 1,
+                YMin: 0,
+                ZMax: 1,
+                ZMin: 0,
+              },
+            },
+            {
+              kind: "ObjectCoreRelaxation",
+              params: {
+                GeometryName: "arch_waveguide",
+                core_maximum_element_size: 6e-9,
+                edge_distance: 50e-9,
+                edge_maximum_element_size: 1.8e-9,
+                sampling_edge: 40,
+                sampling_surface: 20,
+                surface_distance: 80e-9,
+                surface_maximum_element_size: 2e-9,
+              },
+            },
+          ],
+        },
+      },
     });
   });
 

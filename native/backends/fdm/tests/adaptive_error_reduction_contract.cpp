@@ -41,17 +41,44 @@ std::filesystem::path fdm_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+std::string function_body(const std::string &source, const std::string &signature) {
+    const std::size_t start = source.find(signature);
+    check(start != std::string::npos, "expected function signature not found");
+
+    const std::size_t body_start = source.find('{', start);
+    check(body_start != std::string::npos, "expected function body not found");
+
+    std::size_t depth = 0;
+    for (std::size_t i = body_start; i < source.size(); ++i) {
+        if (source[i] == '{') {
+            ++depth;
+        } else if (source[i] == '}') {
+            --depth;
+            if (depth == 0) {
+                return source.substr(body_start, i - body_start + 1);
+            }
+        }
+    }
+
+    std::fprintf(stderr, "FAIL: unterminated function body for %s\n", signature.c_str());
+    std::exit(1);
+}
+
 void adaptive_error_reductions_stay_device_side() {
     const std::filesystem::path root = fdm_source_root();
-    const std::string reductions = read_text_file(root / "src" / "reductions_fp64.cu");
-    const std::string dp45_fp64 = read_text_file(root / "src" / "llg_dp45_fp64.cu");
-    const std::string dp45_fp32 = read_text_file(root / "src" / "llg_dp45_fp32.cu");
-    const std::string rk23_fp64 = read_text_file(root / "src" / "llg_rk23_fp64.cu");
-    const std::string rk23_fp32 = read_text_file(root / "src" / "llg_rk23_fp32.cu");
+    const std::string reductions = read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu");
+    const std::string dp45_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp64.cu");
+    const std::string dp45_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp32.cu");
+    const std::string rk23_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp64.cu");
+    const std::string rk23_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp32.cu");
 
     check(
         reductions.find("double reduce_max_scalar_sqrt(") != std::string::npos,
         "FDM reductions module must expose a shared device-side scalar max-sqrt reduction");
+    check(
+        reductions.find("AdaptiveErrorPolicy reduce_adaptive_error_policy(") !=
+            std::string::npos,
+        "FDM reductions module must expose a shared device-side adaptive policy reduction");
 
     const std::string adaptive_sources = dp45_fp64 + dp45_fp32 + rk23_fp64 + rk23_fp32;
     check(
@@ -61,15 +88,135 @@ void adaptive_error_reductions_stay_device_side() {
         adaptive_sources.find("host_err.data()") == std::string::npos,
         "adaptive RK23/DP45 steps must not download the whole error buffer to host_err");
     check(
-        adaptive_sources.find("reduce_max_scalar_sqrt(ctx, ctx.reduction_scratch") !=
+        adaptive_sources.find("reduce_adaptive_error_policy(ctx, ctx.reduction_scratch") !=
             std::string::npos,
-        "adaptive RK23/DP45 steps must call the shared device-side scalar error reduction");
+        "adaptive RK23/DP45 steps must call the shared device-side adaptive policy reduction");
+    check(
+        adaptive_sources.find("pow(ctx.adaptive_max_error / error") == std::string::npos,
+        "adaptive RK23/DP45 steps must not compute dt policy with host-side pow()");
+}
+
+void adaptive_error_scalar_reduction_uses_compute_stream() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string reduction = function_body(
+        read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu"),
+        "double reduce_max_scalar_sqrt(Context &ctx, double *device_values, uint64_t n)");
+
+    check(
+        reduction.find("context_begin_compute_stream_work(ctx, \"reduce_max_scalar_sqrt\")") !=
+            std::string::npos,
+        "adaptive scalar error reduction must wait for default-stream error producers");
+    check(
+        reduction.find("cudaStream_t stream = context_compute_stream(ctx)") !=
+            std::string::npos,
+        "adaptive scalar error reduction must use the Context compute stream");
+    check(
+        reduction.find("reduce_max_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE, 0, stream>>>") !=
+            std::string::npos,
+        "adaptive scalar error reduction kernels must launch on the Context compute stream");
+    check(
+        reduction.find("cudaMemcpyAsync(&max_value, src, sizeof(double), cudaMemcpyDeviceToHost, stream)") !=
+            std::string::npos,
+        "adaptive scalar error reduction must asynchronously copy only the final scalar");
+    check(
+        reduction.find("cudaStreamSynchronize(stream)") != std::string::npos,
+        "adaptive scalar error reduction must synchronize only the compute stream for the final scalar");
+    check(
+        reduction.find("context_end_compute_stream_work(ctx, \"reduce_max_scalar_sqrt\")") !=
+            std::string::npos,
+        "adaptive scalar error reduction must hand results back to legacy default-stream consumers");
+}
+
+void adaptive_policy_calculation_uses_compute_stream() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string reduction = function_body(
+        read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu"),
+        "AdaptiveErrorPolicy reduce_adaptive_error_policy(");
+
+    check(
+        reduction.find("context_begin_compute_stream_work(ctx, \"reduce_adaptive_error_policy\")") !=
+            std::string::npos,
+        "adaptive policy reduction must wait for default-stream error producers");
+    check(
+        reduction.find("adaptive_error_policy_kernel<<<1, 1, 0, stream>>>") !=
+            std::string::npos,
+        "adaptive policy reduction must compute sqrt, accept predicate, and dt candidate on the Context compute stream");
+    check(
+        reduction.find("cudaMemcpyAsync(&host_values") != std::string::npos,
+        "adaptive policy reduction must asynchronously copy only the compact policy result");
+    check(
+        reduction.find("context_end_compute_stream_work(ctx, \"reduce_adaptive_error_policy\")") !=
+            std::string::npos,
+        "adaptive policy reduction must hand policy results back to legacy default-stream consumers");
+}
+
+void adaptive_d2d_copies_use_compute_stream() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string dp45_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp64.cu");
+    const std::string dp45_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp32.cu");
+    const std::string rk23_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp64.cu");
+    const std::string rk23_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp32.cu");
+    const std::string adaptive_sources = dp45_fp64 + dp45_fp32 + rk23_fp64 + rk23_fp32;
+
+    check(
+        adaptive_sources.find("cudaMemcpy(dst.x, src.x, bytes, cudaMemcpyDeviceToDevice)") ==
+            std::string::npos,
+        "adaptive RK23/DP45 D2D x-component copies must not use the legacy default stream");
+    check(
+        adaptive_sources.find("cudaMemcpy(dst.y, src.y, bytes, cudaMemcpyDeviceToDevice)") ==
+            std::string::npos,
+        "adaptive RK23/DP45 D2D y-component copies must not use the legacy default stream");
+    check(
+        adaptive_sources.find("cudaMemcpy(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice)") ==
+            std::string::npos,
+        "adaptive RK23/DP45 D2D z-component copies must not use the legacy default stream");
+
+    check(
+        adaptive_sources.find("cudaMemcpyAsync(dst.x, src.x, bytes, cudaMemcpyDeviceToDevice, stream)") !=
+            std::string::npos,
+        "adaptive RK23/DP45 D2D x-component copies must be bound to an explicit stream");
+    check(
+        adaptive_sources.find("cudaMemcpyAsync(dst.y, src.y, bytes, cudaMemcpyDeviceToDevice, stream)") !=
+            std::string::npos,
+        "adaptive RK23/DP45 D2D y-component copies must be bound to an explicit stream");
+    check(
+        adaptive_sources.find("cudaMemcpyAsync(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice, stream)") !=
+            std::string::npos,
+        "adaptive RK23/DP45 D2D z-component copies must be bound to an explicit stream");
+
+    check(
+        adaptive_sources.find("copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp64 initial backup copies must use the Context compute stream");
+    check(
+        adaptive_sources.find("copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp64 reject restores must use the Context compute stream");
+    check(
+        adaptive_sources.find("copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp64 FSAL reuse copies must use the Context compute stream");
+    check(
+        adaptive_sources.find("copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp32 initial backup copies must use the Context compute stream");
+    check(
+        adaptive_sources.find("copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp32 reject restores must use the Context compute stream");
+    check(
+        adaptive_sources.find("copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx))") !=
+            std::string::npos,
+        "adaptive RK23/DP45 fp32 FSAL reuse copies must use the Context compute stream");
 }
 
 } // namespace
 
 int main() {
     adaptive_error_reductions_stay_device_side();
+    adaptive_error_scalar_reduction_uses_compute_stream();
+    adaptive_policy_calculation_uses_compute_stream();
+    adaptive_d2d_copies_use_compute_stream();
     std::printf("adaptive error reduction contract: PASS\n");
     return 0;
 }

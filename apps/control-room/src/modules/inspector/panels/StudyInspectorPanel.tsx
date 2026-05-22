@@ -139,7 +139,9 @@ function StageCard({
         value={stage.progressPercent}
       />
       <div className="fm-study-stage-card__meta">
-        {stage.torqueTolerance ? <span>tau {stage.torqueTolerance}</span> : null}
+        {stage.torqueToleranceShortFormatted ? (
+          <span>tau {stage.torqueToleranceShortFormatted}</span>
+        ) : null}
         {stage.energyTolerance ? <span>E {stage.energyTolerance}</span> : null}
         {stage.maxSteps ? <span>{stage.maxSteps} steps</span> : null}
         {stage.untilSeconds ? <span>{stage.untilSeconds} s</span> : null}
@@ -665,7 +667,7 @@ function StudySelectedStageSection({ model }: { model: StudyInspectorModel }) {
       <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
       <FieldRow
         label="Torque stop"
-        value={model.selectedStage?.torqueTolerance ?? "not set"}
+        value={model.selectedStage?.torqueToleranceFormatted ?? "not set"}
       />
       <FieldRow
         label="Energy stop"

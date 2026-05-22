@@ -453,17 +453,63 @@ before convolution.
 This computes free-space demag on the original physical domain and prevents periodic image
 interactions.
 
+#### 3.1.4b CPU execution layout
+
+The public CPU FDM state may remain `Vec<[f64; 3]>` for API compatibility, but buffer-stage
+integrators must be able to evaluate demag from the internal SoA stage layout. The CPU SoA demag
+path therefore routes through the `FdmFftBackend` contract; the default `FftWorkspace`
+implementation owns the cached `rustfft` plans and Newell spectra, packs `Mx`, `My`, and `Mz`
+directly from `VectorFieldSoA` into the workspace FFT buffers, applies the same spectral tensor
+multiplication, and crops the inverse FFT result back into the SoA `H_demag` / `H_eff` buffers.
+
+This is a layout and execution-selection contract, not a new physical operator. AoS and SoA CPU
+buffer paths must produce matching stage updates for every integrator that can route through the
+SoA path. Callers that keep a persistent `ExchangeLlgStateSoA` can advance Heun, RK4, RK23,
+RK45, and ABM3 through `step_soa_with_buffers_evaluation` for the supported CPU SoA term set.
+With `EvaluationRequest::Minimal`, step-end telemetry is computed from SoA field buffers. With
+`EvaluationRequest::Full`, the supported SoA slice now evaluates the decomposed step metrics from
+SoA field buffers and preserves parity with the public AoS report without gathering the
+magnetization into AoS inside the step observable evaluator.
+
+The library `SolverSession`, the CPU interactive FDM preview runtime, and the standalone
+`cpu_reference::execute_reference_fdm` LLG loop keep a persistent `ExchangeLlgStateSoA` for
+supported problems and use it for repeated steps, while preserving the existing AoS-facing
+accessors and live-preview/reporting contracts through compatibility caches. The benchmark harness
+records this as a separate `soa_state` stepper mode so the cost of persistent SoA state can be
+measured against `workspace` and `buffers` paths.
+
+CPU demag backend selection is explicit. `FULLMAG_CPU_FFT_BACKEND=auto` and
+`FULLMAG_CPU_FFT_BACKEND=rustfft` resolve to the default `rustfft` `FftWorkspace` backend; requests
+for unimplemented CPU FFT backends such as FFTW, MKL, or distributed heFFTe fail at runtime rather
+than silently falling back. This keeps provenance honest while the non-`rustfft` implementations are
+still absent.
+
+The remaining CPU architecture work is to shrink the artifact/reporting compatibility paths that
+still require AoS caches or `ExchangeLlgState`, keep direct minimization on the SoA tangent-gradient
+path where supported, and add non-`rustfft` backend implementations.
+
 #### 3.1.5 CUDA implementation target
 
 The intended GPU implementation is:
 
 - **SoA field layout** for `Mx, My, Mz` and `Hdx, Hdy, Hdz`,
 - **cached cuFFT plans** per padded shape and precision,
+- **caller-managed cuFFT work areas** sized once per context,
+- **backend-owned compute stream** binding for demag FFT work,
 - **precomputed kernel spectra** uploaded once per geometry/grid,
 - a **fused complex spectral multiply** kernel for the 3x3 symmetric tensor action,
-- optional overlap of FFT, multiply, and artifact staging later,
+- optional broader overlap of solver work and artifact staging beyond the current async staging
+  handoff,
 - demag energy evaluated either from the cropped field or as a spectral reduction, but always
   published in physical `J`.
+
+The current native single-grid CUDA realization evaluates demag pack, batched cuFFT
+forward/inverse, spectral multiply, unpack, and sparse fp64 boundary correction on a
+context-owned nonblocking compute stream. Ready/done events preserve ordering with the
+remaining legacy-default-stream solver kernels. Asynchronous field and preview snapshots now
+stage data on their private IO streams and hand only the private staging boundary back to the
+default stream, allowing host downloads to overlap later work. Broader solver-kernel stream
+migration remains open.
 
 Precision policy:
 

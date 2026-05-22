@@ -107,6 +107,17 @@ The user-visible precision modes mean:
 The important invariant is that `single` and `double` use the same discrete scheme, not two
 different algorithms.
 
+Adaptive CUDA RK23/DP45 error control uses the same scalar error semantics in both precisions:
+the per-cell error field is reduced on device, only the final scalar maximum is copied to host,
+and the max-sqrt reduction is scheduled on the backend compute stream with explicit ordering
+against the remaining legacy-default-stream producers. Adaptive backup, FSAL reuse, and reject
+restore D2D copies are also bound to the backend compute stream. The adaptive policy scalar
+calculation is device-side: a stream-bound CUDA policy kernel converts the reduced max-error
+square into the accepted/rejected predicate and candidate next timestep using the same exponent
+as the selected integrator (`1/3` for RK23, `1/5` for DP45). The host still consumes the compact
+policy result to drive the current control loop until the whole retry/accept controller is moved
+fully onto the device.
+
 Calibration order is mandatory:
 
 1. CPU `double` vs GPU `double`,

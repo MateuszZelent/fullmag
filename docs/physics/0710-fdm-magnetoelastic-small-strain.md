@@ -88,6 +88,15 @@ Algorithm per step:
 
 Published observables: $\mathbf{H}_{\text{mel}}$, $E_{\text{mel}}$.
 
+Current FDM implementation status for Mode 1:
+
+- CPU AoS reference path evaluates uniform and per-cell prescribed strain through the shared
+  magnetoelastic single-cell formula.
+- CPU SoA hot path produces bitwise-equivalent effective-field contributions for the same
+  prescribed-strain configurations while preserving the public AoS state boundary.
+- This slice does not add new Python API, ProblemIR, planner, runtime resource, or workspace
+  semantics; it only changes the CPU FDM execution layout for an already lowered term.
+
 ### 3.5 Mode 2 — Quasistatic bidirectional coupling
 
 State: $(\mathbf{m}, \mathbf{u})$.
@@ -172,7 +181,9 @@ pub struct FdmMechanicalPlanIR {
 - [ ] ProblemIR
 - [ ] Planner
 - [ ] Capability matrix
-- [ ] FDM backend — Mode 1
+- [x] FDM backend — Mode 1 CPU AoS reference prescribed strain
+- [x] FDM backend — Mode 1 CPU SoA hot path parity
+- [ ] FDM backend — Mode 1 GPU
 - [ ] FDM backend — Mode 2
 - [ ] FDM backend — Mode 3
 - [ ] Outputs / observables

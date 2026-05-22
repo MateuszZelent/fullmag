@@ -1,0 +1,2252 @@
+//! Time integrator methods for ExchangeLlgProblem.
+//!
+//! All methods are `impl ExchangeLlgProblem` — Rust allows splitting impls
+//! across multiple files within the same crate.
+
+use crate::vector::{add, norm, normalized, scale};
+use crate::{
+    EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FftWorkspace,
+    IntegratorBuffers, Result, RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
+};
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
+impl ExchangeLlgProblem {
+    // -----------------------------------------------------------------------
+    // Buffer-reusing Heun step (zero-allocation hot path)
+    // -----------------------------------------------------------------------
+    pub(crate) fn heun_step_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        // k1 = f(t, m0)
+        self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m0[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[0][..n],
+        );
+
+        // predicted = normalize(m0 + dt * k1)
+        {
+            let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+            #[cfg(feature = "parallel")]
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(k0.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+            }
+        }
+
+        // k2 = f(t+dt, predicted)
+        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m_stage[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[1][..n],
+        );
+
+        // corrected = normalize(m0 + dt/2 * (k1 + k2))
+        {
+            let (mag, m0, k0, k1) = (
+                &mut state.magnetization[..n],
+                &bufs.m0[..n],
+                &bufs.k[0][..n],
+                &bufs.k[1][..n],
+            );
+            #[cfg(feature = "parallel")]
+            mag.par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(k0.par_iter())
+                .zip(k1.par_iter())
+                .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
+                    *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+            }
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn heun_step_soa_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.soa.m0.scatter_from_aos(&state.magnetization);
+
+        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let predicted = normalized([
+                bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
+                bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
+                bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = predicted[0];
+            bufs.soa.m_stage.y[i] = predicted[1];
+            bufs.soa.m_stage.z[i] = predicted[2];
+        }
+
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+        for i in 0..n {
+            state.magnetization[i] = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * (bufs.soa.k[0].x[i] + bufs.soa.k[1].x[i]),
+                bufs.soa.m0.y[i] + 0.5 * dt * (bufs.soa.k[0].y[i] + bufs.soa.k[1].y[i]),
+                bufs.soa.m0.z[i] + 0.5 * dt * (bufs.soa.k[0].z[i] + bufs.soa.k[1].z[i]),
+            ])?;
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffer-reusing RK4 step (zero-allocation hot path)
+    // -----------------------------------------------------------------------
+    pub(crate) fn rk4_step_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        // k1 = f(t, m0)
+        self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m0[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[0][..n],
+        );
+
+        // m1 = normalize(m0 + dt/2 * k1)
+        {
+            let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+            #[cfg(feature = "parallel")]
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+            }
+        }
+        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m_stage[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[1][..n],
+        );
+
+        // m2 = normalize(m0 + dt/2 * k2)
+        {
+            let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[1][..n]);
+            #[cfg(feature = "parallel")]
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+            }
+        }
+        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m_stage[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[2][..n],
+        );
+
+        // m3 = normalize(m0 + dt * k3)
+        {
+            let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[2][..n]);
+            #[cfg(feature = "parallel")]
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .zip(kj.par_iter())
+                .try_for_each(|((s, m), k)| -> Result<()> {
+                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?;
+            }
+        }
+        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m_stage[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[3][..n],
+        );
+
+        // y = normalize(m0 + dt/6 * (k1 + 2*k2 + 2*k3 + k4))
+        {
+            let (mag, m0) = (&mut state.magnetization[..n], &bufs.m0[..n]);
+            let (k0, k1, k2, k3) = (
+                &bufs.k[0][..n],
+                &bufs.k[1][..n],
+                &bufs.k[2][..n],
+                &bufs.k[3][..n],
+            );
+            let dt6 = dt / 6.0;
+            #[cfg(feature = "parallel")]
+            mag.par_iter_mut()
+                .enumerate()
+                .try_for_each(|(i, m)| -> Result<()> {
+                    *m = normalized(add(
+                        m0[i],
+                        scale(
+                            add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
+                            dt6,
+                        ),
+                    ))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                mag[i] = normalized(add(
+                    m0[i],
+                    scale(
+                        add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
+                        dt6,
+                    ),
+                ))?;
+            }
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn rk4_step_soa_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.soa.m0.scatter_from_aos(&state.magnetization);
+
+        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
+                bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
+                bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
+                bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
+                bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
+                bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
+                bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+        let dt6 = dt / 6.0;
+        for i in 0..n {
+            let weighted_x = (bufs.soa.k[0].x[i] + 2.0 * bufs.soa.k[1].x[i])
+                + (2.0 * bufs.soa.k[2].x[i] + bufs.soa.k[3].x[i]);
+            let weighted_y = (bufs.soa.k[0].y[i] + 2.0 * bufs.soa.k[1].y[i])
+                + (2.0 * bufs.soa.k[2].y[i] + bufs.soa.k[3].y[i]);
+            let weighted_z = (bufs.soa.k[0].z[i] + 2.0 * bufs.soa.k[1].z[i])
+                + (2.0 * bufs.soa.k[2].z[i] + bufs.soa.k[3].z[i]);
+            state.magnetization[i] = normalized([
+                bufs.soa.m0.x[i] + dt6 * weighted_x,
+                bufs.soa.m0.y[i] + dt6 * weighted_y,
+                bufs.soa.m0.z[i] + dt6 * weighted_z,
+            ])?;
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    // -----------------------------------------------------------------------
+    // In-place RHS helpers
+    // -----------------------------------------------------------------------
+    #[allow(dead_code)]
+    pub(crate) fn llg_rhs_into_ws(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        out: &mut [Vector3],
+    ) {
+        let rhs = self.llg_rhs_from_vectors_ws(magnetization, ws);
+        out[..rhs.len()].copy_from_slice(&rhs);
+    }
+
+    pub(crate) fn _llg_rhs_full_into_ws(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        h_scratch: &mut [Vector3],
+        out: &mut [Vector3],
+    ) -> crate::RhsEvaluation {
+        self.compute_step_observables_zero_alloc(magnetization, ws, h_eff, h_scratch, out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffer-reusing RK23 (Bogacki-Shampine 2(3), adaptive)
+    // -----------------------------------------------------------------------
+    pub(crate) fn rk23_step_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        loop {
+            // k1 = f(t, m0)
+            self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m0[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[0][..n],
+            );
+
+            // m1 = normalize(m0 + dt/2 * k1)
+            {
+                let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+                let f = 0.5 * dt;
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(kj.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[1][..n],
+            );
+
+            // m2 = normalize(m0 + 3dt/4 * k2)
+            {
+                let (stage, m0, kj) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[1][..n]);
+                let f = 0.75 * dt;
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(kj.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[2][..n],
+            );
+
+            // y3 = normalize(m0 + dt*(2/9*k1 + 1/3*k2 + 4/9*k3))
+            {
+                let (delta, stage, m0) =
+                    (&mut bufs.delta[..n], &mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k1, k2) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n]);
+                #[cfg(feature = "parallel")]
+                delta
+                    .par_iter_mut()
+                    .zip(stage.par_iter_mut())
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, ((d, s), m))| -> Result<()> {
+                        *d = scale(
+                            add(
+                                add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)),
+                                scale(k2[i], 4.0 / 9.0),
+                            ),
+                            dt,
+                        );
+                        *s = normalized(add(*m, *d))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    delta[i] = scale(
+                        add(
+                            add(scale(k0[i], 2.0 / 9.0), scale(k1[i], 1.0 / 3.0)),
+                            scale(k2[i], 4.0 / 9.0),
+                        ),
+                        dt,
+                    );
+                    stage[i] = normalized(add(m0[i], delta[i]))?;
+                }
+            }
+
+            // k4 for error estimate
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[3][..n],
+            );
+
+            // Error
+            let error = self.max_error_norm_buf(
+                &[
+                    (0, -5.0 / 72.0),
+                    (1, 1.0 / 12.0),
+                    (2, 1.0 / 9.0),
+                    (3, -1.0 / 8.0),
+                ],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+                state.time_seconds += dt;
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval = self.compute_step_observables(
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
+                    evaluation,
+                );
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(1.0 / 3.0))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    pub(crate) fn rk23_step_soa_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.soa.m0.scatter_from_aos(&state.magnetization);
+
+        loop {
+            self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
+                    bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
+                    bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
+                    bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
+                    bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+            for i in 0..n {
+                let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].x[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].x[i];
+                let weighted_y = (2.0 / 9.0) * bufs.soa.k[0].y[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].y[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].y[i];
+                let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].z[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].z[i];
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * weighted_x,
+                    bufs.soa.m0.y[i] + dt * weighted_y,
+                    bufs.soa.m0.z[i] + dt * weighted_z,
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+            let error = self.max_error_norm_soa_buf(
+                &[
+                    (0, -5.0 / 72.0),
+                    (1, 1.0 / 12.0),
+                    (2, 1.0 / 9.0),
+                    (3, -1.0 / 8.0),
+                ],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                bufs.soa
+                    .m_stage
+                    .gather_into_aos(&mut state.magnetization[..n]);
+                state.time_seconds += dt;
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval = self.compute_step_observables(
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
+                    evaluation,
+                );
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(1.0 / 3.0))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffer-reusing RK45 (Dormand-Prince 4(5), adaptive)
+    // -----------------------------------------------------------------------
+    pub(crate) fn rk45_step_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        // Dormand-Prince coefficients
+        const A21: f64 = 1.0 / 5.0;
+        const A31: f64 = 3.0 / 40.0;
+        const A32: f64 = 9.0 / 40.0;
+        const A41: f64 = 44.0 / 45.0;
+        const A42: f64 = -56.0 / 15.0;
+        const A43: f64 = 32.0 / 9.0;
+        const A51: f64 = 19372.0 / 6561.0;
+        const A52: f64 = -25360.0 / 2187.0;
+        const A53: f64 = 64448.0 / 6561.0;
+        const A54: f64 = -212.0 / 729.0;
+        const A61: f64 = 9017.0 / 3168.0;
+        const A62: f64 = -355.0 / 33.0;
+        const A63: f64 = 46732.0 / 5247.0;
+        const A64: f64 = 49.0 / 176.0;
+        const A65: f64 = -5103.0 / 18656.0;
+        const B1: f64 = 35.0 / 384.0;
+        const B3: f64 = 500.0 / 1113.0;
+        const B4: f64 = 125.0 / 192.0;
+        const B5: f64 = -2187.0 / 6784.0;
+        const B6: f64 = 11.0 / 84.0;
+        const E1: f64 = 71.0 / 57600.0;
+        const E3: f64 = -71.0 / 16695.0;
+        const E4: f64 = 71.0 / 1920.0;
+        const E5: f64 = -17253.0 / 339200.0;
+        const E6: f64 = 22.0 / 525.0;
+        const E7: f64 = -1.0 / 40.0;
+
+        loop {
+            // Stage 1 — FSAL: reuse k7 from previous accepted step
+            if let Some(fsal) = state.k_fsal.take() {
+                bufs.k[0][..n].copy_from_slice(&fsal);
+            } else {
+                self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+                self.llg_rhs_from_fields_with_direct_torques_into(
+                    &bufs.m0[..n],
+                    &bufs.h_eff[..n],
+                    &mut bufs.k[0][..n],
+                );
+            }
+
+            // Stage 2
+            {
+                let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+                let f = A21 * dt;
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, f)))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(k0[i], f)))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[1][..n],
+            );
+
+            // Stage 3
+            {
+                let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k1) = (&bufs.k[0][..n], &bufs.k[1][..n]);
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, (s, m))| -> Result<()> {
+                        *s = normalized(add(
+                            *m,
+                            scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
+                        ))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
+                    ))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[2][..n],
+            );
+
+            // Stage 4
+            {
+                let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k1, k2) = (&bufs.k[0][..n], &bufs.k[1][..n], &bufs.k[2][..n]);
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, (s, m))| -> Result<()> {
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
+                            dt,
+                        ),
+                    ))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[3][..n],
+            );
+
+            // Stage 5
+            {
+                let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k1, k2, k3) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                );
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, (s, m))| -> Result<()> {
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(scale(k0[i], A51), scale(k1[i], A52)),
+                                    add(scale(k2[i], A53), scale(k3[i], A54)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(scale(k0[i], A51), scale(k1[i], A52)),
+                                add(scale(k2[i], A53), scale(k3[i], A54)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[4][..n],
+            );
+
+            // Stage 6
+            {
+                let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k1, k2, k3, k4) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                    &bufs.k[4][..n],
+                );
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, (s, m))| -> Result<()> {
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(
+                                        add(scale(k0[i], A61), scale(k1[i], A62)),
+                                        scale(k2[i], A63),
+                                    ),
+                                    add(scale(k3[i], A64), scale(k4[i], A65)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(add(scale(k0[i], A61), scale(k1[i], A62)), scale(k2[i], A63)),
+                                add(scale(k3[i], A64), scale(k4[i], A65)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
+                }
+            }
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[5][..n],
+            );
+
+            // 5th-order solution → m_stage
+            {
+                let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+                let (k0, k2, k3, k4, k5) = (
+                    &bufs.k[0][..n],
+                    &bufs.k[2][..n],
+                    &bufs.k[3][..n],
+                    &bufs.k[4][..n],
+                    &bufs.k[5][..n],
+                );
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .enumerate()
+                    .try_for_each(|(i, (s, m))| -> Result<()> {
+                        *s = normalized(add(
+                            *m,
+                            scale(
+                                add(
+                                    add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
+                                    add(scale(k4[i], B5), scale(k5[i], B6)),
+                                ),
+                                dt,
+                            ),
+                        ))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(
+                        m0[i],
+                        scale(
+                            add(
+                                add(add(scale(k0[i], B1), scale(k2[i], B3)), scale(k3[i], B4)),
+                                add(scale(k4[i], B5), scale(k5[i], B6)),
+                            ),
+                            dt,
+                        ),
+                    ))?;
+                }
+            }
+
+            // k7 for error estimate (FSAL) → k[6]
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[6][..n],
+            );
+
+            // Error estimate
+            let error = self.max_error_norm_buf(
+                &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+                state.time_seconds += dt;
+                state.k_fsal = Some(bufs.k[6][..n].to_vec());
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval = self.compute_step_observables(
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
+                    evaluation,
+                );
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(0.2))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    pub(crate) fn rk45_step_soa_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.soa.m0.scatter_from_aos(&state.magnetization);
+
+        const A21: f64 = 1.0 / 5.0;
+        const A31: f64 = 3.0 / 40.0;
+        const A32: f64 = 9.0 / 40.0;
+        const A41: f64 = 44.0 / 45.0;
+        const A42: f64 = -56.0 / 15.0;
+        const A43: f64 = 32.0 / 9.0;
+        const A51: f64 = 19372.0 / 6561.0;
+        const A52: f64 = -25360.0 / 2187.0;
+        const A53: f64 = 64448.0 / 6561.0;
+        const A54: f64 = -212.0 / 729.0;
+        const A61: f64 = 9017.0 / 3168.0;
+        const A62: f64 = -355.0 / 33.0;
+        const A63: f64 = 46732.0 / 5247.0;
+        const A64: f64 = 49.0 / 176.0;
+        const A65: f64 = -5103.0 / 18656.0;
+        const B1: f64 = 35.0 / 384.0;
+        const B3: f64 = 500.0 / 1113.0;
+        const B4: f64 = 125.0 / 192.0;
+        const B5: f64 = -2187.0 / 6784.0;
+        const B6: f64 = 11.0 / 84.0;
+        const E1: f64 = 71.0 / 57600.0;
+        const E3: f64 = -71.0 / 16695.0;
+        const E4: f64 = 71.0 / 1920.0;
+        const E5: f64 = -17253.0 / 339200.0;
+        const E6: f64 = 22.0 / 525.0;
+        const E7: f64 = -1.0 / 40.0;
+
+        loop {
+            if let Some(fsal) = state.k_fsal.take() {
+                bufs.soa.k[0].scatter_from_aos(&fsal);
+            } else {
+                self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+                self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            }
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
+                    bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
+                    bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
+                    bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
+                    bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A41 * bufs.soa.k[0].x[i]
+                            + A42 * bufs.soa.k[1].x[i]
+                            + A43 * bufs.soa.k[2].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A41 * bufs.soa.k[0].y[i]
+                            + A42 * bufs.soa.k[1].y[i]
+                            + A43 * bufs.soa.k[2].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A41 * bufs.soa.k[0].z[i]
+                            + A42 * bufs.soa.k[1].z[i]
+                            + A43 * bufs.soa.k[2].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A51 * bufs.soa.k[0].x[i]
+                            + A52 * bufs.soa.k[1].x[i]
+                            + A53 * bufs.soa.k[2].x[i]
+                            + A54 * bufs.soa.k[3].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A51 * bufs.soa.k[0].y[i]
+                            + A52 * bufs.soa.k[1].y[i]
+                            + A53 * bufs.soa.k[2].y[i]
+                            + A54 * bufs.soa.k[3].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A51 * bufs.soa.k[0].z[i]
+                            + A52 * bufs.soa.k[1].z[i]
+                            + A53 * bufs.soa.k[2].z[i]
+                            + A54 * bufs.soa.k[3].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A61 * bufs.soa.k[0].x[i]
+                            + A62 * bufs.soa.k[1].x[i]
+                            + A63 * bufs.soa.k[2].x[i]
+                            + A64 * bufs.soa.k[3].x[i]
+                            + A65 * bufs.soa.k[4].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A61 * bufs.soa.k[0].y[i]
+                            + A62 * bufs.soa.k[1].y[i]
+                            + A63 * bufs.soa.k[2].y[i]
+                            + A64 * bufs.soa.k[3].y[i]
+                            + A65 * bufs.soa.k[4].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A61 * bufs.soa.k[0].z[i]
+                            + A62 * bufs.soa.k[1].z[i]
+                            + A63 * bufs.soa.k[2].z[i]
+                            + A64 * bufs.soa.k[3].z[i]
+                            + A65 * bufs.soa.k[4].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (B1 * bufs.soa.k[0].x[i]
+                            + B3 * bufs.soa.k[2].x[i]
+                            + B4 * bufs.soa.k[3].x[i]
+                            + B5 * bufs.soa.k[4].x[i]
+                            + B6 * bufs.soa.k[5].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (B1 * bufs.soa.k[0].y[i]
+                            + B3 * bufs.soa.k[2].y[i]
+                            + B4 * bufs.soa.k[3].y[i]
+                            + B5 * bufs.soa.k[4].y[i]
+                            + B6 * bufs.soa.k[5].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (B1 * bufs.soa.k[0].z[i]
+                            + B3 * bufs.soa.k[2].z[i]
+                            + B4 * bufs.soa.k[3].z[i]
+                            + B5 * bufs.soa.k[4].z[i]
+                            + B6 * bufs.soa.k[5].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
+
+            let error = self.max_error_norm_soa_buf(
+                &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                bufs.soa
+                    .m_stage
+                    .gather_into_aos(&mut state.magnetization[..n]);
+                state.time_seconds += dt;
+                state.k_fsal = Some(bufs.soa.k[6].gather_to_aos());
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval = self.compute_step_observables(
+                    &state.magnetization,
+                    ws,
+                    &mut bufs.h_eff,
+                    &mut bufs.h_scratch,
+                    &mut bufs.rhs,
+                    evaluation,
+                );
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(0.2))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffer-reusing ABM3 (Adams–Bashforth–Moulton 3rd order)
+    // -----------------------------------------------------------------------
+    pub(crate) fn abm3_step_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+
+        // During startup, fall back to Heun to build history
+        if !state.abm_history.is_ready() {
+            bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+            // k1 = f(t, m0)
+            self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m0[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[0][..n],
+            );
+
+            // predicted = normalize(m0 + dt * k1)
+            {
+                let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
+                #[cfg(feature = "parallel")]
+                stage
+                    .par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .try_for_each(|((s, m), k)| -> Result<()> {
+                        *s = normalized(add(*m, scale(*k, dt)))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+                }
+            }
+
+            // k2 = f(t+dt, predicted)
+            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.llg_rhs_from_fields_with_direct_torques_into(
+                &bufs.m_stage[..n],
+                &bufs.h_eff[..n],
+                &mut bufs.k[1][..n],
+            );
+
+            // corrected = normalize(m0 + dt/2 * (k1 + k2))
+            {
+                let (mag, m0, k0, k1) = (
+                    &mut state.magnetization[..n],
+                    &bufs.m0[..n],
+                    &bufs.k[0][..n],
+                    &bufs.k[1][..n],
+                );
+                #[cfg(feature = "parallel")]
+                mag.par_iter_mut()
+                    .zip(m0.par_iter())
+                    .zip(k0.par_iter())
+                    .zip(k1.par_iter())
+                    .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
+                        *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                        Ok(())
+                    })?;
+                #[cfg(not(feature = "parallel"))]
+                for i in 0..n {
+                    mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+                }
+            }
+            state.time_seconds += dt;
+
+            // Store RHS at accepted point for history
+            let f_accepted = self.llg_rhs_from_vectors_ws(state.magnetization(), ws);
+            state.abm_history.push(f_accepted, dt);
+
+            let eval = self.compute_step_observables(
+                &state.magnetization,
+                ws,
+                &mut bufs.h_eff,
+                &mut bufs.h_scratch,
+                &mut bufs.rhs,
+                evaluation,
+            );
+            return Ok(eval.into_step_report(state.time_seconds, dt, false));
+        }
+
+        // --- Full ABM3 step ---
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        let f_n = state.abm_history.f_n().unwrap();
+        let f_n1 = state.abm_history.f_n_minus_1().unwrap();
+        let f_n2 = state.abm_history.f_n_minus_2().unwrap();
+
+        // Adams–Bashforth predictor → m_stage
+        {
+            let (stage, m0) = (&mut bufs.m_stage[..n], &bufs.m0[..n]);
+            #[cfg(feature = "parallel")]
+            stage
+                .par_iter_mut()
+                .zip(m0.par_iter())
+                .enumerate()
+                .try_for_each(|(i, (s, m))| -> Result<()> {
+                    let pred = add(
+                        add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
+                        scale(f_n2[i], 5.0 / 12.0),
+                    );
+                    *s = normalized(add(*m, scale(pred, dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                let pred = add(
+                    add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
+                    scale(f_n2[i], 5.0 / 12.0),
+                );
+                stage[i] = normalized(add(m0[i], scale(pred, dt)))?;
+            }
+        }
+
+        // Evaluate RHS at predicted point → k[0]
+        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.llg_rhs_from_fields_with_direct_torques_into(
+            &bufs.m_stage[..n],
+            &bufs.h_eff[..n],
+            &mut bufs.k[0][..n],
+        );
+
+        // Adams–Moulton corrector → state.magnetization
+        {
+            let (mag, m0, k0) = (
+                &mut state.magnetization[..n],
+                &bufs.m0[..n],
+                &bufs.k[0][..n],
+            );
+            #[cfg(feature = "parallel")]
+            mag.par_iter_mut()
+                .zip(m0.par_iter())
+                .enumerate()
+                .try_for_each(|(i, (m, m0))| -> Result<()> {
+                    let corr = add(
+                        add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
+                        scale(f_n1[i], -1.0 / 12.0),
+                    );
+                    *m = normalized(add(*m0, scale(corr, dt)))?;
+                    Ok(())
+                })?;
+            #[cfg(not(feature = "parallel"))]
+            for i in 0..n {
+                let corr = add(
+                    add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
+                    scale(f_n1[i], -1.0 / 12.0),
+                );
+                mag[i] = normalized(add(m0[i], scale(corr, dt)))?;
+            }
+        }
+        state.time_seconds += dt;
+
+        // Push f_star (k[0]) into history
+        state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn abm3_step_soa_buf(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+
+        if !state.abm_history.is_ready() {
+            let report = self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)?;
+
+            bufs.soa.m0.scatter_from_aos(&state.magnetization);
+            self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
+            state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
+
+            return Ok(report);
+        }
+
+        bufs.soa.m0.scatter_from_aos(&state.magnetization);
+        bufs.soa.k[1].scatter_from_aos(state.abm_history.f_n().unwrap());
+        bufs.soa.k[2].scatter_from_aos(state.abm_history.f_n_minus_1().unwrap());
+        bufs.soa.k[3].scatter_from_aos(state.abm_history.f_n_minus_2().unwrap());
+
+        for i in 0..n {
+            let pred_x = (23.0 / 12.0) * bufs.soa.k[1].x[i] - (16.0 / 12.0) * bufs.soa.k[2].x[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].x[i];
+            let pred_y = (23.0 / 12.0) * bufs.soa.k[1].y[i] - (16.0 / 12.0) * bufs.soa.k[2].y[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].y[i];
+            let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].z[i];
+            let stage = normalized([
+                bufs.soa.m0.x[i] + dt * pred_x,
+                bufs.soa.m0.y[i] + dt * pred_y,
+                bufs.soa.m0.z[i] + dt * pred_z,
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let corr_x = (5.0 / 12.0) * bufs.soa.k[0].x[i] + (8.0 / 12.0) * bufs.soa.k[1].x[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].x[i];
+            let corr_y = (5.0 / 12.0) * bufs.soa.k[0].y[i] + (8.0 / 12.0) * bufs.soa.k[1].y[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].y[i];
+            let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].z[i];
+            state.magnetization[i] = normalized([
+                bufs.soa.m0.x[i] + dt * corr_x,
+                bufs.soa.m0.y[i] + dt * corr_y,
+                bufs.soa.m0.z[i] + dt * corr_z,
+            ])?;
+        }
+        state.time_seconds += dt;
+
+        bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
+        state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
+
+        let eval = self.compute_step_observables(
+            &state.magnetization,
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+        );
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn heun_step_soa_state_buf(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.soa.m0.copy_from(&state.magnetization);
+
+        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let predicted = normalized([
+                bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
+                bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
+                bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = predicted[0];
+            bufs.soa.m_stage.y[i] = predicted[1];
+            bufs.soa.m_stage.z[i] = predicted[2];
+        }
+
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+        for i in 0..n {
+            let corrected = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * (bufs.soa.k[0].x[i] + bufs.soa.k[1].x[i]),
+                bufs.soa.m0.y[i] + 0.5 * dt * (bufs.soa.k[0].y[i] + bufs.soa.k[1].y[i]),
+                bufs.soa.m0.z[i] + 0.5 * dt * (bufs.soa.k[0].z[i] + bufs.soa.k[1].z[i]),
+            ])?;
+            state.magnetization.x[i] = corrected[0];
+            state.magnetization.y[i] = corrected[1];
+            state.magnetization.z[i] = corrected[2];
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables_soa(&state.magnetization, ws, bufs, evaluation);
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn rk4_step_soa_state_buf(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+        bufs.soa.m0.copy_from(&state.magnetization);
+
+        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
+                bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
+                bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
+                bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
+                bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+        for i in 0..n {
+            let stage = normalized([
+                bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
+                bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
+                bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+        let dt6 = dt / 6.0;
+        for i in 0..n {
+            let weighted_x = (bufs.soa.k[0].x[i] + 2.0 * bufs.soa.k[1].x[i])
+                + (2.0 * bufs.soa.k[2].x[i] + bufs.soa.k[3].x[i]);
+            let weighted_y = (bufs.soa.k[0].y[i] + 2.0 * bufs.soa.k[1].y[i])
+                + (2.0 * bufs.soa.k[2].y[i] + bufs.soa.k[3].y[i]);
+            let weighted_z = (bufs.soa.k[0].z[i] + 2.0 * bufs.soa.k[1].z[i])
+                + (2.0 * bufs.soa.k[2].z[i] + bufs.soa.k[3].z[i]);
+            let updated = normalized([
+                bufs.soa.m0.x[i] + dt6 * weighted_x,
+                bufs.soa.m0.y[i] + dt6 * weighted_y,
+                bufs.soa.m0.z[i] + dt6 * weighted_z,
+            ])?;
+            state.magnetization.x[i] = updated[0];
+            state.magnetization.y[i] = updated[1];
+            state.magnetization.z[i] = updated[2];
+        }
+        state.time_seconds += dt;
+
+        let eval = self.compute_step_observables_soa(&state.magnetization, ws, bufs, evaluation);
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    pub(crate) fn rk23_step_soa_state_buf(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.soa.m0.copy_from(&state.magnetization);
+
+        loop {
+            self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
+                    bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
+                    bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
+                    bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
+                    bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+            for i in 0..n {
+                let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].x[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].x[i];
+                let weighted_y = (2.0 / 9.0) * bufs.soa.k[0].y[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].y[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].y[i];
+                let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
+                    + (1.0 / 3.0) * bufs.soa.k[1].z[i]
+                    + (4.0 / 9.0) * bufs.soa.k[2].z[i];
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * weighted_x,
+                    bufs.soa.m0.y[i] + dt * weighted_y,
+                    bufs.soa.m0.z[i] + dt * weighted_z,
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+            let error = self.max_error_norm_soa_buf(
+                &[
+                    (0, -5.0 / 72.0),
+                    (1, 1.0 / 12.0),
+                    (2, 1.0 / 9.0),
+                    (3, -1.0 / 8.0),
+                ],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                state.magnetization.copy_from(&bufs.soa.m_stage);
+                state.time_seconds += dt;
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval =
+                    self.compute_step_observables_soa(&state.magnetization, ws, bufs, evaluation);
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(1.0 / 3.0))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    pub(crate) fn rk45_step_soa_state_buf(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let cfg = self.dynamics.adaptive;
+        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let n = state.magnetization.len();
+        bufs.soa.m0.copy_from(&state.magnetization);
+
+        const A21: f64 = 1.0 / 5.0;
+        const A31: f64 = 3.0 / 40.0;
+        const A32: f64 = 9.0 / 40.0;
+        const A41: f64 = 44.0 / 45.0;
+        const A42: f64 = -56.0 / 15.0;
+        const A43: f64 = 32.0 / 9.0;
+        const A51: f64 = 19372.0 / 6561.0;
+        const A52: f64 = -25360.0 / 2187.0;
+        const A53: f64 = 64448.0 / 6561.0;
+        const A54: f64 = -212.0 / 729.0;
+        const A61: f64 = 9017.0 / 3168.0;
+        const A62: f64 = -355.0 / 33.0;
+        const A63: f64 = 46732.0 / 5247.0;
+        const A64: f64 = 49.0 / 176.0;
+        const A65: f64 = -5103.0 / 18656.0;
+        const B1: f64 = 35.0 / 384.0;
+        const B3: f64 = 500.0 / 1113.0;
+        const B4: f64 = 125.0 / 192.0;
+        const B5: f64 = -2187.0 / 6784.0;
+        const B6: f64 = 11.0 / 84.0;
+        const E1: f64 = 71.0 / 57600.0;
+        const E3: f64 = -71.0 / 16695.0;
+        const E4: f64 = 71.0 / 1920.0;
+        const E5: f64 = -17253.0 / 339200.0;
+        const E6: f64 = 22.0 / 525.0;
+        const E7: f64 = -1.0 / 40.0;
+
+        loop {
+            if let Some(fsal) = state.k_fsal.take() {
+                bufs.soa.k[0].copy_from(&fsal);
+            } else {
+                self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+                self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            }
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
+                    bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
+                    bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
+                    bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
+                    bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A41 * bufs.soa.k[0].x[i]
+                            + A42 * bufs.soa.k[1].x[i]
+                            + A43 * bufs.soa.k[2].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A41 * bufs.soa.k[0].y[i]
+                            + A42 * bufs.soa.k[1].y[i]
+                            + A43 * bufs.soa.k[2].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A41 * bufs.soa.k[0].z[i]
+                            + A42 * bufs.soa.k[1].z[i]
+                            + A43 * bufs.soa.k[2].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A51 * bufs.soa.k[0].x[i]
+                            + A52 * bufs.soa.k[1].x[i]
+                            + A53 * bufs.soa.k[2].x[i]
+                            + A54 * bufs.soa.k[3].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A51 * bufs.soa.k[0].y[i]
+                            + A52 * bufs.soa.k[1].y[i]
+                            + A53 * bufs.soa.k[2].y[i]
+                            + A54 * bufs.soa.k[3].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A51 * bufs.soa.k[0].z[i]
+                            + A52 * bufs.soa.k[1].z[i]
+                            + A53 * bufs.soa.k[2].z[i]
+                            + A54 * bufs.soa.k[3].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (A61 * bufs.soa.k[0].x[i]
+                            + A62 * bufs.soa.k[1].x[i]
+                            + A63 * bufs.soa.k[2].x[i]
+                            + A64 * bufs.soa.k[3].x[i]
+                            + A65 * bufs.soa.k[4].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (A61 * bufs.soa.k[0].y[i]
+                            + A62 * bufs.soa.k[1].y[i]
+                            + A63 * bufs.soa.k[2].y[i]
+                            + A64 * bufs.soa.k[3].y[i]
+                            + A65 * bufs.soa.k[4].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (A61 * bufs.soa.k[0].z[i]
+                            + A62 * bufs.soa.k[1].z[i]
+                            + A63 * bufs.soa.k[2].z[i]
+                            + A64 * bufs.soa.k[3].z[i]
+                            + A65 * bufs.soa.k[4].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
+
+            for i in 0..n {
+                let stage = normalized([
+                    bufs.soa.m0.x[i]
+                        + dt * (B1 * bufs.soa.k[0].x[i]
+                            + B3 * bufs.soa.k[2].x[i]
+                            + B4 * bufs.soa.k[3].x[i]
+                            + B5 * bufs.soa.k[4].x[i]
+                            + B6 * bufs.soa.k[5].x[i]),
+                    bufs.soa.m0.y[i]
+                        + dt * (B1 * bufs.soa.k[0].y[i]
+                            + B3 * bufs.soa.k[2].y[i]
+                            + B4 * bufs.soa.k[3].y[i]
+                            + B5 * bufs.soa.k[4].y[i]
+                            + B6 * bufs.soa.k[5].y[i]),
+                    bufs.soa.m0.z[i]
+                        + dt * (B1 * bufs.soa.k[0].z[i]
+                            + B3 * bufs.soa.k[2].z[i]
+                            + B4 * bufs.soa.k[3].z[i]
+                            + B5 * bufs.soa.k[4].z[i]
+                            + B6 * bufs.soa.k[5].z[i]),
+                ])?;
+                bufs.soa.m_stage.x[i] = stage[0];
+                bufs.soa.m_stage.y[i] = stage[1];
+                bufs.soa.m_stage.z[i] = stage[2];
+            }
+
+            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
+
+            let error = self.max_error_norm_soa_buf(
+                &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
+                bufs,
+                dt,
+                n,
+            );
+
+            let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+
+            if error <= thr || dt <= cfg.dt_min {
+                state.magnetization.copy_from(&bufs.soa.m_stage);
+                state.time_seconds += dt;
+                if let Some(fsal) = &mut state.k_fsal {
+                    fsal.copy_from(&bufs.soa.k[6]);
+                } else {
+                    state.k_fsal = Some(bufs.soa.k[6].clone());
+                }
+                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
+                    .min(cfg.growth_limit)
+                    .max(cfg.shrink_limit);
+                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+                let eval =
+                    self.compute_step_observables_soa(&state.magnetization, ws, bufs, evaluation);
+                let mut report = eval.into_step_report(state.time_seconds, dt, false);
+                report.suggested_next_dt = Some(dt_next);
+                return Ok(report);
+            }
+
+            let ratio = (cfg.headroom * (thr / error).powf(0.2))
+                .min(cfg.growth_limit)
+                .max(cfg.shrink_limit);
+            dt = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
+        }
+    }
+
+    pub(crate) fn abm3_step_soa_state_buf(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let n = state.magnetization.len();
+
+        if !state.abm_history.is_ready() {
+            let report = self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation)?;
+
+            self.effective_field_into_soa_ws(&state.magnetization, ws, &mut bufs.soa.h_eff);
+            self.llg_rhs_soa_into(&state.magnetization, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+
+            return Ok(report);
+        }
+
+        bufs.soa.m0.copy_from(&state.magnetization);
+        bufs.soa.k[1].copy_from(state.abm_history.f_n().expect("ABM SoA f_n missing"));
+        bufs.soa.k[2].copy_from(
+            state
+                .abm_history
+                .f_n_minus_1()
+                .expect("ABM SoA f_n_minus_1 missing"),
+        );
+        bufs.soa.k[3].copy_from(
+            state
+                .abm_history
+                .f_n_minus_2()
+                .expect("ABM SoA f_n_minus_2 missing"),
+        );
+
+        for i in 0..n {
+            let pred_x = (23.0 / 12.0) * bufs.soa.k[1].x[i] - (16.0 / 12.0) * bufs.soa.k[2].x[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].x[i];
+            let pred_y = (23.0 / 12.0) * bufs.soa.k[1].y[i] - (16.0 / 12.0) * bufs.soa.k[2].y[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].y[i];
+            let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
+                + (5.0 / 12.0) * bufs.soa.k[3].z[i];
+            let stage = normalized([
+                bufs.soa.m0.x[i] + dt * pred_x,
+                bufs.soa.m0.y[i] + dt * pred_y,
+                bufs.soa.m0.z[i] + dt * pred_z,
+            ])?;
+            bufs.soa.m_stage.x[i] = stage[0];
+            bufs.soa.m_stage.y[i] = stage[1];
+            bufs.soa.m_stage.z[i] = stage[2];
+        }
+
+        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+
+        for i in 0..n {
+            let corr_x = (5.0 / 12.0) * bufs.soa.k[0].x[i] + (8.0 / 12.0) * bufs.soa.k[1].x[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].x[i];
+            let corr_y = (5.0 / 12.0) * bufs.soa.k[0].y[i] + (8.0 / 12.0) * bufs.soa.k[1].y[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].y[i];
+            let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
+                - (1.0 / 12.0) * bufs.soa.k[2].z[i];
+            let updated = normalized([
+                bufs.soa.m0.x[i] + dt * corr_x,
+                bufs.soa.m0.y[i] + dt * corr_y,
+                bufs.soa.m0.z[i] + dt * corr_z,
+            ])?;
+            state.magnetization.x[i] = updated[0];
+            state.magnetization.y[i] = updated[1];
+            state.magnetization.z[i] = updated[2];
+        }
+        state.time_seconds += dt;
+
+        state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+
+        let eval = self.compute_step_observables_soa(&state.magnetization, ws, bufs, evaluation);
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
+    fn compute_step_observables_soa(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> RhsEvaluation {
+        match evaluation {
+            EvaluationRequest::Minimal => self.compute_step_observables_soa_minimal(
+                magnetization,
+                ws,
+                &mut bufs.soa.h_eff,
+                &mut bufs.soa.k[0],
+            ),
+            EvaluationRequest::Full => {
+                let soa = &mut bufs.soa;
+                let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
+                self.compute_step_observables_soa_full(
+                    magnetization,
+                    ws,
+                    &mut soa.h_eff,
+                    &mut rhs_slots[0],
+                    &mut scratch_slots[0],
+                )
+            }
+        }
+    }
+
+    #[allow(non_snake_case)]
+    fn compute_step_observables_soa_full(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+        rhs_out: &mut VectorFieldSoA,
+        h_scratch: &mut VectorFieldSoA,
+    ) -> RhsEvaluation {
+        h_eff.fill_zero();
+
+        let exchange_energy_joules = if self.terms.exchange {
+            h_scratch.fill_zero();
+            self.exchange_field_add_into_soa(magnetization, h_scratch);
+            let energy = self.half_field_energy_from_soa(magnetization, h_scratch);
+            add_soa_into(h_eff, h_scratch);
+            energy
+        } else {
+            0.0
+        };
+
+        let (demag_energy_joules, max_demag_field_amplitude) = if self.terms.demag {
+            h_scratch.fill_zero();
+            self.demag_field_add_into_soa_fft_backend(magnetization, ws, h_scratch);
+            let energy = self.half_field_energy_from_soa(magnetization, h_scratch);
+            let max_field = max_norm_soa(h_scratch);
+            add_soa_into(h_eff, h_scratch);
+            (energy, max_field)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let external_energy_joules = if self.terms.external_field.is_some() {
+            h_scratch.fill_zero();
+            self.external_field_add_into_soa(h_scratch);
+            let energy = self.full_field_energy_from_soa(magnetization, h_scratch);
+            add_soa_into(h_eff, h_scratch);
+            energy
+        } else {
+            0.0
+        };
+
+        self.magnetoelastic_field_add_into_soa(magnetization, h_eff);
+        self.anisotropy_field_add_into_soa(magnetization, h_eff);
+        self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
+        self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
+        self.thermal_field_add_into_soa(h_eff);
+        self.oersted_field_add_into_soa(h_eff);
+
+        let mel_energy_joules = self.magnetoelastic_energy_soa(magnetization);
+        let ani_energy_joules = {
+            h_scratch.fill_zero();
+            self.anisotropy_field_add_into_soa(magnetization, h_scratch);
+            self.half_field_energy_from_soa(magnetization, h_scratch)
+        };
+        let dmi_energy_joules = self.dmi_energy_from_soa(magnetization);
+
+        let max_effective_field_amplitude = max_norm_soa(h_eff);
+
+        self.llg_rhs_soa_into(magnetization, h_eff, rhs_out);
+
+        let max_rhs_amplitude = max_norm_soa(rhs_out);
+        let max_torque_apm = max_cross_norm_soa(magnetization, h_eff);
+
+        RhsEvaluation {
+            exchange_energy_joules,
+            demag_energy_joules,
+            external_energy_joules,
+            anisotropy_energy_joules: ani_energy_joules,
+            dmi_energy_joules,
+            total_energy_joules: exchange_energy_joules
+                + demag_energy_joules
+                + external_energy_joules
+                + mel_energy_joules
+                + ani_energy_joules
+                + dmi_energy_joules,
+            max_effective_field_amplitude,
+            max_demag_field_amplitude,
+            max_rhs_amplitude,
+            max_torque_Apm: max_torque_apm,
+        }
+    }
+
+    fn compute_step_observables_soa_minimal(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+        rhs_out: &mut VectorFieldSoA,
+    ) -> RhsEvaluation {
+        self.effective_field_into_soa_ws(magnetization, ws, h_eff);
+        let max_effective_field_amplitude = max_norm_soa(h_eff);
+
+        self.llg_rhs_soa_into(magnetization, h_eff, rhs_out);
+
+        let max_rhs_amplitude = max_norm_soa(rhs_out);
+        let max_torque_apm = max_cross_norm_soa(magnetization, h_eff);
+
+        RhsEvaluation {
+            exchange_energy_joules: 0.0,
+            demag_energy_joules: 0.0,
+            external_energy_joules: 0.0,
+            anisotropy_energy_joules: 0.0,
+            dmi_energy_joules: 0.0,
+            total_energy_joules: 0.0,
+            max_effective_field_amplitude,
+            max_demag_field_amplitude: 0.0,
+            max_rhs_amplitude,
+            max_torque_Apm: max_torque_apm,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Error norm from buffer-indexed k-stages
+    // -----------------------------------------------------------------------
+    pub(crate) fn max_error_norm_buf(
+        &self,
+        weighted_stages: &[(usize, f64)],
+        bufs: &IntegratorBuffers,
+        dt: f64,
+        n: usize,
+    ) -> f64 {
+        let cfg = self.dynamics.adaptive;
+        let use_rtol = cfg.rtol > 0.0;
+        let atol = cfg.max_error;
+        let rtol = cfg.rtol;
+
+        let compute_err = |i: usize| -> f64 {
+            let mut err = [0.0, 0.0, 0.0];
+            for &(k_idx, w) in weighted_stages {
+                err[0] += w * bufs.k[k_idx][i][0];
+                err[1] += w * bufs.k[k_idx][i][1];
+                err[2] += w * bufs.k[k_idx][i][2];
+            }
+            err[0] *= dt;
+            err[1] *= dt;
+            err[2] *= dt;
+            if use_rtol {
+                let y_norm = norm(bufs.m0[i]).max(1e-30);
+                let sc = atol + rtol * y_norm;
+                norm(err) / sc
+            } else {
+                norm(err)
+            }
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            (0..n)
+                .into_par_iter()
+                .map(compute_err)
+                .reduce(|| 0.0f64, f64::max)
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut max_err = 0.0f64;
+            for i in 0..n {
+                max_err = max_err.max(compute_err(i));
+            }
+            max_err
+        }
+    }
+
+    pub(crate) fn max_error_norm_soa_buf(
+        &self,
+        weighted_stages: &[(usize, f64)],
+        bufs: &IntegratorBuffers,
+        dt: f64,
+        n: usize,
+    ) -> f64 {
+        let cfg = self.dynamics.adaptive;
+        let use_rtol = cfg.rtol > 0.0;
+        let atol = cfg.max_error;
+        let rtol = cfg.rtol;
+
+        let compute_err = |i: usize| -> f64 {
+            let mut err = [0.0, 0.0, 0.0];
+            for &(k_idx, w) in weighted_stages {
+                err[0] += w * bufs.soa.k[k_idx].x[i];
+                err[1] += w * bufs.soa.k[k_idx].y[i];
+                err[2] += w * bufs.soa.k[k_idx].z[i];
+            }
+            err[0] *= dt;
+            err[1] *= dt;
+            err[2] *= dt;
+            if use_rtol {
+                let y_norm =
+                    norm([bufs.soa.m0.x[i], bufs.soa.m0.y[i], bufs.soa.m0.z[i]]).max(1e-30);
+                let sc = atol + rtol * y_norm;
+                norm(err) / sc
+            } else {
+                norm(err)
+            }
+        };
+
+        #[cfg(feature = "parallel")]
+        {
+            (0..n)
+                .into_par_iter()
+                .map(compute_err)
+                .reduce(|| 0.0f64, f64::max)
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            let mut max_err = 0.0f64;
+            for i in 0..n {
+                max_err = max_err.max(compute_err(i));
+            }
+            max_err
+        }
+    }
+}
+
+fn max_norm_soa(field: &VectorFieldSoA) -> f64 {
+    let mut max_value = 0.0f64;
+    for i in 0..field.len() {
+        max_value = max_value.max(norm([field.x[i], field.y[i], field.z[i]]));
+    }
+    max_value
+}
+
+fn max_cross_norm_soa(a: &VectorFieldSoA, b: &VectorFieldSoA) -> f64 {
+    debug_assert_eq!(a.len(), b.len());
+    let mut max_value = 0.0f64;
+    for i in 0..a.len() {
+        let cross = [
+            a.y[i] * b.z[i] - a.z[i] * b.y[i],
+            a.z[i] * b.x[i] - a.x[i] * b.z[i],
+            a.x[i] * b.y[i] - a.y[i] * b.x[i],
+        ];
+        max_value = max_value.max(norm(cross));
+    }
+    max_value
+}
+
+fn add_soa_into(dst: &mut VectorFieldSoA, src: &VectorFieldSoA) {
+    debug_assert!(dst.len() >= src.len());
+    for i in 0..src.len() {
+        dst.x[i] += src.x[i];
+        dst.y[i] += src.y[i];
+        dst.z[i] += src.z[i];
+    }
+}

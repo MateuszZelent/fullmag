@@ -105,7 +105,70 @@ int main() {
     check(rc == FULLMAG_FDM_OK, "step failed");
     std::printf("Step 1: t=%.2e s\n", stats.time_seconds);
 
-    // 6. Destroy
+    // 6. Stats mode NONE skips step-end scalar diagnostics but keeps metadata.
+    fullmag_fdm_backend_destroy(handle);
+    handle = nullptr;
+
+    fullmag_fdm_plan_desc plan_no_stats = plan;
+    plan_no_stats.enable_exchange = 0;
+    plan_no_stats.has_external_field = 1;
+    plan_no_stats.external_field_am[2] = 1e5;
+    plan_no_stats.stats_mode = FULLMAG_FDM_STATS_NONE;
+
+    fullmag_fdm_backend *no_stats_handle = fullmag_fdm_backend_create(&plan_no_stats);
+    check(no_stats_handle != nullptr, "backend_create for stats NONE returned NULL");
+    err = fullmag_fdm_backend_last_error(no_stats_handle);
+    if (err) {
+        std::fprintf(stderr, "Create error for stats NONE: %s\n", err);
+        fullmag_fdm_backend_destroy(no_stats_handle);
+        return 1;
+    }
+
+    fullmag_fdm_step_stats no_stats = {};
+    rc = fullmag_fdm_backend_step(no_stats_handle, 1e-14, &no_stats);
+    check(rc == FULLMAG_FDM_OK, "stats NONE step failed");
+    check(no_stats.step == 1, "stats NONE step must return step metadata");
+    check(no_stats.time_seconds > 0.0, "stats NONE step must return time metadata");
+    check(no_stats.dt_seconds == 1e-14, "stats NONE step must return dt metadata");
+    check(no_stats.total_energy_joules == 0.0, "stats NONE step must skip energy reductions");
+    check(no_stats.max_effective_field_amplitude == 0.0, "stats NONE step must skip norm reductions");
+
+    fullmag_fdm_step_stats snapshot_stats = {};
+    rc = fullmag_fdm_backend_snapshot_stats(no_stats_handle, &snapshot_stats);
+    check(rc == FULLMAG_FDM_OK, "snapshot_stats after stats NONE step failed");
+    check(snapshot_stats.step == 1, "snapshot_stats must preserve step metadata");
+    check(snapshot_stats.max_effective_field_amplitude > 0.0,
+          "snapshot_stats must still compute full diagnostics on demand");
+    fullmag_fdm_backend_destroy(no_stats_handle);
+
+    // 7. Demag-enabled refresh exercises the batched cuFFT workspace/plan path.
+    fullmag_fdm_plan_desc plan_demag = plan;
+    plan_demag.enable_exchange = 0;
+    plan_demag.enable_demag = 1;
+    plan_demag.stats_mode = FULLMAG_FDM_STATS_NONE;
+
+    fullmag_fdm_backend *demag_handle = fullmag_fdm_backend_create(&plan_demag);
+    check(demag_handle != nullptr, "backend_create for demag returned NULL");
+    err = fullmag_fdm_backend_last_error(demag_handle);
+    if (err) {
+        std::fprintf(stderr, "Create error for demag: %s\n", err);
+        fullmag_fdm_backend_destroy(demag_handle);
+        return 1;
+    }
+
+    rc = fullmag_fdm_backend_refresh_demag_observable(demag_handle);
+    check(rc == FULLMAG_FDM_OK, "refresh_demag_observable failed");
+
+    std::vector<double> h_demag(cell_count * 3, 0.0);
+    rc = fullmag_fdm_backend_copy_field_f64(
+        demag_handle, FULLMAG_FDM_OBSERVABLE_H_DEMAG, h_demag.data(), cell_count * 3);
+    check(rc == FULLMAG_FDM_OK, "copy H_DEMAG after refresh failed");
+    for (double value : h_demag) {
+        check(std::isfinite(value), "H_DEMAG must stay finite after batched FFT refresh");
+    }
+    fullmag_fdm_backend_destroy(demag_handle);
+
+    // 8. Destroy
     fullmag_fdm_backend_destroy(handle);
     std::printf("Handle destroyed OK\n");
 

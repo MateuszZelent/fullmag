@@ -34,6 +34,12 @@ namespace fdm {
 void launch_newell_compute_spectra_fp64(Context &ctx);
 void launch_newell_compute_spectra_fp32(Context &ctx);
 
+// Multilayer convolution demag execution boundary. The first native CUDA
+// slice owns identity-grid push_m/pull_h and tensor spectral multiplication;
+// non-identity transfer maps are added behind the same launch boundary.
+void launch_multilayer_demag_field_fp64(Context &ctx);
+void launch_multilayer_demag_field_fp32(Context &ctx);
+
 // DP45 adaptive integrators
 void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);

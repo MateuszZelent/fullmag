@@ -118,6 +118,35 @@ describe("useViewport3DSceneModel", () => {
     ).toBe(2.5e-6);
   });
 
+  it("exposes the camera interaction state to the 3D scene", () => {
+    const commandState = {
+      camera: DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+      widgets: {
+        cameraOrthographicScale: 4e-6,
+        cameraProjection: "perspective",
+      },
+    } as Pick<Viewport3DCommandState, "camera" | "widgets">;
+
+    expect(
+      resolveViewport3DSceneCameraView({
+        cameraRegistrySnapshot: {
+          camera: DEFAULT_CAMERA_REGISTRY_STATE,
+          interactionActive: true,
+        },
+        commandState,
+      }).interactionActive,
+    ).toBe(true);
+    expect(
+      resolveViewport3DSceneCameraView({
+        cameraRegistrySnapshot: {
+          camera: DEFAULT_CAMERA_REGISTRY_STATE,
+          interactionActive: false,
+        },
+        commandState,
+      }).interactionActive,
+    ).toBe(false);
+  });
+
   it("builds the FDM instance model once in the scene model without coupling solid rendering to field revisions", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

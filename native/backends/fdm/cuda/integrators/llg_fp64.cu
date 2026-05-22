@@ -380,6 +380,13 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, 0.5 * dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
+    if (!fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count + 1)) {
+        ctx.step_count++;
+        ctx.current_time += dt;
+        fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
+        return;
+    }
+
     // --- Step 7: Compute diagnostics on the new state ---
     // Field contributions for diagnostics
     if (ctx.enable_exchange) {
@@ -429,8 +436,6 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
 
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
-
-    cudaDeviceSynchronize();
 
     // Update context time
     ctx.step_count++;

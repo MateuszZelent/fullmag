@@ -8,18 +8,26 @@ Executable today:
 
 1. **Slonczewski STT** — for current-perpendicular-to-plane (CPP) geometries (MTJ, nanopillar)
 2. **Zhang–Li STT** — for current-in-plane (CIP) geometries (nanowire, domain wall track)
+3. **Spin–Orbit Torque** — for damping-like / field-like spin Hall geometries
 
 Semantic-only placeholders today:
 
-3. **InterfaceCppSTT**
-4. **DriftDiffusionSpinTorque**
-5. **SpinOrbitTorque**
+4. **InterfaceCppSTT**
+5. **DriftDiffusionSpinTorque**
 
-Both are added to the LLG equation:
+Executable direct torques are added to the LLG equation:
 
 $$
 \frac{\partial \mathbf{m}}{\partial t} = -\gamma \mu_0 \, \mathbf{m} \times \mathbf{H}_\mathrm{eff} + \alpha \, \mathbf{m} \times \frac{\partial \mathbf{m}}{\partial t} + \boldsymbol{\tau}_\mathrm{STT}
 $$
+
+CPU FDM implementation rule:
+
+- direct spin-torque terms are RHS contributions, not effective-field terms;
+- every time-integrator stage must add the configured direct torque to the stage RHS after
+  evaluating the field-driven LLG RHS;
+- AoS and SoA CPU buffer paths must produce matching stage updates for the same configured
+  direct torque terms.
 
 ---
 

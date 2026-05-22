@@ -11,7 +11,7 @@ use crate::VectorFieldSoA;
 ///
 /// Backends receive this so they can apply the spectral tensor multiply.
 /// The data format is interleaved complex: [re0, im0, re1, im1, …].
-pub use crate::fdm_fft::DemagKernelSpectra;
+pub use super::DemagKernelSpectra;
 
 // ──────────────────────────────────────────────────────────────────────
 // Backend trait
@@ -20,8 +20,8 @@ pub use crate::fdm_fft::DemagKernelSpectra;
 /// Abstraction over FFT-based demag convolution.
 ///
 /// A backend owns its plans, scratch buffers, and padded-domain storage.
-/// The caller provides **physical-domain** SoA fields and the kernel
-/// spectra; the backend performs:
+/// The caller provides **physical-domain** normalised SoA magnetisation;
+/// the backend performs:
 ///
 ///   1. pack (physical → padded),
 ///   2. forward FFT,
@@ -29,15 +29,16 @@ pub use crate::fdm_fft::DemagKernelSpectra;
 ///   4. inverse FFT,
 ///   5. unpack + accumulate into `out_h`.
 ///
-/// This matches the `FdmFftBackend` signature from the implementation plan.
 pub trait FdmFftBackend: Send + Sync {
     /// Execute the full demag convolution: M → H_demag, accumulated into
-    /// `out_h`.  `m` contains **normalised** magnetisation × M_s; the
-    /// backend must *not* rescale.
+    /// `out_h`. `m` contains **normalised** magnetisation, while
+    /// `saturation_magnetisation` and `active_mask` carry the physical
+    /// scaling and active-domain contract into the backend pack step.
     fn convolve_demag(
         &mut self,
         m: &VectorFieldSoA,
-        kernel: &DemagKernelSpectra,
+        saturation_magnetisation: f64,
+        active_mask: Option<&[bool]>,
         out_h: &mut VectorFieldSoA,
     );
 
@@ -49,24 +50,20 @@ pub trait FdmFftBackend: Send + Sync {
 // RustFftBackend — wraps the existing FftWorkspace
 // ──────────────────────────────────────────────────────────────────────
 
-use crate::fdm_fft::FftWorkspace;
+use super::FftWorkspace;
 
 /// Default CPU backend using `rustfft` 6.x with Rayon parallelism on
 /// the `parallel` feature flag.
 pub struct RustFftBackend {
     pub(crate) ws: FftWorkspace,
-    /// Physical grid dimensions (needed for pack / unpack).
-    nx: usize,
-    ny: usize,
-    nz: usize,
 }
 
 impl RustFftBackend {
     /// Build a new backend for the given physical grid.
     ///
     /// `ws` must already be initialised with matching padded dimensions.
-    pub fn new(ws: FftWorkspace, nx: usize, ny: usize, nz: usize) -> Self {
-        Self { ws, nx, ny, nz }
+    pub fn new(ws: FftWorkspace, _nx: usize, _ny: usize, _nz: usize) -> Self {
+        Self { ws }
     }
 
     /// Borrow the inner `FftWorkspace` (for legacy code that still needs it).
@@ -83,21 +80,25 @@ fn padded_index(px: usize, py: usize, x: usize, y: usize, z: usize) -> usize {
     x + px * (y + py * z)
 }
 
-impl FdmFftBackend for RustFftBackend {
+impl FdmFftBackend for FftWorkspace {
     fn convolve_demag(
         &mut self,
         m: &VectorFieldSoA,
-        _kernel: &DemagKernelSpectra,
+        saturation_magnetisation: f64,
+        active_mask: Option<&[bool]>,
         out_h: &mut VectorFieldSoA,
     ) {
-        let ws = &mut self.ws;
-        let px = ws.px;
-        let py = ws.py;
-        let _pz = ws.pz;
-        let padded_len = px * py * ws.pz;
+        debug_assert_eq!(m.len(), self.nx * self.ny * self.nz);
+        if let Some(mask) = active_mask {
+            debug_assert_eq!(mask.len(), m.len());
+        }
+
+        let px = self.px;
+        let py = self.py;
+        let padded_len = px * py * self.pz;
 
         // 1. Clear M buffers (H buffers overwritten by tensor multiply)
-        ws.clear_m_bufs();
+        self.clear_m_bufs();
 
         // 2. Pack physical → padded
         for z in 0..self.nz {
@@ -105,26 +106,28 @@ impl FdmFftBackend for RustFftBackend {
                 for x in 0..self.nx {
                     let src = x + self.nx * (y + self.ny * z);
                     let dst = padded_index(px, py, x, y, z);
-                    ws.buf_mx[dst] = Complex::new(m.x[src], 0.0);
-                    ws.buf_my[dst] = Complex::new(m.y[src], 0.0);
-                    ws.buf_mz[dst] = Complex::new(m.z[src], 0.0);
+                    if active_mask.map(|mask| mask[src]).unwrap_or(true) {
+                        self.buf_mx[dst] = Complex::new(m.x[src] * saturation_magnetisation, 0.0);
+                        self.buf_my[dst] = Complex::new(m.y[src] * saturation_magnetisation, 0.0);
+                        self.buf_mz[dst] = Complex::new(m.z[src] * saturation_magnetisation, 0.0);
+                    }
                 }
             }
         }
 
         // 3. Forward FFT
-        ws.fft3_m_forward();
+        self.fft3_m_forward();
 
         // 4. Spectral tensor multiply (uses ws.kern_* which were precomputed)
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            let (mx_sl, my_sl, mz_sl) = (&ws.buf_mx[..], &ws.buf_my[..], &ws.buf_mz[..]);
-            let (kxx, kyy, kzz) = (&ws.kern_xx[..], &ws.kern_yy[..], &ws.kern_zz[..]);
-            let (kxy, kxz, kyz) = (&ws.kern_xy[..], &ws.kern_xz[..], &ws.kern_yz[..]);
-            let hx = &mut ws.buf_hx[..];
-            let hy = &mut ws.buf_hy[..];
-            let hz = &mut ws.buf_hz[..];
+            let (mx_sl, my_sl, mz_sl) = (&self.buf_mx[..], &self.buf_my[..], &self.buf_mz[..]);
+            let (kxx, kyy, kzz) = (&self.kern_xx[..], &self.kern_yy[..], &self.kern_zz[..]);
+            let (kxy, kxz, kyz) = (&self.kern_xy[..], &self.kern_xz[..], &self.kern_yz[..]);
+            let hx = &mut self.buf_hx[..];
+            let hy = &mut self.buf_hy[..];
+            let hz = &mut self.buf_hz[..];
             hx.par_iter_mut().enumerate().for_each(|(i, h)| {
                 *h = -(kxx[i] * mx_sl[i] + kxy[i] * my_sl[i] + kxz[i] * mz_sl[i]);
             });
@@ -138,17 +141,20 @@ impl FdmFftBackend for RustFftBackend {
         #[cfg(not(feature = "parallel"))]
         {
             for i in 0..padded_len {
-                let mx = ws.buf_mx[i];
-                let my = ws.buf_my[i];
-                let mz = ws.buf_mz[i];
-                ws.buf_hx[i] = -(ws.kern_xx[i] * mx + ws.kern_xy[i] * my + ws.kern_xz[i] * mz);
-                ws.buf_hy[i] = -(ws.kern_xy[i] * mx + ws.kern_yy[i] * my + ws.kern_yz[i] * mz);
-                ws.buf_hz[i] = -(ws.kern_xz[i] * mx + ws.kern_yz[i] * my + ws.kern_zz[i] * mz);
+                let mx = self.buf_mx[i];
+                let my = self.buf_my[i];
+                let mz = self.buf_mz[i];
+                self.buf_hx[i] =
+                    -(self.kern_xx[i] * mx + self.kern_xy[i] * my + self.kern_xz[i] * mz);
+                self.buf_hy[i] =
+                    -(self.kern_xy[i] * mx + self.kern_yy[i] * my + self.kern_yz[i] * mz);
+                self.buf_hz[i] =
+                    -(self.kern_xz[i] * mx + self.kern_yz[i] * my + self.kern_zz[i] * mz);
             }
         }
 
         // 5. Inverse FFT
-        ws.fft3_h_inverse();
+        self.fft3_h_inverse();
 
         // 6. Unpack + accumulate into out_h
         let norm = 1.0 / padded_len as f64;
@@ -157,12 +163,31 @@ impl FdmFftBackend for RustFftBackend {
                 for x in 0..self.nx {
                     let src = padded_index(px, py, x, y, z);
                     let dst = x + self.nx * (y + self.ny * z);
-                    out_h.x[dst] += ws.buf_hx[src].re * norm;
-                    out_h.y[dst] += ws.buf_hy[src].re * norm;
-                    out_h.z[dst] += ws.buf_hz[src].re * norm;
+                    if active_mask.map(|mask| mask[dst]).unwrap_or(true) {
+                        out_h.x[dst] += self.buf_hx[src].re * norm;
+                        out_h.y[dst] += self.buf_hy[src].re * norm;
+                        out_h.z[dst] += self.buf_hz[src].re * norm;
+                    }
                 }
             }
         }
+    }
+
+    fn name(&self) -> &'static str {
+        "rustfft"
+    }
+}
+
+impl FdmFftBackend for RustFftBackend {
+    fn convolve_demag(
+        &mut self,
+        m: &VectorFieldSoA,
+        saturation_magnetisation: f64,
+        active_mask: Option<&[bool]>,
+        out_h: &mut VectorFieldSoA,
+    ) {
+        self.ws
+            .convolve_demag(m, saturation_magnetisation, active_mask, out_h);
     }
 
     fn name(&self) -> &'static str {
@@ -188,7 +213,9 @@ use crate::distributed::{GlobalReductionService, RankLocalSubdomain};
 pub trait DistributedFftBackend: Send + Sync {
     /// Execute distributed demag convolution on the local slab.
     ///
-    /// - `local_m`: SoA magnetization for the **owned** cells on this rank
+    /// - `local_m`: normalised SoA magnetization for the **owned** cells on this rank
+    /// - `saturation_magnetisation`: `M_s` used while packing magnetic moment
+    /// - `active_mask`: optional rank-local active-cell mask
     /// - `kernel`: pre-computed Newell spectra (global, broadcast at startup)
     /// - `sub`: subdomain description (offsets, extents)
     /// - `out_h`: output field — accumulated into (not overwritten)
@@ -196,6 +223,8 @@ pub trait DistributedFftBackend: Send + Sync {
     fn convolve_demag_distributed(
         &mut self,
         local_m: &VectorFieldSoA,
+        saturation_magnetisation: f64,
+        active_mask: Option<&[bool]>,
         kernel: &DemagKernelSpectra,
         sub: &RankLocalSubdomain,
         out_h: &mut VectorFieldSoA,
@@ -225,13 +254,17 @@ impl<B: FdmFftBackend> DistributedFftBackend for GatherScatterFallback<B> {
     fn convolve_demag_distributed(
         &mut self,
         local_m: &VectorFieldSoA,
+        saturation_magnetisation: f64,
+        active_mask: Option<&[bool]>,
         kernel: &DemagKernelSpectra,
         _sub: &RankLocalSubdomain,
         out_h: &mut VectorFieldSoA,
         _reductions: &dyn GlobalReductionService,
     ) {
         // Single-rank fallback: just delegate to the local backend.
-        self.local_backend.convolve_demag(local_m, kernel, out_h);
+        let _ = kernel;
+        self.local_backend
+            .convolve_demag(local_m, saturation_magnetisation, active_mask, out_h);
     }
 
     fn name(&self) -> &'static str {

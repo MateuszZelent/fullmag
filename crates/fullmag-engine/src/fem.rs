@@ -2352,6 +2352,9 @@ impl FemLlgProblem {
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
+            anisotropy_energy_joules: uniaxial_anisotropy_energy_joules
+                + cubic_anisotropy_energy_joules,
+            dmi_energy_joules,
             total_energy_joules,
             max_effective_field_amplitude,
             max_demag_field_amplitude,
@@ -2446,6 +2449,9 @@ impl FemLlgProblem {
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
+            anisotropy_energy_joules: uniaxial_anisotropy_energy_joules
+                + cubic_anisotropy_energy_joules,
+            dmi_energy_joules,
             total_energy_joules,
             max_effective_field_amplitude,
             max_demag_field_amplitude,

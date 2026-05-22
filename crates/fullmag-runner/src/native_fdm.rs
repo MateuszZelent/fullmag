@@ -542,6 +542,8 @@ impl NativeFdmBackend {
             adaptive_dt_min: adaptive.map_or(0.0, |cfg| cfg.dt_min),
             adaptive_dt_max: adaptive.and_then(|cfg| cfg.dt_max).unwrap_or(0.0),
             adaptive_headroom: adaptive.map_or(0.0, |cfg| cfg.safety),
+            stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
+            stats_stride: 1,
         };
 
         let handle = unsafe { ffi::fullmag_fdm_backend_create(&plan_desc) };

@@ -95,6 +95,10 @@ infinite-cylinder reduction instead of this midpoint fallback.
   - CPU reference and native CUDA runners inject that field as an additive per-cell effective-field contribution,
   - `H_OE` becomes available through the FDM observables and field selection contract.
 
+For CPU FDM step reports, both `EvaluationRequest::Minimal` and `EvaluationRequest::Full` include
+the Oersted contribution in `H_eff`, RHS, and torque metrics. The current FDM scalar energy
+decomposition does not publish a separate Oersted energy term.
+
 ### 3.2 FEM
 
 - No change; `0850` remains the authoritative note for general prescribed-current Oersted on native FEM.
@@ -164,7 +168,9 @@ Provenance should preserve whether FDM used:
 
 1. Planner test for non-cylindrical FDM `from_current_solution` lowering.
 2. CPU FDM runner test proving the generalized Oersted field reaches observables / effective field.
-3. Capability-matrix updates.
+3. Engine test proving Oersted-only full step observables preserve the same field/RHS/torque
+   metrics as minimal evaluation.
+4. Capability-matrix updates.
 
 ## 7. Completeness checklist
 

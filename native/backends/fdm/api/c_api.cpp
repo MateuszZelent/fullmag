@@ -28,6 +28,8 @@ extern void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats
 extern void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_demag_field_fp64(Context &ctx);
+extern void launch_multilayer_demag_field_fp32(Context &ctx);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
@@ -62,7 +64,9 @@ extern double reduce_max_cross_norm_fp32(
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz,
     uint64_t n);
+#if FULLMAG_HAS_CUDA
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
+#endif
 } }
 
 namespace {
@@ -82,6 +86,7 @@ std::optional<int> selected_cuda_device_from_env() {
     return static_cast<int>(parsed);
 }
 
+#if FULLMAG_HAS_CUDA
 bool select_cuda_device_if_requested(Context &ctx) {
     auto selected = selected_cuda_device_from_env();
     if (!selected.has_value()) {
@@ -94,7 +99,9 @@ bool select_cuda_device_if_requested(Context &ctx) {
     }
     return true;
 }
+#endif
 
+#if FULLMAG_HAS_CUDA
 bool fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats) {
     if (!context_refresh_observables(ctx)) {
         return false;
@@ -163,6 +170,155 @@ bool fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats) {
         out_stats->dmi_energy_joules;
     return true;
 }
+#endif
+
+uint64_t grid_cell_count(const fullmag_fdm_grid_desc &grid) {
+    return static_cast<uint64_t>(grid.nx) * grid.ny * grid.nz;
+}
+
+bool validate_grid_desc(
+    const fullmag_fdm_grid_desc &grid,
+    const char *name,
+    std::string &error)
+{
+    if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0) {
+        error = std::string(name) + " must have non-zero dimensions";
+        return false;
+    }
+    if (grid.dx <= 0.0 || grid.dy <= 0.0 || grid.dz <= 0.0) {
+        error = std::string(name) + " must have positive cell sizes";
+        return false;
+    }
+    return true;
+}
+
+bool valid_precision(fullmag_fdm_precision precision) {
+    return precision == FULLMAG_FDM_PRECISION_SINGLE ||
+        precision == FULLMAG_FDM_PRECISION_DOUBLE;
+}
+
+bool valid_integrator(fullmag_fdm_integrator integrator) {
+    switch (integrator) {
+        case FULLMAG_FDM_INTEGRATOR_HEUN:
+        case FULLMAG_FDM_INTEGRATOR_DP45:
+        case FULLMAG_FDM_INTEGRATOR_ABM3:
+        case FULLMAG_FDM_INTEGRATOR_RK4:
+        case FULLMAG_FDM_INTEGRATOR_RK23:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool validate_multilayer_plan_v2(
+    const fullmag_fdm_multilayer_plan_desc_v2 &plan,
+    std::string &error)
+{
+    if (!valid_precision(plan.precision)) {
+        error = "unknown FDM precision in v2 plan";
+        return false;
+    }
+    if (!valid_integrator(plan.integrator)) {
+        error = "unknown FDM integrator in v2 plan";
+        return false;
+    }
+    if (plan.layer_count == 0) {
+        error = "layer_count must be greater than zero";
+        return false;
+    }
+    if (plan.layers == nullptr) {
+        error = "layers pointer must be present when layer_count is non-zero";
+        return false;
+    }
+
+    for (uint32_t i = 0; i < plan.layer_count; ++i) {
+        const fullmag_fdm_layer_desc_v2 &layer = plan.layers[i];
+        if (layer.layer_index != i) {
+            error = "layer_index must match layer table order";
+            return false;
+        }
+        if (!validate_grid_desc(layer.native_grid, "layer native_grid", error) ||
+            !validate_grid_desc(layer.convolution_grid, "layer convolution_grid", error))
+        {
+            return false;
+        }
+        if (layer.material.saturation_magnetisation <= 0.0) {
+            error = "layer material saturation_magnetisation must be positive";
+            return false;
+        }
+        if (layer.material.exchange_stiffness < 0.0) {
+            error = "layer material exchange_stiffness must be non-negative";
+            return false;
+        }
+        if (layer.material.damping < 0.0) {
+            error = "layer material damping must be non-negative";
+            return false;
+        }
+        if (layer.material.gyromagnetic_ratio <= 0.0) {
+            error = "layer material gyromagnetic_ratio must be positive";
+            return false;
+        }
+        const uint64_t expected_m_len = grid_cell_count(layer.native_grid) * 3u;
+        if (layer.initial_magnetization_xyz == nullptr) {
+            error = "layer initial_magnetization_xyz must be present";
+            return false;
+        }
+        if (layer.initial_magnetization_len != expected_m_len) {
+            error = "layer initial_magnetization_len mismatch: expected "
+                + std::to_string(expected_m_len)
+                + ", got " + std::to_string(layer.initial_magnetization_len);
+            return false;
+        }
+        if (layer.active_mask != nullptr &&
+            layer.active_mask_len != grid_cell_count(layer.native_grid))
+        {
+            error = "layer active_mask_len mismatch: expected "
+                + std::to_string(grid_cell_count(layer.native_grid))
+                + ", got " + std::to_string(layer.active_mask_len);
+            return false;
+        }
+    }
+
+    if (plan.enable_demag) {
+        if (plan.kernels == nullptr) {
+            error = "kernels pointer must be present when demag is enabled";
+            return false;
+        }
+        const uint64_t expected_kernel_count =
+            static_cast<uint64_t>(plan.layer_count) * plan.layer_count;
+        if (plan.kernel_count != expected_kernel_count) {
+            error = "kernel_count mismatch: expected "
+                + std::to_string(expected_kernel_count)
+                + ", got " + std::to_string(plan.kernel_count);
+            return false;
+        }
+        for (uint32_t i = 0; i < plan.kernel_count; ++i) {
+            const fullmag_fdm_tensor_kernel_desc_v2 &kernel = plan.kernels[i];
+            if (kernel.dst_layer >= plan.layer_count || kernel.src_layer >= plan.layer_count) {
+                error = "kernel layer index out of range";
+                return false;
+            }
+            if (!validate_grid_desc(kernel.fft_grid, "kernel fft_grid", error)) {
+                return false;
+            }
+            if (!kernel.kernel_xx || !kernel.kernel_yy || !kernel.kernel_zz ||
+                !kernel.kernel_xy || !kernel.kernel_xz || !kernel.kernel_yz)
+            {
+                error = "kernel tensor spectra pointers must all be present";
+                return false;
+            }
+            const uint64_t expected_len = grid_cell_count(kernel.fft_grid);
+            if (kernel.kernel_len != expected_len) {
+                error = "kernel_len mismatch: expected "
+                    + std::to_string(expected_len)
+                    + ", got " + std::to_string(kernel.kernel_len);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
 
 } // namespace
 
@@ -217,6 +373,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // Execution config
     ctx->precision  = plan->precision;
     ctx->integrator = plan->integrator;
+    ctx->stats_mode = plan->stats_mode == FULLMAG_FDM_STATS_NONE
+        ? FULLMAG_FDM_STATS_NONE
+        : FULLMAG_FDM_STATS_FULL;
+    ctx->stats_stride = plan->stats_stride == 0 ? 1 : plan->stats_stride;
     ctx->disable_precession = plan->disable_precession != 0;
     ctx->enable_exchange = plan->enable_exchange != 0;
     ctx->enable_demag = plan->enable_demag != 0;
@@ -590,6 +750,61 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 #endif
 }
 
+fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
+    const fullmag_fdm_multilayer_plan_desc_v2 *plan)
+{
+#if FULLMAG_HAS_CUDA
+    if (!plan) return nullptr;
+
+    auto *ctx = new (std::nothrow) Context();
+    if (!ctx) return nullptr;
+    if (!select_cuda_device_if_requested(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
+    if (plan->kind == FULLMAG_FDM_PLAN_UNIFORM_GRID) {
+        ctx->last_error =
+            "v2 uniform-grid execution is not implemented; use fullmag_fdm_backend_create";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->kind != FULLMAG_FDM_PLAN_MULTILAYER_CONV) {
+        ctx->last_error = "unknown FDM plan kind in v2 plan";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
+    std::string validation_error;
+    if (!validate_multilayer_plan_v2(*plan, validation_error)) {
+        ctx->last_error = validation_error;
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
+    ctx->precision = plan->precision;
+    ctx->integrator = plan->integrator;
+    ctx->stats_mode = plan->stats_mode == FULLMAG_FDM_STATS_NONE
+        ? FULLMAG_FDM_STATS_NONE
+        : FULLMAG_FDM_STATS_FULL;
+    ctx->stats_stride = plan->stats_stride == 0 ? 1 : plan->stats_stride;
+    ctx->disable_precession = plan->disable_precession != 0;
+    ctx->enable_exchange = plan->enable_exchange != 0;
+    ctx->enable_demag = plan->enable_demag != 0;
+    if (!context_upload_multilayer_plan_v2(*ctx, *plan)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (!context_prepare_multilayer_fft_workspace_v2(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
+    ctx->last_error =
+        "uploaded " + std::to_string(ctx->multilayer_layers.size())
+        + " layers and " + std::to_string(ctx->multilayer_kernels.size())
+        + " tensor kernels; prepared shared FFT workspace; native multilayer CUDA execution is not implemented for fullmag_fdm_backend_create_v2";
+    return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+#else
+    (void)plan;
+    return nullptr;
+#endif
+}
+
 /* ── Step ── */
 
 int fullmag_fdm_backend_step(
@@ -601,6 +816,26 @@ int fullmag_fdm_backend_step(
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
     ctx->step_interrupted = false;
+    if (ctx->has_multilayer_plan_v2) {
+        fullmag_fdm_fill_step_stats_metadata(*ctx, out_stats, dt_seconds);
+        ctx->last_error.clear();
+        bool refreshed_demag = false;
+        if (ctx->enable_demag) {
+            if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                launch_multilayer_demag_field_fp64(*ctx);
+            } else {
+                launch_multilayer_demag_field_fp32(*ctx);
+            }
+            if (!ctx->last_error.empty()) {
+                return FULLMAG_FDM_ERR_CUDA;
+            }
+            refreshed_demag = true;
+        }
+        ctx->last_error = refreshed_demag
+            ? "native multilayer demag refreshed; native multilayer timestep execution is not implemented for fullmag_fdm_backend_step"
+            : "native multilayer timestep execution is not implemented for fullmag_fdm_backend_step";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         switch (ctx->integrator) {

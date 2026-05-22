@@ -9,6 +9,7 @@ import { defaultObjectMeshPolicyResource } from "@/kernel/resources/geometryLife
 export { defaultObjectMeshPolicyResource };
 
 const OBJECT_POLICY_MANUAL_BOX_SOURCE = "object_policy_manual_box";
+const OBJECT_CORE_RELAXATION_KIND = "ObjectCoreRelaxation";
 const UNMARKED_MANUAL_BOX_SOURCE = "unmarked_manual_box";
 
 export interface ObjectMeshPolicyDraft {
@@ -20,6 +21,15 @@ export interface ObjectMeshPolicyDraft {
   boundaryLayerTargetSurfaceTags: string;
   boundaryLayerThickness: string;
   computeQuality: string;
+  coreRelaxationEdgeDistance: string;
+  coreRelaxationEdgeMaximumElementSize: string;
+  coreRelaxationEnabled: boolean;
+  coreRelaxationGeometryName: string;
+  coreRelaxationMaximumElementSize: string;
+  coreRelaxationSamplingEdge: string;
+  coreRelaxationSamplingSurface: string;
+  coreRelaxationSurfaceDistance: string;
+  coreRelaxationSurfaceMaximumElementSize: string;
   cornerExtent: string;
   cornerMaximumElementSize: string;
   configText: string;
@@ -42,6 +52,7 @@ export interface ObjectMeshPolicyDraft {
   maximumElementSize: string;
   meshStrategy: string;
   minimumElementSize: string;
+  narrowRegions: string;
   narrowRegionResolution: string;
   order: string;
   optimize: string;
@@ -53,6 +64,7 @@ export interface ObjectMeshPolicyDraft {
   calibrateFor: string;
   sizePreset: string;
   sizeFactor: string;
+  sizeFromCurvature: string;
   throughThicknessDistribution: string;
   throughThicknessElementRatio: string;
   throughThicknessElements: string;
@@ -73,6 +85,7 @@ export function draftFromObjectMeshPolicyResource(
 ): ObjectMeshPolicyDraft {
   const config = resource.config ?? {};
   const manualBox = readManualBoxSizeField(config.size_fields);
+  const coreRelaxation = readObjectCoreRelaxationSizeField(config.size_fields);
 
   return {
     algorithm2d: readNumberText(config.algorithm_2d),
@@ -87,6 +100,16 @@ export function draftFromObjectMeshPolicyResource(
     ),
     boundaryLayerThickness: readNumberText(config.boundary_layer_thickness),
     computeQuality: readBooleanText(config.compute_quality),
+    coreRelaxationEdgeDistance: coreRelaxation.edgeDistance,
+    coreRelaxationEdgeMaximumElementSize: coreRelaxation.edgeMaximumElementSize,
+    coreRelaxationEnabled: coreRelaxation.enabled,
+    coreRelaxationGeometryName: coreRelaxation.geometryName,
+    coreRelaxationMaximumElementSize: coreRelaxation.maximumElementSize,
+    coreRelaxationSamplingEdge: coreRelaxation.samplingEdge,
+    coreRelaxationSamplingSurface: coreRelaxation.samplingSurface,
+    coreRelaxationSurfaceDistance: coreRelaxation.surfaceDistance,
+    coreRelaxationSurfaceMaximumElementSize:
+      coreRelaxation.surfaceMaximumElementSize,
     cornerExtent: readNumberText(config.corner_extent),
     cornerMaximumElementSize: readNumberText(config.corner_maximum_element_size),
     calibrateFor: readStringText(config.calibrate_for),
@@ -95,7 +118,7 @@ export function draftFromObjectMeshPolicyResource(
     edgeMaximumElementSize: readNumberText(config.edge_maximum_element_size),
     edgeThickness: readNumberText(config.edge_thickness),
     interfaceMaximumElementSize: readNumberText(
-      config.interface_maximum_element_size,
+      config.interface_hmax ?? config.interface_maximum_element_size,
     ),
     interfaceThickness: readNumberText(config.interface_thickness),
     manualBoxSizeFieldEnabled: manualBox.enabled,
@@ -114,6 +137,7 @@ export function draftFromObjectMeshPolicyResource(
     maximumElementSize: readNumberText(config.maximum_element_size),
     meshStrategy: readStringText(config.mesh_strategy),
     minimumElementSize: readNumberText(config.minimum_element_size),
+    narrowRegions: readNumberText(config.narrow_regions),
     narrowRegionResolution: readNumberText(config.narrow_region_resolution),
     order: readNumberText(config.order),
     optimize: readStringText(config.optimize),
@@ -121,6 +145,7 @@ export function draftFromObjectMeshPolicyResource(
     perElementQuality: readBooleanText(config.per_element_quality),
     present: resource.config !== null && resource.config !== undefined,
     sizeFactor: readNumberText(config.size_factor),
+    sizeFromCurvature: readNumberText(config.size_from_curvature),
     sizePreset: readStringText(config.size_preset),
     smoothingSteps: readNumberText(config.smoothing_steps),
     sweepFaceMeshing: readStringText(config.sweep_face_meshing),
@@ -159,6 +184,15 @@ export function buildObjectMeshPolicyReplaceRequest({
   boundaryLayerTargetSurfaceTags,
   boundaryLayerThickness,
   computeQuality,
+  coreRelaxationEdgeDistance,
+  coreRelaxationEdgeMaximumElementSize,
+  coreRelaxationEnabled,
+  coreRelaxationGeometryName,
+  coreRelaxationMaximumElementSize,
+  coreRelaxationSamplingEdge,
+  coreRelaxationSamplingSurface,
+  coreRelaxationSurfaceDistance,
+  coreRelaxationSurfaceMaximumElementSize,
   configText,
   curvatureFactor,
   edgeMaximumElementSize,
@@ -179,6 +213,7 @@ export function buildObjectMeshPolicyReplaceRequest({
   maximumElementSize,
   meshStrategy,
   minimumElementSize,
+  narrowRegions,
   narrowRegionResolution,
   order,
   optimize,
@@ -189,6 +224,7 @@ export function buildObjectMeshPolicyReplaceRequest({
   calibrateFor,
   sizePreset,
   sizeFactor,
+  sizeFromCurvature,
   sweepFaceMeshing,
   throughThicknessDistribution,
   throughThicknessElementRatio,
@@ -224,6 +260,8 @@ export function buildObjectMeshPolicyReplaceRequest({
     ],
     ["curvature_factor", curvatureFactor, "Curvature factor"],
     ["narrow_region_resolution", narrowRegionResolution, "Narrow region resolution"],
+    ["narrow_regions", narrowRegions, "Narrow regions", true],
+    ["size_from_curvature", sizeFromCurvature, "Size from curvature", true],
     ["size_factor", sizeFactor, "Size factor"],
     ["order", order, "FEM order", true],
     ["smoothing_steps", smoothingSteps, "Smoothing steps", true],
@@ -250,11 +288,7 @@ export function buildObjectMeshPolicyReplaceRequest({
       throughThicknessElementRatio,
       "Through-thickness element ratio",
     ],
-    [
-      "interface_maximum_element_size",
-      interfaceMaximumElementSize,
-      "Interface maximum element size",
-    ],
+    ["interface_hmax", interfaceMaximumElementSize, "Interface maximum element size"],
     ["interface_thickness", interfaceThickness, "Interface thickness"],
     ["transition_distance", transitionDistance, "Transition distance"],
     ["transition_growth", transitionGrowth, "Transition growth"],
@@ -273,6 +307,7 @@ export function buildObjectMeshPolicyReplaceRequest({
     if (!parsed.ok) return { error: parsed.error };
     applyOptionalNumber(value, key, parsed.value);
   }
+  delete value.interface_maximum_element_size;
 
   applyOptionalString(value, "mesh_strategy", meshStrategy);
   applyOptionalString(value, "optimize", optimize);
@@ -316,6 +351,18 @@ export function buildObjectMeshPolicyReplaceRequest({
     zMin: manualBoxSizeFieldZMin,
   });
   if (!manualBox.ok) return { error: manualBox.error };
+  const coreRelaxation = applyObjectCoreRelaxationSizeField(value, {
+    edgeDistance: coreRelaxationEdgeDistance,
+    edgeMaximumElementSize: coreRelaxationEdgeMaximumElementSize,
+    enabled: coreRelaxationEnabled,
+    geometryName: coreRelaxationGeometryName,
+    maximumElementSize: coreRelaxationMaximumElementSize,
+    samplingEdge: coreRelaxationSamplingEdge,
+    samplingSurface: coreRelaxationSamplingSurface,
+    surfaceDistance: coreRelaxationSurfaceDistance,
+    surfaceMaximumElementSize: coreRelaxationSurfaceMaximumElementSize,
+  });
+  if (!coreRelaxation.ok) return { error: coreRelaxation.error };
 
   return { request: { config: value } };
 }
@@ -353,6 +400,18 @@ interface ManualBoxSizeFieldDraft {
   zMin: string;
 }
 
+interface ObjectCoreRelaxationSizeFieldDraft {
+  edgeDistance: string;
+  edgeMaximumElementSize: string;
+  enabled: boolean;
+  geometryName: string;
+  maximumElementSize: string;
+  samplingEdge: string;
+  samplingSurface: string;
+  surfaceDistance: string;
+  surfaceMaximumElementSize: string;
+}
+
 function emptyManualBoxSizeField(): ManualBoxSizeFieldDraft {
   return {
     enabled: false,
@@ -365,6 +424,20 @@ function emptyManualBoxSizeField(): ManualBoxSizeFieldDraft {
     yMin: "",
     zMax: "",
     zMin: "",
+  };
+}
+
+function emptyObjectCoreRelaxationSizeField(): ObjectCoreRelaxationSizeFieldDraft {
+  return {
+    edgeDistance: "",
+    edgeMaximumElementSize: "",
+    enabled: false,
+    geometryName: "",
+    maximumElementSize: "",
+    samplingEdge: "",
+    samplingSurface: "",
+    surfaceDistance: "",
+    surfaceMaximumElementSize: "",
   };
 }
 
@@ -406,6 +479,32 @@ function readManualBoxSizeField(value: unknown): ManualBoxSizeFieldDraft {
   };
 }
 
+function readObjectCoreRelaxationSizeField(
+  value: unknown,
+): ObjectCoreRelaxationSizeFieldDraft {
+  if (!Array.isArray(value)) return emptyObjectCoreRelaxationSizeField();
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record?.kind !== OBJECT_CORE_RELAXATION_KIND) continue;
+    const params = asRecord(record.params);
+    if (!params) return emptyObjectCoreRelaxationSizeField();
+    return {
+      edgeDistance: readNumberText(params.edge_distance),
+      edgeMaximumElementSize: readNumberText(params.edge_maximum_element_size),
+      enabled: true,
+      geometryName: readStringText(params.GeometryName),
+      maximumElementSize: readNumberText(params.core_maximum_element_size),
+      samplingEdge: readNumberText(params.sampling_edge) || "40",
+      samplingSurface: readNumberText(params.sampling_surface) || "20",
+      surfaceDistance: readNumberText(params.surface_distance),
+      surfaceMaximumElementSize: readNumberText(
+        params.surface_maximum_element_size,
+      ),
+    };
+  }
+  return emptyObjectCoreRelaxationSizeField();
+}
+
 function applyManualBoxSizeField(
   config: JsonObject,
   draft: ManualBoxSizeFieldDraft,
@@ -433,6 +532,46 @@ function applyManualBoxSizeField(
     nextFields.push({
       kind: "Box",
       source: OBJECT_POLICY_MANUAL_BOX_SOURCE,
+      params: parsed.params,
+    });
+  }
+
+  if (nextFields.length === 0) {
+    delete config.size_fields;
+    return { ok: true };
+  }
+
+  config.size_fields = nextFields as JsonValue[];
+  return { ok: true };
+}
+
+function applyObjectCoreRelaxationSizeField(
+  config: JsonObject,
+  draft: ObjectCoreRelaxationSizeFieldDraft,
+): { ok: true } | { error: string; ok: false } {
+  const rawFields = config.size_fields;
+  if (
+    draft.enabled &&
+    rawFields !== undefined &&
+    rawFields !== null &&
+    !Array.isArray(rawFields)
+  ) {
+    return {
+      error: "Object mesh policy size_fields must be an array.",
+      ok: false,
+    };
+  }
+
+  const fields = Array.isArray(rawFields) ? rawFields : [];
+  const nextFields = fields.filter((entry) => {
+    const field = asRecord(entry);
+    return field?.kind !== OBJECT_CORE_RELAXATION_KIND;
+  });
+  if (draft.enabled) {
+    const parsed = parseObjectCoreRelaxationSizeField(draft);
+    if (!parsed.ok) return parsed;
+    nextFields.push({
+      kind: OBJECT_CORE_RELAXATION_KIND,
       params: parsed.params,
     });
   }
@@ -490,6 +629,84 @@ function parseManualBoxSizeField(
       ZMax: zMax.value,
       ZMin: zMin.value,
     },
+  };
+}
+
+function parseObjectCoreRelaxationSizeField(
+  draft: ObjectCoreRelaxationSizeFieldDraft,
+):
+  | { ok: true; params: JsonObject }
+  | { error: string; ok: false } {
+  const geometryName = draft.geometryName.trim();
+  if (!geometryName) {
+    return { error: "Object core relaxation geometry name is required.", ok: false };
+  }
+
+  const core = parseRequiredPositiveNumber(
+    draft.maximumElementSize,
+    "Core maximum element size",
+  );
+  if (!core.ok) return core;
+  const surface = parseRequiredPositiveNumber(
+    draft.surfaceMaximumElementSize,
+    "Surface maximum element size",
+  );
+  if (!surface.ok) return surface;
+  if (surface.value > core.value) {
+    return {
+      error: "Surface maximum element size must be <= core maximum element size.",
+      ok: false,
+    };
+  }
+  const surfaceDistance = parseRequiredPositiveNumber(
+    draft.surfaceDistance,
+    "Surface distance",
+  );
+  if (!surfaceDistance.ok) return surfaceDistance;
+  const samplingSurface = parseSamplingCount(
+    draft.samplingSurface,
+    "Surface sampling",
+  );
+  if (!samplingSurface.ok) return samplingSurface;
+  const samplingEdge = parseSamplingCount(draft.samplingEdge, "Edge sampling");
+  if (!samplingEdge.ok) return samplingEdge;
+
+  const params: JsonObject = {
+    GeometryName: geometryName,
+    core_maximum_element_size: core.value,
+    sampling_edge: samplingEdge.value,
+    sampling_surface: samplingSurface.value,
+    surface_distance: surfaceDistance.value,
+    surface_maximum_element_size: surface.value,
+  };
+
+  const edgeText = draft.edgeMaximumElementSize.trim();
+  const edgeDistanceText = draft.edgeDistance.trim();
+  if (edgeText || edgeDistanceText) {
+    const edge = parseRequiredPositiveNumber(
+      draft.edgeMaximumElementSize,
+      "Edge maximum element size",
+    );
+    if (!edge.ok) return edge;
+    if (edge.value > surface.value) {
+      return {
+        error:
+          "Edge maximum element size must be <= surface maximum element size.",
+        ok: false,
+      };
+    }
+    const edgeDistance = parseRequiredPositiveNumber(
+      draft.edgeDistance,
+      "Edge distance",
+    );
+    if (!edgeDistance.ok) return edgeDistance;
+    params.edge_distance = edgeDistance.value;
+    params.edge_maximum_element_size = edge.value;
+  }
+
+  return {
+    ok: true,
+    params,
   };
 }
 
@@ -580,6 +797,21 @@ function parseRequiredPositiveNumber(
   if (!parsed.ok) return parsed;
   if (parsed.value === null) {
     return { error: `${label} is required.`, ok: false };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+function parseSamplingCount(
+  value: string,
+  label: string,
+): { ok: true; value: number } | { error: string; ok: false } {
+  const parsed = parseRequiredPositiveNumber(value, label);
+  if (!parsed.ok) return parsed;
+  if (!Number.isInteger(parsed.value)) {
+    return { error: `${label} must be an integer.`, ok: false };
+  }
+  if (parsed.value < 2) {
+    return { error: `${label} must be >= 2.`, ok: false };
   }
   return { ok: true, value: parsed.value };
 }

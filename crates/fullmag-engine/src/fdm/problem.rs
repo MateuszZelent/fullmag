@@ -2,9 +2,9 @@
 
 use crate::fdm_fft::zero_vectors;
 use crate::{
-    CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, ExchangeLlgState,
-    FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MaterialParameters,
-    Result, StepReport, TimeIntegrator, Vector3,
+    CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
+    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FftWorkspace, GridShape,
+    IntegratorBuffers, LlgConfig, MaterialParameters, Result, StepReport, TimeIntegrator, Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -165,6 +165,12 @@ impl ExchangeLlgProblem {
         Ok(self.effective_field_from_vectors_ws(state.magnetization(), &mut ws))
     }
 
+    pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        let mut ws = self.create_workspace();
+        Ok(self.observable_effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+    }
+
     pub fn llg_rhs(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.llg_rhs_from_vectors(state.magnetization()))
@@ -187,32 +193,25 @@ impl ExchangeLlgProblem {
     /// Single step using a disposable FFT workspace.
     #[deprecated(
         since = "0.1.0",
-        note = "creates a new FFT workspace per call; use step_with_workspace() instead"
+        note = "creates workspaces per call; use step_with_buffers() or SolverSession for repeated stepping"
     )]
     pub fn step(&self, state: &mut ExchangeLlgState, dt: f64) -> Result<StepReport> {
         let mut ws = self.create_workspace();
         self.step_with_workspace(state, dt, &mut ws)
     }
 
-    /// Step with a pre-built FFT workspace (avoids re-planning per step).
+    /// Step with a pre-built FFT workspace.
+    ///
+    /// This allocates temporary integrator buffers per call. Use
+    /// [`Self::step_with_buffers`] for repeated stepping.
     pub fn step_with_workspace(
         &self,
         state: &mut ExchangeLlgState,
         dt: f64,
         ws: &mut FftWorkspace,
     ) -> Result<StepReport> {
-        self.ensure_state_matches_grid(state)?;
-        if dt <= 0.0 {
-            return Err(EngineError::new("dt must be positive"));
-        }
-
-        match self.dynamics.integrator {
-            TimeIntegrator::Heun => self.heun_step(state, dt, ws),
-            TimeIntegrator::RK4 => self.rk4_step(state, dt, ws),
-            TimeIntegrator::RK23 => self.rk23_step(state, dt, ws),
-            TimeIntegrator::RK45 => self.rk45_step(state, dt, ws),
-            TimeIntegrator::ABM3 => self.abm3_step(state, dt, ws),
-        }
+        let mut bufs = self.create_integrator_buffers();
+        self.step_with_buffers(state, dt, ws, &mut bufs)
     }
 
     /// Create preallocated integrator buffers sized for this problem's grid.
@@ -229,19 +228,82 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         bufs: &mut IntegratorBuffers,
     ) -> Result<StepReport> {
+        self.step_with_buffers_evaluation(state, dt, ws, bufs, EvaluationRequest::Full)
+    }
+
+    /// Step with both a pre-built FFT workspace and preallocated integrator
+    /// buffers, choosing how much step-end telemetry to compute.
+    pub fn step_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
         self.ensure_state_matches_grid(state)?;
         if dt <= 0.0 {
             return Err(EngineError::new("dt must be positive"));
         }
 
         let result = match self.dynamics.integrator {
-            TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs),
-            TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs),
-            TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs),
-            TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs),
-            TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs),
+            TimeIntegrator::Heun if self.soa_fast_path_supported() => {
+                self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)
+            }
+            TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK4 if self.soa_fast_path_supported() => {
+                self.rk4_step_soa_buf(state, dt, ws, bufs, evaluation)
+            }
+            TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK23 if self.soa_fast_path_supported() => {
+                self.rk23_step_soa_buf(state, dt, ws, bufs, evaluation)
+            }
+            TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
+                self.rk45_step_soa_buf(state, dt, ws, bufs, evaluation)
+            }
+            TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::ABM3 if self.soa_fast_path_supported() => {
+                self.abm3_step_soa_buf(state, dt, ws, bufs, evaluation)
+            }
+            TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
         };
         // Advance thermal RNG counter after each step attempt
+        self.advance_thermal_step();
+        result
+    }
+
+    /// Step a persistent SoA state with a pre-built FFT workspace and
+    /// preallocated integrator buffers.
+    ///
+    /// This entry point is intentionally limited to the supported CPU SoA
+    /// fast-path terms; unsupported problems should continue through the
+    /// AoS-compatible API until their SoA field/RHS implementations exist.
+    pub fn step_soa_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        self.ensure_soa_state_matches_grid(state)?;
+        if dt <= 0.0 {
+            return Err(EngineError::new("dt must be positive"));
+        }
+        if !self.soa_fast_path_supported() {
+            return Err(EngineError::new(
+                "SoA state stepping requires a problem supported by the CPU SoA fast path",
+            ));
+        }
+
+        let result = match self.dynamics.integrator {
+            TimeIntegrator::Heun => self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK4 => self.rk4_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK23 => self.rk23_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::RK45 => self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+            TimeIntegrator::ABM3 => self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+        };
         self.advance_thermal_step();
         result
     }
@@ -250,6 +312,15 @@ impl ExchangeLlgProblem {
         if state.grid != self.grid {
             return Err(EngineError::new(
                 "state grid does not match the problem grid shape",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_soa_state_matches_grid(&self, state: &ExchangeLlgStateSoA) -> Result<()> {
+        if state.grid != self.grid || state.cell_count() != self.grid.cell_count() {
+            return Err(EngineError::new(
+                "SoA state grid does not match the problem grid shape",
             ));
         }
         Ok(())

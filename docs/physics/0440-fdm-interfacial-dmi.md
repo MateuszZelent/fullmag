@@ -335,6 +335,27 @@ This is the preferred reference definition because it:
 The production CUDA path may compute the field with direct centered-difference kernels,
 but it must be validated against the energy-derived CPU reference.
 
+Current CPU/native scalar reporting uses the same cell-centered centered-derivative
+density as the native CUDA reduction for parity of `E_iDMI` rows:
+
+\[
+E_{\mathrm{iDMI}}^{\mathrm{scalar}}
+=
+\sum_i
+D V_i
+\left[
+m_{z,i}(\partial_x m_x+\partial_y m_y)_i
+-m_{x,i}(\partial_x m_z)_i
+-m_{y,i}(\partial_y m_z)_i
+\right].
+\]
+
+The centered derivatives use the same periodic/clamped neighbor policy as the
+field stencil; inactive neighbor cells are replaced by the active center value.
+This scalar reduction is the current CPU/GPU reporting and line-search contract.
+The face-energy form above remains the stricter variational reference for future
+boundary-closure hardening.
+
 #### 3.1.3 Boundary closure with ghost cells
 
 At free boundaries, a centered stencil needs ghost values.
@@ -468,6 +489,8 @@ For calibration and determinism:
 - keep a reference CPU energy-first implementation,
 - compare GPU vs CPU on `H_iDMI`, `E_iDMI`, and relaxation trajectories,
 - record precision mode and stencil realization in provenance.
+- until the face-energy reference is promoted into production, CPU and CUDA
+  `E_iDMI` scalar reports must match the cell-centered reduction in section 3.1.2.
 
 ### 3.2 FEM
 

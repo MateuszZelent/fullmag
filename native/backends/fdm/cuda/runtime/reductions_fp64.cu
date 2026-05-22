@@ -19,6 +19,8 @@
 namespace fullmag {
 namespace fdm {
 
+extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
+
 static constexpr double MU0 = 4.0 * M_PI * 1e-7;
 static constexpr int REDUCTION_BLOCK_SIZE = 256;
 
@@ -94,6 +96,32 @@ __global__ void reduce_max_blocks_kernel(const double *input, double *output, ui
     if (threadIdx.x == 0) {
         output[blockIdx.x] = shared[0];
     }
+}
+
+__global__ void adaptive_error_policy_kernel(
+    const double *max_error_sq,
+    double *policy_out,
+    double dt,
+    double adaptive_max_error,
+    double adaptive_dt_min,
+    double adaptive_dt_max,
+    double adaptive_headroom,
+    double exponent)
+{
+    double max_sq = max_error_sq != nullptr ? max_error_sq[0] : 0.0;
+    double error = max_sq > 0.0 ? sqrt(max_sq) : 0.0;
+    double dt_candidate = dt;
+    if (error > 0.0) {
+        dt_candidate = adaptive_headroom * dt * pow(adaptive_max_error / error, exponent);
+        dt_candidate = fmin(dt_candidate, adaptive_dt_max);
+        dt_candidate = fmax(dt_candidate, adaptive_dt_min);
+    } else {
+        dt_candidate = adaptive_dt_max;
+    }
+    double accepted = (error <= adaptive_max_error || dt <= adaptive_dt_min) ? 1.0 : 0.0;
+    policy_out[0] = error;
+    policy_out[1] = dt_candidate;
+    policy_out[2] = accepted;
 }
 
 template <typename Scalar>
@@ -663,6 +691,114 @@ static double finalize_max_reduction(double *device_values, uint64_t n) {
     double result = 0.0;
     cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost);
     return result;
+}
+
+double reduce_max_scalar_sqrt(Context &ctx, double *device_values, uint64_t n) {
+    if (device_values == nullptr || n == 0) {
+        return 0.0;
+    }
+    if (!context_begin_compute_stream_work(ctx, "reduce_max_scalar_sqrt")) {
+        return 0.0;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+
+    double *src = device_values;
+    double *dst = ctx.reduction_scratch_aux;
+    uint64_t current = n;
+    while (current > 1) {
+        uint64_t blocks = (current + REDUCTION_BLOCK_SIZE * 2 - 1) / (REDUCTION_BLOCK_SIZE * 2);
+        reduce_max_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE, 0, stream>>>(
+            src,
+            dst,
+            current);
+        current = blocks;
+        double *tmp = src;
+        src = dst;
+        dst = tmp;
+    }
+
+    double max_value = 0.0;
+    cudaError_t err = cudaMemcpyAsync(&max_value, src, sizeof(double), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpyAsync(reduce_max_scalar_sqrt)", err);
+        context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
+        return 0.0;
+    }
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaStreamSynchronize(reduce_max_scalar_sqrt)", err);
+        context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
+        return 0.0;
+    }
+    if (!context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt")) {
+        return 0.0;
+    }
+    return max_value > 0.0 ? std::sqrt(max_value) : 0.0;
+}
+
+AdaptiveErrorPolicy reduce_adaptive_error_policy(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double dt,
+    double exponent)
+{
+    AdaptiveErrorPolicy policy{};
+    policy.dt_candidate = ctx.adaptive_dt_max;
+    policy.accepted = 1;
+    if (device_values == nullptr || n == 0 || ctx.adaptive_policy_scratch == nullptr) {
+        return policy;
+    }
+    if (!context_begin_compute_stream_work(ctx, "reduce_adaptive_error_policy")) {
+        return policy;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+
+    double *src = device_values;
+    double *dst = ctx.reduction_scratch_aux;
+    uint64_t current = n;
+    while (current > 1) {
+        uint64_t blocks = (current + REDUCTION_BLOCK_SIZE * 2 - 1) / (REDUCTION_BLOCK_SIZE * 2);
+        reduce_max_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE, 0, stream>>>(
+            src,
+            dst,
+            current);
+        current = blocks;
+        double *tmp = src;
+        src = dst;
+        dst = tmp;
+    }
+
+    adaptive_error_policy_kernel<<<1, 1, 0, stream>>>(
+        src,
+        ctx.adaptive_policy_scratch,
+        dt,
+        ctx.adaptive_max_error,
+        ctx.adaptive_dt_min,
+        ctx.adaptive_dt_max,
+        ctx.adaptive_headroom,
+        exponent);
+
+    double host_values[3] = {0.0, dt, 0.0};
+    cudaError_t err = cudaMemcpyAsync(&host_values, ctx.adaptive_policy_scratch, 3 * sizeof(double), cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpyAsync(reduce_adaptive_error_policy)", err);
+        context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+        return policy;
+    }
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
+        context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+        return policy;
+    }
+    if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) {
+        return policy;
+    }
+    policy.error = host_values[0];
+    policy.dt_candidate = host_values[1];
+    policy.accepted = host_values[2] >= 0.5 ? 1 : 0;
+    return policy;
 }
 
 double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n) {

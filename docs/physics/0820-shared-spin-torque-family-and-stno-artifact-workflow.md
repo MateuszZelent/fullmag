@@ -17,9 +17,9 @@ Fullmag needs one physics-first contract for spin-transfer and spin-orbit drive 
 
 The current executable slice remains intentionally narrow:
 
-- executable now: single-module `SlonczewskiSTT` or `ZhangLiSTT` on the FDM public path,
+- executable now: single-module `SlonczewskiSTT`, `ZhangLiSTT`, or `SpinOrbitTorque` on the FDM public path,
 - executable now: `CurrentTransport(model="prescribed_density")` as a source-bound current artifact and planner bridge on the FDM public path,
-- semantic-only now: `InterfaceCppSTT`, `DriftDiffusionSpinTorque`, `SpinOrbitTorque`,
+- semantic-only now: `InterfaceCppSTT`, `DriftDiffusionSpinTorque`,
 - semantic-only now on FEM: all spin-torque modules,
 - executable now for Oersted on the CPU FDM reference path: constant / sinusoidal / pulse envelopes,
 - rejected now on the FDM public path: `PiecewiseLinear` Oersted time dependence.
@@ -90,7 +90,7 @@ $$
 2. The public Slonczewski model is a bulk / uniform CPP drive over the solved magnetic body.
 3. `InterfaceCppSTT` is reserved for interface-local multilayer torque semantics and is not executable yet.
 4. `DriftDiffusionSpinTorque` is reserved for self-consistent spin accumulation and diffusion and is not executable yet.
-5. `SpinOrbitTorque` is reserved for damping-like / field-like SOT semantics and is not executable yet.
+5. `SpinOrbitTorque` is executable for damping-like / field-like prescribed-current SOT on the FDM path.
 6. The current Oersted model assumes an analytically prescribed cylindrical conductor, not a self-consistent transport solve.
 7. The current STNO artifact workflow assumes that averaged magnetization scalars and optional `m` snapshots are sufficient to measure frequency, linewidth, orbit radius, and a steady-state score.
 
@@ -138,7 +138,6 @@ New semantic-only public placeholders:
 
 - `InterfaceCppSTT`
 - `DriftDiffusionSpinTorque`
-- `SpinOrbitTorque`
 
 Authoring rules:
 
@@ -202,7 +201,7 @@ Current truthful status:
 | `ZhangLiSTT` | `reference_executable` | `production_executable` | `semantic_only` |
 | `InterfaceCppSTT` | `semantic_only` | `semantic_only` | `semantic_only` |
 | `DriftDiffusionSpinTorque` | `semantic_only` | `semantic_only` | `semantic_only` |
-| `SpinOrbitTorque` | `semantic_only` | `semantic_only` | `semantic_only` |
+| `SpinOrbitTorque` | `reference_executable` | `production_executable` | `semantic_only` |
 | `OerstedCylinder` constant/sinusoidal/pulse | `reference_executable` | `production_executable` | implementation-specific |
 | `OerstedCylinder` piecewise_linear | rejected | implementation-specific | implementation-specific |
 
@@ -306,10 +305,9 @@ Checklist notes:
 1. Multi-module authoring is canonical but not yet executable on the public path.
 2. `InterfaceCppSTT` remains semantic-only until multilayer / interface-local runtime support exists.
 3. `DriftDiffusionSpinTorque` remains semantic-only until current transport and spin accumulation are modeled explicitly.
-4. `SpinOrbitTorque` remains semantic-only until the public SOT executable lane exists.
-5. Self-consistent `CurrentTransport` beyond `model="prescribed_density"` remains deferred; see `docs/physics/0830-prescribed-current-transport-and-source-bound-spin-torque.md`.
-6. FEM periodic / eigen support must remain described by its actual current capability status and not be implied by STNO documentation.
-7. Phase 5+ roadmap work such as composite free layers, NEB, and optimization are not claimed as implemented here.
+4. Self-consistent `CurrentTransport` beyond `model="prescribed_density"` remains deferred; see `docs/physics/0830-prescribed-current-transport-and-source-bound-spin-torque.md`.
+5. FEM periodic / eigen support must remain described by its actual current capability status and not be implied by STNO documentation.
+6. Phase 5+ roadmap work such as composite free layers, NEB, and optimization are not claimed as implemented here.
 
 ## 9. References
 

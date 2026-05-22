@@ -10,8 +10,8 @@
 use std::time::Instant;
 
 use fullmag_engine::{
-    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig,
-    MaterialParameters, TimeIntegrator, Vector3,
+    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, EvaluationRequest, ExchangeLlgProblem,
+    ExchangeLlgStateSoA, GridShape, LlgConfig, MaterialParameters, TimeIntegrator, Vector3,
 };
 use serde::Serialize;
 
@@ -62,6 +62,8 @@ struct BenchmarkResult {
     grid: [usize; 3],
     cell_count: usize,
     integrator: String,
+    stepper: String,
+    evaluation: String,
     terms: String,
     steps: usize,
     total_wall_ns: u64,
@@ -78,6 +80,45 @@ struct BenchmarkSuite {
     hostname: String,
     num_threads: usize,
     results: Vec<BenchmarkResult>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StepperMode {
+    Workspace,
+    Buffers,
+    SoaState,
+}
+
+impl StepperMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            StepperMode::Workspace => "workspace",
+            StepperMode::Buffers => "buffers",
+            StepperMode::SoaState => "soa_state",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvaluationMode {
+    Full,
+    Minimal,
+}
+
+impl EvaluationMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            EvaluationMode::Full => "full",
+            EvaluationMode::Minimal => "minimal",
+        }
+    }
+
+    fn request(self) -> EvaluationRequest {
+        match self {
+            EvaluationMode::Full => EvaluationRequest::Full,
+            EvaluationMode::Minimal => EvaluationRequest::Minimal,
+        }
+    }
 }
 
 // ── Standard material parameters ───────────────────────────────────────
@@ -134,6 +175,8 @@ fn run_benchmark(
     cell_nm: f64,
     terms: EffectiveFieldTerms,
     integrator: TimeIntegrator,
+    stepper: StepperMode,
+    evaluation: EvaluationMode,
     steps: usize,
     dt: f64,
 ) -> BenchmarkResult {
@@ -151,23 +194,48 @@ fn run_benchmark(
 
     let mag = random_magnetization(grid.cell_count(), 12345);
     let mut state = problem.new_state(mag).unwrap();
+    let mut soa_state = match stepper {
+        StepperMode::SoaState => Some(state.to_soa()),
+        StepperMode::Workspace | StepperMode::Buffers => None,
+    };
 
     // Pre-allocate workspace and buffers
     let setup_start = Instant::now();
     let mut ws = problem.create_workspace();
-    let mut bufs = problem.create_integrator_buffers();
+    let mut bufs = match stepper {
+        StepperMode::Workspace => None,
+        StepperMode::Buffers | StepperMode::SoaState => Some(problem.create_integrator_buffers()),
+    };
     let setup_ns = setup_start.elapsed().as_nanos() as u64;
 
     // Warmup: 2 steps (not counted)
     for _ in 0..2 {
-        let _ = problem.step_with_buffers(&mut state, dt, &mut ws, &mut bufs);
+        run_step(
+            &problem,
+            &mut state,
+            soa_state.as_mut(),
+            dt,
+            &mut ws,
+            bufs.as_mut(),
+            stepper,
+            evaluation,
+        );
     }
 
     // Benchmark
     alloc_counter::reset();
     let bench_start = Instant::now();
     for _ in 0..steps {
-        let _ = problem.step_with_buffers(&mut state, dt, &mut ws, &mut bufs);
+        run_step(
+            &problem,
+            &mut state,
+            soa_state.as_mut(),
+            dt,
+            &mut ws,
+            bufs.as_mut(),
+            stepper,
+            evaluation,
+        );
     }
     let total_wall = bench_start.elapsed();
     let (alloc_count, alloc_bytes) = alloc_counter::snapshot();
@@ -179,6 +247,8 @@ fn run_benchmark(
         grid: grid_dims,
         cell_count: grid.cell_count(),
         integrator: integrator_name,
+        stepper: stepper.as_str().to_string(),
+        evaluation: evaluation.as_str().to_string(),
         terms: terms_desc,
         steps,
         total_wall_ns: total_ns,
@@ -187,6 +257,43 @@ fn run_benchmark(
         alloc_bytes_per_step: alloc_bytes as f64 / steps as f64,
         setup_ns,
     }
+}
+
+fn run_step(
+    problem: &ExchangeLlgProblem,
+    state: &mut fullmag_engine::ExchangeLlgState,
+    soa_state: Option<&mut ExchangeLlgStateSoA>,
+    dt: f64,
+    ws: &mut fullmag_engine::FftWorkspace,
+    bufs: Option<&mut fullmag_engine::IntegratorBuffers>,
+    stepper: StepperMode,
+    evaluation: EvaluationMode,
+) {
+    let result = match stepper {
+        StepperMode::Workspace => {
+            assert_eq!(
+                evaluation,
+                EvaluationMode::Full,
+                "workspace compatibility stepper only supports full evaluation",
+            );
+            problem.step_with_workspace(state, dt, ws)
+        }
+        StepperMode::Buffers => problem.step_with_buffers_evaluation(
+            state,
+            dt,
+            ws,
+            bufs.expect("buffer stepper requires preallocated buffers"),
+            evaluation.request(),
+        ),
+        StepperMode::SoaState => problem.step_soa_with_buffers_evaluation(
+            soa_state.expect("SoA-state stepper requires a persistent SoA state"),
+            dt,
+            ws,
+            bufs.expect("SoA-state stepper requires preallocated buffers"),
+            evaluation.request(),
+        ),
+    };
+    result.expect("benchmark step should succeed");
 }
 
 fn describe_terms(terms: &EffectiveFieldTerms) -> String {
@@ -272,6 +379,13 @@ fn main() {
 
     // Integrators to test
     let integrators = [TimeIntegrator::Heun, TimeIntegrator::RK45];
+    let stepper_evaluations = [
+        (StepperMode::Workspace, EvaluationMode::Full),
+        (StepperMode::Buffers, EvaluationMode::Full),
+        (StepperMode::Buffers, EvaluationMode::Minimal),
+        (StepperMode::SoaState, EvaluationMode::Full),
+        (StepperMode::SoaState, EvaluationMode::Minimal),
+    ];
 
     // Term configurations
     let term_configs: Vec<(&str, EffectiveFieldTerms)> = vec![
@@ -284,41 +398,48 @@ fn main() {
     let dt = 1e-13;
     let cell_nm = 5.0;
 
-    let total_benchmarks = grids.len() * integrators.len() * term_configs.len();
+    let total_benchmarks =
+        grids.len() * integrators.len() * stepper_evaluations.len() * term_configs.len();
     let mut done = 0;
 
     for &(grid_dims, steps) in grids {
         for &integrator in &integrators {
-            for (term_name, ref terms) in &term_configs {
-                done += 1;
-                let name = format!(
-                    "fdm_{}_{}x{}x{}_{}",
-                    term_name,
-                    grid_dims[0],
-                    grid_dims[1],
-                    grid_dims[2],
-                    format!("{:?}", integrator).to_lowercase(),
-                );
-                eprintln!("[{}/{}] {}", done, total_benchmarks, name);
+            for &(stepper, evaluation) in &stepper_evaluations {
+                for (term_name, ref terms) in &term_configs {
+                    done += 1;
+                    let name = format!(
+                        "fdm_{}_{}x{}x{}_{}_{}_{}",
+                        term_name,
+                        grid_dims[0],
+                        grid_dims[1],
+                        grid_dims[2],
+                        format!("{:?}", integrator).to_lowercase(),
+                        stepper.as_str(),
+                        evaluation.as_str(),
+                    );
+                    eprintln!("[{}/{}] {}", done, total_benchmarks, name);
 
-                let result = run_benchmark(
-                    &name,
-                    grid_dims,
-                    cell_nm,
-                    terms.clone(),
-                    integrator,
-                    steps,
-                    dt,
-                );
+                    let result = run_benchmark(
+                        &name,
+                        grid_dims,
+                        cell_nm,
+                        terms.clone(),
+                        integrator,
+                        stepper,
+                        evaluation,
+                        steps,
+                        dt,
+                    );
 
-                eprintln!(
-                    "  {:.2} ms/step | {:.0} allocs/step | {:.1} KB/step",
-                    result.wall_per_step_ns as f64 / 1e6,
-                    result.allocs_per_step,
-                    result.alloc_bytes_per_step / 1024.0,
-                );
+                    eprintln!(
+                        "  {:.2} ms/step | {:.0} allocs/step | {:.1} KB/step",
+                        result.wall_per_step_ns as f64 / 1e6,
+                        result.allocs_per_step,
+                        result.alloc_bytes_per_step / 1024.0,
+                    );
 
-                results.push(result);
+                    results.push(result);
+                }
             }
         }
     }
@@ -345,4 +466,89 @@ fn chrono_like_now() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap();
     format!("unix_{}", d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn benchmark_records_workspace_and_buffer_steppers() {
+        let workspace = run_benchmark(
+            "workspace_probe",
+            [4, 4, 1],
+            5.0,
+            exchange_only(),
+            TimeIntegrator::Heun,
+            StepperMode::Workspace,
+            EvaluationMode::Full,
+            2,
+            1e-13,
+        );
+        let buffers = run_benchmark(
+            "buffers_probe",
+            [4, 4, 1],
+            5.0,
+            exchange_only(),
+            TimeIntegrator::Heun,
+            StepperMode::Buffers,
+            EvaluationMode::Full,
+            2,
+            1e-13,
+        );
+
+        assert_eq!(workspace.stepper, "workspace");
+        assert_eq!(buffers.stepper, "buffers");
+        assert!(
+            workspace.allocs_per_step > buffers.allocs_per_step,
+            "workspace compatibility path should allocate more than the preallocated buffer path"
+        );
+    }
+
+    #[test]
+    fn benchmark_records_full_and_minimal_evaluation_modes() {
+        let full = run_benchmark(
+            "full_probe",
+            [4, 4, 1],
+            5.0,
+            exchange_only(),
+            TimeIntegrator::Heun,
+            StepperMode::Buffers,
+            EvaluationMode::Full,
+            2,
+            1e-13,
+        );
+        let minimal = run_benchmark(
+            "minimal_probe",
+            [4, 4, 1],
+            5.0,
+            exchange_only(),
+            TimeIntegrator::Heun,
+            StepperMode::Buffers,
+            EvaluationMode::Minimal,
+            2,
+            1e-13,
+        );
+
+        assert_eq!(full.evaluation, "full");
+        assert_eq!(minimal.evaluation, "minimal");
+    }
+
+    #[test]
+    fn benchmark_records_soa_state_stepper() {
+        let soa_state = run_benchmark(
+            "soa_state_probe",
+            [4, 4, 1],
+            5.0,
+            exchange_demag(),
+            TimeIntegrator::Heun,
+            StepperMode::SoaState,
+            EvaluationMode::Minimal,
+            2,
+            1e-13,
+        );
+
+        assert_eq!(soa_state.stepper, "soa_state");
+        assert_eq!(soa_state.evaluation, "minimal");
+    }
 }

@@ -193,6 +193,11 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     ctx.step_count++;
     ctx.current_time += dt;
 
+    if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+        fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
+        return;
+    }
+
     // Diagnostics (fp64 accumulators)
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
@@ -221,8 +226,6 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
-
-    cudaDeviceSynchronize();
 
     stats->step = ctx.step_count;
     stats->time_seconds = ctx.current_time;

@@ -89,4 +89,19 @@ describe("Viewport3DModule scene wiring", () => {
       'data-camera-target={sceneProps.cameraState.target.join(" ")}',
     );
   });
+
+  it("mounts the temporary azimuth and polar controls beside the existing R3F canvas", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("Viewport3DOrbitDebugPanel");
+    expect(source).toContain('aria-label="Temporary orbit controls"');
+    expect(source).toContain('label="Azimuth"');
+    expect(source).toContain('label="Polar"');
+    expect(source).toContain("orbitDebugRevision");
+    expect(source).toContain("orbitDebugCommitRevision");
+    expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
+  });
 });

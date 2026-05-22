@@ -126,6 +126,11 @@ static void abm3_rotate_history(Context &ctx, uint64_t n) {
 /* ── Helper: compute diagnostics and fill stats ── */
 
 static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
+    if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+        fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
+        return;
+    }
+
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + 255) / 256;
     double alpha = ctx.alpha;
@@ -165,8 +170,6 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
-
-    cudaDeviceSynchronize();
 
     stats->step = ctx.step_count;
     stats->time_seconds = ctx.current_time;

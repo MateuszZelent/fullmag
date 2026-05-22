@@ -8,35 +8,35 @@ set(FDM_PUBLIC_HEADERS
 )
 
 set(FDM_SOURCES
-    src/api.cpp
-    src/error.cpp
+    api/c_api.cpp
+    api/error.cpp
 )
 
 if(FULLMAG_ENABLE_CUDA)
     list(APPEND FDM_SOURCES
-        src/context.cu
-        src/device_info.cpp
-        src/exchange_fp64.cu
-        src/exchange_fp32.cu
-        src/exchange_t0_fp64.cu
-        src/exchange_t1_fp64.cu
-        src/demag_fp64.cu
-        src/demag_fp32.cu
-        src/llg_fp64.cu
-        src/llg_fp32.cu
-        src/llg_dp45_fp64.cu
-        src/llg_dp45_fp32.cu
-        src/llg_rk4_fp64.cu
-        src/llg_rk4_fp32.cu
-        src/llg_rk23_fp64.cu
-        src/llg_rk23_fp32.cu
-        src/llg_abm3_fp64.cu
-        src/llg_abm3_fp32.cu
-        src/reductions_fp64.cu
-        src/newell_gpu_fp64.cu
-        src/newell_gpu_fp32.cu
-        src/llg_dp45_fp32.cu
-        src/llg_abm3_fp32.cu
+        core/context.cu
+        cuda/runtime/device_info.cpp
+        cuda/runtime/reductions_fp64.cu
+        cuda/interactions/exchange_fp64.cu
+        cuda/interactions/exchange_fp32.cu
+        cuda/interactions/exchange_t0_fp64.cu
+        cuda/interactions/exchange_t1_fp64.cu
+        cuda/interactions/demag_fp64.cu
+        cuda/interactions/demag_fp32.cu
+        cuda/interactions/demag_boundary_fp64.cu
+        cuda/integrators/llg_fp64.cu
+        cuda/integrators/llg_fp32.cu
+        cuda/integrators/llg_dp45_fp64.cu
+        cuda/integrators/llg_dp45_fp32.cu
+        cuda/integrators/llg_rk4_fp64.cu
+        cuda/integrators/llg_rk4_fp32.cu
+        cuda/integrators/llg_rk23_fp64.cu
+        cuda/integrators/llg_rk23_fp32.cu
+        cuda/integrators/llg_abm3_fp64.cu
+        cuda/integrators/llg_abm3_fp32.cu
+        cuda/demag/multilayer_convolution.cu
+        cuda/demag/newell_gpu_fp64.cu
+        cuda/demag/newell_gpu_fp32.cu
     )
 endif()
 
@@ -72,9 +72,15 @@ set_target_properties(fullmag_fdm PROPERTIES
 )
 
 # ── Tests ──
-if(FULLMAG_ENABLE_CUDA)
-    enable_testing()
+enable_testing()
 
+add_executable(source_layout_contract tests/source_layout_contract.cpp)
+add_test(NAME fdm_source_layout_contract COMMAND source_layout_contract)
+
+add_executable(multilayer_abi_v2_contract tests/multilayer_abi_v2_contract.cpp)
+add_test(NAME fdm_multilayer_abi_v2_contract COMMAND multilayer_abi_v2_contract)
+
+if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)
     target_link_libraries(smoke_context PRIVATE fullmag_fdm)
     add_test(NAME fdm_smoke_context COMMAND smoke_context)
@@ -94,4 +100,26 @@ if(FULLMAG_ENABLE_CUDA)
     add_executable(tier_b_compare tests/tier_b_compare.cu)
     target_link_libraries(tier_b_compare PRIVATE fullmag_fdm)
     add_test(NAME fdm_tier_b_compare COMMAND tier_b_compare)
+
+    add_executable(adaptive_error_reduction_contract tests/adaptive_error_reduction_contract.cpp)
+    add_test(NAME fdm_adaptive_error_reduction_contract COMMAND adaptive_error_reduction_contract)
+
+    add_executable(stats_mode_contract tests/stats_mode_contract.cpp)
+    add_test(NAME fdm_stats_mode_contract COMMAND stats_mode_contract)
+
+    add_executable(batched_demag_fft_contract tests/batched_demag_fft_contract.cpp)
+    add_test(NAME fdm_batched_demag_fft_contract COMMAND batched_demag_fft_contract)
+
+    add_executable(async_snapshot_contract tests/async_snapshot_contract.cpp)
+    add_test(NAME fdm_async_snapshot_contract COMMAND async_snapshot_contract)
+
+    add_executable(multilayer_create_v2_contract tests/multilayer_create_v2_contract.cpp)
+    target_link_libraries(multilayer_create_v2_contract PRIVATE fullmag_fdm)
+    set_target_properties(multilayer_create_v2_contract PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:fullmag_fdm>"
+    )
+    add_test(NAME fdm_multilayer_create_v2_contract COMMAND multilayer_create_v2_contract)
+    set_tests_properties(fdm_multilayer_create_v2_contract PROPERTIES
+        ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:fullmag_fdm>"
+    )
 endif()
