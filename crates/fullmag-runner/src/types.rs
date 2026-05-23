@@ -1137,7 +1137,7 @@ pub struct ExecutionProvenance {
     #[serde(default)]
     pub lossy_fallback_used: bool,
     /// Physics terms that were present in the plan but silently ignored by the
-    /// engine (e.g. H_ani on a CPU reference engine that folds it into H_eff).
+    /// engine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_terms: Vec<String>,
     /// RNG seed used for stochastic initialisations, if any.

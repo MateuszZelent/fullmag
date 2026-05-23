@@ -8,10 +8,10 @@
 #[cfg(feature = "cuda")]
 use crate::artifacts::field_unit;
 use crate::artifacts::{
-    write_field_file, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
+    write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
 };
 #[cfg(feature = "cuda")]
-use crate::native_fdm::{
+use crate::fdm::gpu::cuda::native::{
     NativeFdmFieldSnapshot, NativeFieldSnapshotInfo, NativeFieldSnapshotScalarType,
 };
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunError, StepStats};
@@ -462,32 +462,13 @@ fn writer_loop(
                 snapshot,
                 provenance,
             } => {
-                let observable_dir = fields_dir.join(&snapshot.name);
-                fs::create_dir_all(&observable_dir).map_err(|error| {
-                    format!(
-                        "failed to create field snapshot directory '{}': {}",
-                        observable_dir.display(),
-                        error
-                    )
-                })?;
-                let snapshot_path = observable_dir.join(format!("step_{:06}.json", snapshot.step));
-                write_field_file(
-                    &snapshot_path,
-                    &field_context,
-                    &provenance,
-                    &snapshot.name,
-                    snapshot.step,
-                    snapshot.time,
-                    snapshot.solver_dt,
-                    &snapshot.values,
-                )
-                .map_err(|error| {
-                    format!(
-                        "failed to write field snapshot '{}': {}",
-                        snapshot_path.display(),
-                        error
-                    )
-                })?;
+                write_field_snapshot_artifact(&fields_dir, &field_context, &provenance, &snapshot)
+                    .map_err(|error| {
+                        format!(
+                            "failed to write field snapshot '{}' step {}: {}",
+                            snapshot.name, snapshot.step, error
+                        )
+                    })?;
                 summary.field_snapshots_written += 1;
             }
             #[cfg(feature = "cuda")]

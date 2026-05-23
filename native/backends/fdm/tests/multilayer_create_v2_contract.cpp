@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 
 namespace {
 
@@ -24,6 +25,13 @@ void check_error_contains(fullmag_fdm_backend *handle, const char *needle) {
     const char *message = fullmag_fdm_backend_last_error(handle);
     check(message != nullptr, "expected create_v2 to expose a last_error message");
     check(std::strstr(message, needle) != nullptr, message);
+}
+
+void check_close(double actual, double expected, double tolerance, const char *msg) {
+    if (std::fabs(actual - expected) > tolerance) {
+        std::fprintf(stderr, "FAIL: %s (actual=%g expected=%g)\n", msg, actual, expected);
+        std::exit(1);
+    }
 }
 
 fullmag_fdm_layer_desc_v2 make_layer(uint32_t index, const double *m) {
@@ -106,10 +114,15 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
 
     const double m0[3] = {1.0, 0.0, 0.0};
     const double m1[3] = {0.0, 1.0, 0.0};
-    const fullmag_fdm_layer_desc_v2 layers[2] = {
+    fullmag_fdm_layer_desc_v2 layers[2] = {
         make_layer(0, m0),
         make_layer(1, m1),
     };
+    layers[0].has_uniaxial_anisotropy = 1;
+    layers[0].uniaxial_anisotropy_constant = 4.0e4;
+    layers[0].anisotropy_axis[0] = 1.0;
+    layers[0].anisotropy_axis[1] = 0.0;
+    layers[0].anisotropy_axis[2] = 0.0;
     const fullmag_fdm_complex64 kernel_component[8] = {
         {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
         {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
@@ -123,6 +136,12 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
     fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(layers, 2);
     plan.enable_exchange = 1;
     plan.enable_demag = 1;
+    plan.has_external_field = 1;
+    plan.external_field_am[0] = 1.5e3;
+    plan.external_field_am[1] = -2.0e3;
+    plan.external_field_am[2] = 7.5e2;
+    plan.has_interfacial_dmi = 1;
+    plan.dmi_D_interfacial = 2.0e-3;
     plan.kernels = kernels;
     plan.kernel_count = 4;
 
@@ -130,6 +149,46 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
     check(handle != nullptr, "valid create_v2 plan should return a staged v2 handle");
     check_error_contains(handle, "uploaded 2 layers and 4 tensor kernels");
     check_error_contains(handle, "native Heun/RK4 timestep with demag and layer-local exchange is available");
+
+    double h_ani[3] = {};
+    const int h_ani_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_ANI,
+        h_ani,
+        3);
+    check(h_ani_status == FULLMAG_FDM_OK, "copy layer H_ANI should succeed for anisotropy-enabled v2 multilayer handles");
+    const double mu0 = 4.0 * 3.141592653589793238462643383279502884 * 1.0e-7;
+    const double expected_h_ani_x =
+        2.0 * layers[0].uniaxial_anisotropy_constant /
+        (mu0 * layers[0].material.saturation_magnetisation);
+    check_close(h_ani[0], expected_h_ani_x, expected_h_ani_x * 1e-10, "copy layer H_ANI should return the staged uniaxial field");
+    check_close(h_ani[1], 0.0, 1e-12, "copy layer H_ANI y should remain zero for x-axis anisotropy");
+    check_close(h_ani[2], 0.0, 1e-12, "copy layer H_ANI z should remain zero for x-axis anisotropy");
+
+    double h_eff[3] = {};
+    const int h_eff_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_EFF,
+        h_eff,
+        3);
+    check(h_eff_status == FULLMAG_FDM_OK, "copy layer H_EFF should succeed for v2 multilayer handles");
+    check_close(
+        h_eff[0],
+        expected_h_ani_x + plan.external_field_am[0],
+        expected_h_ani_x * 1e-10,
+        "copy layer H_EFF x should include staged H_ANI and H_EXT");
+    check_close(
+        h_eff[1],
+        plan.external_field_am[1],
+        1e-12,
+        "copy layer H_EFF y should include staged H_EXT");
+    check_close(
+        h_eff[2],
+        plan.external_field_am[2],
+        1e-12,
+        "copy layer H_EFF z should include staged H_EXT");
 
     const int refresh_status = fullmag_fdm_backend_refresh_multilayer_demag(handle);
     check(
@@ -159,6 +218,29 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
         h_ex,
         3);
     check(h_ex_status == FULLMAG_FDM_OK, "copy layer H_EX should succeed after Heun step");
+
+    double h_dmi[3] = {};
+    const int h_dmi_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_DMI,
+        h_dmi,
+        3);
+    check(h_dmi_status == FULLMAG_FDM_OK, "copy layer H_DMI should succeed for DMI-enabled v2 multilayer handles");
+
+    double h_ext[3] = {};
+    const int h_ext_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_EXT,
+        h_ext,
+        3);
+    check(h_ext_status == FULLMAG_FDM_OK, "copy layer H_EXT should succeed for external-field v2 multilayer handles");
+    check(
+        h_ext[0] == plan.external_field_am[0] &&
+            h_ext[1] == plan.external_field_am[1] &&
+            h_ext[2] == plan.external_field_am[2],
+        "copy layer H_EXT should return the staged uniform external field");
 
     double m_copy[3] = {};
     const int m_status = fullmag_fdm_backend_copy_layer_field_f64(

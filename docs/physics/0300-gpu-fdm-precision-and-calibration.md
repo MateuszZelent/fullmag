@@ -200,7 +200,11 @@ so the runner and native backend do not infer or silently override precision.
   - the native CUDA FDM transfer ABI also exposes precision-matched `f32` and
     `f64` upload/export entrypoints, so calibrated `single` execution no longer
     has to round-trip runtime magnetization and field buffers through host `f64`
-    unless a higher-level caller explicitly requests `f64` artifacts.
+    unless a higher-level caller explicitly requests `f64` artifacts,
+  - single-grid native CUDA exposes `H_ani` as a first-class observable through
+    the `FULLMAG_FDM_OBSERVABLE_H_ANI` copy, preview, and async snapshot paths;
+    the field uses the same uniaxial/cubic anisotropy equations and active-mask
+    semantics as the anisotropy contribution accumulated into `H_eff`.
 
 This means the capability matrix must distinguish:
 

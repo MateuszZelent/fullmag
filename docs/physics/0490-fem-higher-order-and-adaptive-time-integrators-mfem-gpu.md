@@ -328,6 +328,12 @@ fm.LLG(
 The public API should be backend-neutral.
 Do not expose FE mass-lumping or CEED knobs in the user-facing integrator object.
 
+Status: the convenience Python DSL now propagates `dt_min` through flat/study
+`solver(...)`, direct `relax(...)`, `run_while(..., relax=True)`, and staged
+`study.stages.add_relax(...)` calls into `AdaptiveTimeStepIR`. This keeps the
+minimum-step floor expressible without exposing backend-specific adaptive-RK
+implementation details.
+
 ### 4.2 ProblemIR representation
 
 The same `IntegratorChoice` and `AdaptiveTimeStepIR` used by FDM should be shared.
@@ -377,7 +383,7 @@ Capability matrix should distinguish:
 
 ## 6. Completeness checklist
 
-- [ ] Python API
+- [x] Python API surface for backend-neutral adaptive `dt_min` propagation
 - [ ] ProblemIR
 - [ ] Planner
 - [ ] Capability matrix

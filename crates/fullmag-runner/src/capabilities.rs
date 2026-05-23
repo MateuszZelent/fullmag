@@ -78,8 +78,8 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
                 "oersted".to_string(),
             ],
             supported_demag_realizations: vec!["tensor_fft_newell".to_string()],
-            // NOTE: H_ani and H_dmi are computed but folded into H_eff;
-            // they are not available as separate observable fields in the CPU reference engine.
+            // H_ani and H_dmi are exposed as derived CPU observables when the
+            // plan enables the corresponding local anisotropy or DMI terms.
             // H_ant is always zero (no antenna connectivity in the reference path).
             preview_quantities: quantity_names(&[
                 QuantityId::M,
@@ -87,6 +87,8 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
                 QuantityId::HDemag,
                 QuantityId::HExt,
                 QuantityId::Torque,
+                QuantityId::HAni,
+                QuantityId::HDmi,
                 QuantityId::HEff,
             ]),
             snapshot_quantities: quantity_names(&[
@@ -94,6 +96,8 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
+                QuantityId::HAni,
+                QuantityId::HDmi,
                 QuantityId::HEff,
             ]),
             scalar_outputs: vec![
@@ -135,6 +139,7 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
                 QuantityId::HDemag,
                 QuantityId::HExt,
                 QuantityId::Torque,
+                QuantityId::HAni,
                 QuantityId::HEff,
                 QuantityId::HOe,
             ]),
@@ -143,6 +148,7 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
+                QuantityId::HAni,
                 QuantityId::HEff,
                 QuantityId::HOe,
             ]),

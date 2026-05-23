@@ -58,6 +58,9 @@ from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxa
 from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 
+DEFAULT_ADAPTIVE_DT_MIN = 1e-15
+
+
 def _builder_base_problem(loaded: LoadedProblem) -> Problem:
     return loaded.workspace_problem or loaded.problem
 
@@ -1956,6 +1959,8 @@ def _render_solver_call(
         if fixed_timestep is not None:
             kwargs.append(f"dt={_py_number(fixed_timestep)}")
         kwargs.append(f"max_error={_py_number(dynamics.adaptive_timestep.atol)}")
+        if dynamics.adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
+            kwargs.append(f"dt_min={_py_number(dynamics.adaptive_timestep.dt_min)}")
     elif fixed_timestep is not None:
         kwargs.append(f"dt={_py_number(fixed_timestep)}")
     if demag_interval_s is not None:

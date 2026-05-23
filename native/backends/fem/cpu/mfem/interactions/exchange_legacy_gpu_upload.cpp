@@ -36,8 +36,8 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         error = "legacy sparse exchange CSR has invalid dimensions";
         return false;
     }
-    if (height > static_cast<int>(std::numeric_limits<uint32_t>::max()) ||
-        width > static_cast<int>(std::numeric_limits<uint32_t>::max())) {
+    if (static_cast<uint64_t>(height) > std::numeric_limits<uint32_t>::max() ||
+        static_cast<uint64_t>(width) > std::numeric_limits<uint32_t>::max()) {
         error = "legacy sparse exchange CSR dimensions exceed u32 GPU indexing";
         return false;
     }

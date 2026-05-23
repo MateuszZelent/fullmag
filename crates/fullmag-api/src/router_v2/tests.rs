@@ -7726,6 +7726,62 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
 }
 
 #[tokio::test]
+async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live_state() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "waiting_for_compute".into();
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 0,
+                time: 0.0,
+                dt: 0.0,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        crate::session::refresh_runtime_status(snapshot);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["runtime_state"], "waiting_for_compute");
+    assert_eq!(json["runtime_status_code"], "waiting_for_compute");
+    assert_eq!(json["session_status"], "waiting_for_compute");
+    assert_eq!(json["is_busy"], false);
+    assert_eq!(json["can_accept_commands"], true);
+}
+
+#[tokio::test]
 async fn solver_energies_current_endpoint_returns_latest_energy_sample() {
     let app = test_router_with_runtime_read_models().await;
     let response = app

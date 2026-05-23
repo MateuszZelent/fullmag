@@ -482,7 +482,9 @@ CPU demag backend selection is explicit. `FULLMAG_CPU_FFT_BACKEND=auto` and
 `FULLMAG_CPU_FFT_BACKEND=rustfft` resolve to the default `rustfft` `FftWorkspace` backend; requests
 for unimplemented CPU FFT backends such as FFTW, MKL, or distributed heFFTe fail at runtime rather
 than silently falling back. This keeps provenance honest while the non-`rustfft` implementations are
-still absent.
+still absent. The same selection guard applies to standalone CPU demag execution and direct
+preview/snapshot entrypoints, so a demag-enabled plan cannot bypass an unsupported requested CPU FFT
+backend through live field inspection.
 
 The remaining CPU architecture work is to shrink the artifact/reporting compatibility paths that
 still require AoS caches or `ExchangeLlgState`, keep direct minimization on the SoA tangent-gradient

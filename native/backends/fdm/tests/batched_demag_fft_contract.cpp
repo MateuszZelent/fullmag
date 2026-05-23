@@ -125,6 +125,7 @@ void demag_fft_runs_on_context_compute_stream() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string context = read_text_file(root / "core" / "context.cu");
+arc    const std::string streams = read_text_file(root / "cuda" / "runtime" / "streams.cu");
     const std::string fp64 = function_body(
         read_text_file(root / "cuda" / "interactions" / "demag_fp64.cu"),
         "void launch_demag_field_fp64(Context &ctx)");
@@ -140,9 +141,12 @@ void demag_fft_runs_on_context_compute_stream() {
             context_header.find("compute_done_event") != std::string::npos,
         "Context must own stream handoff events for legacy-default ordering");
     check(
-        context.find("cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking)") !=
+        streams.find("cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking)") !=
             std::string::npos,
         "Context compute stream must be nonblocking for later overlap work");
+    check(
+        context.find("context_create_compute_stream(ctx)") != std::string::npos,
+        "Context allocation must request stream lifecycle through the runtime stream owner");
     check(
         context.find("cufftSetStream(ctx.fft_plan, context_compute_stream(ctx))") !=
             std::string::npos,

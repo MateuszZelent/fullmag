@@ -83,7 +83,7 @@ The FSAL buffer **must be invalidated** when:
 - `rk45_step()` checks `fsal_valid` flag before computing $K_1$
 - On rejection: `fsal_valid = false`, buffer is stale
 
-### CUDA (`native/backends/fdm/cuda/integrators/llg_dp45_fp64.cu`)
+### CUDA (`native/backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu`)
 - `DeviceVectorField k_fsal` in `Context` (SoA layout)
 - `ctx.fsal_valid` flag controls reuse
 - `copy_field_d2d()` for $K_{fsal} \to K_1$ transfer (device-to-device)

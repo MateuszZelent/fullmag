@@ -515,27 +515,6 @@ bool ensure_launch_size(Context &ctx, uint64_t total, const char *operation) {
     return true;
 }
 
-bool workspace_matches_kernel(
-    Context &ctx,
-    const DeviceMultilayerTensorKernel &kernel,
-    const char *operation)
-{
-    if (!ctx.fft_plan_valid || ctx.fft_x == nullptr || ctx.fft_y == nullptr || ctx.fft_z == nullptr) {
-        ctx.last_error = std::string(operation) + ": multilayer FFT workspace is not initialized";
-        return false;
-    }
-    if (ctx.fft_nx != kernel.fft_grid.nx ||
-        ctx.fft_ny != kernel.fft_grid.ny ||
-        ctx.fft_nz != kernel.fft_grid.nz ||
-        ctx.fft_cell_count != kernel.kernel_len)
-    {
-        ctx.last_error = std::string(operation)
-            + ": current FFT workspace does not match the multilayer tensor-kernel grid";
-        return false;
-    }
-    return true;
-}
-
 bool same_grid_dimensions(
     const fullmag_fdm_grid_desc &lhs,
     const fullmag_fdm_grid_desc &rhs)
@@ -670,14 +649,15 @@ bool source_push_map_supported(
 bool destination_pull_map_supported(
     Context &ctx,
     const DeviceMultilayerLayer &dst,
+    const DeviceMultilayerTensorKernel &kernel,
     const char *operation)
 {
-    if (dst.pull_map.cell_count != dst.cell_count ||
-        (dst.pull_map.cell_count > 0 &&
-            (dst.pull_map.indices == nullptr || dst.pull_map.weights == nullptr)))
+    if (kernel.dst_pull_map.cell_count != dst.cell_count ||
+        (kernel.dst_pull_map.cell_count > 0 &&
+            (kernel.dst_pull_map.indices == nullptr || kernel.dst_pull_map.weights == nullptr)))
     {
         ctx.last_error = std::string(operation)
-            + ": destination push_pull transfer map is not initialized";
+            + ": destination push_pull transfer map is not initialized for the tensor-kernel FFT grid";
         return false;
     }
     return true;
@@ -708,7 +688,7 @@ bool transfer_supported(
         return false;
     }
     if (dst.transfer_kind == FULLMAG_FDM_TRANSFER_PUSH_PULL &&
-        !destination_pull_map_supported(ctx, dst, operation))
+        !destination_pull_map_supported(ctx, dst, kernel, operation))
     {
         return false;
     }
@@ -783,7 +763,7 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
             ctx.last_error = "launch_multilayer_demag_field_fp64: kernel layer index out of range";
             break;
         }
-        if (!workspace_matches_kernel(ctx, kernel, "launch_multilayer_demag_field_fp64")) {
+        if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel)) {
             break;
         }
 
@@ -914,8 +894,8 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
                 static_cast<const cufftDoubleComplex*>(ctx.fft_x),
                 static_cast<const cufftDoubleComplex*>(ctx.fft_y),
                 static_cast<const cufftDoubleComplex*>(ctx.fft_z),
-                dst.pull_map.indices,
-                dst.pull_map.weights,
+                kernel.dst_pull_map.indices,
+                kernel.dst_pull_map.weights,
                 dst.active_mask,
                 static_cast<double*>(dst.h_demag.x),
                 static_cast<double*>(dst.h_demag.y),
@@ -923,7 +903,7 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
                 dst.native_grid.nx,
                 dst.native_grid.ny,
                 dst.native_grid.nz,
-                dst.pull_map.cell_count,
+                kernel.dst_pull_map.cell_count,
                 dst.has_active_mask ? 1 : 0,
                 1.0 / static_cast<double>(kernel.kernel_len));
         } else {
@@ -977,7 +957,7 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
             ctx.last_error = "launch_multilayer_demag_field_fp32: kernel layer index out of range";
             break;
         }
-        if (!workspace_matches_kernel(ctx, kernel, "launch_multilayer_demag_field_fp32")) {
+        if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel)) {
             break;
         }
 
@@ -1108,8 +1088,8 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
                 static_cast<const cufftComplex*>(ctx.fft_x),
                 static_cast<const cufftComplex*>(ctx.fft_y),
                 static_cast<const cufftComplex*>(ctx.fft_z),
-                dst.pull_map.indices,
-                dst.pull_map.weights,
+                kernel.dst_pull_map.indices,
+                kernel.dst_pull_map.weights,
                 dst.active_mask,
                 static_cast<float*>(dst.h_demag.x),
                 static_cast<float*>(dst.h_demag.y),
@@ -1117,7 +1097,7 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
                 dst.native_grid.nx,
                 dst.native_grid.ny,
                 dst.native_grid.nz,
-                dst.pull_map.cell_count,
+                kernel.dst_pull_map.cell_count,
                 dst.has_active_mask ? 1 : 0,
                 1.0f / static_cast<float>(kernel.kernel_len));
         } else {

@@ -103,6 +103,8 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HDemag
                 | QuantityId::HExt
                 | QuantityId::Torque
+                | QuantityId::HAni
+                | QuantityId::HDmi
                 | QuantityId::HEff
         ),
         FdmEngine::CudaFdm => matches!(
@@ -112,6 +114,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HDemag
                 | QuantityId::HExt
                 | QuantityId::Torque
+                | QuantityId::HAni
                 | QuantityId::HEff
                 | QuantityId::HOe
         ),
@@ -386,7 +389,7 @@ mod tests {
     fn fdm_cached_quantities_follow_active_terms_and_engine_observables() {
         let mut plan = fdm_plan();
         let quantities = [
-            "m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_oe",
+            "m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff", "H_oe",
         ];
 
         assert_eq!(
@@ -397,15 +400,16 @@ mod tests {
         plan.enable_demag = true;
         plan.external_field = Some([0.0, 0.0, 1.0]);
         plan.material.uniaxial_anisotropy_ku1 = Some(1.0e5);
+        plan.interfacial_dmi = Some(1.0e-3);
         plan.has_oersted_cylinder = true;
 
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff", "H_oe"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_oe"]
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff"]
         );
     }
 

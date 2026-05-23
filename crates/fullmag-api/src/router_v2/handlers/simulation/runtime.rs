@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
+use crate::session::effective_runtime_status_code;
 use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
     CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
@@ -193,11 +194,7 @@ pub async fn get_solver_status(
 
     Ok(Json(SolverStatusResource {
         revision: snapshot.state_version,
-        runtime_state: snapshot
-            .live_state
-            .as_ref()
-            .map(|value| value.status.clone())
-            .unwrap_or_else(|| snapshot.runtime_status.code.clone()),
+        runtime_state: effective_runtime_status_code(snapshot),
         runtime_status_kind: runtime_status_kind(snapshot),
         runtime_status_code: snapshot.runtime_status.code.clone(),
         session_status: snapshot.session.status.clone(),

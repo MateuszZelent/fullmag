@@ -10,6 +10,7 @@ trybie `multilayer_convolution`, ale tylko dla ograniczonego, uczciwie opisanego
 - wiele `Ferromagnet` w jednym `Problem`,
 - body-local `Exchange()`,
 - globalne `Demag()` pomiędzy ciałami,
+- globalne `InterfacialDMI()` / `BulkDMI()` constants w publicznym multilayer planie,
 - planowanie przez `BackendPlanIR::FdmMultilayer(...)`,
 - wykonanie przez CPU reference runner, publiczny `cuda-assisted` runner oraz
   native CUDA single-grid fast path dla kompatybilnych z-stacków,
@@ -38,7 +39,8 @@ obsługiwane są tylko:
   - `cuda_native_multilayer_single_grid` dla kompatybilnych z-stacków dających się złożyć do
     jednego globalnego grida z `active_mask + region_mask`,
   - `cuda-assisted_multilayer` jako fallback, gdzie local exchange per body idzie przez
-    native CUDA FDM, a globalny cross-body demag pozostaje na istniejącym runtime konwolucyjnym.
+    native CUDA FDM, lokalne DMI/anizotropia są składane z warstwowych obserwowalnych, a globalny
+    cross-body demag pozostaje na istniejącym runtime konwolucyjnym.
 
 Jeszcze **nie** są gotowe:
 
@@ -161,41 +163,55 @@ Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, obja
 - [x] Dodać wykonawczy entrypoint `fullmag_fdm_backend_create_v2` oraz walidację planu po stronie native CUDA z jawnym staged execution scope dla poprawnych planów multilayer.
 - [x] Dodać upload/staging warstw i tensor-kerneli do urządzenia w `Context`.
 - [x] Dodać pierwszego właściciela CUDA dla identity-grid `push_m`, `multiply_demag_tensor_kernel(...)` i `pull_h` w fp64/fp32.
-- [x] Przygotować shared cuFFT workspace dla v2 multilayer, gdy wszystkie pary warstw używają jednego `fft_grid`.
-- [x] Wpiąć staged v2 handle w `step()` do pierwszych natywnych timestep slices: Heun i RK4 w fp64/fp32 dla staged multilayer layers z demag i layer-local exchange, z jawnym odrzuceniem adaptacyjnych i wielokrokowych integratorów.
+- [x] Przygotować cached cuFFT workspaces dla v2 multilayer, keyowane per tensor-kernel `fft_grid`, i bindować aktywny workspace przed launchem tensor-kernela.
+- [x] Wpiąć staged v2 handle w `step()` do pierwszych natywnych timestep slices: Heun i RK4 w fp64/fp32 dla staged multilayer layers z demag, uniform external field, per-layer uniform uniaxial/cubic anisotropy, global interfacial/bulk DMI i layer-local exchange, z jawnym odrzuceniem adaptacyjnych i wielokrokowych integratorów.
+- [x] Zdjąć nieaktualną publiczną bramkę `heun`-only: planner multilayer FDM oraz CUDA-assisted multilayer runner przepuszczają fixed-step RK4 do staged native v2 path, bez otwierania adaptacyjnych ani wielokrokowych integratorów v2.
+- [x] Rozdzielić publiczną bramkę integratorów według wykonania: CPU reference multilayer dopuszcza fixed-step Heun/RK4/RK23/RK45/ABM3, kompatybilne `cuda_native_multilayer_single_grid` stacki mogą użyć istniejących single-grid CUDA integratorów RK23/RK45/ABM3, a staged native v2 multilayer pozostaje ograniczony do Heun/RK4.
 - [x] Wystawić jawny `fullmag_fdm_backend_refresh_multilayer_demag`, żeby CUDA-assisted path odświeżał staged v2 demag bez używania `step(0)` jako operatora demag.
-- [x] Wystawić per-layer copy ABI dla `M`, `H_EX` i `H_DEMAG`, żeby odświeżone native multilayer fields były widoczne poza prywatnym `Context`.
+- [x] Wystawić per-layer copy ABI dla `M`, `H_EX` i `H_DEMAG`, żeby odświeżone native multilayer fields były widoczne poza prywatnym `Context`; kopia `H_EX` odświeża staged layer-local exchange przed transferem hosta.
+- [x] Wystawić per-layer copy ABI dla staged `H_DMI`: native `Context` ma warstwowy bufor `h_dmi`, a `gpu/cuda/interactions/multilayer_dmi.cu` odświeża globalny interfacial/bulk DMI field na żądanie kopii.
+- [x] Wystawić per-layer copy ABI dla staged `H_ANI`: native `Context` ma warstwowy bufor `h_ani`, a `gpu/cuda/interactions/multilayer_anisotropy.cu` odświeża uniaxial/cubic anisotropy field na żądanie kopii.
+- [x] Wystawić per-layer copy ABI dla staged `H_EFF`: `gpu/cuda/interactions/multilayer_effective_field.cu` składa `H_EX + H_DEMAG + H_DMI + H_ANI + H_EXT` do istniejącego warstwowego `tmp` scratch po odświeżeniu staged `H_EX`, `H_DMI` i `H_ANI`; `H_DEMAG` pozostaje jawnie odświeżanym staged demag buforem.
 - [x] Wystawić per-layer upload ABI dla aktualnej magnetyzacji i użyć staged native v2 handle jako demag operatora w identity-grid CUDA-assisted multilayer path.
 - [x] Przenieść `transfer_kind` z `FdmLayerPlanIR` przez Rust wrapper, C ABI i native `Context`, żeby `identity` oraz `push_pull` były jawnym kontraktem wykonania zamiast inferencją z rozmiarów siatek.
 - [x] Dodać fp64/fp32 CUDA `push_pull` transfer kernels dla staged v2 demag refresh: volume-weighted `push_m` native->convolution oraz trilinear `pull_h` convolution->native.
 - [x] Zbudować i wgrać staged precomputed transfer maps dla heterogenicznych siatek w native `Context`: push offsets/indices/weights oraz padded-FFT pull indices/weights.
-- [ ] Dodać pełny native CUDA execution path dla `multilayer_convolution`: workspace/plany FFT per przypadek, zoptymalizowane interpolation backends, pozostałe local-field RHS coverage oraz pozostałe integratory poza Heun/RK4.
+- [x] Dodać per-grid cuFFT workspace cache: tensor kernels mogą mieć różne `fft_grid`, a runtime przełącza aktywny `DeviceMultilayerFftWorkspace` bez niszczenia i ponownego tworzenia planu/buforów.
+- [x] Przenieść `pull_h` mapy `push_pull` na tensor-kernel `fft_grid`: `push_map` pozostaje per-layer, a destination `pull_map` jest staged jako `kernel.dst_pull_map`.
+- [ ] Dodać pełny native CUDA execution path dla `multilayer_convolution`: zoptymalizowane interpolation backends, pozostałe local-field RHS coverage poza uniform external field, per-layer uniform uniaxial/cubic anisotropy, global DMI i layer-local exchange oraz staged v2 integratory poza Heun/RK4.
 
-#### [MODIFY] native/backends/fdm/api, native/backends/fdm/core, native/backends/fdm/cuda/... (C/CUDA)
+#### [MODIFY] native/backends/fdm/api, native/backends/fdm/core, native/backends/fdm/gpu/cuda/... (C/CUDA)
 - Przepisać deskryptory setupu pod v2 logic.
 - Dodać kopiowanie z Host to Device prekompilowanych struktur tensorów multi-level `kernels`.
 - [x] Wdrożyć w CUDA pierwszy kernel mnożący `multiply_demag_tensor_kernel(...)` dla identity-grid slice.
-- [x] Wdrożyć identity-grid `push_m` / `pull_h` boundary w `cuda/demag/multilayer_convolution.cu`.
+- [x] Wdrożyć identity-grid `push_m` / `pull_h` boundary w `gpu/cuda/demag/multilayer_convolution.cu`.
 - [x] Wykonać forward i inverse cuFFT dla wszystkich składowych `M_x/M_y/M_z` w natywnym identity-grid multilayer demag, zamiast transformować tylko komponent `x`.
 - [x] Poprawić walidację identity transfer: `native_grid == convolution_grid`, a tensor-kernel `fft_grid` może być padded i musi tylko obejmować convolution grid.
-- [x] Dodać routing `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` przez native `Context` dla warstwowego `M`, `H_EX` i `H_DEMAG`.
+- [x] Dodać routing `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` przez native `Context` dla warstwowego `M`, `H_EX` i `H_DEMAG`, z odświeżeniem layer-local exchange przed kopią `H_EX`.
+- [x] Dodać routing `FULLMAG_FDM_OBSERVABLE_H_DMI` przez `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` oraz osobnego właściciela `gpu/cuda/interactions/multilayer_dmi.cu` dla staged global DMI field.
+- [x] Dodać routing `FULLMAG_FDM_OBSERVABLE_H_ANI` przez `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` oraz osobnego właściciela `gpu/cuda/interactions/multilayer_anisotropy.cu` dla staged uniaxial/cubic anisotropy field.
+- [x] Dodać routing `FULLMAG_FDM_OBSERVABLE_H_EFF` przez `fullmag_fdm_backend_copy_layer_field_f64/f32(...)` oraz osobnego właściciela `gpu/cuda/interactions/multilayer_effective_field.cu` dla scratch-backed staged effective field z on-demand refresh `H_EX`/`H_DMI`/`H_ANI`.
 - [x] Dodać routing `fullmag_fdm_backend_upload_layer_magnetization_f64/f32(...)` przez native `Context` oraz Rust wrapper `create_multilayer_v2`.
 - [x] Dodać routing `fullmag_fdm_backend_refresh_multilayer_demag(...)` przez native `Context` i Rust FFI, bez przeciążania semantyki timestepu.
 - [x] Dodać jawny `transfer_kind` do v2 layer descriptor i zachować go w staged native layer state, z routingiem `identity` oraz `push_pull`.
 - [x] Zaimplementować pierwsze native CUDA `push_m` dla niezgodnych siatek przez volume-weighted overlap oraz `pull_h` przez trilinear interpolation na urządzeniu.
 - [x] Zaimplementować staged memory transfer maps dla niezgodnych siatek, żeby CUDA refresh konsumował gotowe mapy zamiast liczyć overlap/trilinear neighborhood w kernelu.
-- [x] Dodać osobnego właściciela `cuda/integrators/multilayer_heun.cu` dla v2 Heun timestepu z demag i layer-local exchange, z per-layer `tmp`/`k1`/`k2` w `Context`.
-- [x] Dodać osobnego właściciela `cuda/integrators/multilayer_rk4.cu` dla v2 RK4 timestepu z demag i layer-local exchange, z per-layer `k1`/`k2`/`k3`/`k4` w `Context`.
-- [x] Dodać osobnego właściciela `cuda/interactions/multilayer_exchange.cu` dla uniform-A layer-local exchange na staged v2 layer native grids.
+- [x] Dodać osobnego właściciela `gpu/cuda/integrators/multilayer_heun.cu` dla v2 Heun timestepu z demag, uniform external field, per-layer uniform uniaxial/cubic anisotropy, global interfacial/bulk DMI i layer-local exchange, z per-layer `tmp`/`k1`/`k2` w `Context`.
+- [x] Dodać osobnego właściciela `gpu/cuda/integrators/multilayer_rk4.cu` dla v2 RK4 timestepu z demag, uniform external field, per-layer uniform uniaxial/cubic anisotropy, global interfacial/bulk DMI i layer-local exchange, z per-layer `k1`/`k2`/`k3`/`k4` w `Context`.
+- [x] Dodać osobnego właściciela `gpu/cuda/interactions/multilayer_exchange.cu` dla uniform-A layer-local exchange na staged v2 layer native grids.
+- [x] Dodać osobnego właściciela `gpu/cuda/interactions/multilayer_dmi.cu` dla obserwowalnego `H_DMI` na staged v2 layer native grids.
+- [x] Dodać osobnego właściciela `gpu/cuda/interactions/multilayer_anisotropy.cu` dla obserwowalnego `H_ANI` na staged v2 layer native grids.
+- [x] Dodać osobnego właściciela `gpu/cuda/interactions/multilayer_effective_field.cu` dla obserwowalnego `H_EFF` na staged v2 layer native grids.
 - [ ] Zaimplementować zoptymalizowane sprzętowe/interpolacyjne `pull_h` ponad obecnym staged-map fallbackiem.
 
-#### [MODIFY] crates/fullmag-runner/src/fdm/native_cuda.rs
+#### [MODIFY] crates/fullmag-runner/src/fdm/gpu/cuda/native.rs
 - [x] Wypełnić wywołania API nowymi tablicami wskaźników z pamięci Rust do memory C używając structów v2 dla identity-grid native demag boundary.
 - [x] Pobierać `H_DEMAG` per sub-layer z native v2 handle w CUDA-assisted path, gdy transfer_kind jest `identity`.
-- Pobierać tablicowe dane kroków per sub-layer zamiast pojedynczej tablicy grid dla pełnego native timestep path.
+- [x] Pobierać tablicowe dane kroków per sub-layer zamiast pojedynczej tablicy grid dla pełnego native timestep path: `cuda_native_multilayer_single_grid` zachowuje natywne metadata kroku, ale scalar/live/relaxation `StepStats` buduje z warstwowych `StateObservables`.
+- [x] Zachować layer-local DMI reporting w `cuda_native_multilayer_single_grid`: warstwowe konteksty są częścią native stacked planu, a `H_dmi` / per-object `e_dmi` są składane z tych kontekstów zamiast zerować się na globalnej granicy obserwowalnych.
 
 #### [MODIFY] crates/fullmag-runner/src/fdm
-- [x] Przenieść FDM CPU reference, multilayer reference, CUDA-assisted multilayer i native CUDA wrapper pod jeden owner module `src/fdm/`, zostawiając prywatne shimy kompatybilności w root runnera.
+- [x] Przenieść FDM CPU reference i multilayer reference pod `src/fdm/cpu/`, a CUDA-assisted multilayer i native CUDA wrapper pod `src/fdm/gpu/cuda/`, bez root-level shimów kompatybilności w runnerze.
 - [x] Przenieść współdzieloną selekcję artifact field snapshots z lokalnych runnerów do `src/fdm/artifacts.rs`, żeby CPU, multilayer reference i CUDA-assisted multilayer nie duplikowały semantyki nazw pól.
 - [x] Przenieść wspólne zapisywanie due field snapshots dla ścieżek multilayer do `src/fdm/schedules.rs`, żeby reference i CUDA-assisted multilayer używały jednego helpera schedule/artifact.
 - [x] Przenieść wspólny builder `StepStats` dla ścieżek multilayer do `src/fdm/multilayer.rs`, żeby reference i CUDA-assisted multilayer nie duplikowały scalar trace semantics.
@@ -205,9 +221,9 @@ Zastąpienie obecnego jedno-magnesowego spektralnego FDM demag przez jawny, obja
 ### 5. GUI, Session API & Manifesty Artefaktów
 
 #### [MODIFY] crates/fullmag-runner/src/artifacts.rs
-- Skonfigurować artefakty zapisów, tak by obsługiwały podkatalogi per-layer.
-- Generować `manifest.json` po utworzeniu outputu śledzący kształt wektorowy, unikalne Id warstw oraz przesunięcia oryginalne `origin`.
-- Folder będzie wyglądał: `artifacts/fields/m/manifest.json` i dla każdej z warstw np. `layer-free/step-0000.npz`.
+- [x] Skonfigurować artefakty zapisów, tak by obsługiwały podkatalogi per-layer.
+- [x] Generować `manifest.json` po utworzeniu outputu śledzący kształt wektorowy, unikalne Id warstw oraz przesunięcia oryginalne `origin`.
+- [x] Folder runnera wygląda teraz: `artifacts/fields/m/manifest.json` i dla każdej z warstw np. `layer-free/step_000000.json`. Pakowany format binarny pozostaje przyszłym krokiem, jeśli REST/data-plane będzie wymagał formatu innego niż JSON.
 
 #### [MODIFY] apps/fullmag-api
 - Dodać `Layer Registry` eksponowany poprzez endpoint JSON na wstępie połączenia websocket problemu.

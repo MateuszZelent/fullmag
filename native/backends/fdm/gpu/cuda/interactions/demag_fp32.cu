@@ -415,6 +415,98 @@ __global__ void combine_effective_field_fp32_kernel(
     h_eff_z[idx] = hz;
 }
 
+__global__ void anisotropy_field_fp32_kernel(
+    const float * __restrict__ m_x,
+    const float * __restrict__ m_y,
+    const float * __restrict__ m_z,
+    const uint8_t * __restrict__ active_mask,
+    float * __restrict__ h_ani_x,
+    float * __restrict__ h_ani_y,
+    float * __restrict__ h_ani_z,
+    int n,
+    int has_active_mask,
+    int has_uniaxial_anisotropy,
+    float Ku1,
+    float Ku2,
+    float ux,
+    float uy,
+    float uz,
+    const double * __restrict__ ku1_field,
+    const double * __restrict__ ku2_field,
+    float ms,
+    int has_cubic_anisotropy,
+    float Kc1,
+    float Kc2,
+    float Kc3,
+    float c1x, float c1y, float c1z,
+    float c2x, float c2y, float c2z,
+    const double * __restrict__ kc1_field,
+    const double * __restrict__ kc2_field,
+    const double * __restrict__ kc3_field)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
+    float hx = 0.0f;
+    float hy = 0.0f;
+    float hz = 0.0f;
+
+    if (!has_active_mask || active_mask[idx] != 0) {
+        float mx = m_x[idx];
+        float my = m_y[idx];
+        float mz = m_z[idx];
+
+        if (has_uniaxial_anisotropy && ms > 0.0f) {
+            const float mu0 = 4.0f * 3.14159265358979323846f * 1e-7f;
+            float ku1_val = ku1_field ? static_cast<float>(ku1_field[idx]) : Ku1;
+            float ku2_val = ku2_field ? static_cast<float>(ku2_field[idx]) : Ku2;
+            float m_dot_u = mx * ux + my * uy + mz * uz;
+            float prefactor = 2.0f / (mu0 * ms);
+            float term = prefactor * (ku1_val * m_dot_u + 2.0f * ku2_val * m_dot_u * m_dot_u * m_dot_u);
+            hx += term * ux;
+            hy += term * uy;
+            hz += term * uz;
+        }
+
+        if (has_cubic_anisotropy && ms > 0.0f) {
+            const float mu0 = 4.0f * 3.14159265358979323846f * 1e-7f;
+            float kc1_val = kc1_field ? static_cast<float>(kc1_field[idx]) : Kc1;
+            float kc2_val = kc2_field ? static_cast<float>(kc2_field[idx]) : Kc2;
+            float kc3_val = kc3_field ? static_cast<float>(kc3_field[idx]) : Kc3;
+            float inv_mu0Ms = 1.0f / (mu0 * ms);
+
+            float c3x = c1y * c2z - c1z * c2y;
+            float c3y = c1z * c2x - c1x * c2z;
+            float c3z = c1x * c2y - c1y * c2x;
+
+            float m1 = mx * c1x + my * c1y + mz * c1z;
+            float m2 = mx * c2x + my * c2y + mz * c2z;
+            float m3 = mx * c3x + my * c3y + mz * c3z;
+
+            float m1sq = m1 * m1;
+            float m2sq = m2 * m2;
+            float m3sq = m3 * m3;
+            float sigma = m1sq * m2sq + m2sq * m3sq + m1sq * m3sq;
+
+            float pf1 = -2.0f * kc1_val * inv_mu0Ms;
+            float pf2 = -2.0f * kc2_val * inv_mu0Ms;
+            float pf3 = -4.0f * kc3_val * inv_mu0Ms;
+
+            float g1 = pf1 * m1 * (m2sq + m3sq) + pf2 * m1 * m2sq * m3sq + pf3 * sigma * m1 * (m2sq + m3sq);
+            float g2 = pf1 * m2 * (m1sq + m3sq) + pf2 * m1sq * m2 * m3sq + pf3 * sigma * m2 * (m1sq + m3sq);
+            float g3 = pf1 * m3 * (m1sq + m2sq) + pf2 * m1sq * m2sq * m3 + pf3 * sigma * m3 * (m1sq + m2sq);
+
+            hx += g1 * c1x + g2 * c2x + g3 * c3x;
+            hy += g1 * c1y + g2 * c2y + g3 * c3y;
+            hz += g1 * c1z + g2 * c2z + g3 * c3z;
+        }
+    }
+
+    h_ani_x[idx] = hx;
+    h_ani_y[idx] = hy;
+    h_ani_z[idx] = hz;
+}
+
 } // namespace
 
 void launch_demag_field_fp32(Context &ctx) {
@@ -617,6 +709,39 @@ void launch_effective_field_fp32(Context &ctx) {
             static_cast<const float*>(ctx.h_oe_static.z),
             static_cast<float>(I_scale), n);
     }
+}
+
+void launch_anisotropy_field_fp32(Context &ctx) {
+    int n = static_cast<int>(ctx.cell_count);
+    int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    anisotropy_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+        static_cast<const float*>(ctx.m.x),
+        static_cast<const float*>(ctx.m.y),
+        static_cast<const float*>(ctx.m.z),
+        ctx.active_mask,
+        static_cast<float*>(ctx.h_ani.x),
+        static_cast<float*>(ctx.h_ani.y),
+        static_cast<float*>(ctx.h_ani.z),
+        n,
+        ctx.has_active_mask ? 1 : 0,
+        ctx.has_uniaxial_anisotropy ? 1 : 0,
+        static_cast<float>(ctx.Ku1),
+        static_cast<float>(ctx.Ku2),
+        static_cast<float>(ctx.anisU[0]),
+        static_cast<float>(ctx.anisU[1]),
+        static_cast<float>(ctx.anisU[2]),
+        ctx.ku1_field,
+        ctx.ku2_field,
+        static_cast<float>(ctx.Ms),
+        ctx.has_cubic_anisotropy ? 1 : 0,
+        static_cast<float>(ctx.Kc1),
+        static_cast<float>(ctx.Kc2),
+        static_cast<float>(ctx.Kc3),
+        static_cast<float>(ctx.cubic_axis1[0]), static_cast<float>(ctx.cubic_axis1[1]), static_cast<float>(ctx.cubic_axis1[2]),
+        static_cast<float>(ctx.cubic_axis2[0]), static_cast<float>(ctx.cubic_axis2[1]), static_cast<float>(ctx.cubic_axis2[2]),
+        ctx.kc1_field,
+        ctx.kc2_field,
+        ctx.kc3_field);
 }
 
 double launch_demag_energy_fp32(Context &ctx) {

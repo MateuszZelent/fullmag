@@ -159,7 +159,6 @@ if [ -n "${FULLMAG_CPU_THREADS:-}" ] && [ -z "${OMP_NUM_THREADS:-}" ]; then
       ;;
   esac
 fi
-export FULLMAG_FEM_EXECUTION="${FULLMAG_FEM_EXECUTION:-gpu}"
 export FULLMAG_FEM_GPU_INDEX="${FULLMAG_FEM_GPU_INDEX:-0}"
 export FULLMAG_FDM_GPU_INDEX="${FULLMAG_FDM_GPU_INDEX:-${FULLMAG_FEM_GPU_INDEX}}"
 exec "${SELF_DIR}/fullmag-fem-gpu-bin" "$@"

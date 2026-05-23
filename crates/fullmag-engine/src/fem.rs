@@ -2349,6 +2349,7 @@ impl FemLlgProblem {
             demag_field,
             external_field,
             effective_field,
+            dmi_field: vec![[0.0, 0.0, 0.0]; magnetization.len()],
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,

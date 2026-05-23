@@ -1,6 +1,5 @@
 //! ExchangeLlgProblem struct definition, constructors, and public API dispatch.
 
-use crate::fdm_fft::zero_vectors;
 use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
     ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FftWorkspace, GridShape,
@@ -169,6 +168,17 @@ impl ExchangeLlgProblem {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
         Ok(self.observable_effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+    }
+
+    pub fn dmi_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        let interfacial = self.interfacial_dmi_field(state.magnetization());
+        let bulk = self.bulk_dmi_field(state.magnetization());
+        Ok(interfacial
+            .iter()
+            .zip(bulk.iter())
+            .map(|(interfacial, bulk)| crate::add(*interfacial, *bulk))
+            .collect())
     }
 
     pub fn llg_rhs(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
@@ -342,6 +352,10 @@ impl ExchangeLlgProblem {
     pub fn advance_thermal_step(&self) {
         self.thermal_step_counter.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+fn zero_vectors(len: usize) -> Vec<Vector3> {
+    vec![[0.0; 3]; len]
 }
 
 impl Clone for ExchangeLlgProblem {

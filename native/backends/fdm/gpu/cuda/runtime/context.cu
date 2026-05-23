@@ -25,13 +25,24 @@ extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_exchange_field_fp32(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
+extern void launch_anisotropy_field_fp64(Context &ctx);
+extern void launch_anisotropy_field_fp32(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx);
 extern void launch_newell_compute_spectra_fp64(Context &ctx);
 extern void launch_newell_compute_spectra_fp32(Context &ctx);
+extern bool launch_multilayer_dmi_field_fp64(Context &ctx);
+extern bool launch_multilayer_dmi_field_fp32(Context &ctx);
+extern bool launch_multilayer_anisotropy_field_fp64(Context &ctx);
+extern bool launch_multilayer_anisotropy_field_fp32(Context &ctx);
+extern void launch_multilayer_exchange_field_fp64(Context &ctx);
+extern void launch_multilayer_exchange_field_fp32(Context &ctx);
+extern bool launch_multilayer_effective_field_fp64(Context &ctx);
+extern bool launch_multilayer_effective_field_fp32(Context &ctx);
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
+static bool context_refresh_anisotropy_observable(Context &ctx);
 static bool upload_f64_array(Context &ctx, double *&dst, const double *src,
                               uint64_t len, const char *label);
 
@@ -242,31 +253,87 @@ static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
     if (kernel.yz) { cudaFree(kernel.yz); kernel.yz = nullptr; }
 }
 
-static void free_device_transfer_maps(DeviceMultilayerLayer &layer) {
-    if (layer.push_map.offsets) {
-        cudaFree(layer.push_map.offsets);
-        layer.push_map.offsets = nullptr;
+static void free_device_push_map(DeviceMultilayerPushMap &map) {
+    if (map.offsets) {
+        cudaFree(map.offsets);
+        map.offsets = nullptr;
     }
-    if (layer.push_map.indices) {
-        cudaFree(layer.push_map.indices);
-        layer.push_map.indices = nullptr;
+    if (map.indices) {
+        cudaFree(map.indices);
+        map.indices = nullptr;
     }
-    if (layer.push_map.weights) {
-        cudaFree(layer.push_map.weights);
-        layer.push_map.weights = nullptr;
+    if (map.weights) {
+        cudaFree(map.weights);
+        map.weights = nullptr;
     }
-    layer.push_map.cell_count = 0;
-    layer.push_map.entry_count = 0;
+    map.cell_count = 0;
+    map.entry_count = 0;
+}
 
-    if (layer.pull_map.indices) {
-        cudaFree(layer.pull_map.indices);
-        layer.pull_map.indices = nullptr;
+static void free_device_pull_map(DeviceMultilayerPullMap &map) {
+    if (map.indices) {
+        cudaFree(map.indices);
+        map.indices = nullptr;
     }
-    if (layer.pull_map.weights) {
-        cudaFree(layer.pull_map.weights);
-        layer.pull_map.weights = nullptr;
+    if (map.weights) {
+        cudaFree(map.weights);
+        map.weights = nullptr;
     }
-    layer.pull_map.cell_count = 0;
+    map.cell_count = 0;
+}
+
+static void unbind_multilayer_fft_workspace(Context &ctx) {
+    if (!ctx.fft_workspace_bound_to_multilayer_cache) {
+        return;
+    }
+    ctx.fft_nx = 0;
+    ctx.fft_ny = 0;
+    ctx.fft_nz = 0;
+    ctx.fft_cell_count = 0;
+    ctx.fft_component_stride = 0;
+    ctx.fft_x = nullptr;
+    ctx.fft_y = nullptr;
+    ctx.fft_z = nullptr;
+    ctx.fft_work_area = nullptr;
+    ctx.fft_work_area_bytes = 0;
+    ctx.fft_plan = 0;
+    ctx.fft_plan_valid = false;
+    ctx.fft_components_share_allocation = false;
+    ctx.fft_workspace_bound_to_multilayer_cache = false;
+}
+
+static void free_multilayer_fft_workspace(DeviceMultilayerFftWorkspace &workspace) {
+    if (workspace.plan_valid) {
+        cufftDestroy(workspace.plan);
+        workspace.plan = 0;
+        workspace.plan_valid = false;
+    }
+    if (workspace.work_area) {
+        cudaFree(workspace.work_area);
+        workspace.work_area = nullptr;
+    }
+    workspace.work_area_bytes = 0;
+    if (workspace.components_share_allocation) {
+        if (workspace.fft_x) { cudaFree(workspace.fft_x); }
+        workspace.fft_x = nullptr;
+        workspace.fft_y = nullptr;
+        workspace.fft_z = nullptr;
+    } else {
+        if (workspace.fft_x) { cudaFree(workspace.fft_x); workspace.fft_x = nullptr; }
+        if (workspace.fft_y) { cudaFree(workspace.fft_y); workspace.fft_y = nullptr; }
+        if (workspace.fft_z) { cudaFree(workspace.fft_z); workspace.fft_z = nullptr; }
+    }
+    workspace.cell_count = 0;
+    workspace.component_stride = 0;
+    workspace.components_share_allocation = false;
+}
+
+static void free_multilayer_fft_workspaces(Context &ctx) {
+    unbind_multilayer_fft_workspace(ctx);
+    for (DeviceMultilayerFftWorkspace &workspace : ctx.multilayer_fft_workspaces) {
+        free_multilayer_fft_workspace(workspace);
+    }
+    ctx.multilayer_fft_workspaces.clear();
 }
 
 static uint64_t flatten_grid_index(uint32_t x, uint32_t y, uint32_t z, const fullmag_fdm_grid_desc &grid) {
@@ -445,10 +512,9 @@ static void build_pull_map_host(
     }
 }
 
-static bool build_and_upload_transfer_maps(
+static bool build_and_upload_push_map(
     Context &ctx,
-    DeviceMultilayerLayer &layer,
-    const fullmag_fdm_grid_desc &fft_grid)
+    DeviceMultilayerLayer &layer)
 {
     if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
         return true;
@@ -473,18 +539,38 @@ static bool build_and_upload_transfer_maps(
         return false;
     }
 
+    return true;
+}
+
+static bool build_and_upload_kernel_pull_map(
+    Context &ctx,
+    DeviceMultilayerTensorKernel &kernel,
+    const DeviceMultilayerLayer &dst_layer)
+{
+    if (dst_layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+        return true;
+    }
+
     std::vector<uint64_t> pull_indices;
     std::vector<double> pull_weights;
     build_pull_map_host(
-        layer.native_grid,
-        layer.convolution_grid,
-        fft_grid,
+        dst_layer.native_grid,
+        dst_layer.convolution_grid,
+        kernel.fft_grid,
         pull_indices,
         pull_weights);
 
-    layer.pull_map.cell_count = layer.cell_count;
-    return upload_u64_array(ctx, layer.pull_map.indices, pull_indices, "cudaMemcpy(multilayer_pull_map_indices)") &&
-        upload_f64_vector(ctx, layer.pull_map.weights, pull_weights, "cudaMemcpy(multilayer_pull_map_weights)");
+    kernel.dst_pull_map.cell_count = dst_layer.cell_count;
+    return upload_u64_array(
+            ctx,
+            kernel.dst_pull_map.indices,
+            pull_indices,
+            "cudaMemcpy(multilayer_pull_map_indices)") &&
+        upload_f64_vector(
+            ctx,
+            kernel.dst_pull_map.weights,
+            pull_weights,
+            "cudaMemcpy(multilayer_pull_map_weights)");
 }
 
 static bool upload_tensor_kernel_component(
@@ -530,16 +616,19 @@ static bool upload_tensor_kernel_component(
 }
 
 static void free_multilayer_plan_v2(Context &ctx) {
+    free_multilayer_fft_workspaces(ctx);
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         free_vector_field(layer.m);
         free_vector_field(layer.h_ex);
         free_vector_field(layer.h_demag);
+        free_vector_field(layer.h_dmi);
+        free_vector_field(layer.h_ani);
         free_vector_field(layer.tmp);
         free_vector_field(layer.k1);
         free_vector_field(layer.k2);
         free_vector_field(layer.k3);
         free_vector_field(layer.k4);
-        free_device_transfer_maps(layer);
+        free_device_push_map(layer.push_map);
         if (layer.active_mask) {
             cudaFree(layer.active_mask);
             layer.active_mask = nullptr;
@@ -547,6 +636,7 @@ static void free_multilayer_plan_v2(Context &ctx) {
     }
     for (DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
         free_device_demag_kernel(kernel.tensor);
+        free_device_pull_map(kernel.dst_pull_map);
     }
     ctx.multilayer_layers.clear();
     ctx.multilayer_kernels.clear();
@@ -965,6 +1055,10 @@ static bool alloc_fft_workspace(Context &ctx) {
 }
 
 static void free_fft_workspace(Context &ctx) {
+    if (ctx.fft_workspace_bound_to_multilayer_cache) {
+        unbind_multilayer_fft_workspace(ctx);
+        return;
+    }
     if (ctx.fft_plan_valid) {
         cufftDestroy(ctx.fft_plan);
         ctx.fft_plan = 0;
@@ -990,6 +1084,220 @@ static void free_fft_workspace(Context &ctx) {
     ctx.fft_components_share_allocation = false;
 }
 
+static bool multilayer_fft_workspace_matches_grid(
+    const DeviceMultilayerFftWorkspace &workspace,
+    const fullmag_fdm_grid_desc &grid,
+    uint64_t cell_count)
+{
+    return workspace.plan_valid &&
+        workspace.fft_x != nullptr &&
+        workspace.fft_y != nullptr &&
+        workspace.fft_z != nullptr &&
+        workspace.fft_grid.nx == grid.nx &&
+        workspace.fft_grid.ny == grid.ny &&
+        workspace.fft_grid.nz == grid.nz &&
+        workspace.cell_count == cell_count;
+}
+
+static void bind_multilayer_fft_workspace(
+    Context &ctx,
+    DeviceMultilayerFftWorkspace &workspace)
+{
+    ctx.fft_nx = workspace.fft_grid.nx;
+    ctx.fft_ny = workspace.fft_grid.ny;
+    ctx.fft_nz = workspace.fft_grid.nz;
+    ctx.fft_cell_count = workspace.cell_count;
+    ctx.fft_component_stride = workspace.component_stride;
+    ctx.fft_x = workspace.fft_x;
+    ctx.fft_y = workspace.fft_y;
+    ctx.fft_z = workspace.fft_z;
+    ctx.fft_work_area = workspace.work_area;
+    ctx.fft_work_area_bytes = workspace.work_area_bytes;
+    ctx.fft_plan = workspace.plan;
+    ctx.fft_plan_valid = workspace.plan_valid;
+    ctx.fft_components_share_allocation = workspace.components_share_allocation;
+    ctx.thin_film_2d_demag = workspace.fft_grid.nz == 1;
+    ctx.fft_workspace_bound_to_multilayer_cache = true;
+}
+
+static bool alloc_multilayer_fft_workspace(
+    Context &ctx,
+    DeviceMultilayerFftWorkspace &workspace,
+    const fullmag_fdm_grid_desc &grid)
+{
+    workspace.fft_grid = grid;
+    workspace.cell_count = grid_cell_count(grid);
+
+    if (workspace.cell_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        ctx.last_error = "multilayer demag FFT component stride exceeds cuFFT PlanMany limit";
+        return false;
+    }
+
+    const bool thin_film = grid.nz == 1;
+    const int rank = thin_film ? 2 : 3;
+    int dims[3] = {};
+    if (thin_film) {
+        dims[0] = static_cast<int>(grid.ny);
+        dims[1] = static_cast<int>(grid.nx);
+    } else {
+        dims[0] = static_cast<int>(grid.nz);
+        dims[1] = static_cast<int>(grid.ny);
+        dims[2] = static_cast<int>(grid.nx);
+    }
+    int inembed[3] = {dims[0], dims[1], dims[2]};
+    int onembed[3] = {dims[0], dims[1], dims[2]};
+    const int component_stride = static_cast<int>(workspace.cell_count);
+
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        size_t bytes = workspace.cell_count * sizeof(cufftDoubleComplex);
+        cudaError_t err = cudaMalloc(&workspace.fft_x, bytes * 3);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(multilayer_fft_xyz)", err); return false; }
+        auto *base = static_cast<cufftDoubleComplex*>(workspace.fft_x);
+        workspace.fft_y = base + workspace.cell_count;
+        workspace.fft_z = base + (2 * workspace.cell_count);
+        workspace.component_stride = workspace.cell_count;
+        workspace.components_share_allocation = true;
+
+        cufftResult fft_err = cufftCreate(&workspace.plan);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftCreate(multilayer Z2Z, batch=3)", fft_err);
+            return false;
+        }
+        workspace.plan_valid = true;
+
+        fft_err = cufftSetAutoAllocation(workspace.plan, 0);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetAutoAllocation(multilayer Z2Z, batch=3)", fft_err);
+            return false;
+        }
+
+        size_t work_area_bytes = 0;
+        fft_err = cufftMakePlanMany(
+            workspace.plan,
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            CUFFT_Z2Z,
+            3,
+            &work_area_bytes);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftMakePlanMany(multilayer Z2Z, batch=3)", fft_err);
+            return false;
+        }
+
+        workspace.work_area_bytes = static_cast<uint64_t>(work_area_bytes);
+        if (work_area_bytes > 0) {
+            err = cudaMalloc(&workspace.work_area, work_area_bytes);
+            if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(multilayer_fft_work_area)", err); return false; }
+        }
+        fft_err = cufftSetWorkArea(workspace.plan, workspace.work_area);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetWorkArea(multilayer Z2Z, batch=3)", fft_err);
+            return false;
+        }
+        fft_err = cufftSetStream(workspace.plan, context_compute_stream(ctx));
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetStream(multilayer Z2Z, batch=3)", fft_err);
+            return false;
+        }
+    } else {
+        size_t bytes = workspace.cell_count * sizeof(cufftComplex);
+        cudaError_t err = cudaMalloc(&workspace.fft_x, bytes * 3);
+        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(multilayer_fft_xyz)", err); return false; }
+        auto *base = static_cast<cufftComplex*>(workspace.fft_x);
+        workspace.fft_y = base + workspace.cell_count;
+        workspace.fft_z = base + (2 * workspace.cell_count);
+        workspace.component_stride = workspace.cell_count;
+        workspace.components_share_allocation = true;
+
+        cufftResult fft_err = cufftCreate(&workspace.plan);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftCreate(multilayer C2C, batch=3)", fft_err);
+            return false;
+        }
+        workspace.plan_valid = true;
+
+        fft_err = cufftSetAutoAllocation(workspace.plan, 0);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetAutoAllocation(multilayer C2C, batch=3)", fft_err);
+            return false;
+        }
+
+        size_t work_area_bytes = 0;
+        fft_err = cufftMakePlanMany(
+            workspace.plan,
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            CUFFT_C2C,
+            3,
+            &work_area_bytes);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftMakePlanMany(multilayer C2C, batch=3)", fft_err);
+            return false;
+        }
+
+        workspace.work_area_bytes = static_cast<uint64_t>(work_area_bytes);
+        if (work_area_bytes > 0) {
+            err = cudaMalloc(&workspace.work_area, work_area_bytes);
+            if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(multilayer_fft_work_area)", err); return false; }
+        }
+        fft_err = cufftSetWorkArea(workspace.plan, workspace.work_area);
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetWorkArea(multilayer C2C, batch=3)", fft_err);
+            return false;
+        }
+        fft_err = cufftSetStream(workspace.plan, context_compute_stream(ctx));
+        if (fft_err != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftSetStream(multilayer C2C, batch=3)", fft_err);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
+    Context &ctx,
+    const fullmag_fdm_grid_desc &grid,
+    uint64_t cell_count)
+{
+    for (DeviceMultilayerFftWorkspace &workspace : ctx.multilayer_fft_workspaces) {
+        if (multilayer_fft_workspace_matches_grid(workspace, grid, cell_count)) {
+            return &workspace;
+        }
+    }
+
+    if (!ctx.fft_workspace_bound_to_multilayer_cache &&
+        (ctx.fft_plan_valid ||
+            ctx.fft_x != nullptr ||
+            ctx.fft_y != nullptr ||
+            ctx.fft_z != nullptr ||
+            ctx.fft_work_area != nullptr))
+    {
+        free_fft_workspace(ctx);
+    }
+
+    ctx.multilayer_fft_workspaces.emplace_back();
+    DeviceMultilayerFftWorkspace &workspace = ctx.multilayer_fft_workspaces.back();
+    if (!alloc_multilayer_fft_workspace(ctx, workspace, grid)) {
+        free_multilayer_fft_workspace(workspace);
+        ctx.multilayer_fft_workspaces.pop_back();
+        return nullptr;
+    }
+    return &workspace;
+}
+
 /* ── Public context functions ── */
 
 bool context_alloc_device(Context &ctx) {
@@ -1001,6 +1309,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag)) return false;
+    if (!alloc_vector_field(ctx, ctx.h_ani)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
@@ -1064,6 +1373,9 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.h_demag.x, 0, bytes);
     cudaMemset(ctx.h_demag.y, 0, bytes);
     cudaMemset(ctx.h_demag.z, 0, bytes);
+    cudaMemset(ctx.h_ani.x, 0, bytes);
+    cudaMemset(ctx.h_ani.y, 0, bytes);
+    cudaMemset(ctx.h_ani.z, 0, bytes);
     cudaMemset(ctx.k1.x, 0, bytes);
     cudaMemset(ctx.k1.y, 0, bytes);
     cudaMemset(ctx.k1.z, 0, bytes);
@@ -1083,6 +1395,7 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
+    free_vector_field(ctx.h_ani);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.work);
@@ -1261,6 +1574,22 @@ bool context_upload_multilayer_plan_v2(
         dst.layer_index = src.layer_index;
         dst.z_offset_cells = src.z_offset_cells;
         dst.material = src.material;
+        dst.has_uniaxial_anisotropy = src.has_uniaxial_anisotropy != 0;
+        dst.Ku1 = src.uniaxial_anisotropy_constant;
+        dst.Ku2 = src.uniaxial_anisotropy_k2;
+        dst.anisU[0] = src.anisotropy_axis[0];
+        dst.anisU[1] = src.anisotropy_axis[1];
+        dst.anisU[2] = src.anisotropy_axis[2];
+        dst.has_cubic_anisotropy = src.has_cubic_anisotropy != 0;
+        dst.Kc1 = src.cubic_Kc1;
+        dst.Kc2 = src.cubic_Kc2;
+        dst.Kc3 = src.cubic_Kc3;
+        dst.cubic_axis1[0] = src.cubic_axis1[0];
+        dst.cubic_axis1[1] = src.cubic_axis1[1];
+        dst.cubic_axis1[2] = src.cubic_axis1[2];
+        dst.cubic_axis2[0] = src.cubic_axis2[0];
+        dst.cubic_axis2[1] = src.cubic_axis2[1];
+        dst.cubic_axis2[2] = src.cubic_axis2[2];
         dst.cell_count = grid_cell_count(src.native_grid);
         dst.convolution_cell_count = grid_cell_count(src.convolution_grid);
         dst.has_active_mask = src.active_mask != nullptr;
@@ -1272,6 +1601,12 @@ bool context_upload_multilayer_plan_v2(
             return fail();
         }
         if (!alloc_vector_field_cells(ctx, dst.h_demag, dst.cell_count, "multilayer_h_demag")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.h_dmi, dst.cell_count, "multilayer_h_dmi")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(ctx, dst.h_ani, dst.cell_count, "multilayer_h_ani")) {
             return fail();
         }
         if (!alloc_vector_field_cells(ctx, dst.tmp, dst.cell_count, "multilayer_tmp")) {
@@ -1327,6 +1662,36 @@ bool context_upload_multilayer_plan_v2(
         zero_err = cudaMemset(dst.h_demag.z, 0, layer_bytes);
         if (zero_err != cudaSuccess) {
             set_cuda_error(ctx, "cudaMemset(multilayer_h_demag.z)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_dmi.x, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_dmi.x)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_dmi.y, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_dmi.y)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_dmi.z, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_dmi.z)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_ani.x, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ani.x)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_ani.y, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ani.y)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_ani.z, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_ani.z)", zero_err);
             return fail();
         }
         if (dst.has_active_mask) {
@@ -1386,20 +1751,14 @@ bool context_upload_multilayer_plan_v2(
     }
 
     if (ctx.enable_demag && !ctx.multilayer_kernels.empty()) {
-        const fullmag_fdm_grid_desc &fft_grid = ctx.multilayer_kernels.front().fft_grid;
-        for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
-            if (kernel.fft_grid.nx != fft_grid.nx ||
-                kernel.fft_grid.ny != fft_grid.ny ||
-                kernel.fft_grid.nz != fft_grid.nz ||
-                kernel.kernel_len != grid_cell_count(fft_grid))
-            {
-                ctx.last_error =
-                    "multilayer transfer maps require a shared fft_grid until heterogeneous workspace support is implemented";
+        for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+            if (!build_and_upload_push_map(ctx, layer)) {
                 return fail();
             }
         }
-        for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
-            if (!build_and_upload_transfer_maps(ctx, layer, fft_grid)) {
+        for (DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+            DeviceMultilayerLayer &dst_layer = ctx.multilayer_layers[kernel.dst_layer];
+            if (!build_and_upload_kernel_pull_map(ctx, kernel, dst_layer)) {
                 return fail();
             }
         }
@@ -1418,28 +1777,47 @@ bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
     }
 
     const DeviceMultilayerTensorKernel &first = ctx.multilayer_kernels.front();
-    for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
-        if (kernel.fft_grid.nx != first.fft_grid.nx ||
-            kernel.fft_grid.ny != first.fft_grid.ny ||
-            kernel.fft_grid.nz != first.fft_grid.nz ||
-            kernel.kernel_len != first.kernel_len)
-        {
-            ctx.last_error =
-                "multilayer FFT workspace requires a shared fft_grid until heterogeneous workspace support is implemented";
-            return false;
-        }
+    return context_prepare_multilayer_fft_workspace_for_kernel(ctx, first);
+}
+
+bool context_prepare_multilayer_fft_workspace_for_kernel(
+    Context &ctx,
+    const DeviceMultilayerTensorKernel &kernel)
+{
+    if (!ctx.has_multilayer_plan_v2 || !ctx.enable_demag) {
+        return true;
+    }
+
+    if (kernel.kernel_len != grid_cell_count(kernel.fft_grid)) {
+        ctx.last_error =
+            "multilayer FFT workspace kernel length must match the tensor-kernel grid";
+        return false;
     }
 
     if (!context_create_compute_stream(ctx)) {
         return false;
     }
 
-    free_fft_workspace(ctx);
-    ctx.fft_nx = first.fft_grid.nx;
-    ctx.fft_ny = first.fft_grid.ny;
-    ctx.fft_nz = first.fft_grid.nz;
-    ctx.thin_film_2d_demag = first.fft_grid.nz == 1;
-    return alloc_fft_workspace(ctx);
+    if (ctx.fft_workspace_bound_to_multilayer_cache &&
+        ctx.fft_plan_valid &&
+        ctx.fft_x != nullptr &&
+        ctx.fft_y != nullptr &&
+        ctx.fft_z != nullptr &&
+        ctx.fft_nx == kernel.fft_grid.nx &&
+        ctx.fft_ny == kernel.fft_grid.ny &&
+        ctx.fft_nz == kernel.fft_grid.nz &&
+        ctx.fft_cell_count == kernel.kernel_len)
+    {
+        return true;
+    }
+
+    DeviceMultilayerFftWorkspace *workspace =
+        ensure_multilayer_fft_workspace(ctx, kernel.fft_grid, kernel.kernel_len);
+    if (!workspace) {
+        return false;
+    }
+    bind_multilayer_fft_workspace(ctx, *workspace);
+    return true;
 }
 
 /* ── Boundary correction upload ── */
@@ -1870,7 +2248,7 @@ bool context_upload_layer_magnetization_f32(
 
 template <typename HostScalar>
 static bool context_download_field_impl(
-    const Context &ctx,
+    Context &ctx,
     fullmag_fdm_observable observable,
     HostScalar *out_xyz,
     uint64_t out_len)
@@ -1880,11 +2258,18 @@ static bool context_download_field_impl(
         return false;
     }
 
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_ANI
+        && !context_refresh_anisotropy_observable(ctx))
+    {
+        return false;
+    }
+
     const DeviceVectorField *field;
     switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M: field = &ctx.m; break;
         case FULLMAG_FDM_OBSERVABLE_H_EX: field = &ctx.h_ex; break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG: field = &ctx.h_demag; break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
             const double scale = oersted_field_scale(ctx);
@@ -1986,7 +2371,7 @@ static bool context_download_field_impl(
 }
 
 bool context_download_field_f64(
-    const Context &ctx,
+    Context &ctx,
     fullmag_fdm_observable observable,
     double *out_xyz,
     uint64_t out_len)
@@ -1995,12 +2380,26 @@ bool context_download_field_f64(
 }
 
 bool context_download_field_f32(
-    const Context &ctx,
+    Context &ctx,
     fullmag_fdm_observable observable,
     float *out_xyz,
     uint64_t out_len)
 {
     return context_download_field_impl(ctx, observable, out_xyz, out_len);
+}
+
+static bool context_refresh_multilayer_exchange_observable(Context &ctx)
+{
+    if (!ctx.enable_exchange) {
+        return true;
+    }
+    ctx.last_error.clear();
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        launch_multilayer_exchange_field_fp64(ctx);
+    } else {
+        launch_multilayer_exchange_field_fp32(ctx);
+    }
+    return ctx.last_error.empty();
 }
 
 template <typename HostScalar>
@@ -2026,8 +2425,83 @@ static bool context_download_layer_field_impl(
         return false;
     }
 
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_EX
+        && !context_refresh_multilayer_exchange_observable(ctx))
+    {
+        return false;
+    }
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_DMI) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_dmi_field_fp64(ctx)
+            : launch_multilayer_dmi_field_fp32(ctx);
+        if (!ok) {
+            return false;
+        }
+    }
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_ANI) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_anisotropy_field_fp64(ctx)
+            : launch_multilayer_anisotropy_field_fp32(ctx);
+        if (!ok) {
+            return false;
+        }
+    }
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_EFF) {
+        if (!context_refresh_multilayer_exchange_observable(ctx)) {
+            return false;
+        }
+        const bool dmi_ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_dmi_field_fp64(ctx)
+            : launch_multilayer_dmi_field_fp32(ctx);
+        if (!dmi_ok) {
+            return false;
+        }
+        const bool anisotropy_ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_anisotropy_field_fp64(ctx)
+            : launch_multilayer_anisotropy_field_fp32(ctx);
+        if (!anisotropy_ok) {
+            return false;
+        }
+        const bool effective_ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_effective_field_fp64(ctx)
+            : launch_multilayer_effective_field_fp32(ctx);
+        if (!effective_ok) {
+            return false;
+        }
+    }
+
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_EXT) {
+        const uint64_t n = layer.cell_count;
+        std::vector<uint8_t> active_mask;
+        if (layer.has_active_mask) {
+            active_mask.resize(n);
+            cudaError_t err = cudaMemcpy(
+                active_mask.data(),
+                layer.active_mask,
+                static_cast<size_t>(n) * sizeof(uint8_t),
+                cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) {
+                set_cuda_error(ctx, "cudaMemcpy(multilayer_layer_h_ext_active_mask)", err);
+                return false;
+            }
+        }
+        for (uint64_t i = 0; i < n; ++i) {
+            const bool is_active = !layer.has_active_mask || active_mask[i] != 0;
+            out_xyz[i * 3 + 0] = (ctx.has_external_field && is_active)
+                ? static_cast<HostScalar>(ctx.external_field[0])
+                : HostScalar{};
+            out_xyz[i * 3 + 1] = (ctx.has_external_field && is_active)
+                ? static_cast<HostScalar>(ctx.external_field[1])
+                : HostScalar{};
+            out_xyz[i * 3 + 2] = (ctx.has_external_field && is_active)
+                ? static_cast<HostScalar>(ctx.external_field[2])
+                : HostScalar{};
+        }
+        return true;
+    }
+
     const DeviceVectorField *field = nullptr;
-        switch (observable) {
+    switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M:
             field = &layer.m;
             break;
@@ -2036,6 +2510,15 @@ static bool context_download_layer_field_impl(
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
             field = &layer.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_DMI:
+            field = &layer.h_dmi;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            field = &layer.h_ani;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF:
+            field = &layer.tmp;
             break;
         default:
             ctx.last_error = "unsupported multilayer layer observable";
@@ -2123,6 +2606,12 @@ static bool context_download_field_preview_impl(
         return context_download_field_impl(ctx, observable, out_xyz, out_len);
     }
 
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_ANI
+        && !context_refresh_anisotropy_observable(ctx))
+    {
+        return false;
+    }
+
     const DeviceVectorField *field = nullptr;
     switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M:
@@ -2133,6 +2622,9 @@ static bool context_download_field_preview_impl(
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
             field = &ctx.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             field = &ctx.work;
@@ -2379,6 +2871,14 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
             field = &ctx.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            if (!context_refresh_anisotropy_observable(ctx)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_ani snapshot"
+                                           : ctx.last_error);
+            }
+            field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             field = &ctx.work;
@@ -2634,6 +3134,14 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
             field = &ctx.h_demag;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            if (!context_refresh_anisotropy_observable(ctx)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_ani preview snapshot"
+                                           : ctx.last_error);
+            }
+            field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             field = &ctx.work;
@@ -2986,6 +3494,21 @@ bool context_refresh_demag_observable(Context &ctx) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "context_refresh_demag_observable", err);
+        return false;
+    }
+    return true;
+}
+
+static bool context_refresh_anisotropy_observable(Context &ctx) {
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        launch_anisotropy_field_fp64(ctx);
+    } else {
+        launch_anisotropy_field_fp32(ctx);
+    }
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "context_refresh_anisotropy_observable", err);
         return false;
     }
     return true;

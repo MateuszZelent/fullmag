@@ -43,6 +43,25 @@ std::size_t count_occurrences(const std::string &haystack, const std::string &ne
     return count;
 }
 
+std::string slice_between(
+    const std::string &haystack,
+    const std::string &start,
+    const std::string &end,
+    const char *label)
+{
+    const std::size_t start_pos = haystack.find(start);
+    if (start_pos == std::string::npos) {
+        std::fprintf(stderr, "FAIL: unable to find %s start\n", label);
+        std::exit(1);
+    }
+    const std::size_t end_pos = haystack.find(end, start_pos);
+    if (end_pos == std::string::npos) {
+        std::fprintf(stderr, "FAIL: unable to find %s end\n", label);
+        std::exit(1);
+    }
+    return haystack.substr(start_pos, end_pos - start_pos + end.size());
+}
+
 std::filesystem::path native_root() {
     const std::filesystem::path this_file(__FILE__);
     if (this_file.is_absolute()) {
@@ -58,7 +77,12 @@ std::filesystem::path repo_root() {
 
 std::filesystem::path runner_native_fdm_source() {
     return repo_root() / "crates" / "fullmag-runner" / "src" / "fdm" /
-        "native_cuda.rs";
+        "gpu" / "cuda" / "native.rs";
+}
+
+std::filesystem::path runner_multilayer_cuda_source() {
+    return repo_root() / "crates" / "fullmag-runner" / "src" / "fdm" /
+        "gpu" / "cuda" / "multilayer.rs";
 }
 
 void c_header_exposes_multilayer_plan_shape() {
@@ -125,6 +149,12 @@ void c_header_exposes_multilayer_plan_shape() {
                 std::string::npos &&
             header.find("uint32_t                   kernel_count") != std::string::npos,
         "multilayer plan descriptor must carry explicit layers and kernel table");
+    check(
+        header.find("Until native multilayer CUDA execution is\n"
+                    " * implemented") == std::string::npos &&
+            header.find("valid multilayer plan returns a handle carrying a clear\n"
+                        " * last_error message") == std::string::npos,
+        "C ABI create_v2 docs must not describe staged multilayer CUDA as an unimplemented placeholder");
 }
 
 void rust_ffi_mirrors_multilayer_plan_shape() {
@@ -187,10 +217,9 @@ void native_sources_stage_multilayer_upload_path() {
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string c_api =
         read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
-
     check(
         context_header.find("struct DeviceMultilayerLayer") != std::string::npos &&
             context_header.find("struct DeviceMultilayerTensorKernel") != std::string::npos,
@@ -237,32 +266,62 @@ void native_sources_prepare_multilayer_fft_workspace() {
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string multilayer_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
+                       "multilayer_convolution.cu");
     const std::string c_api =
         read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
 
     check(
         context_header.find("context_prepare_multilayer_fft_workspace_v2") !=
-            std::string::npos,
-        "Context must expose v2 multilayer FFT workspace preparation");
-    check(
-        context_source.find("bool context_prepare_multilayer_fft_workspace_v2(") !=
                 std::string::npos &&
-            context_source.find("kernel.fft_grid.nx") != std::string::npos &&
-            context_source.find("multilayer FFT workspace requires a shared fft_grid") !=
+            context_header.find("context_prepare_multilayer_fft_workspace_for_kernel") !=
                 std::string::npos,
-        "Context must validate one shared FFT grid before preparing v2 multilayer workspace");
+        "Context must expose initial and per-kernel v2 multilayer FFT workspace preparation");
     check(
-        context_source.find("ctx.fft_nx = first.fft_grid.nx") != std::string::npos &&
-            context_source.find("ctx.fft_ny = first.fft_grid.ny") != std::string::npos &&
-            context_source.find("ctx.fft_nz = first.fft_grid.nz") != std::string::npos &&
-            context_source.find("alloc_fft_workspace(ctx)") != std::string::npos,
-        "Context must create the cuFFT workspace from the staged multilayer tensor grid");
+        context_header.find("struct DeviceMultilayerFftWorkspace") !=
+                std::string::npos &&
+            context_header.find("std::vector<DeviceMultilayerFftWorkspace> multilayer_fft_workspaces") !=
+                std::string::npos,
+        "Context must own cached v2 multilayer FFT workspaces separately from the single-grid FFT workspace");
+    check(
+        context_source.find("ensure_multilayer_fft_workspace") !=
+                std::string::npos &&
+            context_source.find("bind_multilayer_fft_workspace(ctx") !=
+                std::string::npos &&
+            context_source.find("free_multilayer_fft_workspaces(ctx)") !=
+                std::string::npos,
+        "Context must cache and bind per-grid multilayer FFT workspaces instead of reallocating for every grid switch");
+    check(
+        context_source.find("bool context_prepare_multilayer_fft_workspace_for_kernel(") !=
+                std::string::npos &&
+            context_source.find("ensure_multilayer_fft_workspace(ctx, kernel.fft_grid") !=
+                std::string::npos &&
+            context_source.find("free_fft_workspace(ctx);\n    ctx.fft_nx = kernel.fft_grid.nx") ==
+                std::string::npos &&
+            context_source.find("cudaStreamSynchronize(multilayer_fft_replan)") ==
+                std::string::npos,
+        "Context must bind a cached cuFFT workspace for the active multilayer tensor-kernel grid");
+    check(
+        context_source.find("multilayer FFT workspace requires a shared fft_grid") ==
+                std::string::npos &&
+            context_source.find("push_pull transfer maps require a shared fft_grid") ==
+                std::string::npos,
+        "native v2 CUDA must allow heterogeneous FFT grids without a shared-grid upload gate");
+    check(
+        multilayer_source.find(
+            "context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel") !=
+                std::string::npos &&
+            multilayer_source.find("workspace_matches_kernel") == std::string::npos &&
+            multilayer_source.find("current FFT workspace does not match") ==
+                std::string::npos,
+        "multilayer demag launches must prepare per-kernel FFT workspace instead of rejecting grid changes");
     check(
         c_api.find("context_prepare_multilayer_fft_workspace_v2(*ctx)") !=
                 std::string::npos &&
-            c_api.find("prepared shared FFT workspace") != std::string::npos,
-        "create_v2 must prepare the shared multilayer FFT workspace before reporting unsupported timestep execution");
+            c_api.find("prepared initial FFT workspace") != std::string::npos,
+        "create_v2 must prepare the initial multilayer FFT workspace before reporting native timestep execution");
 }
 
 void native_sources_expose_multilayer_cuda_demag_boundary() {
@@ -274,7 +333,7 @@ void native_sources_expose_multilayer_cuda_demag_boundary() {
     const std::string cmake =
         read_text_file(root / "backends" / "fdm" / "CMakeLists.txt");
     const std::string multilayer_source =
-        read_text_file(root / "backends" / "fdm" / "cuda" / "demag" /
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
 
     check(
@@ -285,8 +344,8 @@ void native_sources_expose_multilayer_cuda_demag_boundary() {
             kernels_header.find("launch_multilayer_demag_field_fp32") != std::string::npos,
         "kernel header must expose fp64/fp32 multilayer demag launch boundaries");
     check(
-        cmake.find("cuda/demag/multilayer_convolution.cu") != std::string::npos,
-        "CMake must compile the native multilayer convolution CUDA owner");
+        cmake.find("gpu/cuda/demag/multilayer_convolution.cu") != std::string::npos,
+        "CMake must compile the native multilayer convolution GPU/CUDA owner");
     check(
         multilayer_source.find("push_multilayer_m_identity_fp64_kernel") !=
                 std::string::npos &&
@@ -314,7 +373,7 @@ void native_sources_expose_multilayer_cuda_demag_boundary() {
 void native_multilayer_demag_transforms_all_vector_components() {
     const std::filesystem::path root = native_root();
     const std::string multilayer_source =
-        read_text_file(root / "backends" / "fdm" / "cuda" / "demag" /
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
 
     for (const char *component : {"ctx.fft_x", "ctx.fft_y", "ctx.fft_z"}) {
@@ -336,7 +395,7 @@ void native_multilayer_demag_transforms_all_vector_components() {
 void native_multilayer_identity_transfer_accepts_padded_fft_grid() {
     const std::filesystem::path root = native_root();
     const std::string multilayer_source =
-        read_text_file(root / "backends" / "fdm" / "cuda" / "demag" /
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
 
     check(
@@ -360,9 +419,9 @@ void native_multilayer_push_pull_transfer_has_cuda_boundary() {
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string multilayer_source =
-        read_text_file(root / "backends" / "fdm" / "cuda" / "demag" /
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
     const std::string rust_runner = read_text_file(runner_native_fdm_source());
 
@@ -407,9 +466,9 @@ void native_multilayer_push_pull_transfer_uses_staged_maps() {
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string multilayer_source =
-        read_text_file(root / "backends" / "fdm" / "cuda" / "demag" /
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
 
     check(
@@ -421,24 +480,32 @@ void native_multilayer_push_pull_transfer_uses_staged_maps() {
     check(
         context_header.find("DeviceMultilayerPushMap push_map") !=
                 std::string::npos &&
-            context_header.find("DeviceMultilayerPullMap pull_map") !=
+            context_header.find("DeviceMultilayerPullMap dst_pull_map") !=
                 std::string::npos,
-        "each staged multilayer layer must own device transfer maps");
+        "staged multilayer layers must own grid-independent push maps and tensor kernels must own fft-grid-specific pull maps");
     check(
-        context_source.find("build_and_upload_transfer_maps") !=
+        context_source.find("build_and_upload_push_map") !=
+                std::string::npos &&
+            context_source.find("build_and_upload_kernel_pull_map") !=
                 std::string::npos &&
             context_source.find("cudaMemcpy(multilayer_push_map_offsets)") !=
                 std::string::npos &&
             context_source.find("cudaMemcpy(multilayer_pull_map_weights)") !=
                 std::string::npos,
-        "native v2 upload must build and upload transfer maps for push_pull layers");
+        "native v2 upload must build layer push maps and per-kernel pull maps for push_pull transfer");
     check(
-        context_source.find("free_device_transfer_maps") != std::string::npos,
-        "Context cleanup must free staged transfer maps");
+        context_source.find("free_device_push_map") != std::string::npos &&
+            context_source.find("free_device_pull_map(kernel.dst_pull_map)") !=
+                std::string::npos,
+        "Context cleanup must free staged layer push maps and per-kernel pull maps");
     check(
         multilayer_source.find("src.push_map.offsets") != std::string::npos &&
-            multilayer_source.find("dst.pull_map.indices") != std::string::npos,
+            multilayer_source.find("kernel.dst_pull_map.indices") != std::string::npos,
         "CUDA push_pull kernels must consume staged transfer maps");
+    check(
+        context_source.find("push_pull transfer maps require a shared fft_grid") ==
+            std::string::npos,
+        "push_pull transfer maps must not require one shared FFT grid after per-kernel pull-map staging");
     check(
         multilayer_source.find("floor(c_lo_x / ndx)") == std::string::npos,
         "CUDA push_pull kernels must not rebuild overlap maps inside the timestep launch");
@@ -454,12 +521,13 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
     const std::string context_header =
         read_text_file(native_root() / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(native_root() / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(native_root() / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string multilayer_cuda_runner = read_text_file(runner_multilayer_cuda_source());
     const std::string heun_source =
-        read_text_file(native_root() / "backends" / "fdm" / "cuda" / "integrators" /
+        read_text_file(native_root() / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
                        "multilayer_heun.cu");
     const std::filesystem::path rk4_path =
-        native_root() / "backends" / "fdm" / "cuda" / "integrators" /
+        native_root() / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
         "multilayer_rk4.cu";
     const bool rk4_exists = std::filesystem::exists(rk4_path);
     const std::string rk4_source = rk4_exists ? read_text_file(rk4_path) : std::string();
@@ -499,6 +567,10 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             std::string::npos,
         "v2 multilayer step must not keep the Heun-only integrator gate");
     check(
+        multilayer_cuda_runner.find("IntegratorChoice::Heun | IntegratorChoice::Rk4") !=
+            std::string::npos,
+        "public CUDA-assisted multilayer runner must not reject RK4 before native v2 dispatch");
+    check(
         kernels_header.find("launch_multilayer_heun_step_fp64") != std::string::npos &&
             kernels_header.find("launch_multilayer_heun_step_fp32") != std::string::npos,
         "kernel header must expose native v2 multilayer Heun timestep launchers");
@@ -511,14 +583,14 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             kernels_header.find("launch_multilayer_exchange_field_fp32") != std::string::npos,
         "kernel header must expose native v2 multilayer exchange field launchers");
     check(
-        cmake.find("cuda/integrators/multilayer_heun.cu") != std::string::npos,
-        "CMake must compile the native v2 multilayer Heun CUDA owner");
+        cmake.find("gpu/cuda/integrators/multilayer_heun.cu") != std::string::npos,
+        "CMake must compile the native v2 multilayer Heun GPU/CUDA owner");
     check(
-        cmake.find("cuda/integrators/multilayer_rk4.cu") != std::string::npos,
-        "CMake must compile the native v2 multilayer RK4 CUDA owner");
+        cmake.find("gpu/cuda/integrators/multilayer_rk4.cu") != std::string::npos,
+        "CMake must compile the native v2 multilayer RK4 GPU/CUDA owner");
     check(
-        cmake.find("cuda/interactions/multilayer_exchange.cu") != std::string::npos,
-        "CMake must compile the native v2 multilayer exchange CUDA owner");
+        cmake.find("gpu/cuda/interactions/multilayer_exchange.cu") != std::string::npos,
+        "CMake must compile the native v2 multilayer exchange GPU/CUDA owner");
     check(
         context_header.find("DeviceVectorField h_ex") != std::string::npos &&
             context_source.find("multilayer_h_ex") != std::string::npos &&
@@ -541,45 +613,479 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
         "v2 multilayer RK4 must have a native owner with exchange-aware stage fields");
 }
 
+void native_multilayer_v2_rhs_includes_uniform_external_field() {
+    const std::filesystem::path root = native_root();
+    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string rust =
+        read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
+    const std::string c_api =
+        read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
+    const std::string heun_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_heun.cu");
+    const std::string rk4_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_rk4.cu");
+    const std::string c_v2_plan = slice_between(
+        c_header,
+        "typedef struct {\n    fullmag_fdm_plan_kind",
+        "} fullmag_fdm_multilayer_plan_desc_v2;",
+        "C ABI v2 multilayer plan descriptor");
+    const std::string rust_v2_plan = slice_between(
+        rust,
+        "pub struct fullmag_fdm_multilayer_plan_desc_v2",
+        "pub stats_stride: u32,\n}",
+        "Rust FFI v2 multilayer plan descriptor");
+
+    check(
+        c_v2_plan.find("int                        enable_demag;\n"
+                       "    int                        has_external_field") !=
+                std::string::npos &&
+            c_v2_plan.find("double                     external_field_am[3]") !=
+                std::string::npos,
+        "C ABI v2 multilayer plan must carry the requested uniform external field");
+    check(
+        rust_v2_plan.find("pub enable_demag: i32,\n"
+                          "    pub has_external_field: i32") != std::string::npos &&
+            rust_v2_plan.find("pub external_field_am: [f64; 3]") != std::string::npos,
+        "Rust FFI v2 multilayer plan must mirror the uniform external field");
+    check(
+        rust_runner.find("has_external_field: if plan.external_field.is_some() { 1 } else { 0 }") !=
+                std::string::npos &&
+            rust_runner.find("external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0])") !=
+                std::string::npos,
+        "Rust native runner wrapper must pass FdmMultilayerPlanIR external_field into the v2 ABI");
+    check(
+        c_api.find("ctx->has_external_field = plan->has_external_field != 0") !=
+                std::string::npos &&
+            c_api.find("ctx->external_field[0] = plan->external_field_am[0]") !=
+                std::string::npos,
+        "create_v2 must stage the requested uniform external field on Context");
+    check(
+        heun_source.find("ctx.has_external_field ? 1 : 0") != std::string::npos &&
+            heun_source.find("ctx.external_field[0]") != std::string::npos &&
+            heun_source.find("h0 += has_external_field ? h_ext_x : 0.0") !=
+                std::string::npos,
+        "v2 multilayer Heun RHS must include the staged uniform external field");
+    check(
+        rk4_source.find("ctx.has_external_field ? 1 : 0") != std::string::npos &&
+            rk4_source.find("ctx.external_field[0]") != std::string::npos &&
+            rk4_source.find("h0 += has_external_field ? h_ext_x : 0.0") !=
+                std::string::npos,
+        "v2 multilayer RK4 RHS must include the staged uniform external field");
+}
+
+void native_multilayer_v2_rhs_includes_uniaxial_anisotropy() {
+    const std::filesystem::path root = native_root();
+    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string rust =
+        read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
+    const std::string context_header =
+        read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
+    const std::string context_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string heun_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_heun.cu");
+    const std::string rk4_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_rk4.cu");
+    const std::string c_v2_layer = slice_between(
+        c_header,
+        "typedef struct {\n    fullmag_fdm_grid_desc      native_grid",
+        "} fullmag_fdm_layer_desc_v2;",
+        "C ABI v2 layer descriptor");
+    const std::string rust_v2_layer = slice_between(
+        rust,
+        "pub struct fullmag_fdm_layer_desc_v2",
+        "pub active_mask_len: u64,\n}",
+        "Rust FFI v2 layer descriptor");
+
+    check(
+        c_v2_layer.find("int                        has_uniaxial_anisotropy") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     uniaxial_anisotropy_constant") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     uniaxial_anisotropy_k2") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     anisotropy_axis[3]") !=
+                std::string::npos,
+        "C ABI v2 layer descriptor must carry per-layer uniaxial anisotropy");
+    check(
+        rust_v2_layer.find("pub has_uniaxial_anisotropy: i32") !=
+                std::string::npos &&
+            rust_v2_layer.find("pub uniaxial_anisotropy_constant: f64") !=
+                std::string::npos &&
+            rust_v2_layer.find("pub uniaxial_anisotropy_k2: f64") !=
+                std::string::npos &&
+            rust_v2_layer.find("pub anisotropy_axis: [f64; 3]") !=
+                std::string::npos,
+        "Rust FFI v2 layer descriptor must mirror per-layer uniaxial anisotropy");
+    check(
+        rust_runner.find("has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some()") !=
+                std::string::npos &&
+            rust_runner.find("uniaxial_anisotropy_constant: layer") !=
+                std::string::npos &&
+            rust_runner.find(".uniaxial_anisotropy_ku1") != std::string::npos &&
+            rust_runner.find("uniaxial_anisotropy_k2: layer") !=
+                std::string::npos &&
+            rust_runner.find(".uniaxial_anisotropy_ku2") !=
+                std::string::npos &&
+            rust_runner.find("anisotropy_axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0])") !=
+                std::string::npos,
+        "Rust native runner wrapper must pass per-layer uniaxial anisotropy into the v2 ABI");
+    check(
+        context_header.find("bool has_uniaxial_anisotropy") !=
+                std::string::npos &&
+            context_header.find("double Ku1") != std::string::npos &&
+            context_header.find("double anisU[3]") != std::string::npos,
+        "Context staged layer state must own per-layer uniaxial anisotropy parameters");
+    check(
+        context_source.find("dst.has_uniaxial_anisotropy = src.has_uniaxial_anisotropy != 0") !=
+                std::string::npos &&
+            context_source.find("dst.Ku1 = src.uniaxial_anisotropy_constant") !=
+                std::string::npos &&
+            context_source.find("dst.anisU[0] = src.anisotropy_axis[0]") !=
+                std::string::npos,
+        "native v2 upload must stage per-layer uniaxial anisotropy parameters");
+    check(
+        heun_source.find("has_uniaxial_anisotropy") != std::string::npos &&
+            heun_source.find("ku1 * m_dot_u + 2.0 * ku2 * m_dot_u * m_dot_u * m_dot_u") !=
+                std::string::npos &&
+            heun_source.find("layer.has_uniaxial_anisotropy ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer Heun RHS must include per-layer uniaxial anisotropy field");
+    check(
+        rk4_source.find("has_uniaxial_anisotropy") != std::string::npos &&
+            rk4_source.find("ku1 * m_dot_u + 2.0 * ku2 * m_dot_u * m_dot_u * m_dot_u") !=
+                std::string::npos &&
+            rk4_source.find("layer.has_uniaxial_anisotropy ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer RK4 RHS must include per-layer uniaxial anisotropy field");
+}
+
+void native_multilayer_v2_rhs_includes_cubic_anisotropy() {
+    const std::filesystem::path root = native_root();
+    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string rust =
+        read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
+    const std::string context_header =
+        read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
+    const std::string context_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string heun_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_heun.cu");
+    const std::string rk4_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_rk4.cu");
+    const std::string c_v2_layer = slice_between(
+        c_header,
+        "typedef struct {\n    fullmag_fdm_grid_desc      native_grid",
+        "} fullmag_fdm_layer_desc_v2;",
+        "C ABI v2 layer descriptor");
+    const std::string rust_v2_layer = slice_between(
+        rust,
+        "pub struct fullmag_fdm_layer_desc_v2",
+        "pub active_mask_len: u64,\n}",
+        "Rust FFI v2 layer descriptor");
+    const std::string device_layer = slice_between(
+        context_header,
+        "struct DeviceMultilayerLayer {",
+        "struct DeviceMultilayerTensorKernel",
+        "DeviceMultilayerLayer");
+
+    check(
+        c_v2_layer.find("int                        has_cubic_anisotropy") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     cubic_Kc1") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     cubic_Kc2") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     cubic_Kc3") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     cubic_axis1[3]") !=
+                std::string::npos &&
+            c_v2_layer.find("double                     cubic_axis2[3]") !=
+                std::string::npos,
+        "C ABI v2 layer descriptor must carry per-layer cubic anisotropy");
+    check(
+        rust_v2_layer.find("pub has_cubic_anisotropy: i32") !=
+                std::string::npos &&
+            rust_v2_layer.find("pub cubic_kc1: f64") != std::string::npos &&
+            rust_v2_layer.find("pub cubic_kc2: f64") != std::string::npos &&
+            rust_v2_layer.find("pub cubic_kc3: f64") != std::string::npos &&
+            rust_v2_layer.find("pub cubic_axis1: [f64; 3]") !=
+                std::string::npos &&
+            rust_v2_layer.find("pub cubic_axis2: [f64; 3]") !=
+                std::string::npos,
+        "Rust FFI v2 layer descriptor must mirror per-layer cubic anisotropy");
+    check(
+        rust_runner.find("has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some()") !=
+                std::string::npos &&
+            rust_runner.find(".cubic_anisotropy_kc2") != std::string::npos &&
+            rust_runner.find(".cubic_anisotropy_kc3") != std::string::npos &&
+            rust_runner.find("cubic_axis1: layer") != std::string::npos &&
+            rust_runner.find(".cubic_anisotropy_axis1") != std::string::npos &&
+            rust_runner.find("cubic_axis2: layer") != std::string::npos &&
+            rust_runner.find(".cubic_anisotropy_axis2") != std::string::npos,
+        "Rust native runner wrapper must pass per-layer cubic anisotropy into the v2 ABI");
+    check(
+        device_layer.find("bool has_cubic_anisotropy") != std::string::npos &&
+            device_layer.find("double Kc1") != std::string::npos &&
+            device_layer.find("double Kc2") != std::string::npos &&
+            device_layer.find("double Kc3") != std::string::npos &&
+            device_layer.find("double cubic_axis1[3]") != std::string::npos &&
+            device_layer.find("double cubic_axis2[3]") != std::string::npos,
+        "Context staged layer state must own per-layer cubic anisotropy parameters");
+    check(
+        context_source.find("dst.has_cubic_anisotropy = src.has_cubic_anisotropy != 0") !=
+                std::string::npos &&
+            context_source.find("dst.Kc1 = src.cubic_Kc1") != std::string::npos &&
+            context_source.find("dst.Kc2 = src.cubic_Kc2") != std::string::npos &&
+            context_source.find("dst.Kc3 = src.cubic_Kc3") != std::string::npos &&
+            context_source.find("dst.cubic_axis1[0] = src.cubic_axis1[0]") !=
+                std::string::npos &&
+            context_source.find("dst.cubic_axis2[0] = src.cubic_axis2[0]") !=
+                std::string::npos,
+        "native v2 upload must stage per-layer cubic anisotropy parameters");
+    check(
+        heun_source.find("has_cubic_anisotropy") != std::string::npos &&
+            heun_source.find("kc1 * mc1 * (m2sq + m3sq)") !=
+                std::string::npos &&
+            heun_source.find("kc3 * sigma * mc1 * (m2sq + m3sq)") !=
+                std::string::npos &&
+            heun_source.find("layer.has_cubic_anisotropy ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer Heun RHS must include per-layer cubic anisotropy field");
+    check(
+        rk4_source.find("has_cubic_anisotropy") != std::string::npos &&
+            rk4_source.find("kc1 * mc1 * (m2sq + m3sq)") !=
+                std::string::npos &&
+            rk4_source.find("kc3 * sigma * mc1 * (m2sq + m3sq)") !=
+                std::string::npos &&
+            rk4_source.find("layer.has_cubic_anisotropy ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer RK4 RHS must include per-layer cubic anisotropy field");
+}
+
+void native_multilayer_v2_rhs_includes_dmi() {
+    const std::filesystem::path root = native_root();
+    const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
+    const std::string rust =
+        read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
+    const std::string c_api =
+        read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
+    const std::string context_header =
+        read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
+    const std::string heun_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_heun.cu");
+    const std::string rk4_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
+                       "multilayer_rk4.cu");
+    const std::string c_v2_plan = slice_between(
+        c_header,
+        "typedef struct {\n    fullmag_fdm_plan_kind      kind",
+        "} fullmag_fdm_multilayer_plan_desc_v2;",
+        "C ABI v2 multilayer plan descriptor");
+    const std::string rust_v2_plan = slice_between(
+        rust,
+        "pub struct fullmag_fdm_multilayer_plan_desc_v2",
+        "pub stats_stride: u32,\n}",
+        "Rust FFI v2 multilayer plan descriptor");
+
+    check(
+        c_v2_plan.find("int                        has_interfacial_dmi") !=
+                std::string::npos &&
+            c_v2_plan.find("double                     dmi_D_interfacial") !=
+                std::string::npos &&
+            c_v2_plan.find("int                        has_bulk_dmi") !=
+                std::string::npos &&
+            c_v2_plan.find("double                     dmi_D_bulk") !=
+                std::string::npos,
+        "C ABI v2 multilayer plan descriptor must carry DMI constants");
+    check(
+        rust_v2_plan.find("pub has_interfacial_dmi: i32") !=
+                std::string::npos &&
+            rust_v2_plan.find("pub dmi_d_interfacial: f64") !=
+                std::string::npos &&
+            rust_v2_plan.find("pub has_bulk_dmi: i32") !=
+                std::string::npos &&
+            rust_v2_plan.find("pub dmi_d_bulk: f64") != std::string::npos,
+        "Rust FFI v2 multilayer plan descriptor must mirror DMI constants");
+    check(
+        rust_runner.find("has_interfacial_dmi: if plan.interfacial_dmi.is_some()") !=
+                std::string::npos &&
+            rust_runner.find("dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0)") !=
+                std::string::npos &&
+            rust_runner.find("has_bulk_dmi: if plan.bulk_dmi.is_some()") !=
+                std::string::npos &&
+            rust_runner.find("dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0)") !=
+                std::string::npos,
+        "Rust native runner wrapper must pass multilayer DMI constants into the v2 ABI");
+    check(
+        c_api.find("ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0") !=
+                std::string::npos &&
+            c_api.find("ctx->D_interfacial = plan->dmi_D_interfacial") !=
+                std::string::npos &&
+            c_api.find("ctx->has_bulk_dmi = plan->has_bulk_dmi != 0") !=
+                std::string::npos &&
+            c_api.find("ctx->D_bulk = plan->dmi_D_bulk") != std::string::npos,
+        "create_v2 must stage DMI constants on Context");
+    check(
+        context_header.find("bool has_interfacial_dmi") != std::string::npos &&
+            context_header.find("double D_interfacial") != std::string::npos &&
+            context_header.find("bool has_bulk_dmi") != std::string::npos &&
+            context_header.find("double D_bulk") != std::string::npos,
+        "Context must own staged DMI constants for v2 multilayer RHS");
+    check(
+        heun_source.find("has_interfacial_dmi") != std::string::npos &&
+            heun_source.find("dmz_dx") != std::string::npos &&
+            heun_source.find("has_bulk_dmi") != std::string::npos &&
+            heun_source.find("dmz_dy - dmy_dz") != std::string::npos &&
+            heun_source.find("ctx.has_interfacial_dmi ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer Heun RHS must include staged DMI field");
+    check(
+        rk4_source.find("has_interfacial_dmi") != std::string::npos &&
+            rk4_source.find("dmz_dx") != std::string::npos &&
+            rk4_source.find("has_bulk_dmi") != std::string::npos &&
+            rk4_source.find("dmz_dy - dmy_dz") != std::string::npos &&
+            rk4_source.find("ctx.has_interfacial_dmi ? 1 : 0") !=
+                std::string::npos,
+        "v2 multilayer RK4 RHS must include staged DMI field");
+}
+
 void native_sources_expose_multilayer_layer_field_copy() {
     const std::filesystem::path root = native_root();
     const std::string c_header = read_text_file(root / "include" / "fullmag_fdm.h");
     const std::string rust =
         read_text_file(repo_root() / "crates" / "fullmag-fdm-sys" / "src" / "lib.rs");
+    const std::string rust_runner = read_text_file(runner_native_fdm_source());
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string c_api =
         read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
+    const std::string layer_download = slice_between(
+        context_source,
+        "static bool context_download_layer_field_impl",
+        "bool context_download_layer_field_f64",
+        "multilayer layer field download helper");
 
     check(
         c_header.find("fullmag_fdm_backend_copy_layer_field_f64") !=
                 std::string::npos &&
             c_header.find("fullmag_fdm_backend_copy_layer_field_f32") !=
-                std::string::npos,
-        "C ABI must expose per-layer field copy entrypoints for v2 multilayer handles");
+                std::string::npos &&
+            c_header.find("FULLMAG_FDM_OBSERVABLE_H_DMI") != std::string::npos,
+        "C ABI must expose per-layer H_DMI field copy entrypoints for v2 multilayer handles");
     check(
         rust.find("pub fn fullmag_fdm_backend_copy_layer_field_f64") !=
                 std::string::npos &&
             rust.find("pub fn fullmag_fdm_backend_copy_layer_field_f32") !=
+                std::string::npos &&
+            rust.find("FULLMAG_FDM_OBSERVABLE_H_DMI") != std::string::npos,
+        "Rust FFI must mirror per-layer H_DMI field copy entrypoints");
+    check(
+        rust_runner.find("pub fn copy_layer_h_ext(") != std::string::npos &&
+            rust_runner.find("pub fn copy_layer_h_ext_f32(") != std::string::npos &&
+            rust_runner.find("FULLMAG_FDM_OBSERVABLE_H_EXT") != std::string::npos,
+        "Rust native wrapper must expose per-layer H_EXT field copies for staged v2 handles");
+    check(
+        rust_runner.find("pub fn copy_layer_h_ani(") != std::string::npos &&
+            rust_runner.find("pub fn copy_layer_h_ani_f32(") != std::string::npos &&
+            rust_runner.find("FULLMAG_FDM_OBSERVABLE_H_ANI") != std::string::npos,
+        "Rust native wrapper must expose per-layer H_ANI field copies for staged v2 handles");
+    check(
+        rust_runner.find("pub fn copy_layer_h_eff(") != std::string::npos &&
+            rust_runner.find("pub fn copy_layer_h_eff_f32(") != std::string::npos &&
+            rust_runner.find("FULLMAG_FDM_OBSERVABLE_H_EFF") != std::string::npos,
+        "Rust native wrapper must expose per-layer H_EFF field copies for staged v2 handles");
+    check(
+        rust_runner.find("native multilayer CUDA execution is not implemented") ==
+            std::string::npos,
+        "Rust native wrapper must not treat the old create_v2 unsupported placeholder as an accepted staged status");
+    const std::string c_header_copy_f64 = slice_between(
+        c_header,
+        "Copy a v2 multilayer layer field observable from device to host as f64.",
+        "int fullmag_fdm_backend_copy_layer_field_f64",
+        "C ABI f64 layer-copy documentation");
+    const std::string c_header_copy_f32 = slice_between(
+        c_header,
+        "Copy a v2 multilayer layer field observable from device to host as f32.",
+        "int fullmag_fdm_backend_copy_layer_field_f32",
+        "C ABI f32 layer-copy documentation");
+    check(
+        c_header_copy_f64.find("FULLMAG_FDM_OBSERVABLE_H_ANI") !=
+                std::string::npos &&
+            c_header_copy_f64.find("FULLMAG_FDM_OBSERVABLE_H_EFF") !=
+                std::string::npos &&
+            c_header_copy_f32.find("FULLMAG_FDM_OBSERVABLE_H_ANI") !=
+                std::string::npos &&
+            c_header_copy_f32.find("FULLMAG_FDM_OBSERVABLE_H_EFF") !=
                 std::string::npos,
-        "Rust FFI must mirror per-layer field copy entrypoints");
+        "C ABI layer-copy docs must list H_ANI and H_EFF alongside the supported staged v2 observables");
     check(
         context_header.find("context_download_layer_field_f64") != std::string::npos &&
-            context_header.find("context_download_layer_field_f32") != std::string::npos,
-        "Context must expose per-layer field download helpers");
+            context_header.find("context_download_layer_field_f32") != std::string::npos &&
+            context_header.find("DeviceVectorField h_dmi;\n    DeviceVectorField h_ani;") !=
+                std::string::npos &&
+            context_header.find("DeviceVectorField tmp;") !=
+                std::string::npos,
+        "Context must expose per-layer H_DMI/H_ANI helpers and a scratch field for H_EFF downloads");
     check(
         context_source.find("context_download_layer_field_impl") != std::string::npos &&
             context_source.find("FULLMAG_FDM_OBSERVABLE_H_DEMAG") != std::string::npos &&
             context_source.find("layer.h_demag") != std::string::npos &&
             context_source.find("FULLMAG_FDM_OBSERVABLE_H_EX") != std::string::npos &&
             context_source.find("layer.h_ex") != std::string::npos &&
+            context_source.find("FULLMAG_FDM_OBSERVABLE_H_DMI") != std::string::npos &&
+            context_source.find("layer.h_dmi") != std::string::npos &&
+            context_source.find("FULLMAG_FDM_OBSERVABLE_H_ANI") != std::string::npos &&
+            context_source.find("layer.h_ani") != std::string::npos &&
+            context_source.find("FULLMAG_FDM_OBSERVABLE_H_EFF") != std::string::npos &&
+            context_source.find("launch_multilayer_effective_field") != std::string::npos &&
+            context_source.find("layer.tmp") != std::string::npos &&
+            context_source.find("FULLMAG_FDM_OBSERVABLE_H_EXT") != std::string::npos &&
+            context_source.find("ctx.external_field[0]") != std::string::npos &&
+            context_source.find("multilayer_layer_h_ext_active_mask") != std::string::npos &&
             context_source.find("FULLMAG_FDM_OBSERVABLE_M") != std::string::npos &&
             context_source.find("layer.m") != std::string::npos &&
             context_source.find("unsupported multilayer layer observable") !=
                 std::string::npos,
-        "Context layer downloads must support M, H_EX, and H_DEMAG and reject unsupported observables");
+        "Context layer downloads must support M, H_EX, H_DEMAG, H_DMI, H_ANI, H_EFF, and H_EXT and reject unsupported observables");
+    check(
+        context_source.find("static bool context_refresh_multilayer_exchange_observable") !=
+                std::string::npos &&
+            context_source.find("launch_multilayer_exchange_field_fp64") !=
+                std::string::npos &&
+            context_source.find("launch_multilayer_exchange_field_fp32") !=
+                std::string::npos,
+        "Context must provide a staged exchange refresh helper for layer observables");
+    check(
+        layer_download.find("observable == FULLMAG_FDM_OBSERVABLE_H_EX") !=
+                std::string::npos &&
+            layer_download.find("context_refresh_multilayer_exchange_observable(ctx)") !=
+                std::string::npos,
+        "Context layer H_EX downloads must refresh staged layer-local exchange before copying");
+    const std::size_t h_eff_pos = layer_download.find("observable == FULLMAG_FDM_OBSERVABLE_H_EFF");
+    const std::size_t h_eff_exchange_pos =
+        layer_download.find("context_refresh_multilayer_exchange_observable(ctx)", h_eff_pos);
+    const std::size_t h_eff_assembly_pos =
+        layer_download.find("launch_multilayer_effective_field", h_eff_pos);
+    check(
+        h_eff_pos != std::string::npos &&
+            h_eff_exchange_pos != std::string::npos &&
+            h_eff_assembly_pos != std::string::npos &&
+            h_eff_exchange_pos < h_eff_assembly_pos,
+        "Context layer H_EFF downloads must refresh H_EX before scratch effective-field assembly");
     check(
         c_api.find("fullmag_fdm_backend_copy_layer_field_f64") != std::string::npos &&
             c_api.find("fullmag_fdm_backend_copy_layer_field_f32") != std::string::npos &&
@@ -597,7 +1103,7 @@ void native_sources_expose_multilayer_layer_magnetization_upload() {
     const std::string context_header =
         read_text_file(root / "backends" / "fdm" / "include" / "context.hpp");
     const std::string context_source =
-        read_text_file(root / "backends" / "fdm" / "core" / "context.cu");
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string c_api =
         read_text_file(root / "backends" / "fdm" / "api" / "c_api.cpp");
 
@@ -705,6 +1211,10 @@ int main() {
     native_multilayer_push_pull_transfer_has_cuda_boundary();
     native_multilayer_push_pull_transfer_uses_staged_maps();
     native_c_api_keeps_v2_handles_out_of_legacy_step_path();
+    native_multilayer_v2_rhs_includes_uniform_external_field();
+    native_multilayer_v2_rhs_includes_uniaxial_anisotropy();
+    native_multilayer_v2_rhs_includes_cubic_anisotropy();
+    native_multilayer_v2_rhs_includes_dmi();
     native_sources_expose_multilayer_layer_field_copy();
     native_sources_expose_multilayer_layer_magnetization_upload();
     native_sources_expose_explicit_multilayer_demag_refresh();

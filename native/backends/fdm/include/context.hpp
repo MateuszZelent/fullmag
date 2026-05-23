@@ -62,11 +62,23 @@ struct DeviceMultilayerLayer {
     uint32_t layer_index = 0;
     int32_t z_offset_cells = 0;
     fullmag_fdm_material_desc material{};
+    bool has_uniaxial_anisotropy = false;
+    double Ku1 = 0.0;
+    double Ku2 = 0.0;
+    double anisU[3] = {0.0, 0.0, 1.0};
+    bool has_cubic_anisotropy = false;
+    double Kc1 = 0.0;
+    double Kc2 = 0.0;
+    double Kc3 = 0.0;
+    double cubic_axis1[3] = {1.0, 0.0, 0.0};
+    double cubic_axis2[3] = {0.0, 1.0, 0.0};
     uint64_t cell_count = 0;
     uint64_t convolution_cell_count = 0;
     DeviceVectorField m;
     DeviceVectorField h_ex;
     DeviceVectorField h_demag;
+    DeviceVectorField h_dmi;
+    DeviceVectorField h_ani;
     DeviceVectorField tmp;
     DeviceVectorField k1;
     DeviceVectorField k2;
@@ -75,7 +87,6 @@ struct DeviceMultilayerLayer {
     uint8_t *active_mask = nullptr;
     bool has_active_mask = false;
     DeviceMultilayerPushMap push_map;
-    DeviceMultilayerPullMap pull_map;
 };
 
 struct DeviceMultilayerTensorKernel {
@@ -85,12 +96,31 @@ struct DeviceMultilayerTensorKernel {
     double z_shift_meters = 0.0;
     uint64_t kernel_len = 0;
     DeviceDemagKernel tensor;
+    DeviceMultilayerPullMap dst_pull_map;
 };
 
 struct AdaptiveErrorPolicy {
     double error = 0.0;
     double dt_candidate = 0.0;
     int accepted = 0;
+};
+
+struct DeviceMultilayerFftWorkspace {
+    fullmag_fdm_grid_desc fft_grid{};
+    uint64_t cell_count = 0;
+    uint64_t component_stride = 0;
+    void *fft_x = nullptr;
+    void *fft_y = nullptr;
+    void *fft_z = nullptr;
+    void *work_area = nullptr;
+    uint64_t work_area_bytes = 0;
+#if FULLMAG_HAS_CUDA
+    cufftHandle plan = 0;
+#else
+    void *plan = nullptr;
+#endif
+    bool plan_valid = false;
+    bool components_share_allocation = false;
 };
 
 struct Context {
@@ -207,6 +237,7 @@ struct Context {
     DeviceVectorField m;      // magnetization
     DeviceVectorField h_ex;   // exchange field
     DeviceVectorField h_demag;// demag field
+    DeviceVectorField h_ani;  // anisotropy field
     DeviceVectorField k1;     // RHS stage 1 (all integrators)
     DeviceVectorField tmp;    // predictor state / scratch
     DeviceVectorField work;   // effective field / scratch
@@ -294,6 +325,8 @@ struct Context {
 #endif
     bool fft_plan_valid = false;
     bool fft_components_share_allocation = false;
+    bool fft_workspace_bound_to_multilayer_cache = false;
+    std::vector<DeviceMultilayerFftWorkspace> multilayer_fft_workspaces;
     void *compute_stream = nullptr;      // cudaStream_t
     void *compute_ready_event = nullptr; // cudaEvent_t
     void *compute_done_event = nullptr;  // cudaEvent_t
@@ -579,8 +612,13 @@ bool context_upload_multilayer_plan_v2(
     Context &ctx,
     const fullmag_fdm_multilayer_plan_desc_v2 &plan);
 
-/// Prepare the shared cuFFT workspace used by staged v2 multilayer tensor kernels.
+/// Prepare the initial cuFFT workspace used by staged v2 multilayer tensor kernels.
 bool context_prepare_multilayer_fft_workspace_v2(Context &ctx);
+
+/// Prepare/re-plan the cuFFT workspace for one staged v2 multilayer tensor kernel.
+bool context_prepare_multilayer_fft_workspace_for_kernel(
+    Context &ctx,
+    const DeviceMultilayerTensorKernel &kernel);
 
 /// Upload boundary correction geometry data (T0/T1).
 bool context_upload_boundary_correction(
@@ -630,14 +668,14 @@ bool context_upload_demag_boundary_corr(
 
 /// Download a field observable from device to host as f64 AoS.
 bool context_download_field_f64(
-    const Context &ctx,
+    Context &ctx,
     fullmag_fdm_observable observable,
     double *out_xyz,
     uint64_t out_len);
 
 /// Download a field observable from device to host as f32 AoS.
 bool context_download_field_f32(
-    const Context &ctx,
+    Context &ctx,
     fullmag_fdm_observable observable,
     float *out_xyz,
     uint64_t out_len);

@@ -128,6 +128,95 @@ fn requested_cpu_threads_from_problem(problem: &ProblemIR) -> Option<u32> {
         .and_then(|threads| u32::try_from(threads).ok())
 }
 
+fn is_gpu_device_label(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "gpu" | "cuda")
+}
+
+fn fem_gpu_execution_requested(problem: &ProblemIR, runtime: &SessionRuntimeSelection) -> bool {
+    if is_gpu_device_label(&runtime.requested_device) {
+        return true;
+    }
+    if runtime
+        .resolved_device
+        .as_deref()
+        .is_some_and(is_gpu_device_label)
+    {
+        return true;
+    }
+    if is_gpu_device_label(&requested_device_from_problem(problem)) {
+        return true;
+    }
+    std::env::var("FULLMAG_FEM_EXECUTION")
+        .map(|value| is_gpu_device_label(&value))
+        .unwrap_or(false)
+}
+
+fn fem_gpu_memory_preflight_message(
+    estimated_memory_bytes: u64,
+    status: &fullmag_runner::NativeFemGpuStatus,
+) -> (&'static str, String) {
+    let estimated_gb = estimated_memory_bytes as f64 / 1e9;
+    if !status.available {
+        let reason = if status.reason_gpu.trim().is_empty() {
+            "native FEM GPU availability probe did not report a reason"
+        } else {
+            status.reason_gpu.trim()
+        };
+        return (
+            "warn",
+            format!(
+                "GPU requested, but native FEM GPU is unavailable: {} · visible CUDA devices: {}",
+                reason, status.visible_cuda_device_count
+            ),
+        );
+    }
+
+    if status.memory_total_bytes == 0 {
+        return (
+            "warn",
+            format!(
+                "GPU requested and native FEM GPU is available on CUDA device {}, but VRAM could not be sampled · Est. FEM memory: {:.1} GB",
+                status.resolved_gpu_index, estimated_gb
+            ),
+        );
+    }
+
+    let free_gb = status.memory_free_bytes as f64 / 1e9;
+    let total_gb = status.memory_total_bytes as f64 / 1e9;
+    if status.memory_free_bytes < estimated_memory_bytes {
+        (
+            "warn",
+            format!(
+                "GPU VRAM warning: Est. FEM memory {:.1} GB exceeds {:.1} GB free on CUDA device {} ({:.1} GB total)",
+                estimated_gb, free_gb, status.resolved_gpu_index, total_gb
+            ),
+        )
+    } else {
+        (
+            "info",
+            format!(
+                "GPU VRAM: {:.1} GB / {:.1} GB free on CUDA device {} · Est. FEM memory: {:.1} GB",
+                free_gb, total_gb, status.resolved_gpu_index, estimated_gb
+            ),
+        )
+    }
+}
+
+fn log_fem_gpu_memory_preflight(
+    live_workspace: &LocalLiveWorkspace,
+    problem: &ProblemIR,
+    runtime: &SessionRuntimeSelection,
+    estimated_memory_bytes: u64,
+) {
+    if !fem_gpu_execution_requested(problem, runtime) {
+        return;
+    }
+    let gpu_status = fullmag_runner::native_fem_gpu_status();
+    let (level, message) = fem_gpu_memory_preflight_message(estimated_memory_bytes, &gpu_status);
+    live_workspace.push_log(level, &message);
+    eprintln!("[fullmag] {}", message);
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TorqueDisplayMode {
     /// `max_dm_dt` is already a torque-like metric (direct minimizers).
@@ -3145,6 +3234,18 @@ fn wait_for_solve_supported(backend_plan: &BackendPlanIR) -> bool {
     matches!(backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_))
 }
 
+fn wait_for_solve_should_block(requested: bool, supported: bool, headless: bool) -> bool {
+    requested && supported && !headless
+}
+
+fn interactive_session_should_stay_alive(
+    cli_interactive: bool,
+    script_requested_interactive: bool,
+    headless: bool,
+) -> bool {
+    !headless && (cli_interactive || script_requested_interactive)
+}
+
 fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
     match backend_plan {
         BackendPlanIR::Fem(_) => {
@@ -3956,7 +4057,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         })
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    let interactive_requested = args.interactive || script_requested_interactive;
+    let interactive_requested = interactive_session_should_stay_alive(
+        args.interactive,
+        script_requested_interactive,
+        args.headless,
+    );
     let final_session_runtime = stages
         .last()
         .map(|stage| {
@@ -4075,7 +4180,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let _is_fem_backend = matches!(&initial_execution_plan.backend_plan, BackendPlanIR::Fem(_));
     let wait_for_solve_supported = wait_for_solve_supported(&initial_execution_plan.backend_plan);
 
-    if wait_for_solve_requested && wait_for_solve_supported {
+    if wait_for_solve_should_block(
+        wait_for_solve_requested,
+        wait_for_solve_supported,
+        args.headless,
+    ) {
         let wait_message = wait_for_solve_prompt(&initial_execution_plan.backend_plan);
         eprintln!("[fullmag] {}", wait_message.to_lowercase());
         live_workspace.push_log("system", wait_message);
@@ -4100,6 +4209,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let available_ram = available_system_ram_bytes();
             let required_ram = estimate_fem_dense_ram(node_count);
             let ram_budget = interactive_dense_ram_budget_bytes(available_ram);
+            let ram_msg = format!(
+                "Mesh: {} nodes · Est. RAM: {:.1} GB / {:.1} GB available",
+                node_count,
+                required_ram as f64 / 1e9,
+                available_ram as f64 / 1e9
+            );
+            live_workspace.push_log("info", &ram_msg);
+            eprintln!("[fullmag] {}", ram_msg);
+            log_fem_gpu_memory_preflight(
+                &live_workspace,
+                &stages[0].ir,
+                &initial_runtime,
+                required_ram,
+            );
 
             if required_ram > ram_budget {
                 eprintln!(
@@ -4333,15 +4456,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
                     }
                 }
-            } else {
-                let ram_msg = format!(
-                    "Mesh: {} nodes · Est. RAM: {:.1} GB / {:.1} GB available",
-                    node_count,
-                    required_ram as f64 / 1e9,
-                    available_ram as f64 / 1e9
-                );
-                live_workspace.push_log("info", &ram_msg);
-                eprintln!("[fullmag] {}", ram_msg);
             }
         }
 
@@ -4522,6 +4636,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
             }
         }
+    } else if wait_for_solve_requested && args.headless {
+        eprintln!("[fullmag] wait_for_solve ignored in headless mode - proceeding immediately");
+        live_workspace.push_log(
+            "warn",
+            "wait_for_solve is interactive-only and was ignored in headless mode - proceeding immediately",
+        );
     } else if wait_for_solve_requested && !wait_for_solve_supported {
         eprintln!("[fullmag] wait_for_solve ignored — only supported for FDM/FEM solve backends");
         live_workspace.push_log(
@@ -6728,11 +6848,12 @@ mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
-        fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
+        fem_gpu_memory_preflight_message, fem_mesh_payload_from_backend_plan,
+        has_heavy_live_payload, interactive_session_should_stay_alive,
         mesh_build_pipeline_status_json, scripted_stage_execution_state,
-        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_supported,
-        ActiveSequenceState, LiveProgressCadence, WaitForSolveCommandAction,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
+        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence,
+        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -6846,6 +6967,48 @@ mod tests {
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
         }
+    }
+
+    #[test]
+    fn fem_gpu_preflight_reports_available_vram() {
+        let status = fullmag_runner::NativeFemGpuStatus {
+            available: true,
+            visible_cuda_device_count: 1,
+            requested_gpu_index: -1,
+            resolved_gpu_index: 0,
+            memory_free_bytes: 18_000_000_000,
+            memory_total_bytes: 24_000_000_000,
+            reason_gpu: "native FEM GPU backend is available".to_string(),
+        };
+
+        let (level, message) = fem_gpu_memory_preflight_message(8_400_000_000, &status);
+
+        assert_eq!(level, "info");
+        assert_eq!(
+            message,
+            "GPU VRAM: 18.0 GB / 24.0 GB free on CUDA device 0 · Est. FEM memory: 8.4 GB"
+        );
+    }
+
+    #[test]
+    fn fem_gpu_preflight_reports_native_availability_reason() {
+        let status = fullmag_runner::NativeFemGpuStatus {
+            available: false,
+            visible_cuda_device_count: 0,
+            requested_gpu_index: -1,
+            resolved_gpu_index: -1,
+            memory_free_bytes: 0,
+            memory_total_bytes: 0,
+            reason_gpu: "cudaGetDeviceCount failed for fullmag_fem: CUDA driver version is insufficient for CUDA runtime version".to_string(),
+        };
+
+        let (level, message) = fem_gpu_memory_preflight_message(8_400_000_000, &status);
+
+        assert_eq!(level, "warn");
+        assert_eq!(
+            message,
+            "GPU requested, but native FEM GPU is unavailable: cudaGetDeviceCount failed for fullmag_fem: CUDA driver version is insufficient for CUDA runtime version · visible CUDA devices: 0"
+        );
     }
 
     #[test]
@@ -7117,6 +7280,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -7242,6 +7406,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -7473,6 +7638,22 @@ mod tests {
     fn wait_for_solve_is_supported_for_fdm_and_fem() {
         assert!(wait_for_solve_supported(&tiny_fdm_plan()));
         assert!(wait_for_solve_supported(&tiny_fem_plan()));
+    }
+
+    #[test]
+    fn wait_for_solve_does_not_block_headless_runs() {
+        assert!(wait_for_solve_should_block(true, true, false));
+        assert!(!wait_for_solve_should_block(true, true, true));
+        assert!(!wait_for_solve_should_block(true, false, false));
+        assert!(!wait_for_solve_should_block(false, true, false));
+    }
+
+    #[test]
+    fn headless_mode_does_not_keep_interactive_session_alive() {
+        assert!(interactive_session_should_stay_alive(false, true, false));
+        assert!(interactive_session_should_stay_alive(true, false, false));
+        assert!(!interactive_session_should_stay_alive(false, true, true));
+        assert!(!interactive_session_should_stay_alive(true, true, true));
     }
 
     #[test]

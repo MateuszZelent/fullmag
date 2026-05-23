@@ -75,6 +75,8 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_H_EXT    = 4,
     FULLMAG_FDM_OBSERVABLE_H_EFF    = 5,
     FULLMAG_FDM_OBSERVABLE_H_OE     = 6,
+    FULLMAG_FDM_OBSERVABLE_H_DMI    = 7,
+    FULLMAG_FDM_OBSERVABLE_H_ANI    = 8,
 } fullmag_fdm_observable;
 
 typedef enum {
@@ -130,6 +132,16 @@ typedef struct {
     uint32_t                   layer_index;
     int32_t                    z_offset_cells;
     fullmag_fdm_material_desc  material;
+    int                        has_uniaxial_anisotropy;
+    double                     uniaxial_anisotropy_constant; /* K_u1 (J/m^3) */
+    double                     uniaxial_anisotropy_k2;       /* K_u2 (J/m^3) */
+    double                     anisotropy_axis[3];           /* Normalized axis */
+    int                        has_cubic_anisotropy;
+    double                     cubic_Kc1;                    /* 1st-order cubic (J/m^3) */
+    double                     cubic_Kc2;                    /* 2nd-order cubic (J/m^3) */
+    double                     cubic_Kc3;                    /* 3rd-order cubic (J/m^3) */
+    double                     cubic_axis1[3];               /* Normalized 1st crystal axis */
+    double                     cubic_axis2[3];               /* Normalized 2nd crystal axis; c3 = c1×c2 */
     const double              *initial_magnetization_xyz;
     uint64_t                   initial_magnetization_len;
     const uint8_t             *active_mask;
@@ -157,6 +169,12 @@ typedef struct {
     int                        disable_precession;
     int                        enable_exchange;
     int                        enable_demag;
+    int                        has_external_field;
+    double                     external_field_am[3]; /* uniform H_ext in A/m */
+    int                        has_interfacial_dmi;
+    double                     dmi_D_interfacial;     /* D_ind (J/m^2) */
+    int                        has_bulk_dmi;
+    double                     dmi_D_bulk;            /* D_bulk (J/m^2) */
     const fullmag_fdm_layer_desc_v2 *layers;
     uint32_t                   layer_count;
     const fullmag_fdm_tensor_kernel_desc_v2 *kernels;
@@ -424,11 +442,11 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 /**
  * Create a backend handle from the v2 executable FDM plan descriptor.
  *
- * This entrypoint validates multilayer convolution plans without overloading
- * the legacy single-grid plan.  Until native multilayer CUDA execution is
- * implemented, a valid multilayer plan returns a handle carrying a clear
- * last_error message rather than silently falling back to single-grid
- * execution.
+ * This entrypoint stages multilayer convolution plans without overloading the
+ * legacy single-grid plan.  Supported staged v2 handles execute native CUDA
+ * multilayer Heun/RK4 slices with explicit per-layer field copy/upload and
+ * demag-refresh entrypoints; unsupported v2 variants fail explicitly rather
+ * than silently falling back to single-grid execution.
  */
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
@@ -470,8 +488,10 @@ int fullmag_fdm_backend_copy_field_f32(
 
 /**
  * Copy a v2 multilayer layer field observable from device to host as f64.
- * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX, and
- * FULLMAG_FDM_OBSERVABLE_H_DEMAG.
+ * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX,
+ * FULLMAG_FDM_OBSERVABLE_H_DEMAG, FULLMAG_FDM_OBSERVABLE_H_DMI,
+ * FULLMAG_FDM_OBSERVABLE_H_ANI, FULLMAG_FDM_OBSERVABLE_H_EXT,
+ * and FULLMAG_FDM_OBSERVABLE_H_EFF.
  * out_xyz length must be 3 * the selected layer native cell count.
  */
 int fullmag_fdm_backend_copy_layer_field_f64(
@@ -483,8 +503,10 @@ int fullmag_fdm_backend_copy_layer_field_f64(
 
 /**
  * Copy a v2 multilayer layer field observable from device to host as f32.
- * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX, and
- * FULLMAG_FDM_OBSERVABLE_H_DEMAG.
+ * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX,
+ * FULLMAG_FDM_OBSERVABLE_H_DEMAG, FULLMAG_FDM_OBSERVABLE_H_DMI,
+ * FULLMAG_FDM_OBSERVABLE_H_ANI, FULLMAG_FDM_OBSERVABLE_H_EXT,
+ * and FULLMAG_FDM_OBSERVABLE_H_EFF.
  * out_xyz length must be 3 * the selected layer native cell count.
  */
 int fullmag_fdm_backend_copy_layer_field_f32(

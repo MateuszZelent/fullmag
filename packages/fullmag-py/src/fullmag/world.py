@@ -1078,6 +1078,7 @@ class _WorldState:
     # Solver
     _dt: float | None = None
     _max_error: float | None = None
+    _adaptive_dt_min: float | None = None
     _integrator: str | None = None
     _gamma: float | None = None
     _demag_interval_s: float | None = None
@@ -1131,6 +1132,7 @@ class RelaxStageSpec:
     solver: str | None = None
     dt: float | Literal["auto"] | None = None
     max_error: float | None = None
+    dt_min: float | None = None
     field_refresh: FieldRefreshPolicy | None = None
     stop: RelaxStop | None = None
 
@@ -1428,6 +1430,7 @@ def relax_stage(
     solver: str | None = None,
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
+    dt_min: float | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
@@ -1451,6 +1454,7 @@ def relax_stage(
         solver=solver,
         dt=dt,
         max_error=max_error,
+        dt_min=dt_min,
         field_refresh=field_refresh,
     )
     return RelaxStageSpec(
@@ -1464,6 +1468,7 @@ def relax_stage(
         solver=solver,
         dt=dt,
         max_error=max_error,
+        dt_min=dt_min,
         field_refresh=field_refresh,
         stop=resolved_stop,
     )
@@ -1552,6 +1557,7 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         solver=spec.solver,
         dt=spec.dt,
         max_error=spec.max_error,
+        dt_min=spec.dt_min,
         field_refresh=spec.field_refresh,
     )
     problem = _build_problem(
@@ -2054,6 +2060,7 @@ class StudyStagesBuilder:
         solver: str | None = None,
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
+        dt_min: float | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
     ) -> "StudyStagesBuilder":
@@ -2069,6 +2076,7 @@ class StudyStagesBuilder:
                 solver=solver,
                 dt=dt,
                 max_error=max_error,
+                dt_min=dt_min,
                 field_refresh=field_refresh,
                 stop=stop,
             )
@@ -2503,6 +2511,7 @@ class StudyBuilder:
         *,
         dt: float | None = None,
         max_error: float | None = None,
+        dt_min: float | None = None,
         integrator: str | None = None,
         gamma: float | None = None,
         g: float | None = None,
@@ -2511,6 +2520,7 @@ class StudyBuilder:
         solver(
             dt=dt,
             max_error=max_error,
+            dt_min=dt_min,
             integrator=integrator,
             gamma=gamma,
             g=g,
@@ -2667,6 +2677,7 @@ class StudyBuilder:
         solver: str | None = None,
         dt: float | Literal["auto"] | None = None,
         max_error: float | None = None,
+        dt_min: float | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
     ) -> Any:
@@ -2681,6 +2692,7 @@ class StudyBuilder:
             solver=solver,
             dt=dt,
             max_error=max_error,
+            dt_min=dt_min,
             field_refresh=field_refresh,
             stop=stop,
         )
@@ -3892,6 +3904,7 @@ def solver(
     *,
     dt: float | None = None,
     max_error: float | None = None,
+    dt_min: float | None = None,
     integrator: str | None = None,
     gamma: float | None = None,
     g: float | None = None,
@@ -3906,6 +3919,8 @@ def solver(
         becomes the initial timestep for adaptive RK23/RK45 stepping.
     max_error : float, optional
         Adaptive integrator error tolerance.
+    dt_min : float, optional
+        Minimum adaptive timestep in seconds.
     integrator : str, optional
         Integrator name: ``"heun"``, ``"rk4"``, ``"rk23"``, ``"rk45"``.
     gamma : float, optional
@@ -3920,6 +3935,10 @@ def solver(
         _state._dt = dt
     if max_error is not None:
         _state._max_error = max_error
+    if dt_min is not None:
+        if dt_min <= 0.0:
+            raise ValueError("dt_min must be positive")
+        _state._adaptive_dt_min = dt_min
     if integrator is not None:
         _state._integrator = integrator
     if demag_interval_s is not None:
@@ -4239,17 +4258,23 @@ def _build_relax_llg_dynamics(
     solver: str | None,
     dt: float | Literal["auto"] | None,
     max_error: float | None,
+    dt_min: float | None,
     field_refresh: FieldRefreshPolicy | None = None,
 ) -> LLG | None:
     if algorithm != "llg_overdamped":
-        if solver is not None or dt is not None or max_error is not None:
+        if solver is not None or dt is not None or max_error is not None or dt_min is not None:
             raise TypeError(
-                "solver/dt/max_error are supported only for algorithm='llg_overdamped'"
+                "solver/dt/max_error/dt_min are supported only for algorithm='llg_overdamped'"
             )
         return None
 
     integrator = _resolve_relax_solver(solver)
     fixed_timestep, dt_is_auto = _coerce_relax_dt(dt)
+    if dt_min is not None:
+        if dt_min <= 0.0:
+            raise ValueError("dt_min must be positive when provided")
+        if fixed_timestep is not None:
+            raise ValueError("dt_min requires dt='auto' for relax()")
 
     adaptive_timestep = None
     if max_error is not None:
@@ -4261,12 +4286,18 @@ def _build_relax_llg_dynamics(
             raise ValueError(
                 "max_error requires an adaptive relax solver (rk23 or rk45)"
             )
-        adaptive_timestep = AdaptiveTimestep(atol=max_error)
+        adaptive_kwargs: dict[str, Any] = {"atol": max_error}
+        if dt_min is not None:
+            adaptive_kwargs["dt_min"] = dt_min
+        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
     elif dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
         # dt=None (default) with an adaptive integrator: use default adaptive
         # stepping so the runner receives a valid AdaptiveTimeStepIR rather than
         # both fixed_timestep=None and adaptive_timestep=None.
-        adaptive_timestep = AdaptiveTimestep()
+        adaptive_kwargs = {}
+        if dt_min is not None:
+            adaptive_kwargs["dt_min"] = dt_min
+        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(
@@ -4358,7 +4389,11 @@ def _build_problem(
         adaptive_kwargs: dict[str, Any] = {"atol": s._max_error}
         if s._dt is not None:
             adaptive_kwargs["dt_initial"] = s._dt
+        if s._adaptive_dt_min is not None:
+            adaptive_kwargs["dt_min"] = s._adaptive_dt_min
         llg_kwargs["adaptive_timestep"] = AdaptiveTimestep(**adaptive_kwargs)
+    elif s._adaptive_dt_min is not None:
+        raise ValueError("dt_min requires max_error for adaptive solver configuration")
     elif s._dt is not None:
         llg_kwargs["fixed_timestep"] = s._dt
     if s._integrator is not None:
@@ -4553,6 +4588,7 @@ def run_while(
                 "solver",
                 "dt",
                 "max_error",
+                "dt_min",
             }
             unsupported = sorted(set(kwargs) - allowed)
             if unsupported:
@@ -4585,6 +4621,7 @@ def run_while(
                 solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
+                dt_min=relax_kwargs.get("dt_min"),  # type: ignore[arg-type]
             )
         until = cfg.max_time if cfg.max_time is not None else cfg.chunk_time * float(cfg.max_steps)
         return run(until)
@@ -4685,6 +4722,7 @@ def relax(
     solver: str | None = None,
     dt: float | Literal["auto"] | None = None,
     max_error: float | None = None,
+    dt_min: float | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> Any:
@@ -4716,6 +4754,8 @@ def relax(
     max_error : float, optional
         Adaptive error tolerance for ``algorithm="llg_overdamped"``.
         Only meaningful with adaptive-capable solvers (``rk23``/``rk45``).
+    dt_min : float, optional
+        Minimum adaptive relaxation timestep in seconds.
     """
     (
         stop,
@@ -4738,6 +4778,7 @@ def relax(
         solver=solver,
         dt=dt,
         max_error=max_error,
+        dt_min=dt_min,
         field_refresh=field_refresh,
     )
     from fullmag.runtime import Simulation

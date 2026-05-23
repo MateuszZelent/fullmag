@@ -678,7 +678,25 @@ export function OrbitCameraControls({
     tracker.recordDirtyFrame("camera-control");
   }, [invalidate, tracker]);
 
+  // Performance Optimization: Debounce handleEnd for zoom/wheel interactions.
+  // OrbitControls dispatches start and end events back-to-back synchronously
+  // on every scroll/wheel event notch, which chokes the React/Zustand updates.
+  // Debouncing end-of-interaction by 200ms groups rapid ticks into one active session.
+  const endTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (endTimeoutRef.current !== null) {
+        clearTimeout(endTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handleStart = useCallback(() => {
+    if (endTimeoutRef.current !== null) {
+      clearTimeout(endTimeoutRef.current);
+      endTimeoutRef.current = null;
+    }
     onCameraInteractionStart?.();
   }, [onCameraInteractionStart]);
 
@@ -716,6 +734,21 @@ export function OrbitCameraControls({
     size.height,
   ]);
 
+  const handleEndRef = useRef(handleEnd);
+  useEffect(() => {
+    handleEndRef.current = handleEnd;
+  }, [handleEnd]);
+
+  const debouncedHandleEnd = useCallback(() => {
+    if (endTimeoutRef.current !== null) {
+      clearTimeout(endTimeoutRef.current);
+    }
+    endTimeoutRef.current = setTimeout(() => {
+      endTimeoutRef.current = null;
+      handleEndRef.current();
+    }, 200);
+  }, []);
+
   const options = resolveViewport3DCameraInteractionOptions();
 
   return (
@@ -730,7 +763,7 @@ export function OrbitCameraControls({
       screenSpacePanning={options.screenSpacePanning}
       zoomToCursor
       onChange={handleChange}
-      onEnd={handleEnd}
+      onEnd={debouncedHandleEnd}
       onStart={handleStart}
     />
   );

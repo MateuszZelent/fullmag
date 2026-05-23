@@ -1,4 +1,5 @@
-use crate::{native_fdm, native_fem};
+use crate::fdm::gpu::cuda::native as native_fdm;
+use crate::native_fem;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

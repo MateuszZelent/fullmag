@@ -226,6 +226,33 @@ impl NativeFdmBackend {
                         damping: layer.material.damping,
                         gyromagnetic_ratio: plan.gyromagnetic_ratio,
                     },
+                    has_uniaxial_anisotropy: if layer.material.uniaxial_anisotropy_ku1.is_some() {
+                        1
+                    } else {
+                        0
+                    },
+                    uniaxial_anisotropy_constant: layer
+                        .material
+                        .uniaxial_anisotropy_ku1
+                        .unwrap_or(0.0),
+                    uniaxial_anisotropy_k2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
+                    anisotropy_axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
+                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some() {
+                        1
+                    } else {
+                        0
+                    },
+                    cubic_kc1: layer.material.cubic_anisotropy_kc1.unwrap_or(0.0),
+                    cubic_kc2: layer.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                    cubic_kc3: layer.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+                    cubic_axis1: layer
+                        .material
+                        .cubic_anisotropy_axis1
+                        .unwrap_or([1.0, 0.0, 0.0]),
+                    cubic_axis2: layer
+                        .material
+                        .cubic_anisotropy_axis2
+                        .unwrap_or([0.0, 1.0, 0.0]),
                     initial_magnetization_xyz: magnetization_storage[index].as_ptr(),
                     initial_magnetization_len: magnetization_storage[index].len() as u64,
                     active_mask: active_mask_storage[index]
@@ -316,6 +343,12 @@ impl NativeFdmBackend {
             },
             enable_exchange: if plan.enable_exchange { 1 } else { 0 },
             enable_demag: if plan.enable_demag { 1 } else { 0 },
+            has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
+            external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
+            has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
+            dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
+            dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
             layers: layer_descs.as_ptr(),
             layer_count: layer_descs.len() as u32,
             kernels: if kernel_descs.is_empty() {
@@ -347,7 +380,6 @@ impl NativeFdmBackend {
             ) && !msg
                 .contains("native Heun timestep with demag and layer-local exchange is available")
                 && !msg.contains("native demag-only Heun timestep is available")
-                && !msg.contains("native multilayer CUDA execution is not implemented")
             {
                 unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
                 return Err(RunError { message: msg });
@@ -1018,6 +1050,14 @@ impl NativeFdmBackend {
         )
     }
 
+    #[allow(dead_code)]
+    pub fn copy_h_ani(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+            cell_count,
+        )
+    }
+
     pub fn copy_h_eff(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
@@ -1084,9 +1124,121 @@ impl NativeFdmBackend {
     }
 
     #[allow(dead_code)]
+    pub fn copy_layer_h_dmi(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_dmi_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_ext(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_ext_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_ani(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_ani_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_eff(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_layer_h_eff_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
     pub fn copy_h_ext_f32(&self, cell_count: usize) -> Result<Vec<[f32; 3]>, RunError> {
         self.copy_field_f32(
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+            cell_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_h_ani_f32(&self, cell_count: usize) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_field_f32(
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
             cell_count,
         )
     }
@@ -1194,6 +1346,7 @@ impl NativeFdmBackend {
                 "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
                 "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
                 "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+                "H_ani" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
                 "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
                 _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
             };
@@ -1760,6 +1913,7 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
         "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
         "H_oe" | "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+        "H_ani" | "H_ANI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
         "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         _ => return None,
     })
@@ -1779,6 +1933,18 @@ mod tests {
         FdmMaterialIR, FdmPeriodicityIR, FdmPlanIR, GridDimensions, IntegratorChoice,
         RelaxationAlgorithmIR, RelaxationControlIR,
     };
+
+    #[test]
+    fn native_fdm_snapshot_observable_accepts_anisotropy_field() {
+        assert!(
+            snapshot_observable("H_ani").is_some(),
+            "native CUDA FDM must expose H_ani as a first-class observable"
+        );
+        assert!(
+            snapshot_observable("H_ANI").is_some(),
+            "native CUDA FDM must accept ABI-style H_ANI snapshot names"
+        );
+    }
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
         FdmPlanIR {
@@ -2053,6 +2219,25 @@ mod tests {
         }
     }
 
+    fn assert_flat_field_close(
+        label: &str,
+        actual: &[f64],
+        expected: &[f64],
+        rel_tol: f64,
+        abs_tol: f64,
+    ) {
+        assert_eq!(actual.len(), expected.len(), "{} length mismatch", label);
+        for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert_scalar_close(
+                &format!("{}[{}]", label, index),
+                *actual,
+                *expected,
+                rel_tol,
+                abs_tol,
+            );
+        }
+    }
+
     fn max_vector_component_diff(actual: &[[f64; 3]], expected: &[[f64; 3]]) -> f64 {
         actual
             .iter()
@@ -2101,6 +2286,13 @@ mod tests {
         }
     }
 
+    fn anisotropy_preview_request() -> LivePreviewRequest {
+        LivePreviewRequest {
+            quantity: "H_ani".to_string(),
+            ..generalized_oersted_preview_request()
+        }
+    }
+
     fn decode_snapshot_payload(info: NativeFieldSnapshotInfo, payload: &[u8]) -> Vec<[f64; 3]> {
         assert_eq!(info.component_count, 3, "expected vector snapshot payload");
         let scalars = match info.scalar_type {
@@ -2130,6 +2322,7 @@ mod tests {
     fn cpu_reference_single_step(
         plan: &FdmPlanIR,
     ) -> (
+        Vec<[f64; 3]>,
         Vec<[f64; 3]>,
         Vec<[f64; 3]>,
         Vec<[f64; 3]>,
@@ -2216,11 +2409,13 @@ mod tests {
             )
             .expect("cpu step");
         let observables = problem.observe(&state).expect("observe");
+        let anisotropy_field = problem.anisotropy_field(state.magnetization());
         (
             state.magnetization().to_vec(),
             observables.exchange_field,
             observables.demag_field,
             observables.external_field,
+            anisotropy_field,
             observables.effective_field,
             report,
         )
@@ -2243,6 +2438,7 @@ mod tests {
             expected_h_ex,
             _expected_h_demag,
             expected_h_ext,
+            _expected_h_ani,
             expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
@@ -2331,6 +2527,76 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_anisotropy_copy_preview_and_snapshot_match_cpu_reference_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM anisotropy observable test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.material.uniaxial_anisotropy_ku1 = Some(8.0e4);
+        plan.material.uniaxial_anisotropy_ku2 = Some(1.0e4);
+        plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        let cell_count = plan.initial_magnetization.len();
+        let (_, _, _, _, expected_h_ani, _, _) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+
+        let actual_h_ani = backend.copy_h_ani(cell_count).expect("copy H_ani");
+        assert_vector_field_close("H_ani", &actual_h_ani, &expected_h_ani, 5e-5, 1e-2);
+
+        let request = anisotropy_preview_request();
+        let expected_preview = build_grid_preview_field(
+            &request,
+            &expected_h_ani,
+            plan.grid.cells,
+            plan.active_mask.as_deref(),
+        );
+        let actual_sync = backend
+            .copy_live_preview_field(&request, plan.grid.cells, plan.active_mask.as_deref())
+            .expect("copy H_ani preview");
+        let actual_async = backend
+            .begin_live_preview_snapshot(&request, plan.grid.cells)
+            .expect("begin H_ani preview snapshot")
+            .into_live_preview_field(plan.active_mask.as_deref())
+            .expect("collect H_ani preview snapshot");
+
+        assert_eq!(actual_sync.quantity, "H_ani");
+        assert_eq!(actual_sync.unit, expected_preview.unit);
+        assert_eq!(actual_sync.preview_grid, expected_preview.preview_grid);
+        assert_flat_field_close(
+            "H_ani.preview",
+            &actual_sync.vector_field_values,
+            &expected_preview.vector_field_values,
+            5e-5,
+            1e-2,
+        );
+        assert_flat_field_close(
+            "H_ani.preview_async",
+            &actual_async.vector_field_values,
+            &expected_preview.vector_field_values,
+            5e-5,
+            1e-2,
+        );
+
+        let mut snapshot = backend
+            .begin_field_snapshot("H_ani", 3, 0.0, plan.fixed_timestep.unwrap_or(0.0))
+            .expect("begin H_ani field snapshot");
+        let mut payload = Vec::new();
+        let written_info = snapshot
+            .write_payload(&mut payload)
+            .expect("H_ani snapshot payload");
+        let decoded = decode_snapshot_payload(written_info, &payload);
+        assert_vector_field_close("H_ani.snapshot", &decoded, &expected_h_ani, 5e-5, 1e-2);
+    }
+
+    #[test]
     fn native_fdm_slonczewski_matches_cpu_reference_without_zhang_li_when_cuda_is_available() {
         if !is_cuda_available() {
             eprintln!(
@@ -2346,8 +2612,9 @@ mod tests {
         plan.stt_lambda = Some(1.8);
         plan.stt_epsilon_prime = Some(0.03);
 
-        let expected = crate::cpu_reference::execute_reference_fdm(&plan, 2.5e-13, &[], None, None)
-            .expect("cpu reference slonczewski run");
+        let expected =
+            crate::fdm::cpu::reference::execute_reference_fdm(&plan, 2.5e-13, &[], None, None)
+                .expect("cpu reference slonczewski run");
         let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
         backend
             .step(plan.fixed_timestep.expect("fixed dt"))
@@ -2457,6 +2724,7 @@ mod tests {
             expected_h_ex,
             _expected_h_demag,
             expected_h_ext,
+            _expected_h_ani,
             expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
@@ -2760,6 +3028,7 @@ mod tests {
             expected_h_ex,
             expected_h_demag,
             expected_h_ext,
+            _expected_h_ani,
             expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
@@ -2841,6 +3110,7 @@ mod tests {
             _expected_h_ex,
             expected_h_demag,
             _expected_h_ext,
+            _expected_h_ani,
             _expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
@@ -2895,6 +3165,7 @@ mod tests {
             expected_h_ex,
             _expected_h_demag,
             expected_h_ext,
+            _expected_h_ani,
             expected_h_eff,
             expected_report,
         ) = cpu_reference_single_step(&plan);
@@ -2950,7 +3221,7 @@ mod tests {
 
         let plan = make_relaxation_precession_test_plan();
         let cell_count = plan.initial_magnetization.len();
-        let (expected_m, _, _, _, _, expected_report) = cpu_reference_single_step(&plan);
+        let (expected_m, _, _, _, _, _, expected_report) = cpu_reference_single_step(&plan);
 
         let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
         let stats = backend

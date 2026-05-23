@@ -10,11 +10,11 @@ use fullmag_engine::{
 };
 use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
 
-use crate::cpu_reference;
 use crate::dispatch::{self, FdmEngine, FemEngine};
-use crate::fem_baseline;
+use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
-use crate::native_fdm::{NativeFdmBackend, NativeFdmPreviewSnapshot};
+use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
+use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{DeviceInfo as FemDeviceInfo, NativeFemBackend};
 use crate::preview::{
@@ -146,11 +146,11 @@ mod tests {
         cached_display_refresh_due, display_refresh_due, InteractiveFdmPreviewRuntime,
         InteractiveFdmPreviewRuntimeInner,
     };
-    use crate::cpu_reference::{
+    use crate::dispatch::FdmEngine;
+    use crate::fdm::cpu::reference::{
         direct_h_eff_assembly_call_count, observe_state_call_count,
         reset_direct_field_assembly_calls, reset_observe_state_calls,
     };
-    use crate::dispatch::FdmEngine;
     use crate::interactive::display::{DisplayKind, DisplaySelectionState};
     use crate::types::{LivePreviewRequest, StepAction};
     use fullmag_ir::{
@@ -3966,7 +3966,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
 #[cfg(feature = "cuda")]
 fn cuda_execution_provenance(
     plan: &FdmPlanIR,
-    device_info: &crate::native_fdm::DeviceInfo,
+    device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
 ) -> ExecutionProvenance {
     let dt_policy = if plan.adaptive_timestep.is_some() {
         Some("adaptive".to_string())

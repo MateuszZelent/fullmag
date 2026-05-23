@@ -215,6 +215,8 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         extract_function_body(gpu_state, "bool gpu_state_download_magnetization_aos(");
     const std::string upload_component_body =
         extract_function_body(gpu_state, "bool gpu_state_upload_component_aos(");
+    const std::string upload_optional_component_body =
+        extract_function_body(gpu_state, "bool gpu_state_upload_optional_component_aos(");
     check(
         upload_m_body.find("std::vector<double> mx") == std::string::npos &&
             upload_m_body.find("std::vector<double> my") == std::string::npos &&
@@ -230,6 +232,14 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
             upload_component_body.find("std::vector<double> y") == std::string::npos &&
             upload_component_body.find("std::vector<double> z") == std::string::npos,
         "GPU component upload must not allocate host AoS-to-SoA component vectors");
+    check(
+        upload_optional_component_body.find("std::vector<double> zeros") == std::string::npos,
+        "GPU optional component upload must not heap-allocate host zero vectors");
+    check(
+        gpu_state.find("gpu_state_zero_component_device(") != std::string::npos &&
+            upload_optional_component_body.find("gpu_state_zero_component_device(") !=
+                std::string::npos,
+        "GPU optional component upload must zero device components directly when the host field is absent");
     check(
         (upload_m_body.find("cudaMemcpy2D") != std::string::npos ||
             upload_m_body.find("fullmag_cuda_upload_aos_to_soa") != std::string::npos) &&

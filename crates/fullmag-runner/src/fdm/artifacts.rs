@@ -40,14 +40,16 @@ fn select_base_field(
         "H_ex" => observables.exchange_field.clone(),
         "H_demag" => observables.demag_field.clone(),
         "H_ext" => observables.external_field.clone(),
+        "H_ani" => observables.anisotropy_field.clone(),
+        "H_dmi" => observables.dmi_field.clone(),
         "H_eff" => observables.effective_field.clone(),
         "torque" => observables.torque_field.clone(),
         "H_OE" if include_oersted => observables.oersted_field.clone(),
         other => {
             let available = if include_oersted {
-                "m, H_ex, H_demag, H_ext, H_OE, H_eff, torque"
+                "m, H_ex, H_demag, H_ext, H_ani, H_dmi, H_OE, H_eff, torque"
             } else {
-                "m, H_ex, H_demag, H_ext, H_eff, torque"
+                "m, H_ex, H_demag, H_ext, H_ani, H_dmi, H_eff, torque"
             };
             return Err(RunError {
                 message: format!(

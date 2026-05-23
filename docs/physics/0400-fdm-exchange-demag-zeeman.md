@@ -624,6 +624,11 @@ The planner should own:
 - demag kernel planning and padding decisions,
 - precision propagation into the executable FDM plan.
 
+Current executable FDM plans still carry uniform material constants only. If a used material
+contains per-cell material fields such as `ms_field`, `a_field`, `alpha_field`, `ku*_field`, or
+`kc*_field`, the FDM planner must reject the plan with an explicit unsupported-capability
+diagnostic rather than lowering the material to uniform constants and silently dropping the field.
+
 The capability matrix should continue to distinguish clearly between:
 
 - semantic legality,

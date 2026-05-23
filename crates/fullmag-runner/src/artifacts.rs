@@ -11,7 +11,7 @@ use crate::types::{
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
@@ -382,18 +382,11 @@ pub(crate) fn write_artifacts(
     if streamed.is_none() {
         let fields_dir = output_dir.join("fields");
         for snapshot in &executed.field_snapshots {
-            let observable_dir = fields_dir.join(&snapshot.name);
-            fs::create_dir_all(&observable_dir)?;
-            let snapshot_path = observable_dir.join(format!("step_{:06}.json", snapshot.step));
-            write_field_file(
-                &snapshot_path,
+            write_field_snapshot_artifact(
+                &fields_dir,
                 &field_context,
                 &execution_provenance,
-                &snapshot.name,
-                snapshot.step,
-                snapshot.time,
-                snapshot.solver_dt,
-                &snapshot.values,
+                snapshot,
             )?;
         }
     }
@@ -786,6 +779,229 @@ pub(crate) fn write_field_file(
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
 
+#[derive(Debug, Clone)]
+struct MultilayerFieldLayer {
+    value_offset: usize,
+    value_count: usize,
+    manifest_entry: serde_json::Value,
+    directory: String,
+}
+
+pub(crate) fn write_field_snapshot_artifact(
+    fields_dir: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    snapshot: &crate::types::FieldSnapshot,
+) -> std::io::Result<()> {
+    let observable_dir = fields_dir.join(&snapshot.name);
+    fs::create_dir_all(&observable_dir)?;
+
+    let Some(layers) = multilayer_field_layers(&context.layout)? else {
+        let snapshot_path = observable_dir.join(format!("step_{:06}.json", snapshot.step));
+        return write_field_file(
+            &snapshot_path,
+            context,
+            provenance,
+            &snapshot.name,
+            snapshot.step,
+            snapshot.time,
+            snapshot.solver_dt,
+            &snapshot.values,
+        );
+    };
+
+    let expected_len = layers
+        .iter()
+        .map(|layer| layer.value_offset.saturating_add(layer.value_count))
+        .max()
+        .unwrap_or(0);
+    if expected_len != snapshot.values.len() {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "multilayer field snapshot '{}' has {} values, expected {} from artifact layout",
+                snapshot.name,
+                snapshot.values.len(),
+                expected_len
+            ),
+        ));
+    }
+
+    write_multilayer_field_manifest(&observable_dir, context, &snapshot.name, &layers)?;
+
+    for layer in &layers {
+        let layer_dir = observable_dir.join(&layer.directory);
+        fs::create_dir_all(&layer_dir)?;
+        let start = layer.value_offset;
+        let end = start + layer.value_count;
+        let snapshot_path = layer_dir.join(format!("step_{:06}.json", snapshot.step));
+        write_layer_field_file(
+            &snapshot_path,
+            context,
+            provenance,
+            &snapshot.name,
+            snapshot.step,
+            snapshot.time,
+            snapshot.solver_dt,
+            layer,
+            &snapshot.values[start..end],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn multilayer_field_layers(
+    layout: &serde_json::Value,
+) -> std::io::Result<Option<Vec<MultilayerFieldLayer>>> {
+    if layout.get("backend").and_then(serde_json::Value::as_str) != Some("fdm_multilayer") {
+        return Ok(None);
+    }
+    let Some(raw_layers) = layout.get("layers").and_then(serde_json::Value::as_array) else {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "fdm_multilayer artifact layout is missing layers",
+        ));
+    };
+    if raw_layers.is_empty() {
+        return Ok(None);
+    }
+
+    let mut seen_ids = HashMap::<String, usize>::new();
+    let layers = raw_layers
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let base_id = raw
+                .get("magnet_name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("layer-{index}"));
+            let count = seen_ids.entry(base_id.clone()).or_insert(0);
+            *count += 1;
+            let id = if *count == 1 {
+                base_id
+            } else {
+                format!("{base_id}-{}", *count)
+            };
+            let directory = format!("layer-{}", sanitize_layer_id(&id));
+            let value_offset = json_usize_field(raw, "value_offset")?;
+            let value_count = json_usize_field(raw, "value_count")?;
+            let manifest_entry = serde_json::json!({
+                "id": id,
+                "directory": directory,
+                "file_pattern": format!("{directory}/step_{{step:06}}.json"),
+                "native_grid": raw.get("native_grid").cloned().unwrap_or(serde_json::Value::Null),
+                "native_cell_size": raw.get("native_cell_size").cloned().unwrap_or(serde_json::Value::Null),
+                "native_origin": raw.get("native_origin").cloned().unwrap_or(serde_json::Value::Null),
+                "convolution_grid": raw.get("convolution_grid").cloned().unwrap_or(serde_json::Value::Null),
+                "convolution_cell_size": raw.get("convolution_cell_size").cloned().unwrap_or(serde_json::Value::Null),
+                "transfer_kind": raw.get("transfer_kind").cloned().unwrap_or(serde_json::Value::Null),
+                "active_mask_present": raw.get("active_mask_present").cloned().unwrap_or(serde_json::Value::Null),
+                "active_cell_count": raw.get("active_cell_count").cloned().unwrap_or(serde_json::Value::Null),
+                "inactive_cell_count": raw.get("inactive_cell_count").cloned().unwrap_or(serde_json::Value::Null),
+                "value_offset": value_offset,
+                "value_count": value_count,
+                "vector_shape": [value_count, 3],
+            });
+            Ok(MultilayerFieldLayer {
+                value_offset,
+                value_count,
+                manifest_entry,
+                directory,
+            })
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+
+    Ok(Some(layers))
+}
+
+fn write_multilayer_field_manifest(
+    observable_dir: &Path,
+    context: &FieldArtifactContext,
+    observable: &str,
+    layers: &[MultilayerFieldLayer],
+) -> std::io::Result<()> {
+    let manifest = serde_json::json!({
+        "schema_version": "fdm_multilayer_field_manifest.v1",
+        "observable": observable,
+        "unit": field_unit(observable),
+        "storage_layout": "per_layer_json",
+        "component_order": ["x", "y", "z"],
+        "layer_count": layers.len(),
+        "layers": layers.iter().map(|layer| layer.manifest_entry.clone()).collect::<Vec<_>>(),
+        "layout": context.layout.clone(),
+    });
+    fs::write(
+        observable_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+}
+
+fn write_layer_field_file(
+    path: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    observable: &str,
+    step: u64,
+    time: f64,
+    solver_dt: f64,
+    layer: &MultilayerFieldLayer,
+    values: &[[f64; 3]],
+) -> std::io::Result<()> {
+    let field_json = serde_json::json!({
+        "observable": observable,
+        "unit": field_unit(observable),
+        "step": step,
+        "time": time,
+        "solver_dt": solver_dt,
+        "layer": layer.manifest_entry.clone(),
+        "layout": context.layout.clone(),
+        "provenance": {
+            "problem_name": context.problem_name,
+            "ir_version": context.ir_version,
+            "source_hash": context.source_hash,
+            "execution_mode": context.execution_mode,
+            "execution_engine": provenance.execution_engine,
+            "precision": provenance.precision,
+        },
+        "values": values,
+    });
+    fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
+}
+
+fn json_usize_field(value: &serde_json::Value, field: &str) -> std::io::Result<usize> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|raw| usize::try_from(raw).ok())
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("fdm_multilayer artifact layer is missing numeric {field}"),
+            )
+        })
+}
+
+fn sanitize_layer_id(id: &str) -> String {
+    let sanitized = id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "unnamed".to_string()
+    } else {
+        sanitized
+    }
+}
+
 pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Value {
     match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
@@ -872,9 +1088,13 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
 }
 
 pub(crate) fn field_unit(observable: &str) -> &'static str {
-    match observable {
+    let base_observable = observable
+        .split_once('.')
+        .map_or(observable, |(base, _)| base);
+    match base_observable {
         "m" => "dimensionless",
         "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" => "A/m",
+        "torque" => "T",
         other => panic!("unsupported observable '{}'", other),
     }
 }
@@ -885,9 +1105,9 @@ mod tests {
     use crate::types::{ExecutedRun, ExecutionProvenance, FieldSnapshot, RunResult, RunStatus};
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
-        ExecutionPrecision, FdmMaterialIR, FdmPlanIR, FemDomainMeshModeIR, FemObjectSegmentIR,
-        FemPlanIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR, OutputPlanIR,
-        ProvenancePlanIR,
+        ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+        FdmMultilayerSummaryIR, FdmPlanIR, FemDomainMeshModeIR, FemObjectSegmentIR, FemPlanIR,
+        GridDimensions, IntegratorChoice, MaterialIR, MeshIR, OutputPlanIR, ProvenancePlanIR,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -953,6 +1173,82 @@ mod tests {
                 interfacial_dmi: None,
                 bulk_dmi: None,
                 ..Default::default()
+            }),
+            output_plan: OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: ProvenancePlanIR { notes: Vec::new() },
+        }
+    }
+
+    fn test_multilayer_execution_plan() -> ExecutionPlanIR {
+        let layer_material = FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        ExecutionPlanIR {
+            common: CommonPlanMeta {
+                ir_version: "v0".to_string(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: ExecutionMode::Strict,
+            },
+            backend_plan: BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
+                mode: "multilayer_convolution".to_string(),
+                common_cells: [2, 1, 2],
+                layers: vec![
+                    FdmLayerPlanIR {
+                        magnet_name: "bottom".to_string(),
+                        native_grid: [2, 1, 1],
+                        native_cell_size: [2e-9, 2e-9, 1e-9],
+                        native_origin: [0.0, 0.0, 0.0],
+                        native_active_mask: None,
+                        initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
+                        material: layer_material.clone(),
+                        convolution_grid: [2, 1, 1],
+                        convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                        convolution_origin: [0.0, 0.0, 0.0],
+                        transfer_kind: "identity".to_string(),
+                    },
+                    FdmLayerPlanIR {
+                        magnet_name: "top".to_string(),
+                        native_grid: [2, 1, 1],
+                        native_cell_size: [2e-9, 2e-9, 1e-9],
+                        native_origin: [0.0, 0.0, 4e-9],
+                        native_active_mask: Some(vec![true, false]),
+                        initial_magnetization: vec![[0.0, 1.0, 0.0]; 2],
+                        material: layer_material,
+                        convolution_grid: [2, 1, 1],
+                        convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                        convolution_origin: [0.0, 0.0, 4e-9],
+                        transfer_kind: "identity".to_string(),
+                    },
+                ],
+                enable_exchange: true,
+                enable_demag: true,
+                external_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                gyromagnetic_ratio: 2.211e5,
+                precision: ExecutionPrecision::Double,
+                exchange_bc: ExchangeBoundaryCondition::Neumann,
+                periodicity: None,
+                integrator: IntegratorChoice::Heun,
+                fixed_timestep: Some(1e-13),
+                field_refresh: None,
+                relaxation: None,
+                planner_summary: FdmMultilayerSummaryIR {
+                    requested_strategy: "multilayer_convolution".to_string(),
+                    selected_strategy: "multilayer_convolution".to_string(),
+                    eligibility: "eligible".to_string(),
+                    estimated_pair_kernels: 4,
+                    estimated_unique_kernels: 3,
+                    estimated_kernel_bytes: 4096,
+                    warnings: Vec::new(),
+                },
             }),
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
@@ -1612,6 +1908,204 @@ mod tests {
         )
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"], 1);
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fdm_field_component_snapshots_use_base_observable_units() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_execution_plan(None);
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-components-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    time: 1.0e-13,
+                    dt: 1.0e-13,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            field_snapshots: vec![
+                FieldSnapshot {
+                    name: "m.x".to_string(),
+                    step: 1,
+                    time: 1.0e-13,
+                    solver_dt: 1.0e-13,
+                    values: vec![[1.0, 0.0, 0.0]; 8],
+                },
+                FieldSnapshot {
+                    name: "H_eff.z".to_string(),
+                    step: 1,
+                    time: 1.0e-13,
+                    solver_dt: 1.0e-13,
+                    values: vec![[5.0, 0.0, 0.0]; 8],
+                },
+                FieldSnapshot {
+                    name: "torque".to_string(),
+                    step: 1,
+                    time: 1.0e-13,
+                    solver_dt: 1.0e-13,
+                    values: vec![[0.0, 0.0, 2.0e-3]; 8],
+                },
+            ],
+            field_snapshot_count: 3,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "cpu_reference".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("component artifacts should be written");
+
+        let m_x: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/m.x/step_000001.json"))
+                .expect("m.x artifact should exist"),
+        )
+        .expect("m.x artifact should parse");
+        assert_eq!(m_x["unit"], "dimensionless");
+
+        let h_eff_z: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/H_eff.z/step_000001.json"))
+                .expect("H_eff.z artifact should exist"),
+        )
+        .expect("H_eff.z artifact should parse");
+        assert_eq!(h_eff_z["unit"], "A/m");
+
+        let torque: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/torque/step_000001.json"))
+                .expect("torque artifact should exist"),
+        )
+        .expect("torque artifact should parse");
+        assert_eq!(torque["unit"], "T");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fdm_multilayer_field_snapshots_are_written_per_layer() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_multilayer_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-multilayer-fields-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    time: 1.0e-13,
+                    dt: 1.0e-13,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![
+                    [1.0, 0.0, 0.0],
+                    [0.9, 0.1, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.9, 0.1],
+                ],
+                completion: None,
+            },
+            initial_magnetization: vec![
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
+            field_snapshots: vec![FieldSnapshot {
+                name: "m".to_string(),
+                step: 1,
+                time: 1.0e-13,
+                solver_dt: 1.0e-13,
+                values: vec![
+                    [1.0, 0.0, 0.0],
+                    [0.9, 0.1, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.9, 0.1],
+                ],
+            }],
+            field_snapshot_count: 1,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "cuda_assisted_multilayer".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("multilayer artifact write should succeed");
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/m/manifest.json"))
+                .expect("multilayer field manifest should exist"),
+        )
+        .expect("multilayer field manifest should parse");
+        assert_eq!(
+            manifest["schema_version"],
+            "fdm_multilayer_field_manifest.v1"
+        );
+        assert_eq!(manifest["observable"], "m");
+        assert_eq!(manifest["storage_layout"], "per_layer_json");
+        assert_eq!(manifest["layers"][0]["id"], "bottom");
+        assert_eq!(manifest["layers"][0]["directory"], "layer-bottom");
+        assert_eq!(manifest["layers"][0]["value_offset"], 0);
+        assert_eq!(manifest["layers"][0]["value_count"], 2);
+        assert_eq!(
+            manifest["layers"][0]["native_origin"],
+            serde_json::json!([0.0, 0.0, 0.0])
+        );
+        assert_eq!(manifest["layers"][1]["id"], "top");
+        assert_eq!(manifest["layers"][1]["directory"], "layer-top");
+        assert_eq!(manifest["layers"][1]["value_offset"], 2);
+        assert_eq!(manifest["layers"][1]["value_count"], 2);
+        assert_eq!(
+            manifest["layers"][1]["native_origin"],
+            serde_json::json!([0.0, 0.0, 4e-9])
+        );
+
+        let bottom: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/m/layer-bottom/step_000001.json"))
+                .expect("bottom layer field snapshot should exist"),
+        )
+        .expect("bottom layer snapshot should parse");
+        assert_eq!(bottom["layer"]["id"], "bottom");
+        assert_eq!(bottom["values"].as_array().expect("values").len(), 2);
+        assert_eq!(bottom["values"][0], serde_json::json!([1.0, 0.0, 0.0]));
+        assert_eq!(bottom["values"][1], serde_json::json!([0.9, 0.1, 0.0]));
+
+        let top: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("fields/m/layer-top/step_000001.json"))
+                .expect("top layer field snapshot should exist"),
+        )
+        .expect("top layer snapshot should parse");
+        assert_eq!(top["layer"]["id"], "top");
+        assert_eq!(top["values"].as_array().expect("values").len(), 2);
+        assert_eq!(top["values"][0], serde_json::json!([0.0, 1.0, 0.0]));
+        assert_eq!(top["values"][1], serde_json::json!([0.0, 0.9, 0.1]));
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

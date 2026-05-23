@@ -374,6 +374,51 @@ bool gpu_state_upload_component_aos(
 #endif
 }
 
+bool gpu_state_zero_component_device(
+    FemGpuState &state,
+    FemGpuComponentField &field,
+    const char *label,
+    TransferAudit &audit,
+    std::string &error)
+{
+    if (!state.allocated) {
+        return true;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    (void)audit;
+    size_t component_bytes = 0;
+    if (!checked_node_bytes(state.node_count, component_bytes, error)) {
+        return false;
+    }
+    if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
+        error = std::string("FemGpuState ") + label + " zero fill received unallocated device components";
+        return false;
+    }
+
+    const std::string op_prefix = std::string("cudaMemsetAsync FemGpuState ") + label;
+    if (!cuda_ok(cudaMemsetAsync(field.x, 0, component_bytes, nullptr),
+            (op_prefix + " x zero device").c_str(),
+            error) ||
+        !cuda_ok(cudaMemsetAsync(field.y, 0, component_bytes, nullptr),
+            (op_prefix + " y zero device").c_str(),
+            error) ||
+        !cuda_ok(cudaMemsetAsync(field.z, 0, component_bytes, nullptr),
+            (op_prefix + " z zero device").c_str(),
+            error)) {
+        return false;
+    }
+    return cuda_ok(cudaStreamSynchronize(nullptr),
+        (op_prefix + " synchronize zero device").c_str(),
+        error);
+#else
+    (void)field;
+    (void)audit;
+    error = "FemGpuState was marked allocated but fullmag_fem was built without CUDA runtime support";
+    return false;
+#endif
+}
+
 bool gpu_state_upload_effective_fields_aos(
     FemGpuState &state,
     const double *h_ex_xyz,
@@ -428,15 +473,7 @@ bool gpu_state_upload_optional_component_aos(
     std::string &error)
 {
     if (xyz == nullptr || len == 0) {
-        std::vector<double> zeros(static_cast<size_t>(state.dof_len), 0.0);
-        return gpu_state_upload_component_aos(
-            state,
-            field,
-            zeros.data(),
-            static_cast<uint64_t>(zeros.size()),
-            label,
-            audit,
-            error);
+        return gpu_state_zero_component_device(state, field, label, audit, error);
     }
     return gpu_state_upload_component_aos(state, field, xyz, len, label, audit, error);
 }

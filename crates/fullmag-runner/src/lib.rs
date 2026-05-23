@@ -4,7 +4,8 @@
 //! - `types`         — public and internal types
 //! - `schedules`     — output scheduling logic
 //! - `artifacts`     — metadata, CSV, field file writing
-//! - `cpu_reference` — CPU reference execution path (calibration baseline)
+//! - `fdm/cpu`       — CPU reference execution path (calibration baseline)
+//! - `fdm/gpu/cuda`  — native CUDA execution path
 //! - `dispatch`      — engine selection (CPU now, CUDA in Phase 2)
 
 /// Vacuum permeability μ₀ in T·m/A.
@@ -32,23 +33,6 @@ mod scalar_metrics;
 mod schedules;
 mod solver_profile;
 mod types;
-
-mod cpu_reference {
-    pub(crate) use crate::fdm::cpu_reference::*;
-}
-
-#[cfg(feature = "cuda")]
-mod multilayer_cuda {
-    pub(crate) use crate::fdm::multilayer_cuda::*;
-}
-
-mod multilayer_reference {
-    pub(crate) use crate::fdm::multilayer_reference::*;
-}
-
-mod native_fdm {
-    pub(crate) use crate::fdm::native_cuda::*;
-}
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
 /// Default maximum timestep for adaptive stepping when the user provides none.
@@ -106,6 +90,9 @@ pub use types::{
 use crate::capabilities::{
     capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
 };
+use crate::fdm::cpu::multilayer_reference;
+use crate::fdm::cpu::reference as cpu_reference;
+use crate::fdm::gpu::cuda::native as native_fdm;
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
 use serde_json::Value;
@@ -229,6 +216,30 @@ pub fn is_native_fdm_cuda_available() -> bool {
 
 pub fn is_native_fem_gpu_available() -> bool {
     native_fem::is_gpu_available()
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeFemGpuStatus {
+    pub available: bool,
+    pub visible_cuda_device_count: i32,
+    pub requested_gpu_index: i32,
+    pub resolved_gpu_index: i32,
+    pub memory_free_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub reason_gpu: String,
+}
+
+pub fn native_fem_gpu_status() -> NativeFemGpuStatus {
+    let availability = native_fem::native_availability();
+    NativeFemGpuStatus {
+        available: availability.native_fem_gpu_available,
+        visible_cuda_device_count: availability.visible_cuda_device_count,
+        requested_gpu_index: availability.requested_gpu_index,
+        resolved_gpu_index: availability.resolved_gpu_index,
+        memory_free_bytes: availability.memory_free_bytes,
+        memory_total_bytes: availability.memory_total_bytes,
+        reason_gpu: availability.reason_gpu,
+    }
 }
 
 pub fn is_native_fem_cpu_available() -> bool {

@@ -1,8 +1,3 @@
-// ── FND-014: DEAD CODE — These kernels are compiled but never called. ──
-// They are included in CMakeLists.txt but no .cpp file invokes any of the
-// functions declared in kernels.h.  They should either be connected to the
-// FEM solver pipeline or removed to avoid maintenance burden.
-//
 // ── S11: Fused CUDA kernels for LLG integration ───────────────────────
 // Provides GPU-resident kernels for:
 //   - LLG RHS (cross-product + damping + block-max reduction)

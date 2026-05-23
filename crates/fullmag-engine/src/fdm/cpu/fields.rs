@@ -5,9 +5,9 @@
 
 use rustfft::num_complex::Complex;
 
-use crate::fdm_fft::{combine_fields_4, padded_index, zero_vectors};
-use crate::fdm_fft_backend::FdmFftBackend;
-use crate::fdm_types::{neighbor_index, AxisBoundary};
+use crate::fdm::cpu::fft::{combine_fields_4, padded_index, zero_vectors};
+use crate::fdm::cpu::fft_backend::FdmFftBackend;
+use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
@@ -49,10 +49,15 @@ impl ExchangeLlgProblem {
         let ani_field = self.anisotropy_field(magnetization);
         let idmi_field = self.interfacial_dmi_field(magnetization);
         let bdmi_field = self.bulk_dmi_field(magnetization);
+        let dmi_field = idmi_field
+            .iter()
+            .zip(bdmi_field.iter())
+            .map(|(interfacial, bulk)| add(*interfacial, *bulk))
+            .collect::<Vec<_>>();
         let mut effective_field =
             combine_fields_4(&exchange_field, &demag_field, &external_field, &mel_field);
         for (i, h) in effective_field.iter_mut().enumerate() {
-            *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
+            *h = add(add(*h, ani_field[i]), dmi_field[i]);
         }
         let rhs = {
             let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
@@ -104,6 +109,7 @@ impl ExchangeLlgProblem {
             demag_field,
             external_field,
             effective_field: effective_field.clone(),
+            dmi_field,
             exchange_energy_joules,
             demag_energy_joules,
             external_energy_joules,
@@ -356,7 +362,7 @@ impl ExchangeLlgProblem {
         sum * cell_volume
     }
 
-    pub(crate) fn anisotropy_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+    pub fn anisotropy_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
         let ms = self.material.saturation_magnetisation;
         let has_uni = self.terms.uniaxial_anisotropy.is_some();
         let has_cub = self.terms.cubic_anisotropy.is_some();

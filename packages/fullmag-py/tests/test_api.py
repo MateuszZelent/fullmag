@@ -880,6 +880,28 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(object_mesh["through_thickness_distribution"], "fixed")
         self.assertEqual(object_mesh["sweep_face_meshing"], "triangular")
 
+    def test_arch_skyrmion_example_uses_skyrmion_texture_and_gpu_ready_relax(self) -> None:
+        example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_skyrmion_relax_50nm.py"
+        with patch.dict(os.environ, {"FULLMAG_DEMAG_PRINT_LEVEL": "0"}):
+            loaded = load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(loaded.entrypoint_kind, "flat_workspace")
+        self.assertEqual(len(loaded.stages), 1)
+        texture = loaded.problem.magnets[0].m0
+        self.assertEqual(texture.preset_kind, "neel_skyrmion")
+        self.assertEqual(texture.params["radius"], 120e-9)
+        self.assertEqual(texture.params["wall_width"], 25e-9)
+        runtime_selection = loaded.problem.runtime.to_runtime_metadata()
+        self.assertEqual(runtime_selection["backend"], "fem")
+        self.assertEqual(runtime_selection["device"], "cuda")
+        self.assertEqual(runtime_selection["gpu_count"], 1)
+        self.assertEqual(runtime_selection["device_index"], 0)
+
+        relax_dynamics = loaded.stages[0].problem.study.to_ir()["dynamics"]
+        self.assertEqual(relax_dynamics["integrator"], "rk45")
+        self.assertEqual(relax_dynamics["adaptive_timestep"]["atol"], 1e-4)
+        self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
         study = fm.study("study_builder_metadata")
@@ -3217,6 +3239,62 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-6)
         self.assertEqual(dynamics["adaptive_timestep"]["dt_initial"], 2e-15)
         self.assertEqual(dynamics["integrator"], "rk23")
+
+    def test_flat_solver_dt_min_lowers_to_adaptive_timestep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        fm.solver(dt=2e-15, max_error=1e-6, dt_min=1e-17, integrator="rk23")
+        fm.save("m", every=1e-12)
+        fm.run(2.5e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_adaptive_solver_dt_min.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        adaptive_timestep = loaded.problem.study.to_ir()["dynamics"]["adaptive_timestep"]
+        self.assertEqual(adaptive_timestep["atol"], 1e-6)
+        self.assertEqual(adaptive_timestep["dt_initial"], 2e-15)
+        self.assertEqual(adaptive_timestep["dt_min"], 1e-17)
+
+    def test_staged_relax_dt_min_lowers_to_adaptive_timestep(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("staged_relax_dt_min")
+        study.engine("fem")
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(maximum_element_size=5e-9, order=1).build()
+        study.stages.add_relax(
+            solver="rk45",
+            max_error=1e-4,
+            dt_min=1e-17,
+            max_steps=5,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_staged_relax_dt_min.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        dynamics = loaded.stages[0].problem.study.to_ir()["dynamics"]
+        self.assertEqual(dynamics["integrator"], "rk45")
+        self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-4)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_min"], 1e-17)
 
     def test_flat_stage_sequence_is_supported(self) -> None:
         script = """

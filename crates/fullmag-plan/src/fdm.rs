@@ -101,6 +101,7 @@ pub(crate) fn plan_fdm(
             }
         }
     }
+    reject_fdm_spatial_material_fields(problem, "FDM", &mut errors);
     if !(enable_exchange || enable_demag || external_field.is_some()) {
         errors.push(
             "the current executable FDM path requires at least one of Exchange, Demag, or Zeeman"
@@ -509,13 +510,6 @@ pub(crate) fn plan_fdm(
                     );
                     fdm_plan.oersted_realization =
                         Some(fullmag_ir::OerstedRealization::BiotSavartMidpoint);
-                    if runtime_requests_cuda(problem) {
-                        return Err(PlanError {
-                            reasons: vec![
-                                "general OerstedField(from_current_solution) midpoint lowering is currently available only on the CPU FDM reference runner; requested CUDA/native FDM execution is not yet implemented".to_string(),
-                            ],
-                        });
-                    }
                 }
             }
             continue;
@@ -654,6 +648,152 @@ pub(crate) fn plan_fdm(
     })
 }
 
+fn reject_fdm_spatial_material_fields(problem: &ProblemIR, lane: &str, errors: &mut Vec<String>) {
+    let mut seen_materials = BTreeSet::new();
+    for magnet in &problem.magnets {
+        let Some(material) = problem
+            .materials
+            .iter()
+            .find(|material| material.name == magnet.material)
+        else {
+            continue;
+        };
+        if !seen_materials.insert(material.name.as_str()) {
+            continue;
+        }
+        let fields = fdm_spatial_material_field_names(material);
+        if fields.is_empty() {
+            continue;
+        }
+        errors.push(format!(
+            "per-cell material fields ({}) on material '{}' are not executable in the current {lane} path; FDM planning currently carries uniform material constants only",
+            fields.join(", "),
+            material.name
+        ));
+    }
+}
+
+fn fdm_spatial_material_field_names(material: &fullmag_ir::MaterialIR) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if material.ms_field.is_some() {
+        fields.push("ms_field");
+    }
+    if material.a_field.is_some() {
+        fields.push("a_field");
+    }
+    if material.alpha_field.is_some() {
+        fields.push("alpha_field");
+    }
+    if material.ku_field.is_some() {
+        fields.push("ku_field");
+    }
+    if material.ku2_field.is_some() {
+        fields.push("ku2_field");
+    }
+    if material.kc1_field.is_some() {
+        fields.push("kc1_field");
+    }
+    if material.kc2_field.is_some() {
+        fields.push("kc2_field");
+    }
+    if material.kc3_field.is_some() {
+        fields.push("kc3_field");
+    }
+    fields
+}
+
+fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
+    let Some(first_layer) = layers.first() else {
+        return false;
+    };
+    let reference_material = &first_layer.material;
+    let reference_cell_size = first_layer.native_cell_size;
+    if layers.iter().any(|layer| {
+        layer.material != *reference_material || layer.native_cell_size != reference_cell_size
+    }) {
+        return false;
+    }
+
+    let mut min_origin = first_layer.native_origin;
+    let mut max_extent = [
+        first_layer.native_origin[0] + first_layer.native_grid[0] as f64 * reference_cell_size[0],
+        first_layer.native_origin[1] + first_layer.native_grid[1] as f64 * reference_cell_size[1],
+        first_layer.native_origin[2] + first_layer.native_grid[2] as f64 * reference_cell_size[2],
+    ];
+    for layer in layers.iter().skip(1) {
+        for axis in 0..3 {
+            min_origin[axis] = min_origin[axis].min(layer.native_origin[axis]);
+            max_extent[axis] = max_extent[axis].max(
+                layer.native_origin[axis]
+                    + layer.native_grid[axis] as f64 * reference_cell_size[axis],
+            );
+        }
+    }
+
+    let mut global_grid = [0usize; 3];
+    for axis in 0..3 {
+        let cells = (max_extent[axis] - min_origin[axis]) / reference_cell_size[axis];
+        let rounded = cells.round();
+        if (cells - rounded).abs() > 1e-6 || rounded < 1.0 {
+            return false;
+        }
+        global_grid[axis] = rounded as usize;
+    }
+    let Some(total_cells) = global_grid
+        .iter()
+        .try_fold(1usize, |acc, cells| acc.checked_mul(*cells))
+    else {
+        return false;
+    };
+    let mut active_mask = vec![false; total_cells];
+
+    for layer in layers {
+        let native_grid = [
+            layer.native_grid[0] as usize,
+            layer.native_grid[1] as usize,
+            layer.native_grid[2] as usize,
+        ];
+        let mut offset = [0usize; 3];
+        for axis in 0..3 {
+            let offset_cells =
+                (layer.native_origin[axis] - min_origin[axis]) / reference_cell_size[axis];
+            let rounded = offset_cells.round();
+            if (offset_cells - rounded).abs() > 1e-6 || rounded < 0.0 {
+                return false;
+            }
+            offset[axis] = rounded as usize;
+        }
+        for z in 0..native_grid[2] {
+            for y in 0..native_grid[1] {
+                for x in 0..native_grid[0] {
+                    let local_index = z * native_grid[1] * native_grid[0] + y * native_grid[0] + x;
+                    if layer
+                        .native_active_mask
+                        .as_ref()
+                        .is_some_and(|mask| !mask[local_index])
+                    {
+                        continue;
+                    }
+                    let gx = offset[0] + x;
+                    let gy = offset[1] + y;
+                    let gz = offset[2] + z;
+                    if gx >= global_grid[0] || gy >= global_grid[1] || gz >= global_grid[2] {
+                        return false;
+                    }
+                    let global_index =
+                        gz * global_grid[1] * global_grid[0] + gy * global_grid[0] + gx;
+                    if active_mask[global_index] {
+                        return false;
+                    }
+                    active_mask[global_index] = true;
+                }
+            }
+        }
+    }
+
+    true
+}
+
 pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -681,10 +821,34 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
+    if problem.temperature.unwrap_or(0.0) > 0.0 {
+        errors.push(
+            "thermal_noise is not executable in the current public multilayer FDM path; staged CPU/GPU multilayer RHS coverage is not implemented yet"
+                .to_string(),
+        );
+    }
+    reject_fdm_spatial_material_fields(problem, "multilayer FDM", &mut errors);
+    if problem.current_density.is_some()
+        || problem.stt_degree.is_some()
+        || problem.stt_beta.is_some()
+        || problem.stt_spin_polarization.is_some()
+        || problem.stt_lambda.is_some()
+        || problem.stt_epsilon_prime.is_some()
+        || problem.stt_thickness.is_some()
+        || problem.stt_fixed_layer_position.is_some()
+        || !problem.spin_torque_modules.is_empty()
+    {
+        errors.push(
+            "spin_torque is not executable in the current public multilayer FDM path; staged CPU/GPU multilayer RHS coverage is not implemented yet"
+                .to_string(),
+        );
+    }
 
     let mut enable_exchange = false;
     let mut enable_demag = false;
     let mut external_field = None;
+    let mut interfacial_dmi = None;
+    let mut bulk_dmi = None;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => {
@@ -704,6 +868,25 @@ pub(crate) fn plan_fdm_multilayer(
                     errors.push("Zeeman is declared more than once".to_string());
                 }
                 external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
+            }
+            fullmag_ir::EnergyTermIR::InterfacialDmi { d, .. } => {
+                if interfacial_dmi.is_some() {
+                    errors.push("InterfacialDmi is declared more than once".to_string());
+                }
+                interfacial_dmi = Some(*d);
+            }
+            fullmag_ir::EnergyTermIR::BulkDmi { d } => {
+                if bulk_dmi.is_some() {
+                    errors.push("BulkDmi is declared more than once".to_string());
+                }
+                bulk_dmi = Some(*d);
+            }
+            fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
+            | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
+                errors.push(
+                    "Oersted is not executable in the current public multilayer FDM path; staged CPU/GPU multilayer RHS coverage is not implemented yet"
+                        .to_string(),
+                );
             }
             other => {
                 errors.push(format!(
@@ -1070,12 +1253,6 @@ pub(crate) fn plan_fdm_multilayer(
         adaptive_timestep,
         field_refresh,
     ) = planned_study_controls(problem, &mut errors);
-    if integrator != IntegratorChoice::Heun {
-        errors.push(
-            "the public multilayer FDM runner currently supports only the 'heun' integrator"
-                .to_string(),
-        );
-    }
     if adaptive_timestep.is_some() {
         errors.push(
             "the public multilayer FDM runner does not yet support adaptive_timestep".to_string(),
@@ -1117,6 +1294,18 @@ pub(crate) fn plan_fdm_multilayer(
             },
         })
         .collect::<Vec<_>>();
+    if runtime_requests_cuda(problem)
+        && !matches!(integrator, IntegratorChoice::Heun | IntegratorChoice::Rk4)
+        && !fdm_multilayer_cuda_native_single_grid_eligible(&layers)
+    {
+        errors.push(
+            "the public staged v2 CUDA multilayer FDM runner currently supports only 'heun' and 'rk4' integrators; RK23/RK45/ABM3 are executable only for native single-grid-compatible multilayer stacks"
+                .to_string(),
+        );
+    }
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
 
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
@@ -1125,6 +1314,8 @@ pub(crate) fn plan_fdm_multilayer(
         enable_exchange,
         enable_demag,
         external_field,
+        interfacial_dmi,
+        bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,

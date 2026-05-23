@@ -14,6 +14,10 @@
 #include <optional>
 #include <string>
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #endif
@@ -210,6 +214,45 @@ fullmag_fem_availability_info query_availability()
         return info;
     }
     info.resolved_gpu_index = resolved_index;
+
+    int previous_index = -1;
+    const cudaError_t get_device_rc = cudaGetDevice(&previous_index);
+    if (get_device_rc != cudaSuccess) {
+        set_gpu_reason(
+            info,
+            std::string("cudaGetDevice failed for fullmag_fem: ") +
+                cudaGetErrorString(get_device_rc));
+        finalize_availability(info);
+        return info;
+    }
+
+    const cudaError_t set_device_rc = cudaSetDevice(resolved_index);
+    if (set_device_rc != cudaSuccess) {
+        set_gpu_reason(
+            info,
+            std::string("cudaSetDevice failed for fullmag_fem: ") +
+                cudaGetErrorString(set_device_rc));
+        finalize_availability(info);
+        return info;
+    }
+
+    size_t memory_free_bytes = 0;
+    size_t memory_total_bytes = 0;
+    const cudaError_t memory_rc =
+        cudaMemGetInfo(&memory_free_bytes, &memory_total_bytes);
+    if (previous_index >= 0 && previous_index != resolved_index) {
+        (void)cudaSetDevice(previous_index);
+    }
+    if (memory_rc != cudaSuccess) {
+        set_gpu_reason(
+            info,
+            std::string("cudaMemGetInfo failed for fullmag_fem: ") +
+                cudaGetErrorString(memory_rc));
+        finalize_availability(info);
+        return info;
+    }
+    info.gpu_memory_free_bytes = static_cast<uint64_t>(memory_free_bytes);
+    info.gpu_memory_total_bytes = static_cast<uint64_t>(memory_total_bytes);
 #endif
 
     if (env_flag("FULLMAG_FEM_REQUIRE_CEED") && !info.built_with_ceed) {

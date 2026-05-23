@@ -35,12 +35,14 @@ ALPHA = 0.1
 KU1 = 0.8e6
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
+ADAPTIVE_MAX_ERROR = 1e-4
+ADAPTIVE_DT_MIN = float(os.environ.get("FULLMAG_ARCH_ADAPTIVE_DT_MIN", "1e-17"))
 
 study = fm.study("arch_waveguide_relax_50nm")
 
 # Engine
 study.engine("fem")
-study.device("cpu", precision="double")
+study.device("gpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 study.universe(
@@ -120,7 +122,12 @@ study.build_domain_mesh()
 
 # Solver — max_error=1e-4 is adequate for relaxation where the physical
 # convergence criterion (torque < tol) dominates over integrator accuracy.
-study.solver(integrator="rk45", max_error=1e-4, gamma=GAMMA)
+study.solver(
+    integrator="rk45",
+    max_error=ADAPTIVE_MAX_ERROR,
+    dt_min=ADAPTIVE_DT_MIN,
+    gamma=GAMMA,
+)
 
 # Outputs
 study.tableautosave(10e-12)
@@ -129,6 +136,9 @@ study.save("m", every=250e-12)
 # Stage
 study.stages.add_relax(
     algorithm="llg_overdamped",
+    solver="rk45",
+    max_error=ADAPTIVE_MAX_ERROR,
+    dt_min=ADAPTIVE_DT_MIN,
     tol=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=5000,
 )

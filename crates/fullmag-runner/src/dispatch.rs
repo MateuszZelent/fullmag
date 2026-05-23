@@ -21,19 +21,19 @@ use std::sync::{Mutex, OnceLock};
 use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::cpu_reference;
+use crate::fdm::cpu::multilayer_reference;
+use crate::fdm::cpu::reference as cpu_reference;
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::multilayer as multilayer_cuda;
+use crate::fdm::gpu::cuda::native as native_fdm;
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem_baseline;
 use crate::fem_eigen;
 #[cfg(feature = "fem-gpu")]
 use crate::interactive_runtime::cached_preview_quantities_for;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
-#[cfg(feature = "cuda")]
-use crate::multilayer_cuda;
-use crate::multilayer_reference;
-use crate::native_fdm;
-#[cfg(feature = "cuda")]
-use crate::native_fdm::NativeFdmBackend;
 use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{
@@ -213,6 +213,48 @@ fn runtime_info_once(message: &str) {
     runtime_log_once("info", message);
 }
 
+#[cfg(feature = "fem-gpu")]
+fn native_fem_gpu_ready_log_message(gpu_state: &NativeFemGpuStateInfo) -> (&'static str, String) {
+    if !gpu_state.allocated {
+        return (
+            "warning",
+            format!(
+                "native FEM GPU state is not allocated; data residency={}",
+                gpu_state.source_of_truth.as_str()
+            ),
+        );
+    }
+
+    let device_gb = gpu_state.device_bytes as f64 / 1e9;
+    let reduction_mb = gpu_state.reduction_workspace_bytes as f64 / 1e6;
+    if gpu_state.source_of_truth != NativeFemDataResidency::DeviceSourceOfTruth {
+        return (
+            "warning",
+            format!(
+                "native FEM GPU buffers allocated, but data residency is {}: nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB",
+                gpu_state.source_of_truth.as_str(),
+                gpu_state.node_count,
+                gpu_state.dof_len,
+                gpu_state.stage_count,
+                device_gb,
+                reduction_mb
+            ),
+        );
+    }
+
+    (
+        "info",
+        format!(
+            "native FEM GPU ready: mesh, material fields, and magnetization are resident on the CUDA device; nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB",
+            gpu_state.node_count,
+            gpu_state.dof_len,
+            gpu_state.stage_count,
+            device_gb,
+            reduction_mb
+        ),
+    )
+}
+
 fn has_antenna_field_source(problem: &ProblemIR) -> bool {
     problem.current_modules.iter().any(|module| {
         matches!(
@@ -230,8 +272,8 @@ fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'st
     if plan.boundary_geometry.is_some() || plan.boundary_correction.is_some() {
         unsupported.push("boundary_correction");
     }
-    // Fields available in CPU FDM snapshots: m, H_ex, H_demag, H_ext, H_eff.
-    // H_ani, H_dmi, H_ant are not exposed as separate observables by the reference engine.
+    // Fields available in CPU FDM snapshots: m, H_ex, H_demag, H_ext, H_ani, H_dmi, H_eff.
+    // H_ant is not exposed as a separate observable by the reference engine.
     if outputs.iter().any(|output| match output {
         OutputIR::Field { name, .. } | OutputIR::Scalar { name, .. } => {
             matches!(
@@ -242,7 +284,7 @@ fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'st
         OutputIR::Snapshot { field, .. } => {
             matches!(
                 field.as_str(),
-                "H_mel" | "u" | "u_dot" | "eps" | "sigma" | "H_ani" | "H_dmi" | "H_ant"
+                "H_mel" | "u" | "u_dot" | "eps" | "sigma" | "H_ant"
             )
         }
         _ => false,
@@ -1069,7 +1111,10 @@ pub(crate) fn snapshot_fem_preview(
             let cpu_plan = fem_plan_for_cpu_native(plan);
             snapshot_native_fem_preview(&cpu_plan, request)
         }
-        FemEngine::NativeGpu => snapshot_native_fem_preview(plan, request),
+        FemEngine::NativeGpu => {
+            let gpu_plan = fem_plan_for_native_gpu(plan);
+            snapshot_native_fem_preview(&gpu_plan, request)
+        }
     }
 }
 
@@ -1088,7 +1133,10 @@ pub(crate) fn snapshot_fem_vector_fields(
             let cpu_plan = fem_plan_for_cpu_native(plan);
             snapshot_native_fem_vector_fields(&cpu_plan, &quantities, request)
         }
-        FemEngine::NativeGpu => snapshot_native_fem_vector_fields(plan, &quantities, request),
+        FemEngine::NativeGpu => {
+            let gpu_plan = fem_plan_for_native_gpu(plan);
+            snapshot_native_fem_vector_fields(&gpu_plan, &quantities, request)
+        }
     }
 }
 
@@ -1098,6 +1146,19 @@ fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
         cpu_plan.mfem_device_string = Some("cpu".to_string());
     }
     cpu_plan
+}
+
+fn fem_plan_for_native_gpu(plan: &FemPlanIR) -> FemPlanIR {
+    let mut gpu_plan = plan.clone();
+    if gpu_plan.mfem_device_string.is_none() {
+        let mfem_device = std::env::var("FULLMAG_FEM_MFEM_DEVICE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "cuda".to_string());
+        gpu_plan.mfem_device_string = Some(mfem_device);
+    }
+    gpu_plan
 }
 
 /// Which execution lane to use for FEM static/time-domain PBC.
@@ -1775,13 +1836,8 @@ pub(crate) fn execute_fem<'a>(
                     artifact_writer,
                 );
             }
-            execute_native_fem(
-                &normalized_plan,
-                until_seconds,
-                outputs,
-                live,
-                artifact_writer,
-            )
+            let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
+            execute_native_fem(&gpu_plan, until_seconds, outputs, live, artifact_writer)
         }
     }
 }
@@ -2931,6 +2987,10 @@ fn execute_native_fem(
         demag_policy.solver,
         demag_policy.preconditioner,
     ));
+    if plan.mfem_device_string.as_deref() != Some("cpu") {
+        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state_info);
+        runtime_log_once(level, &message);
+    }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
     let mut dt =
@@ -4332,6 +4392,47 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn native_fem_gpu_ready_log_confirms_device_residency() {
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 16_502,
+            dof_len: 49_506,
+            stage_count: 7,
+            device_bytes: 275_000_000,
+            reduction_workspace_bytes: 2_000_000,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+
+        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state);
+
+        assert_eq!(level, "info");
+        assert_eq!(
+            message,
+            "native FEM GPU ready: mesh, material fields, and magnetization are resident on the CUDA device; nodes=16502 dof=49506 stages=7 device_buffers=0.275 GB reduction_workspace=2.0 MB"
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_gpu_ready_log_warns_when_data_is_not_device_truth() {
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32_768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::Mixed,
+        };
+
+        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state);
+
+        assert_eq!(level, "warning");
+        assert!(message.contains("data residency is mixed"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn native_fem_runtime_contract_does_not_publish_device_residency_with_hot_loop_sync() {
         let plan = tiny_fem_plan();
         let stats = StepStats {
@@ -4626,6 +4727,8 @@ mod tests {
             visible_cuda_device_count: if gpu { 1 } else { 0 },
             requested_gpu_index: -1,
             resolved_gpu_index: if gpu { 0 } else { -1 },
+            memory_free_bytes: if gpu { 8_000_000_000 } else { 0 },
+            memory_total_bytes: if gpu { 12_000_000_000 } else { 0 },
             reason: reason.to_string(),
             reason_cpu: if cpu {
                 "native FEM CPU backend is available".to_string()

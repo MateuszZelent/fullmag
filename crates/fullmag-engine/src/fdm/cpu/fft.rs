@@ -4,7 +4,7 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 
-use crate::fdm_types::{AxisBoundary, FdmBoundaryPolicy};
+use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy};
 
 use crate::newell;
 use crate::Vector3;

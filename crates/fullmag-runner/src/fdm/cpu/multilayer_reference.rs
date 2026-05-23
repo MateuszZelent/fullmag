@@ -3,7 +3,7 @@
 //! Current public scope:
 //! - multiple ferromagnets with body-local exchange,
 //! - global demag via multilayer convolution,
-//! - synchronous Heun stepping,
+//! - fixed-step Heun/RK4/RK23/RK45/ABM3 stepping,
 //! - scalar traces and concatenated field snapshots.
 
 use fullmag_engine::{
@@ -86,8 +86,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let dt = plan.fixed_timestep.unwrap_or(1e-13);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
-    let fft_backend =
-        crate::cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let provenance = ExecutionProvenance {
         execution_engine: "cpu_reference_multilayer".to_string(),
         precision: "double".to_string(),
@@ -383,8 +382,8 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }
                 }),
-                interfacial_dmi: None,
-                bulk_dmi: None,
+                interfacial_dmi: plan.interfacial_dmi,
+                bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
                 sot: None,
@@ -492,10 +491,14 @@ fn observe_multilayer(
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
+    let mut anisotropy_field = Vec::new();
+    let mut dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
     let mut external_energy = 0.0;
+    let mut anisotropy_energy = 0.0;
+    let mut dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -509,48 +512,32 @@ fn observe_multilayer(
         let state = &states[index];
         let mut local_demag = layer_demag.remove(0);
         zero_outside_active(&mut local_demag, context.problem.active_mask.as_deref());
-        let local_exchange = context
-            .problem
-            .exchange_field(state)
-            .map_err(|error| RunError {
-                message: format!(
-                    "exchange field for magnet '{}': {}",
-                    context.magnet_name, error
-                ),
-            })?;
-        let mut local_external =
-            context
-                .problem
-                .external_field(state)
-                .map_err(|error| RunError {
-                    message: format!(
-                        "external field for magnet '{}': {}",
-                        context.magnet_name, error
-                    ),
-                })?;
+        let local_observables = context.problem.observe(state).map_err(|error| RunError {
+            message: format!(
+                "local observables for magnet '{}': {}",
+                context.magnet_name, error
+            ),
+        })?;
+        let local_exchange = local_observables.exchange_field;
+        let mut local_external = local_observables.external_field;
+        let mut local_anisotropy = context.problem.anisotropy_field(state.magnetization());
+        let mut local_dmi = local_observables.dmi_field;
         zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors(local_exchange.len());
+        zero_outside_active(
+            &mut local_anisotropy,
+            context.problem.active_mask.as_deref(),
+        );
+        zero_outside_active(&mut local_dmi, context.problem.active_mask.as_deref());
+        let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
-            local_effective[cell] = add(
-                add(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
-            );
+            local_effective[cell] = add(local_effective[cell], local_demag[cell]);
         }
         zero_outside_active(&mut local_effective, context.problem.active_mask.as_deref());
         let rhs = llg_rhs_for_layer(context, state.magnetization(), &local_effective);
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        let local_exchange_energy =
-            context
-                .problem
-                .exchange_energy(state)
-                .map_err(|error| RunError {
-                    message: format!(
-                        "exchange energy for magnet '{}': {}",
-                        context.magnet_name, error
-                    ),
-                })?;
+        let local_exchange_energy = local_observables.exchange_energy_joules;
         let local_demag_energy = state
             .magnetization()
             .iter()
@@ -563,9 +550,13 @@ fn observe_multilayer(
             .zip(local_external.iter())
             .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
+        let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
+        let local_dmi_energy = local_observables.dmi_energy_joules;
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
+        anisotropy_energy += local_anisotropy_energy;
+        dmi_energy += local_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
@@ -584,9 +575,15 @@ fn observe_multilayer(
                 ("e_ex".to_string(), local_exchange_energy),
                 ("e_demag".to_string(), local_demag_energy),
                 ("e_ext".to_string(), local_external_energy),
+                ("e_ani".to_string(), local_anisotropy_energy),
+                ("e_dmi".to_string(), local_dmi_energy),
                 (
                     "e_total".to_string(),
-                    local_exchange_energy + local_demag_energy + local_external_energy,
+                    local_exchange_energy
+                        + local_demag_energy
+                        + local_external_energy
+                        + local_anisotropy_energy
+                        + local_dmi_energy,
                 ),
                 ("mx".to_string(), mx),
                 ("my".to_string(), my),
@@ -598,6 +595,8 @@ fn observe_multilayer(
         exchange_field.extend(local_exchange);
         demag_field.extend(local_demag);
         external_field.extend(local_external);
+        anisotropy_field.extend(local_anisotropy);
+        dmi_field.extend(local_dmi);
         effective_field.extend(local_effective);
     }
 
@@ -605,8 +604,6 @@ fn observe_multilayer(
         values.insert("max_dm_dt".to_string(), max_dm_dt);
         values.insert("max_h_eff".to_string(), max_h_eff);
         values.insert("max_h_demag".to_string(), max_h_demag);
-        values.entry("e_ani".to_string()).or_insert(0.0);
-        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
@@ -619,8 +616,8 @@ fn observe_multilayer(
         external_field,
         antenna_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
         effective_field,
-        anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        anisotropy_field,
+        dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -629,9 +626,13 @@ fn observe_multilayer(
         exchange_energy,
         demag_energy,
         external_energy,
-        anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
-        total_energy: exchange_energy + demag_energy + external_energy,
+        anisotropy_energy,
+        dmi_energy,
+        total_energy: exchange_energy
+            + demag_energy
+            + external_energy
+            + anisotropy_energy
+            + dmi_energy,
         max_dm_dt,
         max_h_eff,
         max_h_demag,
@@ -711,34 +712,20 @@ fn llg_rhs_multilayer(
     let mut rhs_layers = Vec::with_capacity(contexts.len());
     for (index, context) in contexts.iter().enumerate() {
         let state = &states[index];
-        let local_exchange = context
-            .problem
-            .exchange_field(state)
-            .map_err(|error| RunError {
-                message: format!(
-                    "exchange field for magnet '{}': {}",
-                    context.magnet_name, error
-                ),
-            })?;
-        let mut local_demag = layer_demag.remove(0);
-        zero_outside_active(&mut local_demag, context.problem.active_mask.as_deref());
-        let mut local_external =
+        let mut local_effective =
             context
                 .problem
-                .external_field(state)
+                .observable_effective_field(state)
                 .map_err(|error| RunError {
                     message: format!(
-                        "external field for magnet '{}': {}",
+                        "local effective field for magnet '{}': {}",
                         context.magnet_name, error
                     ),
                 })?;
-        zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors(local_exchange.len());
+        let mut local_demag = layer_demag.remove(0);
+        zero_outside_active(&mut local_demag, context.problem.active_mask.as_deref());
         for cell in 0..local_effective.len() {
-            local_effective[cell] = add(
-                add(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
-            );
+            local_effective[cell] = add(local_effective[cell], local_demag[cell]);
         }
         zero_outside_active(&mut local_effective, context.problem.active_mask.as_deref());
         rhs_layers.push(llg_rhs_for_layer(
@@ -973,6 +960,8 @@ mod tests {
             enable_exchange: true,
             enable_demag,
             external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -1020,5 +1009,75 @@ mod tests {
             .expect("exchange-only multilayer run should execute");
         let final_step = executed.result.steps.last().unwrap();
         assert!(final_step.e_demag.abs() < 1e-30);
+    }
+
+    #[test]
+    fn multilayer_reference_cpu_includes_global_dmi_in_observables_and_rhs() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.interfacial_dmi = Some(1.5e-3);
+        plan.bulk_dmi = Some(2.5e-3);
+        let layer_nx = plan.layers[0].native_grid[0] as usize;
+        for (index, value) in plan.layers[0].initial_magnetization.iter_mut().enumerate() {
+            let x = (index % layer_nx) as f64;
+            let angle = 0.35 * x;
+            *value = [angle.cos(), 0.0, angle.sin()];
+        }
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("DMI multilayer contexts should build");
+        let observables =
+            observe_multilayer(&contexts, &states, None).expect("DMI observables should compute");
+        assert_eq!(observables.dmi_field.len(), 32);
+        assert!(
+            max_norm(&observables.dmi_field) > 0.0,
+            "global DMI must contribute an observable multilayer field"
+        );
+        assert!(
+            observables.dmi_energy.abs() > 0.0,
+            "global DMI must contribute multilayer energy"
+        );
+
+        let magnetizations = states
+            .iter()
+            .map(|state| state.magnetization().to_vec())
+            .collect::<Vec<_>>();
+        let rhs = llg_rhs_multilayer(&contexts, &magnetizations, None)
+            .expect("DMI multilayer RHS should compute");
+        assert!(
+            rhs.iter().any(|layer| max_norm(layer) > 0.0),
+            "global DMI must contribute to the multilayer RHS"
+        );
+    }
+
+    #[test]
+    fn multilayer_reference_cpu_exposes_layer_anisotropy_field_outputs() {
+        let mut plan = make_plan(false);
+        let tilted = [
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ];
+        for layer in &mut plan.layers {
+            layer.initial_magnetization.fill(tilted);
+            layer.material.uniaxial_anisotropy_ku1 = Some(4.0e5);
+            layer.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        }
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("anisotropy multilayer contexts should build");
+        let observables = observe_multilayer(&contexts, &states, None)
+            .expect("anisotropy observables should compute");
+        assert_eq!(observables.anisotropy_field.len(), 32);
+        assert!(
+            max_norm(&observables.anisotropy_field) > 0.0,
+            "layer anisotropy must contribute an observable multilayer field"
+        );
+
+        let selected = select_state_observable_field(&observables, "H_ani", false)
+            .expect("H_ani should be selectable from multilayer observables");
+        assert_eq!(selected, observables.anisotropy_field);
     }
 }

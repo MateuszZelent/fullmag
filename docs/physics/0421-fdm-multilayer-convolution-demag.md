@@ -180,18 +180,45 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
   pull-back.
 - [x] Validate native identity transfer against `native_grid == convolution_grid`
   while allowing the tensor-kernel FFT grid to be padded.
-- [x] Prepare a shared native cuFFT workspace for staged v2 multilayer tensor
-  kernels when all layer-pair kernels use one `fft_grid`.
+- [x] Prepare cached native cuFFT workspaces for staged v2 multilayer tensor
+  kernels, keyed by each tensor-kernel `fft_grid`.
 - [x] Wire staged v2 handles through `step()` for the first native timestep
   slices: Heun and RK4 over staged multilayer layers in fp64/fp32 with demag
   and layer-local exchange fields; adaptive and multistep integrators are still
   rejected explicitly.
+- [x] Allow the public multilayer FDM planner and CUDA-assisted multilayer
+  runner gate to carry fixed-step RK4 into the staged native v2 path instead of
+  rejecting it at the older Heun-only public boundary. Adaptive and multistep
+  v2 integrators remain explicit non-goals for this slice.
+- [x] Split the public fixed-step integrator gate by execution target:
+  CPU-reference multilayer execution can carry Heun, RK4, RK23, RK45, and ABM3,
+  compatible `cuda_native_multilayer_single_grid` stacks can carry RK23, RK45,
+  and ABM3 through the existing native single-grid CUDA backend, while staged
+  native v2 multilayer execution remains limited to Heun and RK4 until staged
+  adaptive and multistep owners exist.
 - [x] Add an explicit `fullmag_fdm_backend_refresh_multilayer_demag` ABI so the
   CUDA-assisted identity-grid path refreshes staged v2 demag without using
   `step(0)` as an operator call.
 - [x] Expose per-layer v2 `M`, `H_EX`, and `H_DEMAG` copy entrypoints so
   refreshed native multilayer fields are observable outside private `Context`
-  state.
+  state. `H_EX` copies refresh the staged layer-local exchange field on demand
+  before host transfer.
+- [x] Expose per-layer v2 `H_DMI` copy entrypoints for staged CUDA multilayer
+  handles. `Context` owns a layer-local `h_dmi` buffer and refreshes it on
+  demand with the same centered interfacial/bulk DMI stencil used by the
+  staged v2 Heun/RK4 RHS.
+- [x] Expose per-layer v2 `H_ANI` copy entrypoints for staged CUDA multilayer
+  handles. `Context` owns a layer-local `h_ani` buffer and
+  `gpu/cuda/interactions/multilayer_anisotropy.cu` refreshes it on demand with
+  the same uniaxial/cubic anisotropy field equations used by the staged v2
+  Heun/RK4 RHS.
+- [x] Expose per-layer v2 `H_EFF` copy entrypoints for staged CUDA multilayer
+  handles. `gpu/cuda/interactions/multilayer_effective_field.cu` assembles
+  `H_EX + H_DEMAG + H_DMI + H_ANI + H_EXT` on demand into the existing layer
+  `tmp` scratch buffer after refreshing staged `H_EX`, `H_DMI`, and `H_ANI`.
+  `H_DEMAG` remains the current staged demag buffer and is refreshed by the
+  explicit multilayer demag refresh/timestep boundary, so `H_EFF` is observable
+  without adding persistent per-layer field storage.
 - [x] Expose per-layer v2 magnetization upload and route identity-grid
   CUDA-assisted multilayer demag through the staged native v2 handle, with
   provenance distinguishing native cuFFT demag from the Rust fallback.
@@ -211,9 +238,73 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
 - [x] Add native CUDA RK4 timestep ownership for staged v2 layers, using
   per-layer `k1`/`k2`/`k3`/`k4` stage fields and the same demag plus
   layer-local exchange RHS as the Heun slice.
-- [ ] Add per-grid multilayer FFT workspace planning, optimized interpolation
-  backends, remaining local-field RHS coverage beyond layer-local exchange, and
-  the remaining v2 integrators beyond Heun/RK4.
+- [x] Carry the requested uniform external field through
+  `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust runner wrapper, and
+  native `Context`, and include it in the staged v2 Heun/RK4 RHS alongside
+  demag and layer-local exchange.
+- [x] Carry per-layer uniform uniaxial anisotropy (`Ku1`, `Ku2`, axis) through
+  `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner wrapper, and native staged
+  layer state. The staged v2 Heun/RK4 RHS uses the same FDM field convention as
+  the single-grid backend,
+  `H_ani = [2/(mu0 Ms)] [Ku1 (m.u) + 2 Ku2 (m.u)^3] u`, for fp64/fp32 layers.
+  Per-cell anisotropy fields remain outside this slice.
+- [x] Carry per-layer uniform cubic anisotropy (`Kc1`, `Kc2`, `Kc3`,
+  `axis1`, `axis2`) through `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner
+  wrapper, and native staged layer state. The staged v2 Heun/RK4 RHS uses the
+  existing single-grid native FDM cubic field convention in the local cubic
+  basis where `axis3 = axis1 x axis2`; per-cell `kc*_field` inputs remain
+  outside this slice.
+- [x] Preserve layer-local anisotropy at the public multilayer observation
+  boundary: CPU reference observables expose `H_ani`/`E_ani`, CUDA-assisted
+  double/single field assembly carries the same derived `H_ani`, and native
+  stacked scalar/field reporting reuses layer-local contexts instead of losing
+  anisotropy fields at the combined-grid boundary. Staged v2 CUDA handles also
+  expose `H_ANI` through the per-layer copy ABI, backed by the layer-local
+  `h_ani` device buffer; staged `H_EFF` copy refreshes staged exchange,
+  anisotropy, and DMI before scratch-backed effective-field assembly.
+- [x] Carry global interfacial and bulk DMI constants through
+  `FdmMultilayerPlanIR`, `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust
+  runner wrapper, and native `Context`. The staged v2 Heun/RK4 RHS applies the
+  same centered finite-difference FDM DMI convention as the single-grid backend
+  on each layer native grid, with open/active-mask clamping. Per-layer DMI and
+  per-cell DMI fields remain outside this slice; global DMI exposes a separate
+  staged `H_DMI` layer copy endpoint.
+- [x] Keep CPU reference multilayer and CUDA-assisted/native-stacked
+  multilayer execution semantically aligned for global interfacial/bulk DMI:
+  per-layer contexts receive the global constants, CPU reference observables and
+  RHS include `H_DMI`/`E_DMI`, CUDA-assisted local effective fields include the
+  same local DMI term, and the native stacked single-grid plan preserves the DMI
+  constants instead of dropping them while composing the global `FdmPlanIR`.
+  Native stacked scalar/field reporting also reuses the layer-local contexts, so
+  public `H_dmi` snapshots and per-object `e_dmi` are not lost at the combined
+  grid observation boundary.
+- [x] Reject public multilayer FDM thermal noise, Oersted terms, and
+  spin-torque inputs explicitly until staged CPU/GPU multilayer RHS coverage
+  exists, so those physics terms cannot be silently dropped from
+  `FdmMultilayerPlanIR`.
+- [x] Reject public FDM materials with per-cell material fields (`ms_field`,
+  `a_field`, `alpha_field`, `ku*_field`, `kc*_field`) until FDM plan material
+  realization can carry those payloads. This prevents both single-grid and
+  multilayer FDM from silently lowering spatial material fields to uniform
+  constants.
+- [x] Emit runner field artifacts for multilayer snapshots as per-layer series:
+  `fields/<quantity>/manifest.json` records layer IDs, native origins,
+  vector shape, value offsets, and per-layer directories; each layer snapshot
+  stores only that layer's vector values while retaining the full multilayer
+  layout provenance. REST/data-plane layer fetching remains a separate product
+  API step.
+- [x] Add cached native CUDA per-grid cuFFT workspace planning for staged v2
+  demag: mixed `fft_grid` tensor kernels bind a cached
+  `DeviceMultilayerFftWorkspace` instead of freeing and recreating the context
+  FFT plan/buffers on every grid switch.
+- [x] Key staged v2 `push_pull` pull maps by tensor-kernel `fft_grid`: layer
+  push maps remain per source layer because they depend only on
+  native/convolution overlap, while each tensor kernel owns the destination
+  padded-FFT pull map used by `pull_h`.
+- [ ] Finish optimized interpolation backends and remaining local-field RHS
+  coverage for thermal noise, Oersted, spin torque,
+  per-layer/per-cell DMI and per-cell anisotropy fields, and the remaining v2
+  integrators beyond Heun/RK4.
 
 ### Phase 1: Data model
 - [ ] Add `Layer` concept to `ExchangeLlgProblem` (rect, cell count, cell size per layer)

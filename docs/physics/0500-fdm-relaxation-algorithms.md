@@ -236,6 +236,11 @@ residual is defined as $\max_i |m_i \times H_{\mathrm{eff},i}|$.
 `max_torque_T = \mu_0 \, \tau_{\max}` may be reported as an auxiliary derived
 observable for mumax-style comparison, but it is not the control variable used
 for Fullmag relaxation stop checks.
+Vector field artifacts named `torque` use the Tesla-style field-space payload
+consistent with the existing preview path; scalar stop criteria and
+`max_torque_Apm` remain the canonical A/m convergence quantities. Component
+artifact names such as `m.x`, `H_eff.z`, and `torque.x` inherit the unit of the
+base observable.
 
 #### 3.1.2 Algorithm B — Projected Gradient + Barzilai–Borwein
 
@@ -283,15 +288,25 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     scalar terms alongside exchange, demag, external and total energy.
     Scalar-only scheduled CPU rows and scalar-only live updates may reuse that
     `StepReport` plus the current magnetization averages instead of recomputing
-    full observables for the row. CPU FDM live execution should refresh full
-    observables only when a heavy field payload or non-scalar preview is due.
+    full observables for the row. CPU FDM live execution should read heavy
+    magnetization payloads directly from the current state and should refresh
+    full observables only when the requested preview quantity has no direct
+    field accessor.
+    When a live consumer explicitly requests an initial snapshot, CPU FDM should
+    emit a step-0 update with the normalized current magnetization before the
+    first accepted step; otherwise live field previews start from accepted
+    steps.
     Scheduled and final CPU artifact snapshots for the magnetization field
     itself (`m` or `m.x/y/z`) may read the current state directly and pair
     scheduled rows with `StepReport` scalars. `H_ext` snapshots may use the
     direct external-field accessor, preserving uniform field, per-node field,
     component projection, and inactive-mask semantics without full observables.
+    Scheduled `H_ani` snapshots may use the direct anisotropy-field accessor,
+    preserving component projection without full observables.
     Scheduled `H_ex` snapshots may use the direct exchange-field accessor, and
     scheduled `H_demag` snapshots may use the direct demag-field accessor.
+    Scheduled `H_dmi` snapshots may use the direct combined interfacial-plus-bulk
+    DMI field accessor, preserving component projection without full observables.
     Under the current CPU reference artifact contract, scheduled `H_OE`
     snapshots expose `problem.terms.per_node_field` with zero fallback and may
     use that direct source without assembling full observables; this does not
@@ -305,11 +320,14 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     name. Final output passes should use the last `StepReport` for scalar-only
     final rows when it matches the final state time, and should treat an
     existing scalar row at the current final time as authoritative instead of
-    reassembling full observables just to duplicate that row. Standalone and
-    interactive CPU preview snapshots should use the same direct field boundary
-    for `m`, `H_ex`, `H_demag`, `H_ext`, `H_eff`, and `torque`, including
-    shared `H_eff` assembly for cached `H_eff`/`torque` preview fields, with
-    full observables reserved for quantities that have no direct accessor.
+    reassembling full observables just to duplicate that row. The default scalar
+    trace should not assemble an extra initial observable cache between its
+    initial scalar snapshot and final `StepReport` row. Standalone,
+    interactive, and live CPU preview snapshots should use the same direct field
+    boundary for `m`, `H_ex`, `H_demag`, `H_ext`, `H_ani`, `H_dmi`, `H_eff`, and
+    `torque`, including shared `H_eff` assembly for cached `H_eff`/`torque`
+    preview fields, with full observables reserved for quantities that have no
+    direct accessor.
     Interactive CPU step-stat snapshots after a completed step should reuse the
     last `StepReport` when it matches the current state time.
 
@@ -577,7 +595,7 @@ The planner gate (`fullmag-plan/src/lib.rs`) allows:
 - `NonlinearCg` → all FDM backends
 - `TangentPlaneImplicit` → **rejected** (FEM-only, not yet implemented)
 
-The runner (`fullmag-runner/src/cpu_reference.rs`) dispatches:
+The runner (`fullmag-runner/src/fdm/cpu/reference.rs`) dispatches:
 - LLG overdamped → existing Heun time-stepping loop
 - BB / NCG → direct minimization path (bypasses time stepping)
 
@@ -629,17 +647,22 @@ torque tolerance $\epsilon_\tau = 10^{-4}$).
 | `final_magnetization_only_outputs_read_state_without_reobserving_state` | LLG output scheduling | Final `m`/`m.x/y/z` artifact snapshots read current state without full observables when no scalar row is due |
 | `external_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_ext`/`H_ext.x/y/z` artifact snapshots use the direct external-field accessor without full observables |
 | `oersted_field_due_outputs_read_per_node_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_OE`/`H_OE.x/y/z` artifact snapshots use the current per-node field artifact source without full observables |
+| `anisotropy_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_ani`/`H_ani.x/y/z` artifact snapshots use the direct anisotropy-field accessor without full observables |
 | `exchange_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_ex`/`H_ex.x/y/z` artifact snapshots use the direct exchange-field accessor without full observables |
 | `demag_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_demag`/`H_demag.x/y/z` artifact snapshots use the direct demag-field accessor without full observables |
+| `dmi_field_due_outputs_read_problem_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_dmi`/`H_dmi.x/y/z` artifact snapshots use the direct DMI-field accessor without full observables |
 | `effective_field_due_outputs_read_observable_field_without_reobserving_state` | LLG output scheduling | Scheduled `H_eff`/`H_eff.x/y/z` artifact snapshots use the field-only observable effective-field accessor without full observables |
 | `torque_due_outputs_read_observable_effective_field_without_reobserving_state` | LLG output scheduling | Scheduled `torque`/`torque.x/y/z` artifact snapshots derive from the observable effective field without full observables |
 | `effective_field_and_torque_due_outputs_share_direct_effective_field_cache` | LLG output scheduling | A direct output pass reuses one observable effective-field assembly across `H_eff` siblings and `torque` snapshots |
-| `default_final_scalar_trace_uses_last_step_report_without_reobserving_state` | LLG output finalization | Default final scalar trace uses the last `StepReport` instead of reobserving the final state |
+| `default_final_scalar_trace_uses_last_step_report_without_reobserving_state` | LLG output finalization | Default scalar trace uses the initial scalar snapshot and last `StepReport` without extra full observables |
 | `final_outputs_do_not_duplicate_current_time_scalar_row_or_reobserve_state` | LLG/direct output finalization | Final output pass skips duplicate scalar rows and full observables when a current-time scalar row already exists |
 | `snapshot_preview_m_uses_direct_state_without_reobserving_state` | CPU preview snapshot | Magnetization preview snapshots read current state without full observables |
 | `snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state` | CPU cached preview snapshot | Cached `H_eff` and `torque` preview fields share one direct effective-field assembly without full observables |
 | `cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state` | Interactive CPU preview snapshot | Interactive magnetization preview snapshots read current state without full observables |
 | `cpu_interactive_snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state` | Interactive CPU cached preview snapshot | Interactive cached `H_eff` and `torque` preview fields share one direct effective-field assembly without full observables |
+| `live_direct_preview_uses_state_without_reobserving_every_refresh` | LLG live preview | Repeated direct live previews use current state/direct fields rather than full observables per refresh |
+| `live_magnetization_payload_reads_state_without_reobserving_every_refresh` | LLG live payload | Repeated live magnetization payloads read current state instead of full observables per refresh |
+| `live_initial_snapshot_emits_step_zero_magnetization_before_first_step` | LLG live preview | `initial_snapshot=true` emits normalized step-0 magnetization before the first accepted CPU FDM step |
 | `cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state` | Interactive CPU scalar snapshot | Interactive step-stat snapshots reuse the last matching `StepReport` without full observables |
 | `all_algorithms_converge_to_similar_equilibrium` | All 3 | $|E_i - E_{\mathrm{LLG}}|/|E_{\mathrm{LLG}}| < 20\%$ |
 | `llg_overdamped_relaxation_stops_before_time_limit_on_uniform_state` | LLG | Stops early on equilibrium |

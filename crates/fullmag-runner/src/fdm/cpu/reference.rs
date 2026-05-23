@@ -251,6 +251,7 @@ pub(crate) fn snapshot_preview(
     plan: &FdmPlanIR,
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
+    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let (problem, state) = build_snapshot_problem_and_state(plan)?;
     snapshot_preview_from_state(
         &problem,
@@ -292,6 +293,7 @@ pub(crate) fn snapshot_vector_fields(
     quantities: &[&str],
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let (problem, state) = build_snapshot_problem_and_state(plan)?;
     snapshot_vector_fields_from_state(
         &problem,
@@ -343,6 +345,25 @@ pub(crate) fn snapshot_vector_fields_from_state(
     }
 
     Ok(cached)
+}
+
+fn build_direct_preview_field_if_available(
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    request: &LivePreviewRequest,
+    grid: [u32; 3],
+    active_mask: Option<&[bool]>,
+) -> Result<Option<crate::LivePreviewField>, RunError> {
+    let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
+    let Some(values) = select_direct_preview_values(&mut direct_fields, &request.quantity)? else {
+        return Ok(None);
+    };
+    Ok(Some(build_grid_preview_field(
+        request,
+        &values,
+        grid,
+        active_mask,
+    )))
 }
 
 fn select_direct_preview_values(
@@ -742,32 +763,66 @@ pub(crate) fn execute_reference_fdm(
         ));
     } else {
         // LLG overdamped (or no relaxation): existing time-stepping loop
-        let mut current_observables = observe_state(&problem, &state)?;
+        let needs_initial_live_snapshot = live
+            .as_ref()
+            .is_some_and(|consumer| consumer.initial_snapshot);
+        let mut current_observables = if needs_initial_live_snapshot {
+            Some(observe_state(&problem, &state)?)
+        } else {
+            None
+        };
         let mut current_observables_stale = false;
-        let mut current_stats =
-            make_step_stats(step_count, state.time_seconds, 0.0, 0, &current_observables);
+        let mut current_stats = current_observables
+            .as_ref()
+            .map(|observables| make_step_stats(step_count, state.time_seconds, 0.0, 0, observables))
+            .unwrap_or_default();
         while state.time_seconds < until_seconds {
-            if let Some(live) = live.as_mut() {
-                if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                    let preview_due = display_refresh_due(
-                        last_preview_revision,
-                        &display_selection,
-                        current_stats.step,
-                    );
-                    let preview_targets_global_scalar =
-                        display_is_global_scalar(&display_selection);
+            if step_count == 0
+                && live
+                    .as_ref()
+                    .is_some_and(|consumer| consumer.initial_snapshot)
+            {
+                if let Some(live) = live.as_mut() {
+                    let display_selection = live.display_selection.map(|get| get());
+                    let preview_due = display_selection
+                        .as_ref()
+                        .map(|selection| {
+                            display_refresh_due(
+                                last_preview_revision,
+                                selection,
+                                current_stats.step,
+                            )
+                        })
+                        .unwrap_or(false);
+                    let preview_targets_global_scalar = display_selection
+                        .as_ref()
+                        .is_some_and(display_is_global_scalar);
                     let preview_field = if preview_due && !preview_targets_global_scalar {
-                        if current_observables_stale {
-                            current_observables = observe_state(&problem, &state)?;
-                            current_observables_stale = false;
-                        }
-                        let request = display_selection.preview_request();
-                        Some(build_grid_preview_field(
+                        let selection = display_selection.as_ref().expect("checked preview_due");
+                        let request = selection.preview_request();
+                        if let Some(field) = build_direct_preview_field_if_available(
+                            &problem,
+                            &state,
                             &request,
-                            select_observables(&current_observables, &request.quantity)?,
                             live.grid,
                             plan.active_mask.as_deref(),
-                        ))
+                        )? {
+                            Some(field)
+                        } else {
+                            if current_observables_stale || current_observables.is_none() {
+                                current_observables = Some(observe_state(&problem, &state)?);
+                                current_observables_stale = false;
+                            }
+                            let current_observables = current_observables
+                                .as_ref()
+                                .expect("current observables should be initialized");
+                            Some(build_grid_preview_field(
+                                &request,
+                                select_observables(current_observables, &request.quantity)?,
+                                live.grid,
+                                plan.active_mask.as_deref(),
+                            ))
+                        }
                     } else {
                         None
                     };
@@ -776,13 +831,18 @@ pub(crate) fn execute_reference_fdm(
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
                         fem_mesh: None,
-                        magnetization: None,
+                        magnetization: Some(flatten_vectors(state.magnetization())),
                         preview_field,
                         cached_preview_fields: None,
                         finished: false,
                     });
                     if preview_due {
-                        last_preview_revision = Some(display_selection.revision);
+                        last_preview_revision = Some(
+                            display_selection
+                                .as_ref()
+                                .expect("checked preview_due")
+                                .revision,
+                        );
                     }
                     if action == StepAction::Stop {
                         cancelled = true;
@@ -858,38 +918,49 @@ pub(crate) fn execute_reference_fdm(
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
                 let heavy_payload_due = step_count % heavy_payload_every == 0;
+                let mut preview_field = None;
+                let direct_preview_satisfied = if preview_due && !preview_targets_global_scalar {
+                    let selection = display_selection.as_ref().expect("checked preview_due");
+                    let request = selection.preview_request();
+                    preview_field = build_direct_preview_field_if_available(
+                        &problem,
+                        &state,
+                        &request,
+                        live.grid,
+                        plan.active_mask.as_deref(),
+                    )?;
+                    preview_field.is_some()
+                } else {
+                    false
+                };
                 let needs_observables =
-                    heavy_payload_due || (preview_due && !preview_targets_global_scalar);
+                    preview_due && !preview_targets_global_scalar && !direct_preview_satisfied;
                 let observables = if needs_observables {
                     let observables = observe_state(&problem, &state)?;
-                    current_observables = observables.clone();
+                    current_observables = Some(observables.clone());
                     current_observables_stale = false;
                     Some(observables)
                 } else {
                     None
                 };
                 let magnetization = if heavy_payload_due {
-                    observables
-                        .as_ref()
-                        .map(|observables| flatten_vectors(&observables.magnetization))
+                    Some(flatten_vectors(state.magnetization()))
                 } else {
                     None
                 };
-                let preview_field = if preview_due && !preview_targets_global_scalar {
+                if preview_field.is_none() && preview_due && !preview_targets_global_scalar {
                     let selection = display_selection.as_ref().expect("checked preview_due");
                     let request = selection.preview_request();
                     let observables = observables
                         .as_ref()
                         .expect("preview field marked observables as required");
-                    Some(build_grid_preview_field(
+                    preview_field = Some(build_grid_preview_field(
                         &request,
                         select_observables(observables, &request.quantity)?,
                         live.grid,
                         plan.active_mask.as_deref(),
-                    ))
-                } else {
-                    None
-                };
+                    ));
+                }
                 let due_scalar_row = step_count <= 1
                     || step_count % heavy_payload_every == 0
                     || scalar_row_due(&scalar_schedules, state.time_seconds)
@@ -1276,6 +1347,7 @@ pub(crate) fn observe_state(
         .per_node_field
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
     let torque_field = compute_torque_field(
         &observables.magnetization,
@@ -1296,8 +1368,8 @@ pub(crate) fn observe_state(
         external_field: uniform_external,
         antenna_field: vec![[0.0, 0.0, 0.0]; state.magnetization().len()],
         effective_field: observables.effective_field,
-        anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        anisotropy_field,
+        dmi_field: observables.dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1385,7 +1457,7 @@ fn direct_field_values_available(name: &str) -> bool {
     };
     matches!(
         base,
-        "m" | "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "torque"
+        "m" | "H_ex" | "H_demag" | "H_ext" | "H_ani" | "H_dmi" | "H_OE" | "H_eff" | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
 }
 
@@ -1396,6 +1468,8 @@ struct DirectFieldSnapshotCache<'a> {
     exchange_field: Option<Vec<Vector3>>,
     demag_field: Option<Vec<Vector3>>,
     external_field: Option<Vec<Vector3>>,
+    anisotropy_field: Option<Vec<Vector3>>,
+    dmi_field: Option<Vec<Vector3>>,
     oersted_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
@@ -1410,6 +1484,8 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             exchange_field: None,
             demag_field: None,
             external_field: None,
+            anisotropy_field: None,
+            dmi_field: None,
             oersted_field: None,
             effective_field: None,
             torque_field: None,
@@ -1476,6 +1552,32 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     .external_field
                     .as_deref()
                     .expect("cached external field"))
+            }
+            "H_ani" => {
+                if self.anisotropy_field.is_none() {
+                    self.anisotropy_field =
+                        Some(self.problem.anisotropy_field(self.state.magnetization()));
+                }
+                Ok(self
+                    .anisotropy_field
+                    .as_deref()
+                    .expect("cached anisotropy field"))
+            }
+            "H_dmi" => {
+                if self.dmi_field.is_none() {
+                    self.dmi_field =
+                        Some(
+                            self.problem
+                                .dmi_field(self.state)
+                                .map_err(|error| RunError {
+                                    message: format!(
+                                        "CPU FDM snapshot '{}': DMI field: {}",
+                                        name, error
+                                    ),
+                                })?,
+                        );
+                }
+                Ok(self.dmi_field.as_deref().expect("cached DMI field"))
             }
             "H_OE" => {
                 if self.oersted_field.is_none() {
@@ -1619,6 +1721,36 @@ mod tests {
         }
     }
 
+    fn cpu_fft_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("CPU FFT backend env lock should not be poisoned")
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         FdmPlanIR {
             grid: GridDimensions { cells: [1, 1, 1] },
@@ -1725,6 +1857,35 @@ mod tests {
             0,
             "magnetization preview should read the state directly"
         );
+    }
+
+    #[test]
+    fn snapshot_preview_rejects_unimplemented_cpu_fft_backend_for_demag() {
+        let _lock = cpu_fft_env_lock();
+        let _env = EnvVarGuard::set(CPU_FFT_BACKEND_ENV, "fftw");
+        let plan = FdmPlanIR {
+            enable_exchange: false,
+            enable_demag: true,
+            ..make_test_plan()
+        };
+
+        let err = match snapshot_preview(
+            &plan,
+            &LivePreviewRequest {
+                quantity: "H_demag".to_string(),
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        ) {
+            Ok(_) => panic!("demag preview should reject unimplemented CPU FFT backend"),
+            Err(err) => err,
+        };
+
+        assert!(err.message.contains(CPU_FFT_BACKEND_ENV));
+        assert!(err.message.contains("fftw"));
+        assert!(err
+            .message
+            .contains("supported CPU FDM FFT backends: rustfft"));
     }
 
     #[test]
@@ -2028,6 +2189,166 @@ mod tests {
     }
 
     #[test]
+    fn live_direct_preview_uses_state_without_reobserving_every_refresh() {
+        reset_observe_state_calls();
+
+        let plan = FdmPlanIR {
+            initial_magnetization: fullmag_plan::generate_random_unit_vectors(19, 16),
+            ..make_test_plan()
+        };
+        let display_selection = || {
+            let mut state = crate::DisplaySelectionState::default();
+            state.selection.quantity = "m".to_string();
+            state.selection.every_n = 1;
+            state
+        };
+        let mut preview_updates = 0usize;
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            if update.preview_field.is_some() {
+                preview_updates += 1;
+            }
+            assert!(update.magnetization.is_none());
+            assert!(update.cached_preview_fields.is_none());
+            StepAction::Continue
+        };
+
+        let executed = execute_reference_fdm(
+            &plan,
+            3e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: u64::MAX,
+                initial_snapshot: false,
+                display_selection: Some(&display_selection),
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("live direct-preview CPU FDM run should succeed");
+
+        assert_eq!(executed.result.status, RunStatus::Completed);
+        assert!(preview_updates >= 2, "expected repeated preview updates");
+        let observe_calls = observe_state_call_count();
+        assert!(
+            observe_calls <= 2,
+            "direct live previews should not force full observables every refresh; observe_state calls: {observe_calls}"
+        );
+    }
+
+    #[test]
+    fn live_magnetization_payload_reads_state_without_reobserving_every_refresh() {
+        reset_observe_state_calls();
+
+        let plan = FdmPlanIR {
+            initial_magnetization: fullmag_plan::generate_random_unit_vectors(29, 16),
+            ..make_test_plan()
+        };
+        let mut magnetization_updates = 0usize;
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            if let Some(values) = update.magnetization.as_ref() {
+                magnetization_updates += 1;
+                assert_eq!(values.len(), plan.initial_magnetization.len() * 3);
+            }
+            assert!(update.preview_field.is_none());
+            assert!(update.cached_preview_fields.is_none());
+            StepAction::Continue
+        };
+
+        let executed = execute_reference_fdm(
+            &plan,
+            3e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: 1,
+                initial_snapshot: false,
+                display_selection: None,
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("live magnetization payload CPU FDM run should succeed");
+
+        assert_eq!(executed.result.status, RunStatus::Completed);
+        assert!(
+            magnetization_updates >= 2,
+            "expected repeated live magnetization payloads"
+        );
+        let observe_calls = observe_state_call_count();
+        assert!(
+            observe_calls <= 1,
+            "live magnetization payload should read state directly instead of full observables per refresh; observe_state calls: {observe_calls}"
+        );
+    }
+
+    #[test]
+    fn live_initial_snapshot_emits_step_zero_magnetization_before_first_step() {
+        let plan = FdmPlanIR {
+            initial_magnetization: fullmag_plan::generate_random_unit_vectors(19, 16),
+            ..make_test_plan()
+        };
+        let expected_initial: Vec<f64> = plan
+            .initial_magnetization
+            .iter()
+            .flat_map(|value| {
+                let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+                [value[0] / norm, value[1] / norm, value[2] / norm]
+            })
+            .collect();
+        let display_selection = || {
+            let mut state = crate::DisplaySelectionState::default();
+            state.selection.quantity = "m".to_string();
+            state.selection.every_n = 1;
+            state
+        };
+        let mut first_update: Option<StepUpdate> = None;
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            if first_update.is_none() {
+                first_update = Some(update);
+                return StepAction::Stop;
+            }
+            StepAction::Stop
+        };
+
+        let executed = execute_reference_fdm(
+            &plan,
+            3e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: u64::MAX,
+                initial_snapshot: true,
+                display_selection: Some(&display_selection),
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("initial live snapshot CPU FDM run should stop cleanly");
+
+        assert_eq!(executed.result.status, RunStatus::Cancelled);
+        let first_update = first_update.expect("expected initial live update");
+        assert_eq!(first_update.stats.step, 0);
+        assert_eq!(first_update.stats.time, 0.0);
+        let actual_initial = first_update
+            .magnetization
+            .as_deref()
+            .expect("initial live snapshot should include magnetization");
+        assert_eq!(actual_initial.len(), expected_initial.len());
+        for (actual, expected) in actual_initial.iter().zip(expected_initial.iter()) {
+            assert!(
+                (actual - expected).abs() <= 1e-12,
+                "initial magnetization component differs: actual={actual}, expected={expected}"
+            );
+        }
+        assert!(first_update.preview_field.is_some());
+        assert!(!first_update.finished);
+    }
+
+    #[test]
     fn default_final_scalar_trace_uses_last_step_report_without_reobserving_state() {
         reset_observe_state_calls();
 
@@ -2055,8 +2376,8 @@ mod tests {
 
         let observe_calls = observe_state_call_count();
         assert!(
-            observe_calls <= 2,
-            "default final scalar row should reuse the last StepReport instead of reobserving final state; observe_state calls: {observe_calls}"
+            observe_calls <= 1,
+            "default scalar trace should reuse the initial scalar snapshot and last StepReport without extra full observables; observe_state calls: {observe_calls}"
         );
     }
 
@@ -2470,6 +2791,185 @@ mod tests {
             expected_demag
                 .iter()
                 .map(|value| [value[0], 0.0, 0.0])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dmi_field_due_outputs_read_problem_field_without_reobserving_state() {
+        let grid = GridShape::new(3, 3, 3).expect("valid grid");
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.5, 2.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 0.5 * crate::MU0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                interfacial_dmi: Some(0.04 * crate::MU0),
+                bulk_dmi: Some(-0.02 * crate::MU0),
+                magnetoelastic: None,
+                ..Default::default()
+            },
+        );
+        let mut state = problem
+            .new_state(
+                (0..grid.cell_count())
+                    .map(|i| {
+                        let x = i % grid.nx;
+                        let y = (i / grid.nx) % grid.ny;
+                        let z = i / (grid.nx * grid.ny);
+                        [
+                            1.0 + 0.11 * x as f64 - 0.03 * z as f64,
+                            0.2 + 0.07 * y as f64 + 0.02 * z as f64,
+                            0.4 - 0.05 * x as f64 + 0.09 * z as f64,
+                        ]
+                    })
+                    .collect(),
+            )
+            .expect("state should build");
+        state.time_seconds = 2e-12;
+        let expected_dmi = problem
+            .observe(&state)
+            .expect("observables should assemble")
+            .effective_field;
+        reset_observe_state_calls();
+
+        let mut scalar_schedules = Vec::new();
+        let mut field_schedules = vec![
+            OutputSchedule {
+                name: "H_dmi".to_string(),
+                every_seconds: 1e-12,
+                next_time: 0.0,
+                last_sampled_time: None,
+            },
+            OutputSchedule {
+                name: "H_dmi.x".to_string(),
+                every_seconds: 1e-12,
+                next_time: 0.0,
+                last_sampled_time: None,
+            },
+        ];
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance {
+            execution_engine: "cpu_reference".to_string(),
+            precision: "double".to_string(),
+            ..Default::default()
+        });
+
+        record_due_outputs(
+            &problem,
+            &state,
+            10,
+            1e-14,
+            59,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("DMI-field outputs should record");
+
+        let observe_calls = observe_state_call_count();
+        assert_eq!(
+            observe_calls, 0,
+            "H_dmi outputs should use the direct DMI-field accessor instead of full observables"
+        );
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 2);
+        assert_eq!(field_snapshots[0].name, "H_dmi");
+        assert_eq!(field_snapshots[0].values, expected_dmi);
+        assert_eq!(field_snapshots[1].name, "H_dmi.x");
+        assert_eq!(
+            field_snapshots[1].values,
+            expected_dmi
+                .iter()
+                .map(|value| [value[0], 0.0, 0.0])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn anisotropy_field_due_outputs_read_problem_field_without_reobserving_state() {
+        let grid = GridShape::new(2, 1, 1).expect("valid grid");
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                uniaxial_anisotropy: Some(UniaxialAnisotropyConfig {
+                    ku1: 0.5 * crate::MU0,
+                    ku2: 0.25 * crate::MU0,
+                    axis: [0.0, 0.0, 1.0],
+                }),
+                ..Default::default()
+            },
+        );
+        let mut state = problem
+            .new_state(vec![[0.6, 0.0, 0.8], [0.8, 0.0, 0.6]])
+            .expect("state should build");
+        state.time_seconds = 2e-12;
+        let expected_anisotropy = problem
+            .observe(&state)
+            .expect("observables should assemble")
+            .effective_field;
+        reset_observe_state_calls();
+
+        let mut scalar_schedules = Vec::new();
+        let mut field_schedules = vec![
+            OutputSchedule {
+                name: "H_ani".to_string(),
+                every_seconds: 1e-12,
+                next_time: 0.0,
+                last_sampled_time: None,
+            },
+            OutputSchedule {
+                name: "H_ani.z".to_string(),
+                every_seconds: 1e-12,
+                next_time: 0.0,
+                last_sampled_time: None,
+            },
+        ];
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance {
+            execution_engine: "cpu_reference".to_string(),
+            precision: "double".to_string(),
+            ..Default::default()
+        });
+
+        record_due_outputs(
+            &problem,
+            &state,
+            11,
+            1e-14,
+            61,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("anisotropy-field outputs should record");
+
+        let observe_calls = observe_state_call_count();
+        assert_eq!(
+            observe_calls, 0,
+            "H_ani outputs should use the direct anisotropy-field accessor instead of full observables"
+        );
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 2);
+        assert_eq!(field_snapshots[0].name, "H_ani");
+        assert_eq!(field_snapshots[0].values, expected_anisotropy);
+        assert_eq!(field_snapshots[1].name, "H_ani.z");
+        assert_eq!(
+            field_snapshots[1].values,
+            expected_anisotropy
+                .iter()
+                .map(|value| [value[2], 0.0, 0.0])
                 .collect::<Vec<_>>()
         );
     }

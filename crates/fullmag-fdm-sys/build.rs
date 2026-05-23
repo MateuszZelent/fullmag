@@ -13,7 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../native/backends/fdm/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../native/backends/fdm/api");
     println!("cargo:rerun-if-changed=../../native/backends/fdm/core");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/cuda");
+    println!("cargo:rerun-if-changed=../../native/backends/fdm/gpu/cuda");
     println!("cargo:rerun-if-changed=../../native/backends/fdm/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
 

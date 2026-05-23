@@ -95,6 +95,18 @@ void public_availability_api_preserves_lane_mirrors()
     check(
         availability.available_gpu == availability.native_fem_gpu_available,
         "available_gpu mirrors native_fem_gpu_available");
+    if (availability.native_fem_gpu_available == 0) {
+        check(
+            availability.gpu_memory_free_bytes == 0 && availability.gpu_memory_total_bytes == 0,
+            "unavailable native FEM GPU reports zero VRAM capacity");
+    } else {
+        check(
+            availability.gpu_memory_total_bytes > 0,
+            "available native FEM GPU reports total VRAM capacity");
+        check(
+            availability.gpu_memory_free_bytes <= availability.gpu_memory_total_bytes,
+            "available native FEM GPU reports bounded free VRAM");
+    }
     check(
         std::strlen(availability.reason) > 0,
         "availability query reports aggregate reason");

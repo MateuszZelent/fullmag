@@ -3496,13 +3496,15 @@ def test_gpu_rk_step_contains_adaptive_retry_loop_scaffold():
     function_end = gpu_rk_cuda_source.index("bool gpu_rk_finalize_step_stats(", function_start)
     function_source = gpu_rk_cuda_source[function_start:function_end]
 
-    assert "const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt_enabled" in function_source
+    assert "const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled" in function_source
     assert "for (;;) {" in function_source
-    assert "ctx.current_dt = active_dt" in function_source
+    assert "ctx.adaptive_dt.current_dt = active_dt" in function_source
     assert "compute_adaptive_error_norm_device(" in function_source
     assert "gpu_adaptive_pi_step(ctx, error_estimate)" in function_source
     assert "restore_adaptive_reject_magnetization_device(gpu, stream, reason)" in function_source
     assert "rejected_attempts += 1" in function_source
+    assert "ctx.adaptive_dt.max_reject" in function_source
+    assert "adaptive_config.max_reject" in function_source
     assert "continue;" in function_source
     assert "stats.error_estimate = error_estimate" in function_source
     assert "stats.dt_suggested = suggested_dt" in function_source

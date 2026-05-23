@@ -113,3 +113,60 @@ fn fdm_engine_cpu_execution_files_have_cpu_owner() {
         );
     }
 }
+
+#[test]
+fn fdm_engine_root_does_not_keep_compatibility_shim_modules() {
+    let root = crate_root();
+    let lib_rs = fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+
+    for needle in [
+        "mod fdm_fft {",
+        "pub mod fdm_fft_backend {",
+        "mod fdm_types {",
+        "crate::fdm_fft::",
+        "crate::fdm_fft_backend::",
+        "crate::fdm_types::",
+    ] {
+        assert!(
+            !lib_rs.contains(needle),
+            "FDM engine root must not keep compatibility shim module/import: {needle}"
+        );
+    }
+}
+
+#[test]
+fn fdm_module_reexports_use_cpu_and_shared_owner_modules_directly() {
+    let root = crate_root();
+    let fdm_mod = fs::read_to_string(root.join("src/fdm/mod.rs")).expect("read src/fdm/mod.rs");
+
+    for needle in [
+        "pub(crate) mod fft {",
+        "pub mod fft_backend {",
+        "pub(crate) mod state {",
+        "pub(crate) mod problem {",
+        "pub(crate) mod types {",
+    ] {
+        assert!(
+            !fdm_mod.contains(needle),
+            "src/fdm/mod.rs must re-export from owner modules directly, not via shim: {needle}"
+        );
+    }
+
+    for path in [
+        "src/fdm/shared/problem.rs",
+        "src/fdm/cpu/fft.rs",
+        "src/fdm/cpu/fields.rs",
+    ] {
+        let source = fs::read_to_string(root.join(path)).expect("read FDM owner source");
+        for needle in [
+            "crate::fdm_fft",
+            "crate::fdm_fft_backend",
+            "crate::fdm_types",
+        ] {
+            assert!(
+                !source.contains(needle),
+                "{path} must import directly from src/fdm/cpu or src/fdm/shared owners, not {needle}"
+            );
+        }
+    }
+}

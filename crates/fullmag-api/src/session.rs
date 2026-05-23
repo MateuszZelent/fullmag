@@ -28,6 +28,10 @@ pub(crate) fn build_runtime_status_view(status_code: &str) -> RuntimeStatusView 
 }
 
 pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> String {
+    if snapshot.session.status == "waiting_for_compute" {
+        return snapshot.session.status.clone();
+    }
+
     snapshot
         .live_state
         .as_ref()
@@ -1196,6 +1200,46 @@ mod tests {
             Some(CommandCompletionState::Completed)
         );
         assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    #[test]
+    fn runtime_status_prefers_waiting_for_compute_gate_over_stale_live_state() {
+        let mut current = test_current_snapshot();
+        current.session.status = "waiting_for_compute".to_string();
+        current.live_state = Some(LiveState {
+            status: "running".to_string(),
+            updated_at_unix_ms: 1_700_000_000_000,
+            latest_step: StepUpdateView {
+                step: 0,
+                time: 0.0,
+                dt: 0.0,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+
+        refresh_runtime_status(&mut current);
+
+        assert_eq!(effective_runtime_status_code(&current), "waiting_for_compute");
+        assert_eq!(current.runtime_status.kind, RuntimeStatus::WaitingForCompute);
+        assert!(!current.runtime_status.is_busy);
+        assert!(current.runtime_status.can_accept_commands);
     }
 
     #[test]

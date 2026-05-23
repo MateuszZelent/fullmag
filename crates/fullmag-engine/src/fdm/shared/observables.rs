@@ -29,6 +29,7 @@ pub struct EffectiveFieldObservables {
     pub demag_field: Vec<Vector3>,
     pub external_field: Vec<Vector3>,
     pub effective_field: Vec<Vector3>,
+    pub dmi_field: Vec<Vector3>,
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,

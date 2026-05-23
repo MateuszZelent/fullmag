@@ -354,6 +354,8 @@ pub struct fullmag_fem_availability_info {
     pub visible_cuda_device_count: i32,
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
+    pub gpu_memory_free_bytes: u64,
+    pub gpu_memory_total_bytes: u64,
     pub reason: [c_char; 256],
     pub available_any: i32,
     pub available_cpu: i32,
@@ -629,6 +631,8 @@ mod tests {
         assert_eq!(info.mfem_cuda_available, 0);
         assert_eq!(info.hypre_gpu_available, 0);
         assert_eq!(info.libceed_used_hot_path, 0);
+        assert_eq!(info.gpu_memory_free_bytes, 0);
+        assert_eq!(info.gpu_memory_total_bytes, 0);
     }
 
     /// Verify native FEM demag timing totals are ABI-visible.

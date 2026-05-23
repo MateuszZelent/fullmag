@@ -23,18 +23,6 @@ pub mod vector;
 // ── FDM engine modules ────────────────────────────────────────────────
 pub mod fdm;
 
-mod fdm_fft {
-    pub(crate) use crate::fdm::fft::*;
-}
-
-pub mod fdm_fft_backend {
-    pub use crate::fdm::fft_backend::*;
-}
-
-mod fdm_types {
-    pub(crate) use crate::fdm::types::*;
-}
-
 // ── Imports used locally (constants, tests) ───────────────────────────
 use std::f64::consts::PI;
 
@@ -1433,7 +1421,7 @@ mod tests {
         }
     }
 
-    impl crate::fdm_fft_backend::FdmFftBackend for RecordingDemagBackend {
+    impl crate::fdm::cpu::fft_backend::FdmFftBackend for RecordingDemagBackend {
         fn convolve_demag(
             &mut self,
             m: &VectorFieldSoA,

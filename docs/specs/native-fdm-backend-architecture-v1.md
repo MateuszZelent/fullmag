@@ -58,9 +58,10 @@ kernels, per-layer descriptors, or ABI v2 behind ad hoc runner glue.
 
 The current native CUDA boundary stages v2 layers and tensor kernels in
 `Context`, owns identity-grid `push_m`, tensor multiply, and `pull_h` kernels
-under `cuda/demag/multilayer_convolution.cu`, prepares a shared cuFFT
-workspace when all staged layer-pair kernels use one `fft_grid`, and rejects v2
-handles from the legacy single-grid `step()` path. A dedicated
+under `gpu/cuda/demag/multilayer_convolution.cu`, owns cached multilayer cuFFT
+workspaces keyed by tensor-kernel `fft_grid`, binds the active workspace before
+each tensor-kernel launch, and rejects v2 handles from the legacy single-grid
+`step()` path. A dedicated
 `fullmag_fdm_backend_refresh_multilayer_demag` ABI refreshes native multilayer
 demag for demag-enabled v2 plans without pretending to advance time. The
 identity-grid v2 demag operator must forward-transform and inverse-transform
@@ -74,29 +75,44 @@ demag refresh now has fp64/fp32 native CUDA `push_pull` kernels with the same V1
 semantics as the Rust demag crate: volume-weighted native-to-convolution
 `push_m` and trilinear convolution-to-native `pull_h`. Native v2 upload now
 precomputes staged transfer maps in `Context`: sparse push offsets, native
-indices, weights, and padded-FFT pull indices/weights. These maps are the
-correctness boundary for heterogeneous-grid refresh; optimized hardware
-interpolation remains future performance work. Per-layer `M`, `H_EX`, and
-`H_DEMAG` copy entrypoints expose that refreshed state through the C ABI and Rust FFI, and
+indices, weights, and padded-FFT pull indices/weights. The map ownership
+boundary is asymmetric: push maps are per source layer because they depend only
+on native/convolution grids, while pull maps are per tensor kernel because they
+index the active padded `fft_grid`. These maps are the correctness boundary for
+heterogeneous-grid refresh; optimized hardware interpolation remains future
+performance work. Per-layer `M`, `H_EX`, and
+`H_DEMAG` copy entrypoints expose that refreshed state through the C ABI and
+Rust FFI, and
 per-layer magnetization upload lets the CUDA-assisted multilayer runner use the
 native v2 handle as an identity-grid demag operator. The
-`cuda/interactions/multilayer_exchange.cu` owner provides the first layer-local
+`gpu/cuda/interactions/multilayer_exchange.cu` owner provides the first layer-local
 v2 exchange field slice: a uniform-A six-neighbor stencil on each layer native
 grid, with open Neumann boundary clamping and active-mask clamping. The
-`cuda/integrators/multilayer_heun.cu` and
-`cuda/integrators/multilayer_rk4.cu` owners provide the first native v2
+`gpu/cuda/integrators/multilayer_heun.cu` and
+`gpu/cuda/integrators/multilayer_rk4.cu` owners provide the first native v2
 timestep slices: Heun and RK4 for staged multilayer layers in fp64/fp32, using
 per-layer `tmp`, `k1`, `k2`, `k3`, and `k4` buffers with demag plus
-layer-local exchange. Local-field RHS coverage beyond layer-local exchange,
-per-grid workspace planning, and adaptive/multistep v2 integrators remain
-explicit future work.
+the requested uniform external field, per-layer uniform uniaxial anisotropy,
+per-layer uniform cubic anisotropy, global interfacial/bulk DMI, and
+layer-local exchange. Local-field RHS coverage beyond uniform external field,
+per-layer uniform uniaxial/cubic anisotropy, global DMI, and layer-local exchange,
+optimized interpolation, and adaptive/multistep v2 integrators remain explicit
+future work.
+The public multilayer planner and CUDA-assisted multilayer runner may carry
+fixed-step RK4 to this native v2 boundary; adaptive and multistep v2 integrators
+remain rejected instead of falling back into single-grid execution.
+For CPU-reference multilayer execution the public planner keeps the wider
+fixed-step CPU contract: Heun, RK4, RK23, RK45, and ABM3 may lower when CUDA is
+not explicitly requested. The narrower Heun/RK4 gate applies only to explicit
+CUDA/native v2 multilayer execution.
 
-Native step diagnostics now have a dedicated owner in
-`core/telemetry.cu`. The C ABI requests current stats through `Context`; it no
-longer owns the energy-reduction and field-amplitude wiring directly.
+Native step diagnostics now have a dedicated CUDA runtime owner in
+`gpu/cuda/runtime/telemetry.cu`. The C ABI requests current stats through
+`Context`; it no longer owns the energy-reduction and field-amplitude wiring
+directly.
 CUDA stream lifecycle and legacy-default/compute-stream handoff are owned by
-`cuda/runtime/streams.cu`, so `core/context.cu` keeps stream pointers as state
-without owning runtime scheduling policy.
+`gpu/cuda/runtime/streams.cu`, so `gpu/cuda/runtime/context.cu` keeps stream
+pointers as state without owning runtime scheduling policy.
 
 ## 3. Current Strangler Boundary
 
@@ -132,17 +148,24 @@ The second accepted layout step is the runner FDM owner module:
 crates/fullmag-runner/src/fdm/
   mod.rs
   artifacts.rs
-  cpu_reference.rs
+  cpu/
+    mod.rs
+    reference.rs
+    multilayer_reference.rs
+  gpu/
+    mod.rs
+    cuda/
+      mod.rs
+      native.rs
+      multilayer.rs
   multilayer.rs
-  multilayer_cuda.rs
-  multilayer_reference.rs
-  native_cuda.rs
   schedules.rs
 ```
 
-The crate root keeps private compatibility modules for
+Internal runner callers now import these paths through their FDM owner modules
+directly. The old private compatibility modules
 `crate::cpu_reference`, `crate::multilayer_cuda`, `crate::multilayer_reference`,
-and `crate::native_fdm` while callers are migrated to the FDM owner module.
+and `crate::native_fdm` are no longer allowed in `src/lib.rs`.
 
 ## 4. Target Rust Layout
 
@@ -169,20 +192,30 @@ crates/fullmag-engine/src/fdm/
 
 crates/fullmag-runner/src/fdm/
   mod.rs
-  cpu_reference.rs
-  native_cuda.rs
-  interactive.rs
   artifacts.rs
   schedules.rs
   multilayer.rs
+  cpu/
+    reference.rs
+    multilayer_reference.rs
+  gpu/cuda/
+    native.rs
+    multilayer.rs
+  interactive.rs
 ```
 
-This layout is descriptive. It should be reached in small, compiling moves that
-preserve old public imports until all internal callers are migrated.
+This layout is descriptive. It should be reached in small, compiling moves.
+Internal runner call sites must use the owner modules directly instead of
+root-level FDM compatibility shims.
 
 ## 5. Target Native Layout
 
-The target native CUDA layout is:
+The target FDM implementation layout is explicit about the CPU/GPU split:
+the CPU reference implementation lives in Rust under
+`crates/fullmag-engine/src/fdm/cpu`, while the native production GPU backend
+lives under `native/backends/fdm/gpu/cuda`.
+
+The target native GPU/CUDA layout is:
 
 ```text
 native/backends/fdm/
@@ -191,15 +224,15 @@ native/backends/fdm/
     kernels.hpp
     result.hpp
   core/
-    context.cu
     plan_fields.hpp/.cpp
     field_buffers.hpp/.cpp
     material_fields.hpp/.cpp
     state.hpp/.cpp
     snapshots.hpp/.cpp
-    telemetry.cu
-  cuda/
+  gpu/cuda/
     runtime/
+      context.cu
+      telemetry.cu
       device_info.cpp
       streams.cu
       reductions_fp64.cu
@@ -237,7 +270,7 @@ native/backends/fdm/
 
 The former flat `src/` directory is no longer the owner for native FDM source
 files. New native FDM subsystems should land in the target owner directory
-instead of making `core/context.cu` or `api/c_api.cpp` larger.
+instead of making `gpu/cuda/runtime/context.cu` or `api/c_api.cpp` larger.
 
 ## 6. Required Contract Tests
 
@@ -258,14 +291,19 @@ style:
   multilayer, native CUDA wrapper sources, shared FDM artifact helpers, and
   shared multilayer stats/schedule helpers under `src/fdm/`, not as root-level
   runner modules or duplicated local helpers.
+- Runner CPU implementations are owned by `src/fdm/cpu/`; runner CUDA
+  implementations are owned by `src/fdm/gpu/cuda/`. The old
+  `src/fdm/cpu_reference.rs`, `src/fdm/multilayer_reference.rs`,
+  `src/fdm/native_cuda.rs`, and `src/fdm/multilayer_cuda.rs` files are no
+  longer owner paths.
 - `native/backends/fdm/api/c_api.cpp` owns ABI translation, not physics kernels.
-- `native/backends/fdm/core/context.cu` owns compatibility state allocation, not
-  interaction formulas.
+- `native/backends/fdm/gpu/cuda/runtime/context.cu` owns CUDA compatibility
+  state allocation, not interaction formulas.
 - native demag, exchange, integrators, reductions, telemetry, and snapshots
   each have a stable owner path before further expansion.
-- `cuda/runtime/streams.cu` owns compute-stream creation, destruction, and
-  default-stream handoff helpers; `core/context.cu` must call those helpers
-  rather than defining runtime stream policy inline.
+- `gpu/cuda/runtime/streams.cu` owns compute-stream creation, destruction, and
+  default-stream handoff helpers; `gpu/cuda/runtime/context.cu` must call those
+  helpers rather than defining runtime stream policy inline.
 - `multilayer_abi_v2_contract` proves the C header and Rust FFI expose
   `fullmag_fdm_plan_kind`, per-layer descriptors, tensor-kernel descriptors,
   and a multilayer plan descriptor before native CUDA execution is wired.
@@ -275,9 +313,13 @@ style:
 - The same contract, together with the ABI source contract, proves validated
   v2 plans are staged into `Context` as per-layer magnetization/mask buffers
   and per-pair tensor-kernel device buffers before execution.
-- The ABI source contract proves v2 handles expose per-layer `M`, `H_EX`, and
-  `H_DEMAG` copy entrypoints and route them through `Context`, rather than
-  through the legacy single-grid field copy path.
+- The ABI source contract proves v2 handles expose per-layer `M`, `H_EX`,
+  `H_DEMAG`, `H_DMI`, `H_ANI`, `H_EXT`, and scratch-backed `H_EFF` copy
+  entrypoints and route them through `Context`, rather than through the legacy
+  single-grid field copy path. The same contract keeps the public C header
+  documentation aligned with that observable set and prevents stale
+  "multilayer CUDA not implemented" placeholder wording from returning as an
+  accepted staged status.
 - The ABI source contract also proves v2 handles expose per-layer
   magnetization upload, and that the Rust runner wrapper can build
   `fullmag_fdm_multilayer_plan_desc_v2` plus upload/copy per-layer state.
@@ -297,12 +339,38 @@ style:
 - The ABI source contract proves staged v2 `step()` routes to
   `launch_multilayer_heun_step_fp64/fp32` and
   `launch_multilayer_rk4_step_fp64/fp32`, and that Heun/RK4 owners are compiled
-  from `cuda/integrators/multilayer_heun.cu` and
-  `cuda/integrators/multilayer_rk4.cu` instead of keeping the old
+  from `gpu/cuda/integrators/multilayer_heun.cu` and
+  `gpu/cuda/integrators/multilayer_rk4.cu` instead of keeping the old
   timestep-unsupported placeholder.
 - The ABI source contract proves staged v2 Heun does not reject exchange-enabled
-  plans, compiles `cuda/interactions/multilayer_exchange.cu`, and stores
+  plans, compiles `gpu/cuda/interactions/multilayer_exchange.cu`, and stores
   per-layer `H_EX` separately from `H_DEMAG`.
+- The ABI source contract proves staged v2 multilayer plans carry the requested
+  uniform external field through the C ABI, Rust FFI, Rust native runner
+  wrapper, native `Context`, and Heun/RK4 RHS kernels.
+- The ABI source contract proves staged v2 layer descriptors carry per-layer
+  uniform uniaxial anisotropy (`Ku1`, `Ku2`, axis) through the C ABI, Rust FFI,
+  Rust native runner wrapper, native staged layer state, and Heun/RK4 RHS
+  kernels.
+- The ABI source contract proves staged v2 layer descriptors carry per-layer
+  uniform cubic anisotropy (`Kc1`, `Kc2`, `Kc3`, axes) through the C ABI, Rust
+  FFI, Rust native runner wrapper, native staged layer state, and Heun/RK4 RHS
+  kernels.
+- The planner and ABI source contracts prove staged v2 multilayer plans carry
+  global interfacial/bulk DMI constants through `FdmMultilayerPlanIR`, the C
+  ABI, Rust FFI, Rust native runner wrapper, native `Context`, and Heun/RK4 RHS
+  kernels.
+- The runner stats contract proves `cuda_native_multilayer_single_grid` keeps
+  native timestep metadata but derives scalar/live/relaxation `StepStats` from
+  per-layer `StateObservables`, not from a single combined-grid scalar record.
+- The artifact contract proves FDM multilayer field snapshots are written as a
+  per-layer series with `fields/<quantity>/manifest.json`, stable layer IDs,
+  native origins, vector shape, value offsets, and layer subdirectories instead
+  of one anonymous combined-grid field file.
+- The artifact unit contract proves component snapshots such as `m.x` and
+  `H_eff.z` inherit their base observable units, and that vector `torque`
+  artifacts use the Tesla-style preview payload while scalar relaxation
+  convergence keeps `max_torque_Apm` as the canonical stop unit.
 - multilayer demag has one subsystem boundary across Rust runner, Rust demag
   crate, and native CUDA ABI v2.
 

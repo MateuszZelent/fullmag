@@ -711,6 +711,14 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->disable_precession = plan->disable_precession != 0;
     ctx->enable_exchange = plan->enable_exchange != 0;
     ctx->enable_demag = plan->enable_demag != 0;
+    ctx->has_external_field = plan->has_external_field != 0;
+    ctx->external_field[0] = plan->external_field_am[0];
+    ctx->external_field[1] = plan->external_field_am[1];
+    ctx->external_field[2] = plan->external_field_am[2];
+    ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
+    ctx->D_interfacial = plan->dmi_D_interfacial;
+    ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
+    ctx->D_bulk = plan->dmi_D_bulk;
     if (!context_upload_multilayer_plan_v2(*ctx, *plan)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -721,7 +729,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->last_error =
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
-        + " tensor kernels; prepared shared FFT workspace; native Heun/RK4 timestep with demag and layer-local exchange is available for v2 multilayer handles";
+        + " tensor kernels; prepared initial FFT workspace; native Heun/RK4 timestep with demag and layer-local exchange is available for v2 multilayer handles";
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;

@@ -321,6 +321,8 @@ typedef struct {
     int visible_cuda_device_count;
     int requested_gpu_index;
     int resolved_gpu_index;
+    uint64_t gpu_memory_free_bytes;
+    uint64_t gpu_memory_total_bytes;
     char reason[256];
     int available_any;
     int available_cpu;

@@ -630,6 +630,23 @@ fn bootstrap_example_plans_successfully() {
 }
 
 #[test]
+fn fdm_planner_rejects_spatial_material_fields_until_realization_exists() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].ku_field = Some(vec![5.0e4; 8]);
+
+    let err = plan(&ir).expect_err("FDM material field inputs must not be silently dropped");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("per-cell material fields")
+                && reason.contains("ku_field")
+                && reason.contains("FDM")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
 fn fdm_magnetoelastic_term_is_rejected_until_fdm_lane_exists() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Magnetoelastic {
@@ -3069,8 +3086,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
     );
 }
 
-#[test]
-fn stacked_two_body_problem_lowers_to_multilayer_plan() {
+fn stacked_two_body_multilayer_problem() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     ir.geometry.entries = vec![
         GeometryEntryIR::Translate {
@@ -3143,11 +3159,187 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         fem: None,
         hybrid: None,
     });
+    ir
+}
 
-    let plan = plan(&ir).expect("stacked two-body problem should lower");
-    match plan.backend_plan {
+#[test]
+fn multilayer_planner_rejects_thermal_noise_until_rhs_coverage_exists() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.temperature = Some(300.0);
+
+    let err = plan(&ir).expect_err("multilayer thermal noise must not be silently ignored");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("thermal_noise") && reason.contains("multilayer FDM")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn multilayer_planner_rejects_spatial_material_fields_until_rhs_coverage_exists() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.materials[0].kc1_field = Some(vec![1.0e4; 4]);
+
+    let err = plan(&ir).expect_err("multilayer material fields must not be silently ignored");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("per-cell material fields")
+                && reason.contains("kc1_field")
+                && reason.contains("multilayer FDM")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn multilayer_planner_rejects_legacy_stt_until_rhs_coverage_exists() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.current_density = Some([1.0e12, 0.0, 0.0]);
+    ir.stt_degree = Some(0.4);
+    ir.stt_beta = Some(0.1);
+
+    let err = plan(&ir).expect_err("multilayer STT must not be silently ignored");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("spin_torque") && reason.contains("multilayer FDM")),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.energy_terms.push(EnergyTermIR::OerstedCylinder {
+        current: 1.5e-3,
+        radius: 20e-9,
+        center: [20e-9, 10e-9, 0.0],
+        axis: [0.0, 0.0, 1.0],
+        time_dependence: None,
+    });
+
+    let err = plan(&ir).expect_err("multilayer Oersted must not be silently ignored");
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains("Oersted")
+                && reason.contains("multilayer FDM")
+                && reason.contains("RHS coverage")
+        }),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
+    assert!(
+        !err.reasons
+            .iter()
+            .any(|reason| reason.contains("semantic-only")),
+        "Oersted rejection must use an explicit executable-coverage diagnostic: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
+fn stacked_two_body_problem_lowers_to_multilayer_plan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![
+        GeometryEntryIR::Translate {
+            name: "free_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: "free_base".to_string(),
+                size: [40e-9, 20e-9, 2e-9],
+            }),
+            by: [0.0, 0.0, 0.0],
+        },
+        GeometryEntryIR::Translate {
+            name: "ref_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: "ref_base".to_string(),
+                size: [40e-9, 20e-9, 2e-9],
+            }),
+            by: [0.0, 0.0, 4e-9],
+        },
+    ];
+    ir.regions = vec![
+        fullmag_ir::RegionIR {
+            name: "free_region".to_string(),
+            geometry: "free_geom".to_string(),
+        },
+        fullmag_ir::RegionIR {
+            name: "ref_region".to_string(),
+            geometry: "ref_geom".to_string(),
+        },
+    ];
+    ir.magnets = vec![
+        fullmag_ir::MagnetIR {
+            name: "free".to_string(),
+            region: "free_region".to_string(),
+            material: "Py".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            }),
+        },
+        fullmag_ir::MagnetIR {
+            name: "ref".to_string(),
+            region: "ref_region".to_string(),
+            material: "Py".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            }),
+        },
+    ];
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 1.5e-3,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        },
+    ];
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+            default_cell: Some([2e-9, 2e-9, 2e-9]),
+            per_magnet: None,
+            demag: Some(fullmag_ir::FdmDemagHintsIR {
+                strategy: "multilayer_convolution".to_string(),
+                mode: "two_d_stack".to_string(),
+                allow_single_grid_fallback: false,
+                common_cells: None,
+                common_cells_xy: None,
+            }),
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics:
+            fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "rk4".to_string();
+        *fixed_timestep = Some(2e-13);
+    }
+
+    let planned = plan(&ir).expect("stacked two-body problem should lower");
+    match planned.backend_plan {
         BackendPlanIR::FdmMultilayer(multilayer) => {
             assert_eq!(multilayer.layers.len(), 2);
+            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk4);
+            assert_eq!(multilayer.fixed_timestep, Some(2e-13));
             assert_eq!(multilayer.common_cells, [20, 10, 1]);
             for (actual, expected) in multilayer.layers[0]
                 .native_origin
@@ -3167,9 +3359,61 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
                 multilayer.planner_summary.selected_strategy,
                 "multilayer_convolution"
             );
+            assert_eq!(multilayer.interfacial_dmi, Some(1.5e-3));
+            assert_eq!(multilayer.bulk_dmi, Some(2.5e-3));
         }
         other => panic!("expected FDM multilayer plan, got {other:?}"),
     }
+
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics:
+            fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "rk45".to_string();
+        *fixed_timestep = Some(1e-13);
+    }
+    let cpu_plan = plan(&ir).expect("fixed-step CPU multilayer RK45 should lower");
+    match cpu_plan.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
+
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({ "device": "cuda" }),
+    );
+    let cuda_plan = plan(&ir).expect("native-stacked CUDA multilayer RK45 should lower");
+    match cuda_plan.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
+
+    ir.materials.push(fullmag_ir::MaterialIR {
+        name: "CoFeB".to_string(),
+        saturation_magnetisation: 1.1e6,
+        exchange_stiffness: 20e-12,
+        damping: 0.03,
+        ..ir.materials[0].clone()
+    });
+    ir.magnets[1].material = "CoFeB".to_string();
+    let err = plan(&ir).expect_err("heterogeneous CUDA multilayer RK45 should remain unsupported");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("staged v2") && reason.contains("'heun' and 'rk4'")),
+        "unexpected planner errors: {:?}",
+        err.reasons
+    );
 }
 
 #[test]
@@ -4674,6 +4918,48 @@ fn fdm_cuda_pbc_dmi_plans() {
     let plan = plan(&ir).expect("CUDA FDM + PBC DMI should plan");
     match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => assert_eq!(fdm.periodicity, ir.pbc),
+        _ => panic!("expected FDM plan"),
+    }
+}
+
+#[test]
+fn fdm_cuda_general_oersted_field_plans() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries[0] = GeometryEntryIR::Box {
+        name: "wire".to_string(),
+        size: [8e-9, 4e-9, 2e-9],
+    };
+    ir.regions[0].geometry = "wire".to_string();
+    ir.current_modules.push(CurrentModuleIR::CurrentTransport {
+        name: "drive".to_string(),
+        model: CurrentTransportModelIR::PrescribedDensity,
+        current_density: Some([1.0e10, 0.0, 0.0]),
+        solve_region: Some("strip".to_string()),
+        conductivity_s_per_m: None,
+    });
+    ir.energy_terms.push(EnergyTermIR::OerstedField {
+        model: OerstedFieldModelIR::FromCurrentSolution,
+        source: "drive".to_string(),
+    });
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+
+    let plan = plan(&ir).expect("CUDA FDM generalized Oersted field should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert_eq!(
+                fdm.oersted_realization,
+                Some(OerstedRealization::BiotSavartMidpoint)
+            );
+            let field = fdm
+                .oersted_field_xyz
+                .as_ref()
+                .expect("midpoint Oersted field should be lowered onto the FDM grid");
+            assert_eq!(field.len(), fdm.initial_magnetization.len());
+            assert!(field.iter().any(|value| *value != [0.0, 0.0, 0.0]));
+        }
         _ => panic!("expected FDM plan"),
     }
 }

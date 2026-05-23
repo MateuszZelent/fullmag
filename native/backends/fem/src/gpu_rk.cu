@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
@@ -73,6 +74,13 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 bool cuda_launch_ok(const char *operation, std::string &reason)
 {
     return cuda_ok(cudaPeekAtLastError(), operation, reason);
+}
+
+std::string format_scientific(double value)
+{
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.6e", value);
+    return std::string(buffer);
 }
 
 bool read_scalar_result(
@@ -1333,6 +1341,16 @@ bool gpu_rk_exchange_only_step(
             ctx.base_plan.dt_seconds = active_dt;
             ctx.adaptive_dt.current_dt = active_dt;
             rejected_attempts += 1;
+            if (rejected_attempts > ctx.adaptive_dt.max_reject) {
+                reason =
+                    "adaptive GPU RK exceeded adaptive_config.max_reject rejected attempts "
+                    "before accepting a step; last error_norm=" +
+                    format_scientific(error_estimate) +
+                    ", dt=" + format_scientific(active_dt) +
+                    ", dt_min=" + format_scientific(ctx.adaptive_dt.dt_min);
+                gpu.fsal_valid = false;
+                return false;
+            }
             continue;
         }
         ctx.base_plan.dt_seconds = suggested_dt;

@@ -3,7 +3,7 @@
 //! Current scope:
 //! - body-local exchange / local field observables on CUDA per layer,
 //! - global cross-body demag via the existing multilayer convolution runtime,
-//! - synchronous Heun stepping on the host,
+//! - fixed-step Heun/RK4 staged native v2 stepping for explicit CUDA execution,
 //! - scalar traces and concatenated field snapshots.
 
 use fullmag_engine::{
@@ -11,8 +11,9 @@ use fullmag_engine::{
         FdmLayerRuntime, FdmLayerRuntimeF32, KernelPair, KernelPairF32, MultilayerDemagRuntime,
         MultilayerDemagRuntimeF32,
     },
-    CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, ExchangeLlgState,
-    GridShape, LlgConfig, MaterialParameters, UniaxialAnisotropyConfig, MU0,
+    CellSize, CubicAnisotropyConfig, EffectiveFieldObservables, EffectiveFieldTerms,
+    ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig, MaterialParameters,
+    UniaxialAnisotropyConfig, MU0,
 };
 use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
 use fullmag_ir::{
@@ -23,9 +24,9 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
-use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
 };
@@ -70,6 +71,7 @@ struct NativeStackedLayer {
     magnet_name: String,
     native_grid: [usize; 3],
     offset: [usize; 3],
+    context: LayerContext,
 }
 
 struct NativeStackedCudaPlan {
@@ -104,24 +106,10 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
             message: "until_seconds must be positive".to_string(),
         });
     }
-    // DP45/ABM3/Heun all supported by native CUDA backend
-    match plan.integrator {
-        IntegratorChoice::Heun
-        | IntegratorChoice::Rk45
-        | IntegratorChoice::Rk23
-        | IntegratorChoice::Abm3 => {}
-        other => {
-            return Err(RunError {
-                message: format!(
-                    "CUDA-assisted multilayer FDM runner does not support integrator {:?}",
-                    other
-                ),
-            });
-        }
-    }
+    let native_stacked = resolve_cuda_multilayer_execution_shape(plan)?;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
 
-    if let Some(native_stacked) = build_native_stacked_cuda_plan(plan)? {
+    if let Some(native_stacked) = native_stacked {
         return execute_native_stacked_cuda_multilayer(
             plan,
             &native_stacked,
@@ -185,6 +173,26 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
             )
         }
     }
+}
+
+fn resolve_cuda_multilayer_execution_shape(
+    plan: &FdmMultilayerPlanIR,
+) -> Result<Option<NativeStackedCudaPlan>, RunError> {
+    let native_stacked = build_native_stacked_cuda_plan(plan)?;
+    if native_stacked.is_none()
+        && !matches!(
+            plan.integrator,
+            IntegratorChoice::Heun | IntegratorChoice::Rk4
+        )
+    {
+        return Err(RunError {
+            message: format!(
+                "the staged v2 CUDA multilayer FDM runner currently supports only 'heun' and 'rk4' integrators; {:?} is executable only for native single-grid-compatible multilayer stacks",
+                plan.integrator
+            ),
+        });
+    }
+    Ok(native_stacked)
 }
 
 fn build_contexts_and_states(
@@ -259,8 +267,8 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }
                 }),
-                interfacial_dmi: None,
-                bulk_dmi: None,
+                interfacial_dmi: plan.interfacial_dmi,
+                bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
                 sot: None,
@@ -817,7 +825,7 @@ fn execute_cuda_assisted_multilayer_single(
 
 fn assisted_multilayer_provenance(
     plan: &FdmMultilayerPlanIR,
-    device_info: Option<crate::native_fdm::DeviceInfo>,
+    device_info: Option<DeviceInfo>,
     native_demag_enabled: bool,
 ) -> ExecutionProvenance {
     ExecutionProvenance {
@@ -871,6 +879,7 @@ fn build_native_stacked_cuda_plan(
     }) {
         return Ok(None);
     }
+    let (layer_contexts, _) = build_contexts_and_states(plan, false)?;
 
     let mut min_origin = first_layer.native_origin;
     let mut max_extent = [
@@ -968,6 +977,7 @@ fn build_native_stacked_cuda_plan(
             magnet_name: layer.magnet_name.clone(),
             native_grid,
             offset,
+            context: layer_contexts[layer_index].clone(),
         });
     }
 
@@ -1014,8 +1024,8 @@ fn build_native_stacked_cuda_plan(
             oersted_radius: None,
             oersted_center: None,
             temperature: None,
-            interfacial_dmi: None,
-            bulk_dmi: None,
+            interfacial_dmi: plan.interfacial_dmi,
+            bulk_dmi: plan.bulk_dmi,
             mel_b1: None,
             mel_b2: None,
             mel_uniform_strain: None,
@@ -1115,23 +1125,28 @@ fn execute_native_stacked_cuda_multilayer(
     while latest_stats.as_ref().map_or(0.0, |stats| stats.time) < until_seconds {
         let current_time = latest_stats.as_ref().map_or(0.0, |stats| stats.time);
         let dt_step = dt.min(until_seconds - current_time);
-        let stats = backend.step(dt_step)?;
-        if let Some(next) = stats.dt_suggested {
+        let native_stats = backend.step(dt_step)?;
+        if let Some(next) = native_stats.dt_suggested {
             dt = next;
         }
         let need_observables = default_scalar_trace
             || scalar_schedules
                 .iter()
-                .any(|schedule| is_due(stats.time, schedule.next_time))
+                .any(|schedule| is_due(native_stats.time, schedule.next_time))
             || field_schedules
                 .iter()
-                .any(|schedule| is_due(stats.time, schedule.next_time))
-            || live.is_some();
+                .any(|schedule| is_due(native_stats.time, schedule.next_time))
+            || live.is_some()
+            || plan.relaxation.is_some();
         let observables = if need_observables {
             Some(observe_native_stacked_cuda(&backend, native)?)
         } else {
             None
         };
+        let stats = observables
+            .as_ref()
+            .map(|observables| make_native_stacked_step_stats(&native_stats, observables))
+            .unwrap_or(native_stats);
 
         if default_scalar_trace
             || scalar_schedules
@@ -1262,6 +1277,21 @@ fn execute_native_stacked_cuda_multilayer(
     })
 }
 
+fn make_native_stacked_step_stats(
+    native_step: &StepStats,
+    observables: &StateObservables,
+) -> StepStats {
+    let mut stats = make_step_stats(
+        native_step.step,
+        native_step.time,
+        native_step.dt,
+        native_step.wall_time_ns,
+        observables,
+    );
+    stats.dt_suggested = native_step.dt_suggested;
+    stats
+}
+
 fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) -> FdmPlanIR {
     FdmPlanIR {
         grid: GridDimensions {
@@ -1276,11 +1306,19 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
             saturation_magnetisation: layer.material.saturation_magnetisation,
             exchange_stiffness: layer.material.exchange_stiffness,
             damping: layer.material.damping,
+            uniaxial_anisotropy_ku1: layer.material.uniaxial_anisotropy_ku1,
+            uniaxial_anisotropy_ku2: layer.material.uniaxial_anisotropy_ku2,
+            anisotropy_axis: layer.material.anisotropy_axis,
+            cubic_anisotropy_kc1: layer.material.cubic_anisotropy_kc1,
+            cubic_anisotropy_kc2: layer.material.cubic_anisotropy_kc2,
+            cubic_anisotropy_kc3: layer.material.cubic_anisotropy_kc3,
+            cubic_anisotropy_axis1: layer.material.cubic_anisotropy_axis1,
+            cubic_anisotropy_axis2: layer.material.cubic_anisotropy_axis2,
             ..Default::default()
         },
         enable_exchange: plan.enable_exchange,
         enable_demag: false,
-        external_field: None,
+        external_field: plan.external_field,
         gyromagnetic_ratio: plan.gyromagnetic_ratio,
         precision: plan.precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -1313,8 +1351,8 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         oersted_radius: None,
         oersted_center: None,
         temperature: None,
-        interfacial_dmi: None,
-        bulk_dmi: None,
+        interfacial_dmi: plan.interfacial_dmi,
+        bulk_dmi: plan.bulk_dmi,
         mel_b1: None,
         mel_b2: None,
         mel_uniform_strain: None,
@@ -1432,11 +1470,15 @@ fn observe_multilayer_cuda(
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
+    let mut anisotropy_field = Vec::new();
+    let mut dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
     let mut external_energy = 0.0;
+    let mut anisotropy_energy = 0.0;
+    let mut dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -1452,25 +1494,29 @@ fn observe_multilayer_cuda(
 
         let mut local_exchange = gpu.backend.copy_h_ex(gpu.cell_count)?;
         zero_outside_active(&mut local_exchange, context.problem.active_mask.as_deref());
+        let local_observables = context.problem.observe(state).map_err(|error| RunError {
+            message: format!(
+                "local observables for magnet '{}': {}",
+                context.magnet_name, error
+            ),
+        })?;
 
         let mut local_demag = layer_demag.remove(0);
         zero_outside_active(&mut local_demag, context.problem.active_mask.as_deref());
-        let mut local_external =
-            context
-                .problem
-                .external_field(state)
-                .map_err(|error| RunError {
-                    message: format!(
-                        "external field for magnet '{}': {}",
-                        context.magnet_name, error
-                    ),
-                })?;
+        let mut local_external = local_observables.external_field;
+        let mut local_anisotropy = context.problem.anisotropy_field(state.magnetization());
+        let mut local_dmi = local_observables.dmi_field;
         zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors(local_exchange.len());
+        zero_outside_active(
+            &mut local_anisotropy,
+            context.problem.active_mask.as_deref(),
+        );
+        zero_outside_active(&mut local_dmi, context.problem.active_mask.as_deref());
+        let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
             local_effective[cell] = add(
-                add(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
+                add(local_effective[cell], local_demag[cell]),
+                sub(local_exchange[cell], local_observables.exchange_field[cell]),
             );
         }
         zero_outside_active(&mut local_effective, context.problem.active_mask.as_deref());
@@ -1478,16 +1524,7 @@ fn observe_multilayer_cuda(
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        let local_exchange_energy =
-            context
-                .problem
-                .exchange_energy(state)
-                .map_err(|error| RunError {
-                    message: format!(
-                        "exchange energy for magnet '{}': {}",
-                        context.magnet_name, error
-                    ),
-                })?;
+        let local_exchange_energy = local_observables.exchange_energy_joules;
         let local_demag_energy = state
             .magnetization()
             .iter()
@@ -1500,9 +1537,13 @@ fn observe_multilayer_cuda(
             .zip(local_external.iter())
             .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
             .sum::<f64>();
+        let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
+        let local_dmi_energy = local_observables.dmi_energy_joules;
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
+        anisotropy_energy += local_anisotropy_energy;
+        dmi_energy += local_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
@@ -1521,9 +1562,15 @@ fn observe_multilayer_cuda(
                 ("e_ex".to_string(), local_exchange_energy),
                 ("e_demag".to_string(), local_demag_energy),
                 ("e_ext".to_string(), local_external_energy),
+                ("e_ani".to_string(), local_anisotropy_energy),
+                ("e_dmi".to_string(), local_dmi_energy),
                 (
                     "e_total".to_string(),
-                    local_exchange_energy + local_demag_energy + local_external_energy,
+                    local_exchange_energy
+                        + local_demag_energy
+                        + local_external_energy
+                        + local_anisotropy_energy
+                        + local_dmi_energy,
                 ),
                 ("mx".to_string(), mx),
                 ("my".to_string(), my),
@@ -1535,6 +1582,8 @@ fn observe_multilayer_cuda(
         exchange_field.extend(local_exchange);
         demag_field.extend(local_demag);
         external_field.extend(local_external);
+        anisotropy_field.extend(local_anisotropy);
+        dmi_field.extend(local_dmi);
         effective_field.extend(local_effective);
     }
 
@@ -1542,8 +1591,6 @@ fn observe_multilayer_cuda(
         values.insert("max_dm_dt".to_string(), max_dm_dt);
         values.insert("max_h_eff".to_string(), max_h_eff);
         values.insert("max_h_demag".to_string(), max_h_demag);
-        values.entry("e_ani".to_string()).or_insert(0.0);
-        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
@@ -1556,8 +1603,8 @@ fn observe_multilayer_cuda(
         external_field,
         antenna_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
         effective_field,
-        anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        anisotropy_field,
+        dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1566,9 +1613,13 @@ fn observe_multilayer_cuda(
         exchange_energy,
         demag_energy,
         external_energy,
-        anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
-        total_energy: exchange_energy + demag_energy + external_energy,
+        anisotropy_energy,
+        dmi_energy,
+        total_energy: exchange_energy
+            + demag_energy
+            + external_energy
+            + anisotropy_energy
+            + dmi_energy,
         max_dm_dt,
         max_h_eff,
         max_h_demag,
@@ -1676,24 +1727,19 @@ fn llg_rhs_multilayer_cuda(
 
         let mut local_exchange = gpu.backend.copy_h_ex(gpu.cell_count)?;
         zero_outside_active(&mut local_exchange, context.problem.active_mask.as_deref());
+        let local_observables = context.problem.observe(state).map_err(|error| RunError {
+            message: format!(
+                "local observables for magnet '{}': {}",
+                context.magnet_name, error
+            ),
+        })?;
         let mut local_demag = layer_demag.remove(0);
         zero_outside_active(&mut local_demag, context.problem.active_mask.as_deref());
-        let mut local_external =
-            context
-                .problem
-                .external_field(state)
-                .map_err(|error| RunError {
-                    message: format!(
-                        "external field for magnet '{}': {}",
-                        context.magnet_name, error
-                    ),
-                })?;
-        zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors(local_exchange.len());
+        let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
             local_effective[cell] = add(
-                add(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
+                add(local_effective[cell], local_demag[cell]),
+                sub(local_exchange[cell], local_observables.exchange_field[cell]),
             );
         }
         zero_outside_active(&mut local_effective, context.problem.active_mask.as_deref());
@@ -1771,11 +1817,15 @@ fn observe_multilayer_cuda_single(
     let mut exchange_field = Vec::new();
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
+    let mut anisotropy_field = Vec::new();
+    let mut dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
     let mut external_energy = 0.0;
+    let mut anisotropy_energy = 0.0;
+    let mut dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -1786,21 +1836,31 @@ fn observe_multilayer_cuda_single(
 
     for ((index, context), gpu) in contexts.iter().enumerate().zip(gpu_contexts.iter_mut()) {
         let state = &states[index];
+        let local_magnetization = to_f64_vectors(&state.magnetization);
         gpu.backend.upload_magnetization_f32(&state.magnetization)?;
         gpu.backend.refresh_observables()?;
 
         let mut local_exchange = gpu.backend.copy_h_ex_f32(gpu.cell_count)?;
         zero_outside_active_f32(&mut local_exchange, context.problem.active_mask.as_deref());
+        let local_observables = observe_context_f32(context, &state.magnetization)?;
+        let local_observable_exchange = to_f32_vectors(&local_observables.exchange_field);
 
         let mut local_demag = layer_demag.remove(0);
         zero_outside_active_f32(&mut local_demag, context.problem.active_mask.as_deref());
-        let mut local_external = external_field_f32(context);
+        let mut local_external = to_f32_vectors(&local_observables.external_field);
+        let mut local_anisotropy = context.problem.anisotropy_field(&local_magnetization);
+        let mut local_dmi = to_f32_vectors(&local_observables.dmi_field);
         zero_outside_active_f32(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors_f32(local_exchange.len());
+        zero_outside_active(
+            &mut local_anisotropy,
+            context.problem.active_mask.as_deref(),
+        );
+        zero_outside_active_f32(&mut local_dmi, context.problem.active_mask.as_deref());
+        let mut local_effective = to_f32_vectors(&local_observables.effective_field);
         for cell in 0..local_effective.len() {
             local_effective[cell] = add_f32(
-                add_f32(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
+                add_f32(local_effective[cell], local_demag[cell]),
+                sub_f32(local_exchange[cell], local_observable_exchange[cell]),
             );
         }
         zero_outside_active_f32(&mut local_effective, context.problem.active_mask.as_deref());
@@ -1808,11 +1868,7 @@ fn observe_multilayer_cuda_single(
 
         let layer_cell_volume = context.problem.cell_size.volume();
         let layer_ms = context.problem.material.saturation_magnetisation;
-        let local_exchange_energy = field_energy_from_vectors_f32(
-            &state.magnetization,
-            &local_exchange,
-            -0.5 * MU0 * layer_ms * layer_cell_volume,
-        );
+        let local_exchange_energy = local_observables.exchange_energy_joules;
         let local_demag_energy = field_energy_from_vectors_f32(
             &state.magnetization,
             &local_demag,
@@ -1823,31 +1879,40 @@ fn observe_multilayer_cuda_single(
             &local_external,
             -MU0 * layer_ms * layer_cell_volume,
         );
+        let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
+        let local_dmi_energy = local_observables.dmi_energy_joules;
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
+        anisotropy_energy += local_anisotropy_energy;
+        dmi_energy += local_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm_f32(&rhs));
         max_h_eff = max_h_eff.max(max_norm_f32(&local_effective));
         max_h_demag = max_h_demag.max(max_norm_f32(&local_demag));
         torque_field.extend(compute_torque_field(
-            &to_f64_vectors(&state.magnetization),
+            &local_magnetization,
             &to_f64_vectors(&local_effective),
             context.problem.material.damping,
             context.problem.dynamics.precession_enabled,
         ));
 
-        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components(
-            &to_f64_vectors(&state.magnetization),
-        );
+        let [mx, my, mz] =
+            crate::scalar_metrics::average_magnetization_components(&local_magnetization);
         per_object_scalars.insert(
             context.magnet_name.clone(),
             std::collections::HashMap::from([
                 ("e_ex".to_string(), local_exchange_energy),
                 ("e_demag".to_string(), local_demag_energy),
                 ("e_ext".to_string(), local_external_energy),
+                ("e_ani".to_string(), local_anisotropy_energy),
+                ("e_dmi".to_string(), local_dmi_energy),
                 (
                     "e_total".to_string(),
-                    local_exchange_energy + local_demag_energy + local_external_energy,
+                    local_exchange_energy
+                        + local_demag_energy
+                        + local_external_energy
+                        + local_anisotropy_energy
+                        + local_dmi_energy,
                 ),
                 ("mx".to_string(), mx),
                 ("my".to_string(), my),
@@ -1855,10 +1920,12 @@ fn observe_multilayer_cuda_single(
             ]),
         );
 
-        magnetization.extend(to_f64_vectors(&state.magnetization));
+        magnetization.extend(local_magnetization);
         exchange_field.extend(to_f64_vectors(&local_exchange));
         demag_field.extend(to_f64_vectors(&local_demag));
         external_field.extend(to_f64_vectors(&local_external));
+        anisotropy_field.extend(local_anisotropy);
+        dmi_field.extend(to_f64_vectors(&local_dmi));
         effective_field.extend(to_f64_vectors(&local_effective));
     }
 
@@ -1866,8 +1933,6 @@ fn observe_multilayer_cuda_single(
         values.insert("max_dm_dt".to_string(), max_dm_dt);
         values.insert("max_h_eff".to_string(), max_h_eff);
         values.insert("max_h_demag".to_string(), max_h_demag);
-        values.entry("e_ani".to_string()).or_insert(0.0);
-        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
     let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
@@ -1880,8 +1945,8 @@ fn observe_multilayer_cuda_single(
         external_field,
         antenna_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
         effective_field,
-        anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        anisotropy_field,
+        dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1890,9 +1955,13 @@ fn observe_multilayer_cuda_single(
         exchange_energy,
         demag_energy,
         external_energy,
-        anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
-        total_energy: exchange_energy + demag_energy + external_energy,
+        anisotropy_energy,
+        dmi_energy,
+        total_energy: exchange_energy
+            + demag_energy
+            + external_energy
+            + anisotropy_energy
+            + dmi_energy,
         max_dm_dt,
         max_h_eff,
         max_h_demag,
@@ -1992,15 +2061,15 @@ fn llg_rhs_multilayer_cuda_single(
 
         let mut local_exchange = gpu.backend.copy_h_ex_f32(gpu.cell_count)?;
         zero_outside_active_f32(&mut local_exchange, context.problem.active_mask.as_deref());
+        let local_observables = observe_context_f32(context, magnetization)?;
+        let local_observable_exchange = to_f32_vectors(&local_observables.exchange_field);
         let mut local_demag = layer_demag.remove(0);
         zero_outside_active_f32(&mut local_demag, context.problem.active_mask.as_deref());
-        let mut local_external = external_field_f32(context);
-        zero_outside_active_f32(&mut local_external, context.problem.active_mask.as_deref());
-        let mut local_effective = zero_vectors_f32(local_exchange.len());
+        let mut local_effective = to_f32_vectors(&local_observables.effective_field);
         for cell in 0..local_effective.len() {
             local_effective[cell] = add_f32(
-                add_f32(local_exchange[cell], local_demag[cell]),
-                local_external[cell],
+                add_f32(local_effective[cell], local_demag[cell]),
+                sub_f32(local_exchange[cell], local_observable_exchange[cell]),
             );
         }
         zero_outside_active_f32(&mut local_effective, context.problem.active_mask.as_deref());
@@ -2087,6 +2156,25 @@ fn observe_native_stacked_cuda(
     let demag_full = backend.copy_h_demag(cell_count)?;
     let external_full = backend.copy_h_ext(cell_count)?;
     let effective_full = backend.copy_h_eff(cell_count)?;
+    observe_native_stacked_fields(
+        native,
+        &magnetization_full,
+        &exchange_full,
+        &demag_full,
+        &external_full,
+        &effective_full,
+    )
+}
+
+fn observe_native_stacked_fields(
+    native: &NativeStackedCudaPlan,
+    magnetization_full: &[[f64; 3]],
+    exchange_full: &[[f64; 3]],
+    demag_full: &[[f64; 3]],
+    external_full: &[[f64; 3]],
+    effective_full: &[[f64; 3]],
+) -> Result<StateObservables, RunError> {
+    let cell_count = magnetization_full.len();
     let active_mask = native.combined_plan.active_mask.as_deref();
     let cell_volume = native.combined_plan.cell_size[0]
         * native.combined_plan.cell_size[1]
@@ -2095,8 +2183,8 @@ fn observe_native_stacked_cuda(
 
     let exchange_energy = if native.combined_plan.enable_exchange {
         field_energy_from_full(
-            &magnetization_full,
-            &exchange_full,
+            magnetization_full,
+            exchange_full,
             active_mask,
             ms,
             cell_volume,
@@ -2105,20 +2193,14 @@ fn observe_native_stacked_cuda(
         0.0
     };
     let demag_energy = if native.combined_plan.enable_demag {
-        field_energy_from_full(
-            &magnetization_full,
-            &demag_full,
-            active_mask,
-            ms,
-            cell_volume,
-        )
+        field_energy_from_full(magnetization_full, demag_full, active_mask, ms, cell_volume)
     } else {
         0.0
     };
     let external_energy = if native.combined_plan.external_field.is_some() {
         field_energy_from_full(
-            &magnetization_full,
-            &external_full,
+            magnetization_full,
+            external_full,
             active_mask,
             ms,
             cell_volume,
@@ -2135,6 +2217,10 @@ fn observe_native_stacked_cuda(
         String,
         std::collections::HashMap<String, f64>,
     > = std::collections::HashMap::new();
+    let mut dmi_field = Vec::new();
+    let mut anisotropy_field = Vec::new();
+    let mut anisotropy_energy = 0.0;
+    let mut dmi_energy = 0.0;
     let local_energy_factor = -0.5 * MU0 * ms * cell_volume;
     for layer in &native.layers {
         let mut local_exchange_energy = 0.0;
@@ -2175,6 +2261,42 @@ fn observe_native_stacked_cuda(
                 }
             }
         }
+        let local_magnetization =
+            extract_native_stacked_layer_field(magnetization_full, native, layer);
+        let local_state = ExchangeLlgState::new(layer.context.problem.grid, local_magnetization)
+            .map_err(|error| RunError {
+                message: format!(
+                    "native stacked local state for magnet '{}': {}",
+                    layer.magnet_name, error
+                ),
+            })?;
+        let local_observables = layer
+            .context
+            .problem
+            .observe(&local_state)
+            .map_err(|error| RunError {
+                message: format!(
+                    "native stacked local observables for magnet '{}': {}",
+                    layer.magnet_name, error
+                ),
+            })?;
+        let mut local_anisotropy = layer
+            .context
+            .problem
+            .anisotropy_field(local_state.magnetization());
+        zero_outside_active(
+            &mut local_anisotropy,
+            layer.context.problem.active_mask.as_deref(),
+        );
+        let mut local_dmi = local_observables.dmi_field;
+        zero_outside_active(&mut local_dmi, layer.context.problem.active_mask.as_deref());
+        let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
+        let local_dmi_energy = local_observables.dmi_energy_joules;
+        anisotropy_energy += local_anisotropy_energy;
+        dmi_energy += local_dmi_energy;
+        anisotropy_field.extend(local_anisotropy);
+        dmi_field.extend(local_dmi);
+
         let inv = if active_count > 0 {
             1.0 / active_count as f64
         } else {
@@ -2186,9 +2308,15 @@ fn observe_native_stacked_cuda(
                 ("e_ex".to_string(), local_exchange_energy),
                 ("e_demag".to_string(), local_demag_energy),
                 ("e_ext".to_string(), local_external_energy),
+                ("e_ani".to_string(), local_anisotropy_energy),
+                ("e_dmi".to_string(), local_dmi_energy),
                 (
                     "e_total".to_string(),
-                    local_exchange_energy + local_demag_energy + local_external_energy,
+                    local_exchange_energy
+                        + local_demag_energy
+                        + local_external_energy
+                        + local_anisotropy_energy
+                        + local_dmi_energy,
                 ),
                 ("mx".to_string(), mx_sum * inv),
                 ("my".to_string(), my_sum * inv),
@@ -2197,25 +2325,23 @@ fn observe_native_stacked_cuda(
         );
     }
     let max_dm_dt = max_rhs_norm_from_full(
-        &magnetization_full,
-        &effective_full,
+        magnetization_full,
+        effective_full,
         active_mask,
         native.combined_plan.material.damping,
         native.combined_plan.gyromagnetic_ratio,
         !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
     );
-    let max_h_eff = max_norm_from_full(&effective_full, active_mask);
-    let max_h_demag = max_norm_from_full(&demag_full, active_mask);
+    let max_h_eff = max_norm_from_full(effective_full, active_mask);
+    let max_h_demag = max_norm_from_full(demag_full, active_mask);
     for values in per_object_scalars.values_mut() {
         values.insert("max_dm_dt".to_string(), max_dm_dt);
         values.insert("max_h_eff".to_string(), max_h_eff);
         values.insert("max_h_demag".to_string(), max_h_demag);
-        values.entry("e_ani".to_string()).or_insert(0.0);
-        values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let magnetization = extract_native_stacked_field(&magnetization_full, native);
-    let effective_field = extract_native_stacked_field(&effective_full, native);
+    let magnetization = extract_native_stacked_field(magnetization_full, native);
+    let effective_field = extract_native_stacked_field(effective_full, native);
     let torque_field = compute_torque_field(
         &magnetization,
         &effective_field,
@@ -2227,13 +2353,13 @@ fn observe_native_stacked_cuda(
     Ok(StateObservables {
         magnetization,
         torque_field,
-        exchange_field: extract_native_stacked_field(&exchange_full, native),
-        demag_field: extract_native_stacked_field(&demag_full, native),
-        external_field: extract_native_stacked_field(&external_full, native),
+        exchange_field: extract_native_stacked_field(exchange_full, native),
+        demag_field: extract_native_stacked_field(demag_full, native),
+        external_field: extract_native_stacked_field(external_full, native),
         antenna_field: vec![[0.0, 0.0, 0.0]; cell_count],
         effective_field,
-        anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        anisotropy_field,
+        dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -2242,9 +2368,13 @@ fn observe_native_stacked_cuda(
         exchange_energy,
         demag_energy,
         external_energy,
-        anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
-        total_energy: exchange_energy + demag_energy + external_energy,
+        anisotropy_energy,
+        dmi_energy,
+        total_energy: exchange_energy
+            + demag_energy
+            + external_energy
+            + anisotropy_energy
+            + dmi_energy,
         max_dm_dt,
         max_h_eff,
         max_h_demag,
@@ -2257,23 +2387,34 @@ fn extract_native_stacked_field(
     full_field: &[[f64; 3]],
     native: &NativeStackedCudaPlan,
 ) -> Vec<[f64; 3]> {
+    let mut values = Vec::new();
+    for layer in &native.layers {
+        values.extend(extract_native_stacked_layer_field(
+            full_field, native, layer,
+        ));
+    }
+    values
+}
+
+fn extract_native_stacked_layer_field(
+    full_field: &[[f64; 3]],
+    native: &NativeStackedCudaPlan,
+    layer: &NativeStackedLayer,
+) -> Vec<[f64; 3]> {
     let global_grid = [
         native.global_grid[0] as usize,
         native.global_grid[1] as usize,
         native.global_grid[2] as usize,
     ];
     let mut values = Vec::new();
-    for layer in &native.layers {
-        for z in 0..layer.native_grid[2] {
-            for y in 0..layer.native_grid[1] {
-                for x in 0..layer.native_grid[0] {
-                    let gx = layer.offset[0] + x;
-                    let gy = layer.offset[1] + y;
-                    let gz = layer.offset[2] + z;
-                    let global_index =
-                        gz * global_grid[1] * global_grid[0] + gy * global_grid[0] + gx;
-                    values.push(full_field[global_index]);
-                }
+    for z in 0..layer.native_grid[2] {
+        for y in 0..layer.native_grid[1] {
+            for x in 0..layer.native_grid[0] {
+                let gx = layer.offset[0] + x;
+                let gy = layer.offset[1] + y;
+                let gz = layer.offset[2] + z;
+                let global_index = gz * global_grid[1] * global_grid[0] + gy * global_grid[0] + gx;
+                values.push(full_field[global_index]);
             }
         }
     }
@@ -2499,6 +2640,14 @@ fn add_f32(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn sub_f32(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
 fn scale(v: [f64; 3], factor: f64) -> [f64; 3] {
     [v[0] * factor, v[1] * factor, v[2] * factor]
 }
@@ -2586,27 +2735,25 @@ fn to_f64_vectors(values: &[[f32; 3]]) -> Vec<[f64; 3]> {
         .collect()
 }
 
-fn external_field_f32(context: &LayerContext) -> Vec<[f32; 3]> {
-    let external = context
+fn observe_context_f32(
+    context: &LayerContext,
+    magnetization: &[[f32; 3]],
+) -> Result<EffectiveFieldObservables, RunError> {
+    let state = context
         .problem
-        .terms
-        .external_field
-        .unwrap_or([0.0, 0.0, 0.0]);
-    let value = [external[0] as f32, external[1] as f32, external[2] as f32];
-    (0..context.problem.grid.cell_count())
-        .map(|index| {
-            if context
-                .problem
-                .active_mask
-                .as_ref()
-                .is_none_or(|mask| mask[index])
-            {
-                value
-            } else {
-                [0.0, 0.0, 0.0]
-            }
-        })
-        .collect()
+        .new_state(to_f64_vectors(magnetization))
+        .map_err(|error| RunError {
+            message: format!(
+                "temporary single-precision observables state for magnet '{}': {}",
+                context.magnet_name, error
+            ),
+        })?;
+    context.problem.observe(&state).map_err(|error| RunError {
+        message: format!(
+            "single-precision local observables for magnet '{}': {}",
+            context.magnet_name, error
+        ),
+    })
 }
 
 fn field_energy_from_vectors_f32(
@@ -2624,7 +2771,7 @@ fn field_energy_from_vectors_f32(
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
-    use crate::multilayer_reference;
+    use crate::fdm::cpu::multilayer_reference;
     use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
     fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
@@ -2674,6 +2821,8 @@ mod tests {
             enable_exchange: true,
             enable_demag,
             external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -2760,6 +2909,8 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -2785,6 +2936,239 @@ mod tests {
             .zip(expected.iter())
             .flat_map(|(a, e)| (0..3).map(move |component| (a[component] - e[component]).abs()))
             .fold(0.0, f64::max)
+    }
+
+    fn add_global_dmi_texture(plan: &mut FdmMultilayerPlanIR) {
+        plan.enable_exchange = false;
+        plan.interfacial_dmi = Some(1.5e-3);
+        plan.bulk_dmi = Some(2.5e-3);
+        let layer_nx = plan.layers[0].native_grid[0] as usize;
+        for (index, value) in plan.layers[0].initial_magnetization.iter_mut().enumerate() {
+            let x = (index % layer_nx) as f64;
+            let angle = 0.35 * x;
+            *value = [angle.cos(), 0.0, angle.sin()];
+        }
+    }
+
+    fn add_uniaxial_anisotropy_texture(plan: &mut FdmMultilayerPlanIR) {
+        let tilted = [
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ];
+        for layer in &mut plan.layers {
+            layer.initial_magnetization.fill(tilted);
+            layer.material.uniaxial_anisotropy_ku1 = Some(4.0e5);
+            layer.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn cuda_assisted_layer_contexts_preserve_global_dmi_terms() {
+        let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
+        add_global_dmi_texture(&mut plan);
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, false).expect("CUDA-assisted contexts should build");
+        let dmi = contexts[0]
+            .problem
+            .dmi_field(&states[0])
+            .expect("DMI field should compute");
+
+        assert!(
+            max_norm(&dmi) > 0.0,
+            "CUDA-assisted multilayer layer contexts must preserve global DMI"
+        );
+    }
+
+    #[test]
+    fn native_stacked_cuda_plan_preserves_global_dmi_constants() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        add_global_dmi_texture(&mut plan);
+
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked plan should build")
+            .expect("plan should be eligible for native stacked fast path");
+
+        assert_eq!(native.combined_plan.interfacial_dmi, plan.interfacial_dmi);
+        assert_eq!(native.combined_plan.bulk_dmi, plan.bulk_dmi);
+    }
+
+    #[test]
+    fn native_stacked_cuda_allows_single_grid_integrators_beyond_staged_v2() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.integrator = IntegratorChoice::Rk45;
+
+        let native = resolve_cuda_multilayer_execution_shape(&plan)
+            .expect("native stacked RK45 should be a valid CUDA multilayer execution shape")
+            .expect("plan should use native single-grid fast path");
+        assert_eq!(native.combined_plan.integrator, IntegratorChoice::Rk45);
+
+        let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
+        assisted.integrator = IntegratorChoice::Rk45;
+        let err = match resolve_cuda_multilayer_execution_shape(&assisted) {
+            Err(err) => err,
+            Ok(_) => panic!("heterogeneous staged v2 RK45 should remain unsupported"),
+        };
+        assert!(
+            err.message.contains("staged v2") && err.message.contains("'heun' and 'rk4'"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn native_stacked_observables_include_layer_dmi_outputs() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        add_global_dmi_texture(&mut plan);
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked plan should build")
+            .expect("plan should be eligible for native stacked fast path");
+        let cell_count = native.combined_plan.initial_magnetization.len();
+        let zero_field = vec![[0.0, 0.0, 0.0]; cell_count];
+
+        let observables = observe_native_stacked_fields(
+            &native,
+            &native.combined_plan.initial_magnetization,
+            &zero_field,
+            &zero_field,
+            &zero_field,
+            &zero_field,
+        )
+        .expect("native stacked field assembly should compute");
+
+        assert_eq!(observables.dmi_field.len(), 32);
+        assert!(
+            max_norm(&observables.dmi_field) > 0.0,
+            "native stacked observables must preserve H_dmi for field snapshots"
+        );
+        assert!(
+            observables.dmi_energy.abs() > 0.0,
+            "native stacked observables must preserve DMI scalar energy"
+        );
+        assert!(
+            observables
+                .per_object_scalars
+                .get("free")
+                .and_then(|values| values.get("e_dmi"))
+                .is_some_and(|value| value.abs() > 0.0),
+            "native stacked per-object scalars must include layer-local DMI energy"
+        );
+    }
+
+    #[test]
+    fn native_stacked_observables_include_layer_anisotropy_outputs() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        add_uniaxial_anisotropy_texture(&mut plan);
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked plan should build")
+            .expect("plan should be eligible for native stacked fast path");
+        let cell_count = native.combined_plan.initial_magnetization.len();
+        let zero_field = vec![[0.0, 0.0, 0.0]; cell_count];
+
+        let observables = observe_native_stacked_fields(
+            &native,
+            &native.combined_plan.initial_magnetization,
+            &zero_field,
+            &zero_field,
+            &zero_field,
+            &zero_field,
+        )
+        .expect("native stacked field assembly should compute");
+
+        assert_eq!(observables.anisotropy_field.len(), 32);
+        assert!(
+            max_norm(&observables.anisotropy_field) > 0.0,
+            "native stacked observables must preserve H_ani for field snapshots"
+        );
+        assert!(
+            observables.anisotropy_energy.abs() > 0.0,
+            "native stacked observables must preserve anisotropy scalar energy"
+        );
+        let selected = select_state_observable_field(&observables, "H_ani", false)
+            .expect("H_ani should be selectable from native stacked observables");
+        assert_eq!(
+            max_vector_component_diff(&selected, &observables.anisotropy_field),
+            0.0
+        );
+    }
+
+    #[test]
+    fn native_stacked_stats_use_layer_observables_instead_of_combined_grid_scalars() {
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert(
+            "bottom".to_string(),
+            std::collections::HashMap::from([
+                ("e_total".to_string(), 4.0),
+                ("mx".to_string(), 1.0),
+            ]),
+        );
+        per_object_scalars.insert(
+            "top".to_string(),
+            std::collections::HashMap::from([
+                ("e_total".to_string(), 6.0),
+                ("my".to_string(), 1.0),
+            ]),
+        );
+        let observables = StateObservables {
+            magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            torque_field: Vec::new(),
+            exchange_field: Vec::new(),
+            demag_field: Vec::new(),
+            external_field: Vec::new(),
+            antenna_field: Vec::new(),
+            effective_field: Vec::new(),
+            anisotropy_field: Vec::new(),
+            dmi_field: Vec::new(),
+            magnetoelastic_field: Vec::new(),
+            cubic_anisotropy_field: Vec::new(),
+            bulk_dmi_field: Vec::new(),
+            oersted_field: Vec::new(),
+            thermal_field: Vec::new(),
+            exchange_energy: 1.0,
+            demag_energy: 2.0,
+            external_energy: 3.0,
+            anisotropy_energy: 0.5,
+            dmi_energy: 0.25,
+            total_energy: 6.75,
+            max_dm_dt: 7.0,
+            max_h_eff: 8.0,
+            max_h_demag: 9.0,
+            max_torque_Apm: 10.0,
+            per_object_scalars,
+        };
+        let native_step = StepStats {
+            step: 12,
+            time: 3.0e-13,
+            dt: 1.0e-13,
+            e_total: 999.0,
+            wall_time_ns: 42,
+            dt_suggested: Some(2.0e-13),
+            per_object_scalars: std::collections::HashMap::from([(
+                "free".to_string(),
+                std::collections::HashMap::from([("e_total".to_string(), 999.0)]),
+            )]),
+            ..StepStats::default()
+        };
+
+        let stats = make_native_stacked_step_stats(&native_step, &observables);
+
+        assert_eq!(stats.step, native_step.step);
+        assert_eq!(stats.time, native_step.time);
+        assert_eq!(stats.dt, native_step.dt);
+        assert_eq!(stats.wall_time_ns, native_step.wall_time_ns);
+        assert_eq!(stats.dt_suggested, native_step.dt_suggested);
+        assert_eq!(stats.e_total, observables.total_energy);
+        assert_eq!(stats.e_ex, observables.exchange_energy);
+        assert_eq!(stats.e_demag, observables.demag_energy);
+        assert_eq!(stats.e_ani, observables.anisotropy_energy);
+        assert_eq!(stats.e_dmi, observables.dmi_energy);
+        assert_eq!(stats.max_torque_Apm, observables.max_torque_Apm);
+        assert_eq!(stats.max_torque_T, observables.max_torque_Apm * crate::MU0);
+        assert_eq!(stats.per_object_scalars.len(), 2);
+        assert!(stats.per_object_scalars.contains_key("bottom"));
+        assert!(stats.per_object_scalars.contains_key("top"));
+        assert!(!stats.per_object_scalars.contains_key("free"));
     }
 
     #[test]

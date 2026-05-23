@@ -2087,8 +2087,8 @@ Poniżej nie chodzi o literalną kompletną listę plików, tylko o najbardziej 
 - plus nowy crate / moduł kernel builder
 
 ### Runner
-- `crates/fullmag-runner/src/cpu_reference.rs`
-- `crates/fullmag-runner/src/native_fdm.rs`
+- `crates/fullmag-runner/src/fdm/cpu/reference.rs`
+- `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`
 - `crates/fullmag-runner/src/dispatch.rs`
 
 ### Native FDM ABI / CUDA
