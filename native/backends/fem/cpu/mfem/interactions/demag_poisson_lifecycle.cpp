@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "fem_common.hpp"
+#include "gpu_demag_poisson.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -113,6 +114,7 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
 
 void context_destroy_poisson(Context &ctx)
 {
+    gpu_demag_poisson_destroy(ctx);
     destroy_demag_poisson_hypre_workspace(ctx);
 
     delete static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);

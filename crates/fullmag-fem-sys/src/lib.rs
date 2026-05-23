@@ -274,6 +274,8 @@ pub struct fullmag_fem_plan_desc {
     pub thermal_seed: u64,
     /// FEM-030: explicit MFEM device string. null = use env / compiled default.
     pub mfem_device_string: *const std::ffi::c_char,
+    /// Strict FEM GPU demag policy. 0 = runner/default policy.
+    pub gpu_demag_mode: i32,
     /// FND-013: use consistent (full) mass matrix for exchange. 0 = lumped, 1 = consistent.
     pub use_consistent_mass: i32,
     /// Compute initial effective field during backend creation. 0 = lazy, 1 = eager.
@@ -337,6 +339,8 @@ pub struct fullmag_fem_device_info {
     pub compute_capability_minor: i32,
     pub driver_version: i32,
     pub runtime_version: i32,
+    pub gpu_memory_free_bytes: u64,
+    pub gpu_memory_total_bytes: u64,
 }
 
 #[repr(C)]
@@ -348,6 +352,7 @@ pub struct fullmag_fem_availability_info {
     pub built_with_ceed: i32,
     pub native_fem_cpu_available: i32,
     pub native_fem_gpu_available: i32,
+    pub native_fem_gpu_full_demag_available: i32,
     pub mfem_cuda_available: i32,
     pub hypre_gpu_available: i32,
     pub libceed_used_hot_path: i32,
@@ -396,6 +401,14 @@ pub enum fullmag_fem_data_residency {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_demag_mode {
+    FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED = 0,
+    FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON = 1,
+    FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct fullmag_fem_gpu_state_info {
     pub allocated: i32,
     pub node_count: u64,
@@ -414,7 +427,11 @@ pub struct fullmag_fem_gpu_rk_plan_info {
     pub uses_cuda_kernels: i32,
     pub allows_exchange_host_sync: i32,
     pub stage_exchange_device_resident: i32,
+    pub uses_gpu_poisson: i32,
     pub exchange_operator_mode: [c_char; 64],
+    pub demag_operator_mode: [c_char; 64],
+    pub hypre_execution_policy: [c_char; 32],
+    pub demag_residency: [c_char; 32],
     pub reason: [c_char; 256],
 }
 
@@ -628,9 +645,18 @@ mod tests {
         let info = unsafe { info.assume_init() };
         assert_eq!(info.native_fem_cpu_available, 0);
         assert_eq!(info.native_fem_gpu_available, 0);
+        assert_eq!(info.native_fem_gpu_full_demag_available, 0);
         assert_eq!(info.mfem_cuda_available, 0);
         assert_eq!(info.hypre_gpu_available, 0);
         assert_eq!(info.libceed_used_hot_path, 0);
+        assert_eq!(info.gpu_memory_free_bytes, 0);
+        assert_eq!(info.gpu_memory_total_bytes, 0);
+    }
+
+    #[test]
+    fn device_info_abi_exposes_gpu_memory_budget() {
+        let info = std::mem::MaybeUninit::<fullmag_fem_device_info>::zeroed();
+        let info = unsafe { info.assume_init() };
         assert_eq!(info.gpu_memory_free_bytes, 0);
         assert_eq!(info.gpu_memory_total_bytes, 0);
     }
@@ -678,7 +704,11 @@ mod tests {
         assert_eq!(info.uses_cuda_kernels, 0);
         assert_eq!(info.allows_exchange_host_sync, 0);
         assert_eq!(info.stage_exchange_device_resident, 0);
+        assert_eq!(info.uses_gpu_poisson, 0);
         assert_eq!(info.exchange_operator_mode[0], 0);
+        assert_eq!(info.demag_operator_mode[0], 0);
+        assert_eq!(info.hypre_execution_policy[0], 0);
+        assert_eq!(info.demag_residency[0], 0);
         assert_eq!(info.reason[0], 0);
     }
 }

@@ -101,6 +101,7 @@ set(FEM_SOURCES
     src/api.cpp
     src/context.cpp
     src/dmi_weak_residual.cpp
+    src/gpu_demag_poisson.cpp
     src/error.cpp
     src/gpu_exchange.cpp
     src/gpu_rk.cpp

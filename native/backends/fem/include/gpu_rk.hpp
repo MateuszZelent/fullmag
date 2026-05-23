@@ -16,7 +16,11 @@ struct GpuRkPlan {
     bool uses_cuda_kernels = false;
     bool allows_exchange_host_sync = false;
     bool stage_exchange_device_resident = false;
+    bool uses_gpu_poisson = false;
     const char *exchange_operator_mode = "unsupported";
+    const char *demag_operator_mode = "none";
+    const char *hypre_execution_policy = "none";
+    const char *demag_residency = "none";
 };
 
 uint32_t gpu_rk_stage_count(fullmag_fem_integrator integrator);

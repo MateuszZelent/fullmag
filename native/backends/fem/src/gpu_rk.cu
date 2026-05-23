@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "gpu_demag_poisson.hpp"
 #include "gpu_state.hpp"
 #include "kernels.h"
 #include "transfer_audit.hpp"
@@ -667,8 +668,14 @@ bool compute_rhs_for_magnetization(
     if (ctx.dmi.bulk_enabled && !compute_dmi_field(true)) {
         return false;
     }
-    if (!compute_hybrid_cpu_demag_for_device_stage(ctx, m, stream, reason)) {
-        return false;
+    if (ctx.demag.enabled) {
+        if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
+            if (!compute_hybrid_cpu_demag_for_device_stage(ctx, m, stream, reason)) {
+                return false;
+            }
+        } else if (!compute_device_demag_for_device_stage(ctx, m, stream, reason)) {
+            return false;
+        }
     }
     if (ctx.anisotropy.uniaxial_enabled) {
         if (gpu.ms == nullptr || gpu.ku == nullptr || gpu.ku2 == nullptr ||
@@ -1488,6 +1495,50 @@ bool gpu_rk_finalize_step_stats(
         return false;
     }
 
+    double demag_energy = 0.0;
+    if (ctx.demag.enabled) {
+        if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
+            gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
+            reason = "GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag";
+            return false;
+        }
+        fullmag_cuda_demag_energy_blocks(
+            gpu.m.x,
+            gpu.m.y,
+            gpu.m.z,
+            gpu.h_demag.x,
+            gpu.h_demag.y,
+            gpu.h_demag.z,
+            gpu.ms,
+            gpu.exchange_lumped_mass,
+            gpu.magnetic_node_mask,
+            gpu.scalar_reduce_workspace,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK demag energy blocks", reason)) {
+            return false;
+        }
+        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        fullmag_cuda_device_sum(
+            gpu.scalar_reduce_workspace,
+            blocks,
+            gpu.scalar_reduce_result,
+            gpu.scalar_reduce_temp_storage,
+            reduce_bytes,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK demag energy reduction", reason)) {
+            return false;
+        }
+        if (!read_scalar_result(
+                ctx,
+                stream,
+                "cudaMemcpyAsync GPU RK demag energy device->host",
+                demag_energy,
+                reason)) {
+            return false;
+        }
+    }
+
     double external_energy = 0.0;
     if (ctx.zeeman.has_external_field) {
         if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
@@ -1831,6 +1882,44 @@ bool gpu_rk_finalize_step_stats(
         return false;
     }
 
+    double max_h_demag = 0.0;
+    if (ctx.demag.enabled) {
+        fullmag_cuda_field_metric_blocks(
+            gpu.m.x,
+            gpu.m.y,
+            gpu.m.z,
+            gpu.h_demag.x,
+            gpu.h_demag.y,
+            gpu.h_demag.z,
+            gpu.magnetic_node_mask,
+            gpu.scalar_reduce_workspace,
+            gpu.error.x,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK demag field metric blocks", reason)) {
+            return false;
+        }
+        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        fullmag_cuda_device_max(
+            gpu.scalar_reduce_workspace,
+            blocks,
+            gpu.scalar_reduce_result,
+            gpu.scalar_reduce_temp_storage,
+            reduce_bytes,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK max H_demag reduction", reason)) {
+            return false;
+        }
+        if (!read_scalar_result(
+                ctx,
+                stream,
+                "cudaMemcpyAsync GPU RK max H_demag device->host",
+                max_h_demag,
+                reason)) {
+            return false;
+        }
+    }
+
     reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
     fullmag_cuda_device_max(
         gpu.error.x,
@@ -1947,7 +2036,6 @@ bool gpu_rk_finalize_step_stats(
         return false;
     }
 
-    const double demag_energy = ctx.demag.enabled ? gpu.hybrid_demag_energy_joules : 0.0;
     stats.exchange_energy_joules = exchange_energy;
     stats.demag_energy_joules = demag_energy;
     stats.external_energy_joules = external_energy;
@@ -1958,7 +2046,7 @@ bool gpu_rk_finalize_step_stats(
         exchange_energy + demag_energy + external_energy + anisotropy_energy + cubic_anisotropy_energy +
         dmi_energy + bulk_dmi_energy + magnetoelastic_energy;
     stats.max_effective_field_amplitude = max_h_eff;
-    stats.max_demag_field_amplitude = ctx.demag.enabled ? max_norm_aos(ctx.demag.h_xyz) : 0.0;
+    stats.max_demag_field_amplitude = max_h_demag;
     stats.max_torque_Apm = max_torque;
     if (magnetic_count > 0.0) {
         stats.mx = mx_sum / magnetic_count;

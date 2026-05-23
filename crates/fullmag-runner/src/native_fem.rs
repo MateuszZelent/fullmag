@@ -68,6 +68,7 @@ pub(crate) struct GpuAvailability {
     pub built_with_ceed: bool,
     pub native_fem_cpu_available: bool,
     pub native_fem_gpu_available: bool,
+    pub native_fem_gpu_full_demag_available: bool,
     pub mfem_cuda_available: bool,
     pub hypre_gpu_available: bool,
     pub libceed_used_hot_path: bool,
@@ -91,6 +92,7 @@ pub(crate) fn native_availability() -> GpuAvailability {
             built_with_ceed: 0,
             native_fem_cpu_available: 0,
             native_fem_gpu_available: 0,
+            native_fem_gpu_full_demag_available: 0,
             mfem_cuda_available: 0,
             hypre_gpu_available: 0,
             libceed_used_hot_path: 0,
@@ -118,6 +120,7 @@ pub(crate) fn native_availability() -> GpuAvailability {
                 built_with_ceed: false,
                 native_fem_cpu_available: false,
                 native_fem_gpu_available: false,
+                native_fem_gpu_full_demag_available: false,
                 mfem_cuda_available: false,
                 hypre_gpu_available: false,
                 libceed_used_hot_path: false,
@@ -154,6 +157,7 @@ pub(crate) fn native_availability() -> GpuAvailability {
             built_with_ceed: info.built_with_ceed == 1,
             native_fem_cpu_available: info.native_fem_cpu_available == 1,
             native_fem_gpu_available: info.native_fem_gpu_available == 1,
+            native_fem_gpu_full_demag_available: info.native_fem_gpu_full_demag_available == 1,
             mfem_cuda_available: info.mfem_cuda_available == 1,
             hypre_gpu_available: info.hypre_gpu_available == 1,
             libceed_used_hot_path: info.libceed_used_hot_path == 1,
@@ -179,6 +183,7 @@ pub(crate) fn native_availability() -> GpuAvailability {
             built_with_ceed: false,
             native_fem_cpu_available: false,
             native_fem_gpu_available: false,
+            native_fem_gpu_full_demag_available: false,
             mfem_cuda_available: false,
             hypre_gpu_available: false,
             libceed_used_hot_path: false,
@@ -260,7 +265,11 @@ pub(crate) struct NativeFemGpuRkPlanInfo {
     pub(crate) uses_cuda_kernels: bool,
     pub(crate) allows_exchange_host_sync: bool,
     pub(crate) stage_exchange_device_resident: bool,
+    pub(crate) uses_gpu_poisson: bool,
     pub(crate) exchange_operator_mode: String,
+    pub(crate) demag_operator_mode: String,
+    pub(crate) hypre_execution_policy: String,
+    pub(crate) demag_residency: String,
     pub(crate) reason: String,
 }
 
@@ -271,6 +280,16 @@ impl NativeFemGpuRkPlanInfo {
             unsafe { CStr::from_ptr(info.exchange_operator_mode.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
+        let demag_operator_mode = unsafe { CStr::from_ptr(info.demag_operator_mode.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        let hypre_execution_policy =
+            unsafe { CStr::from_ptr(info.hypre_execution_policy.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+        let demag_residency = unsafe { CStr::from_ptr(info.demag_residency.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
         let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
             .to_string_lossy()
             .to_string();
@@ -280,7 +299,11 @@ impl NativeFemGpuRkPlanInfo {
             uses_cuda_kernels: info.uses_cuda_kernels != 0,
             allows_exchange_host_sync: info.allows_exchange_host_sync != 0,
             stage_exchange_device_resident: info.stage_exchange_device_resident != 0,
+            uses_gpu_poisson: info.uses_gpu_poisson != 0,
             exchange_operator_mode,
+            demag_operator_mode,
+            hypre_execution_policy,
+            demag_residency,
             reason,
         }
     }
@@ -292,6 +315,23 @@ fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
         "MFEM/libCEED/hypre CPU FEM backend currently supports only double precision; single precision is not implemented"
     } else {
         "native FEM GPU backend requires double precision; single-precision CUDA kernels are not yet implemented"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
+    if plan.mfem_device_string.as_deref() == Some("cpu") || !plan.enable_demag {
+        return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32;
+    }
+    match std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("hybrid_cpu_poisson") | Some("hybrid") | Some("compat") => {
+            ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON as i32
+        }
+        _ => ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON as i32,
     }
 }
 
@@ -809,6 +849,7 @@ impl NativeFemBackend {
                 .map_or(0, |c| c.seed.unwrap_or(0)),
             // FEM-030 fix: pass explicit MFEM device string from plan.
             mfem_device_string: std::ptr::null(), // set below if present
+            gpu_demag_mode: native_fem_gpu_demag_mode(plan),
             // FND-013: pass consistent-mass flag.
             use_consistent_mass: if plan.use_consistent_mass.unwrap_or(false) {
                 1
@@ -989,7 +1030,11 @@ impl NativeFemBackend {
             uses_cuda_kernels: 0,
             allows_exchange_host_sync: 0,
             stage_exchange_device_resident: 0,
+            uses_gpu_poisson: 0,
             exchange_operator_mode: [0; 64],
+            demag_operator_mode: [0; 64],
+            hypre_execution_policy: [0; 32],
+            demag_residency: [0; 32],
             reason: [0; 256],
         };
         let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_rk_plan_info(self.handle, &mut info) };
@@ -1429,6 +1474,8 @@ impl NativeFemBackend {
             compute_capability_minor: 0,
             driver_version: 0,
             runtime_version: 0,
+            gpu_memory_free_bytes: 0,
+            gpu_memory_total_bytes: 0,
         };
 
         let rc = unsafe { ffi::fullmag_fem_backend_get_device_info(self.handle, &mut info) };
@@ -1448,6 +1495,8 @@ impl NativeFemBackend {
             ),
             driver_version: info.driver_version,
             runtime_version: info.runtime_version,
+            memory_free_bytes: info.gpu_memory_free_bytes,
+            memory_total_bytes: info.gpu_memory_total_bytes,
         })
     }
 
@@ -1551,6 +1600,8 @@ pub(crate) struct DeviceInfo {
     pub compute_capability: String,
     pub driver_version: i32,
     pub runtime_version: i32,
+    pub memory_free_bytes: u64,
+    pub memory_total_bytes: u64,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1896,6 +1947,30 @@ mod tests {
         {
             *dst = src as std::os::raw::c_char;
         }
+        let mut demag_operator_mode = [0; 64];
+        let raw_demag = b"device_hypre_poisson\0";
+        for (dst, src) in demag_operator_mode
+            .iter_mut()
+            .zip(raw_demag.iter().copied())
+        {
+            *dst = src as std::os::raw::c_char;
+        }
+        let mut hypre_execution_policy = [0; 32];
+        let raw_policy = b"device\0";
+        for (dst, src) in hypre_execution_policy
+            .iter_mut()
+            .zip(raw_policy.iter().copied())
+        {
+            *dst = src as std::os::raw::c_char;
+        }
+        let mut demag_residency = [0; 32];
+        let raw_residency = b"device\0";
+        for (dst, src) in demag_residency
+            .iter_mut()
+            .zip(raw_residency.iter().copied())
+        {
+            *dst = src as std::os::raw::c_char;
+        }
 
         let info = NativeFemGpuRkPlanInfo::from_ffi(ffi::fullmag_fem_gpu_rk_plan_info {
             exchange_only_enabled: 1,
@@ -1903,7 +1978,11 @@ mod tests {
             uses_cuda_kernels: 1,
             allows_exchange_host_sync: 1,
             stage_exchange_device_resident: 0,
+            uses_gpu_poisson: 1,
             exchange_operator_mode,
+            demag_operator_mode,
+            hypre_execution_policy,
+            demag_residency,
             reason,
         });
 
@@ -1912,7 +1991,11 @@ mod tests {
         assert!(info.uses_cuda_kernels);
         assert!(info.allows_exchange_host_sync);
         assert!(!info.stage_exchange_device_resident);
+        assert!(info.uses_gpu_poisson);
         assert_eq!(info.exchange_operator_mode, "unsupported");
+        assert_eq!(info.demag_operator_mode, "device_hypre_poisson");
+        assert_eq!(info.hypre_execution_policy, "device");
+        assert_eq!(info.demag_residency, "device");
         assert_eq!(info.reason, "requires CUDA");
     }
 

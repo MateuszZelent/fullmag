@@ -23,7 +23,7 @@ HEIGHT = 20e-9
 ARCH_HEIGHT = 50e-9
 Z0 = -ARCH_HEIGHT / 2.0
 
-B_EXT_T = 1e-7
+B_EXT_T = 1e-2
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 G_FACTOR = 2.115
@@ -109,7 +109,7 @@ core_relaxation = fm.mesh.object_core_relaxation(
 )
 waveguide.mesh.size_field(core_relaxation["kind"], **core_relaxation["params"])
 # Energy terms
-study.b_ext(0.0, 0.0, B_EXT_T)
+study.b_ext(B_EXT_T, 0.0, 0.0)
 study.demag(realization="poisson_robin")
 
 # Demag solver tuning: rtol=1e-6 is sufficient for relaxation

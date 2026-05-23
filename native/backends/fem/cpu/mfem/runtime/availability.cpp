@@ -264,6 +264,15 @@ fullmag_fem_availability_info query_availability()
     }
 
     info.native_fem_gpu_available = 1;
+    info.native_fem_gpu_full_demag_available =
+        (info.mfem_cuda_available != 0 && info.hypre_gpu_available != 0) ? 1 : 0;
+    if (!info.native_fem_gpu_full_demag_available) {
+        set_gpu_reason(
+            info,
+            "native FEM GPU backend is available, but strict full-demag GPU requires hypre GPU support");
+        finalize_availability(info);
+        return info;
+    }
     if (info.built_with_ceed) {
         set_gpu_reason(info, "native FEM GPU backend is available (MFEM + CUDA + libCEED)");
     } else {

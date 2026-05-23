@@ -36,14 +36,25 @@ hostowym stepperem.
 
 ## Jawne tryby runtime
 
-Do czasu domkniecia device-resident exchange/RK/demag backend GPU FEM musi
-raportowac prawde. Dla ogolnego FEM GPU nadal obowiazuje:
+GPU FEM musi raportowac prawde o tym, czy Poisson demag jest wykonywany na
+device, czy przez jawny tryb kompatybilnosci. Od 2026-05-23 publiczne
+`study.engine("fem")` + `study.device("gpu", precision="double")` oznacza
+strict full-in-GPU dla Poisson demag. Dla takiego runu obowiazuje:
 
-- `fem_execution_mode = hybrid_legacy_sparse`,
-- `fem_data_residency = host_source_of_truth`,
+- `fem_execution_mode = all_in_gpu_legacy_sparse`,
+- `fem_data_residency = device_source_of_truth` po inicjalizacji device,
 - `fem_assembly_mode = legacy_sparse`,
-- `uses_cuda_kernels = false` poza jawnie dopuszczonym waskim milestone'em,
-- `uses_gpu_poisson = false`.
+- `uses_cuda_kernels = true`,
+- `uses_gpu_poisson = true`,
+- `fem_demag_operator_mode = device_hypre_poisson`,
+- `hypre_execution_policy = device`,
+- `demag_residency = device`.
+
+`hybrid_legacy_sparse` / `hybrid_cpu_poisson` pozostaje dopuszczalne tylko jako
+jawnie wybrany compatibility/debug mode, np. przez backendowy hint albo zmienna
+`FULLMAG_FEM_GPU_DEMAG_MODE=hybrid_cpu_poisson`. Taki tryb nie jest strict GPU
+i musi raportowac `uses_gpu_poisson=false`,
+`hypre_execution_policy=host` oraz `demag_residency=host_device_roundtrip`.
 
 Te pola nie sa kosmetyka. Sa bramka anty-regresyjna dla runnera, artefaktow i
 benchmarkow. Dopiero gdy `TransferAudit` oraz profiler potwierdza brak
@@ -197,12 +208,12 @@ retry, ktory liczy blad, podejmuje decyzje PI, przy reject odtwarza
 adaptive RK23/RK45 osobnym powodem, ale ta sciezka nadal wymaga kompilacji `.cu`,
 device-resident exchange i realnej walidacji CUDA/MFEM przed uznaniem jej za
 zaakceptowana.
-Po kroku device pozostaje zrodlem prawdy. Hostowy
-snapshot magnetyzacji jest odswiezany tylko przez jawny readback poza
-`TransferAuditScope::HotLoop` w sciezce kopii pola `M`. Ten milestone nadal
-nie obejmuje demag, DMI, anizotropii, Oersted/STT, thermal, magnetoelastic,
-PBC, zaakceptowanej na CUDA/MFEM adaptive RK23/RK45 parity/profiler, adaptive
-FSAL/error reuse, consistent mass ani partial assembly/libCEED.
+Po kroku device pozostaje zrodlem prawdy. Hostowy snapshot magnetyzacji jest
+odswiezany tylko przez jawny readback poza `TransferAuditScope::HotLoop` w
+sciezce kopii pola `M`. Ten milestone nadal nie obejmuje PBC demag,
+Fredkin-Koehler GPU, high-order FEM, zaakceptowanej na CUDA/MFEM adaptive
+RK23/RK45 parity/profiler, adaptive FSAL/error reuse, consistent mass ani
+partial assembly/libCEED.
 
 Wymuszenie pelnego trybu odbywa sie przez `FULLMAG_FEM_ALL_IN_GPU=1` albo
 `FULLMAG_FEM_EXECUTION=all_in_gpu`. Taki request jest fail-fast: runtime nie
@@ -210,24 +221,39 @@ moze fallbackowac do CPU ani akceptowac `hybrid_legacy_sparse`. Dopoki
 `fem_gpu_rk_exchange_only_enabled` i
 `fem_gpu_rk_stage_exchange_device_resident` nie sa jednoczesnie `true`, albo
 `fem_exchange_operator_mode` nie jest realnym trybem
-`legacy_sparse_gpu` / `partial_assembly_gpu`, runner ma zwracac blad
-`all_in_gpu_contract_unmet` z `gpu_rk_block_reason`, zeby diagnostyka
+`legacy_sparse_gpu` / `partial_assembly_gpu`, albo Poisson demag nie raportuje
+`device_hypre_poisson` + `hypre_execution_policy=device`, runner ma zwracac
+blad `all_in_gpu_contract_unmet` z `gpu_rk_block_reason`, zeby diagnostyka
 pokazywala konkretny brak planu GPU RK.
+
+Strict GPU demag obejmuje na razie P1, double precision, nieperiodyczny
+shared-domain airbox Poisson z Dirichlet/Robin. `fe_order > 1`, periodic
+demag oraz Fredkin-Koehler FEM/BEM na GPU maja failowac z diagnostyka zamiast
+przechodzic w ukryty CPU fallback.
 
 ## Bramka pierwszego kamienia milowego
 
-Pierwszy prawdziwy kamien milowy to `exchange_only + Heun`:
+Pierwszy prawdziwy kamien milowy po zmianie 2026-05-23 to
+`exchange + demag + lokalne pola` z Poisson demag na device:
 
 - `fem_data_residency = device_source_of_truth`,
 - `fem_exchange_operator_mode = legacy_sparse_gpu`,
+- `fem_demag_operator_mode = device_hypre_poisson`,
+- `hypre_execution_policy = device`,
+- `demag_residency = device`,
+- `uses_gpu_poisson = true`,
 - `fem_gpu_rk_stage_exchange_device_resident = true`,
 - `fem_gpu_rk_exchange_only_enabled = true`,
 - `hot_loop_h2d_bytes = 0`,
 - `hot_loop_d2h_bytes = 0`,
 - `hot_loop_host_sync_count = 0`,
+- `hot_loop_compute_h2d_bytes = 0`,
+- `hot_loop_compute_d2h_bytes = 0`,
+- `hot_loop_compute_host_sync_count = 0`,
 - CPU/GPU parity po 1, 10 i 100 krokach,
 - GPU wygrywa z CPU powyzej ustalonego progu rozmiaru siatki,
-- profiler pokazuje RK/LLG/redukcje/operator exchange w hot loopie.
+- profiler pokazuje RK/LLG/redukcje/operator exchange oraz demag Poisson w hot
+  loopie.
 
 Status lokalny 2026-05-15: czesc zrodlowa milestone'u zostala wdrozona i
 sprawdzona przez lokalne bramki bez CUDA: `fem_gpu_rk_plan`,

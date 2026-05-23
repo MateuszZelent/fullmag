@@ -351,11 +351,36 @@ The first production optimization for this path is therefore:
 - keep `demag_solve_count`, iterations, residuals, `H_demag`, and `E_demag`
   reporting unchanged.
 
-This does not replace the later GPU target: a libCEED/MFEM device-side
-right-hand-side QFunction remains the intended follow-up once host/device
-transfer and field-recovery bottlenecks are addressed.
+The strict FEM GPU target replaces the per-stage host assembly path with a
+device-resident Poisson subsystem:
 
-#### 3.2.7 Multi-material interfaces and curved boundaries
+- setup builds and uploads sparse P1 RHS operators
+  $B_x^T(M_s)$, $B_y^T(M_s)$ and $B_z^T(M_s)$ mapping nodal
+  `m.x/y/z` to the scalar Poisson RHS;
+- setup builds and uploads sparse recovery operators mapping `u` to
+  `H_demag.x/y/z = -grad(u)` on magnetic nodes;
+- `poisson_rhs`, `poisson_solution` and `H_demag` are persistent device
+  buffers;
+- hypre is initialized with device execution and device memory policy;
+- the warm-start potential remains resident on device between RK stages.
+
+The runtime mode names are part of the contract:
+
+| Mode | Meaning |
+|---|---|
+| `device_hypre_poisson` | Strict GPU path. RHS, hypre solve, recovery and demag energy stay device-resident. |
+| `hybrid_cpu_poisson` | Explicit compatibility/debug path. The stage downloads magnetization, runs CPU Poisson, and uploads `H_demag`. |
+
+For `study.engine("fem")` + `study.device("gpu", precision="double")`, the
+default is `device_hypre_poisson`. If this path is unavailable, the run must
+fail with diagnostics instead of silently using `hybrid_cpu_poisson`.
+
+Initial strict scope is P1, double precision, non-periodic shared-domain
+airbox Poisson with Dirichlet or Robin outer boundary. `fe_order > 1`,
+periodic demag, and Fredkin-Koehler FEM/BEM GPU demag remain explicit
+rejections until each has its own documented device contract.
+
+#### 3.2.8 Multi-material interfaces and curved boundaries
 
 In FEM, curved boundaries and material interfaces are represented by the mesh itself rather than by
 staircasing.

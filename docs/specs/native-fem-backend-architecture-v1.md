@@ -267,6 +267,11 @@ native/backends/fem/
     runtime/
     state/
     kernels/
+    demag_poisson/
+      rhs_operator.hpp/.cpp
+      hypre_device_solver.hpp/.cpp
+      recovery_operator.hpp/.cpp
+      energy.hpp/.cpp
     interactions/
     integrators/
     transfer/
@@ -346,6 +351,22 @@ FEM-BEM, Fredkin-Koehler, or FMM strategies can be compared honestly. The
 Fredkin-Koehler/FEM-BEM path is a body-only open-boundary method: it must not
 allocate or require a volumetric airbox, because the exterior is represented by
 a boundary integral operator on the magnetic surface.
+
+The strict GPU Poisson demag realization is a sibling subsystem, not an
+extension of `mfem_bridge.cpp`. It owns device CSR RHS/recovery operators,
+persistent `poisson_rhs`, `poisson_solution`, `H_demag` buffers, hypre device
+execution policy, BoomerAMG/Krylov object lifetime, warm-start residency, and
+transfer-audit reporting. Runtime provenance must distinguish:
+
+```text
+device_hypre_poisson  -> strict device-resident demag
+hybrid_cpu_poisson    -> explicit compatibility/debug round-trip path
+```
+
+`study.device("gpu")` resolves to `device_hypre_poisson` for demag-enabled FEM
+runs. If hypre GPU, MFEM CUDA, P1/shared-domain preconditions, or device
+operators are unavailable, strict GPU must fail clearly instead of falling back
+to CPU Poisson.
 
 ## 8. Capability and Qualification
 

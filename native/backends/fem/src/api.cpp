@@ -286,11 +286,27 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
     out_info->allows_exchange_host_sync = plan.allows_exchange_host_sync ? 1 : 0;
     out_info->stage_exchange_device_resident =
         plan.stage_exchange_device_resident ? 1 : 0;
+    out_info->uses_gpu_poisson = plan.uses_gpu_poisson ? 1 : 0;
     std::snprintf(
         out_info->exchange_operator_mode,
         sizeof(out_info->exchange_operator_mode),
         "%s",
         plan.exchange_operator_mode != nullptr ? plan.exchange_operator_mode : "unsupported");
+    std::snprintf(
+        out_info->demag_operator_mode,
+        sizeof(out_info->demag_operator_mode),
+        "%s",
+        plan.demag_operator_mode != nullptr ? plan.demag_operator_mode : "none");
+    std::snprintf(
+        out_info->hypre_execution_policy,
+        sizeof(out_info->hypre_execution_policy),
+        "%s",
+        plan.hypre_execution_policy != nullptr ? plan.hypre_execution_policy : "none");
+    std::snprintf(
+        out_info->demag_residency,
+        sizeof(out_info->demag_residency),
+        "%s",
+        plan.demag_residency != nullptr ? plan.demag_residency : "none");
     if (!reason.empty()) {
         std::snprintf(out_info->reason, sizeof(out_info->reason), "%s", reason.c_str());
     }

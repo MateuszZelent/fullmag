@@ -494,29 +494,38 @@ mod all_in_gpu_fem_transfer_audit_tests {
     #[test]
     fn execution_provenance_carries_truthful_fem_gpu_runtime_contract() {
         let provenance = ExecutionProvenance {
-            fem_execution_mode: Some("hybrid_legacy_sparse".to_string()),
-            fem_data_residency: Some("host_source_of_truth".to_string()),
-            uses_cuda_kernels: Some(false),
-            uses_gpu_poisson: Some(false),
-            hot_loop_host_sync_count: Some(9),
-            hot_loop_exchange_host_sync_count: Some(4),
-            hot_loop_compute_host_sync_count: Some(5),
+            fem_execution_mode: Some("all_in_gpu_legacy_sparse".to_string()),
+            fem_data_residency: Some("device_source_of_truth".to_string()),
+            uses_cuda_kernels: Some(true),
+            uses_gpu_poisson: Some(true),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            hypre_execution_policy: Some("device".to_string()),
+            demag_residency: Some("device".to_string()),
+            hot_loop_host_sync_count: Some(0),
+            hot_loop_exchange_host_sync_count: Some(0),
+            hot_loop_compute_host_sync_count: Some(0),
             ..ExecutionProvenance::default()
         };
 
         assert_eq!(
             provenance.fem_execution_mode.as_deref(),
-            Some("hybrid_legacy_sparse")
+            Some("all_in_gpu_legacy_sparse")
         );
         assert_eq!(
             provenance.fem_data_residency.as_deref(),
-            Some("host_source_of_truth")
+            Some("device_source_of_truth")
         );
-        assert_eq!(provenance.uses_cuda_kernels, Some(false));
-        assert_eq!(provenance.uses_gpu_poisson, Some(false));
-        assert_eq!(provenance.hot_loop_host_sync_count, Some(9));
-        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(4));
-        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(5));
+        assert_eq!(provenance.uses_cuda_kernels, Some(true));
+        assert_eq!(provenance.uses_gpu_poisson, Some(true));
+        assert_eq!(
+            provenance.fem_demag_operator_mode.as_deref(),
+            Some("device_hypre_poisson")
+        );
+        assert_eq!(provenance.hypre_execution_policy.as_deref(), Some("device"));
+        assert_eq!(provenance.demag_residency.as_deref(), Some("device"));
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(0));
+        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
     }
 }
 
@@ -1196,6 +1205,15 @@ pub struct ExecutionProvenance {
     /// Whether Poisson demag solve/recovery stayed on GPU in the native FEM hot loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uses_gpu_poisson: Option<bool>,
+    /// FEM demag operator mode selected by native GPU runtime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_demag_operator_mode: Option<String>,
+    /// hypre execution policy used by native FEM demag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypre_execution_policy: Option<String>,
+    /// FEM demag data residency in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub demag_residency: Option<String>,
     /// Cumulative native FEM hot-loop host synchronization count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hot_loop_host_sync_count: Option<u64>,

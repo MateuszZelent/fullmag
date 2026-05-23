@@ -214,7 +214,11 @@ fn runtime_info_once(message: &str) {
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_gpu_ready_log_message(gpu_state: &NativeFemGpuStateInfo) -> (&'static str, String) {
+fn native_fem_gpu_ready_log_message(
+    gpu_state: &NativeFemGpuStateInfo,
+    device_info: &native_fem::DeviceInfo,
+    gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
+) -> (&'static str, String) {
     if !gpu_state.allocated {
         return (
             "warning",
@@ -227,17 +231,31 @@ fn native_fem_gpu_ready_log_message(gpu_state: &NativeFemGpuStateInfo) -> (&'sta
 
     let device_gb = gpu_state.device_bytes as f64 / 1e9;
     let reduction_mb = gpu_state.reduction_workspace_bytes as f64 / 1e6;
-    if gpu_state.source_of_truth != NativeFemDataResidency::DeviceSourceOfTruth {
+    let vram_free_gb = device_info.memory_free_bytes as f64 / 1e9;
+    let vram_total_gb = device_info.memory_total_bytes as f64 / 1e9;
+    let device_stage_ready = gpu_rk_plan.is_some_and(|plan| {
+        plan.exchange_only_enabled
+            && plan.stage_exchange_device_resident
+            && plan.uses_gpu_poisson
+            && plan.demag_operator_mode == "device_hypre_poisson"
+            && plan.hypre_execution_policy == "device"
+            && plan.demag_residency == "device"
+    });
+    if gpu_state.source_of_truth != NativeFemDataResidency::DeviceSourceOfTruth
+        && !device_stage_ready
+    {
         return (
             "warning",
             format!(
-                "native FEM GPU buffers allocated, but data residency is {}: nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB",
+                "native FEM GPU buffers allocated, but data residency is {}: nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB vram_free={:.3} GB vram_total={:.3} GB",
                 gpu_state.source_of_truth.as_str(),
                 gpu_state.node_count,
                 gpu_state.dof_len,
                 gpu_state.stage_count,
                 device_gb,
-                reduction_mb
+                reduction_mb,
+                vram_free_gb,
+                vram_total_gb
             ),
         );
     }
@@ -245,12 +263,15 @@ fn native_fem_gpu_ready_log_message(gpu_state: &NativeFemGpuStateInfo) -> (&'sta
     (
         "info",
         format!(
-            "native FEM GPU ready: mesh, material fields, and magnetization are resident on the CUDA device; nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB",
+            "native FEM GPU ready: mesh, material fields, magnetization, and demag data are loaded on the CUDA device; nodes={} dof={} stages={} device_buffers={:.3} GB reduction_workspace={:.1} MB vram_free={:.3} GB vram_total={:.3} GB initial_residency={}",
             gpu_state.node_count,
             gpu_state.dof_len,
             gpu_state.stage_count,
             device_gb,
-            reduction_mb
+            reduction_mb,
+            vram_free_gb,
+            vram_total_gb,
+            gpu_state.source_of_truth.as_str()
         ),
     )
 }
@@ -694,6 +715,15 @@ fn resolve_fem_engine_with_availability(
                         )),
                     })
                 }
+            } else if !availability.native_fem_gpu_full_demag_available
+                && fem_policy_requires_gpu(policy)
+            {
+                Err(RunError {
+                    message: format!(
+                        "FEM GPU execution was requested, but strict full-in-GPU demag is unavailable: {} (fallback_reason=native_fem_gpu_full_demag_unavailable)",
+                        availability.reason_gpu
+                    ),
+                })
             } else if fe_order != 1 {
                 if env_override {
                     Err(RunError {
@@ -2822,8 +2852,18 @@ fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
 fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
     if plan.mfem_device_string.as_deref() == Some("cpu") {
         "cpu_native"
-    } else {
+    } else if std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "hybrid_cpu_poisson" | "hybrid" | "compat"
+            )
+        })
+    {
         "hybrid_legacy_sparse"
+    } else {
+        "all_in_gpu_legacy_sparse"
     }
 }
 
@@ -2838,6 +2878,10 @@ fn validate_all_in_gpu_fem_runtime_contract(
     if execution_mode != "all_in_gpu_legacy_sparse"
         || !gpu_rk_plan.exchange_only_enabled
         || !gpu_rk_plan.stage_exchange_device_resident
+        || !gpu_rk_plan.uses_gpu_poisson
+        || gpu_rk_plan.demag_operator_mode != "device_hypre_poisson"
+        || gpu_rk_plan.hypre_execution_policy != "device"
+        || gpu_rk_plan.demag_residency != "device"
         || !matches!(
             gpu_rk_plan.exchange_operator_mode.as_str(),
             "legacy_sparse_gpu" | "partial_assembly_gpu"
@@ -2848,11 +2892,17 @@ fn validate_all_in_gpu_fem_runtime_contract(
                 "ALL_IN_GPU FEM was requested, but native FEM runtime is not all-in GPU \
                  (execution_mode={}, gpu_rk_exchange_only_enabled={}, \
                  stage_exchange_device_resident={}, fem_exchange_operator_mode={}, \
+                 uses_gpu_poisson={}, fem_demag_operator_mode={}, hypre_execution_policy={}, \
+                 demag_residency={}, \
                  gpu_rk_block_reason={}, fallback_reason=all_in_gpu_contract_unmet)",
                 execution_mode,
                 gpu_rk_plan.exchange_only_enabled,
                 gpu_rk_plan.stage_exchange_device_resident,
                 gpu_rk_plan.exchange_operator_mode,
+                gpu_rk_plan.uses_gpu_poisson,
+                gpu_rk_plan.demag_operator_mode,
+                gpu_rk_plan.hypre_execution_policy,
+                gpu_rk_plan.demag_residency,
                 if gpu_rk_plan.reason.is_empty() {
                     "none"
                 } else {
@@ -2882,13 +2932,13 @@ fn native_fem_data_residency(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_uses_cuda_kernels(_plan: &FemPlanIR) -> bool {
-    false
+fn native_fem_uses_cuda_kernels(plan: &FemPlanIR) -> bool {
+    plan.mfem_device_string.as_deref() != Some("cpu")
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_uses_gpu_poisson(_plan: &FemPlanIR) -> bool {
-    false
+fn native_fem_uses_gpu_poisson(plan: &FemPlanIR) -> bool {
+    plan.mfem_device_string.as_deref() != Some("cpu") && plan.enable_demag
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2902,8 +2952,16 @@ fn apply_native_fem_runtime_contract(
     provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
     provenance.fem_data_residency =
         Some(native_fem_data_residency(plan, stats, gpu_state).to_string());
-    provenance.uses_cuda_kernels = Some(native_fem_uses_cuda_kernels(plan));
-    provenance.uses_gpu_poisson = Some(native_fem_uses_gpu_poisson(plan));
+    provenance.uses_cuda_kernels = Some(
+        gpu_rk_plan
+            .map(|plan| plan.uses_cuda_kernels)
+            .unwrap_or_else(|| native_fem_uses_cuda_kernels(plan)),
+    );
+    provenance.uses_gpu_poisson = Some(
+        gpu_rk_plan
+            .map(|plan| plan.uses_gpu_poisson)
+            .unwrap_or_else(|| native_fem_uses_gpu_poisson(plan)),
+    );
     provenance.hot_loop_host_sync_count = stats.map(|entry| entry.hot_loop_host_sync_count);
     if let Some(entry) = stats {
         provenance.hot_loop_exchange_h2d_bytes = Some(entry.hot_loop_exchange_h2d_bytes);
@@ -2930,6 +2988,9 @@ fn apply_native_fem_runtime_contract(
         provenance.fem_gpu_rk_stage_exchange_device_resident =
             Some(rk_plan.stage_exchange_device_resident);
         provenance.fem_exchange_operator_mode = Some(rk_plan.exchange_operator_mode.clone());
+        provenance.fem_demag_operator_mode = Some(rk_plan.demag_operator_mode.clone());
+        provenance.hypre_execution_policy = Some(rk_plan.hypre_execution_policy.clone());
+        provenance.demag_residency = Some(rk_plan.demag_residency.clone());
         provenance.fem_gpu_rk_block_reason =
             (!rk_plan.reason.is_empty()).then(|| rk_plan.reason.clone());
     }
@@ -2977,7 +3038,7 @@ fn execute_native_fem(
     validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
     let demag_policy = plan.demag_solver_policy.clone().unwrap_or_default();
     runtime_info_once(&format!(
-        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse demag_solver={} preconditioner={}",
+        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
         execution_engine,
         device_info.name,
         device_info.compute_capability,
@@ -2986,9 +3047,16 @@ fn execute_native_fem(
         plan.mfem_device_string.as_deref().unwrap_or("cpu"),
         demag_policy.solver,
         demag_policy.preconditioner,
+        gpu_rk_plan_info.demag_operator_mode,
+        gpu_rk_plan_info.hypre_execution_policy,
+        gpu_rk_plan_info.demag_residency,
     ));
     if plan.mfem_device_string.as_deref() != Some("cpu") {
-        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state_info);
+        let (level, message) = native_fem_gpu_ready_log_message(
+            &gpu_state_info,
+            &device_info,
+            Some(&gpu_rk_plan_info),
+        );
         runtime_log_once(level, &message);
     }
     let node_count = plan.mesh.nodes.len();
@@ -4391,6 +4459,35 @@ mod tests {
     }
 
     #[cfg(feature = "fem-gpu")]
+    fn gpu_device_info_for_log_test() -> native_fem::DeviceInfo {
+        native_fem::DeviceInfo {
+            name: "NVIDIA test GPU".to_string(),
+            compute_capability: "8.9".to_string(),
+            driver_version: 13010,
+            runtime_version: 12060,
+            memory_free_bytes: 8_000_000_000,
+            memory_total_bytes: 12_000_000_000,
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    fn gpu_rk_ready_plan_for_log_test() -> NativeFemGpuRkPlanInfo {
+        NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: true,
+            stage_count: 2,
+            uses_cuda_kernels: true,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: true,
+            uses_gpu_poisson: true,
+            exchange_operator_mode: "legacy_sparse_gpu".to_string(),
+            demag_operator_mode: "device_hypre_poisson".to_string(),
+            hypre_execution_policy: "device".to_string(),
+            demag_residency: "device".to_string(),
+            reason: String::new(),
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
     #[test]
     fn native_fem_gpu_ready_log_confirms_device_residency() {
         let gpu_state = NativeFemGpuStateInfo {
@@ -4402,14 +4499,41 @@ mod tests {
             reduction_workspace_bytes: 2_000_000,
             source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
         };
+        let device_info = gpu_device_info_for_log_test();
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
 
-        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state);
+        let (level, message) =
+            native_fem_gpu_ready_log_message(&gpu_state, &device_info, Some(&rk_plan));
 
         assert_eq!(level, "info");
         assert_eq!(
             message,
-            "native FEM GPU ready: mesh, material fields, and magnetization are resident on the CUDA device; nodes=16502 dof=49506 stages=7 device_buffers=0.275 GB reduction_workspace=2.0 MB"
+            "native FEM GPU ready: mesh, material fields, magnetization, and demag data are loaded on the CUDA device; nodes=16502 dof=49506 stages=7 device_buffers=0.275 GB reduction_workspace=2.0 MB vram_free=8.000 GB vram_total=12.000 GB initial_residency=device_source_of_truth"
         );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_gpu_ready_log_confirms_device_demag_when_initial_source_is_host() {
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 171,
+            dof_len: 513,
+            stage_count: 2,
+            device_bytes: 1_000_000,
+            reduction_workspace_bytes: 0,
+            source_of_truth: NativeFemDataResidency::HostSourceOfTruth,
+        };
+        let device_info = gpu_device_info_for_log_test();
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
+
+        let (level, message) =
+            native_fem_gpu_ready_log_message(&gpu_state, &device_info, Some(&rk_plan));
+
+        assert_eq!(level, "info");
+        assert!(message.contains("demag data are loaded on the CUDA device"));
+        assert!(message.contains("initial_residency=host_source_of_truth"));
+        assert!(message.contains("vram_free=8.000 GB vram_total=12.000 GB"));
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -4424,11 +4548,13 @@ mod tests {
             reduction_workspace_bytes: 512,
             source_of_truth: NativeFemDataResidency::Mixed,
         };
+        let device_info = gpu_device_info_for_log_test();
 
-        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state);
+        let (level, message) = native_fem_gpu_ready_log_message(&gpu_state, &device_info, None);
 
         assert_eq!(level, "warning");
         assert!(message.contains("data residency is mixed"));
+        assert!(message.contains("vram_free=8.000 GB vram_total=12.000 GB"));
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -4476,7 +4602,11 @@ mod tests {
             uses_cuda_kernels: false,
             allows_exchange_host_sync: false,
             stage_exchange_device_resident: false,
+            uses_gpu_poisson: false,
             exchange_operator_mode: "unsupported".to_string(),
+            demag_operator_mode: "unsupported".to_string(),
+            hypre_execution_policy: "unavailable".to_string(),
+            demag_residency: "unavailable".to_string(),
             reason: "GPU RK exchange-only path requires CUDA runtime support".to_string(),
         };
         let mut provenance = ExecutionProvenance::default();
@@ -4495,6 +4625,15 @@ mod tests {
             provenance.fem_exchange_operator_mode.as_deref(),
             Some("unsupported")
         );
+        assert_eq!(
+            provenance.fem_demag_operator_mode.as_deref(),
+            Some("unsupported")
+        );
+        assert_eq!(
+            provenance.hypre_execution_policy.as_deref(),
+            Some("unavailable")
+        );
+        assert_eq!(provenance.demag_residency.as_deref(), Some("unavailable"));
         assert_eq!(
             provenance.fem_gpu_rk_block_reason.as_deref(),
             Some("GPU RK exchange-only path requires CUDA runtime support")
@@ -4515,7 +4654,11 @@ mod tests {
             uses_cuda_kernels: true,
             allows_exchange_host_sync: true,
             stage_exchange_device_resident: false,
+            uses_gpu_poisson: false,
             exchange_operator_mode: "unsupported".to_string(),
+            demag_operator_mode: "hybrid_cpu_poisson".to_string(),
+            hypre_execution_policy: "host".to_string(),
+            demag_residency: "host_device_roundtrip".to_string(),
             reason: "stage H_ex is not device-resident".to_string(),
         };
 
@@ -4546,7 +4689,11 @@ mod tests {
             uses_cuda_kernels: true,
             allows_exchange_host_sync: false,
             stage_exchange_device_resident: true,
+            uses_gpu_poisson: true,
             exchange_operator_mode: "unsupported".to_string(),
+            demag_operator_mode: "device_hypre_poisson".to_string(),
+            hypre_execution_policy: "device".to_string(),
+            demag_residency: "device".to_string(),
             reason: String::new(),
         };
 
@@ -4565,17 +4712,53 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn all_in_gpu_request_rejects_missing_device_poisson() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: true,
+            stage_count: 2,
+            uses_cuda_kernels: true,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: true,
+            uses_gpu_poisson: false,
+            exchange_operator_mode: "legacy_sparse_gpu".to_string(),
+            demag_operator_mode: "hybrid_cpu_poisson".to_string(),
+            hypre_execution_policy: "host".to_string(),
+            demag_residency: "host_device_roundtrip".to_string(),
+            reason: String::new(),
+        };
+
+        let err = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan)
+            .expect_err("ALL_IN_GPU must reject non-device Poisson demag");
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        assert!(err.message.contains("uses_gpu_poisson=false"));
+        assert!(err
+            .message
+            .contains("fem_demag_operator_mode=hybrid_cpu_poisson"));
+        assert!(err.message.contains("hypre_execution_policy=host"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn all_in_gpu_execution_value_forces_gpu_policy() {
         let _guard = env_lock().lock().expect("env mutex");
         let problem = fem_policy_problem();
         unsafe {
             std::env::set_var("FULLMAG_FEM_EXECUTION", "all_in_gpu");
-            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
+            std::env::set_var("FULLMAG_FEM_GPU_INDEX", "99999");
             std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
         }
         let result = resolve_fem_engine(&problem);
         unsafe {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
         }
         let err = result.expect_err("all_in_gpu should force native GPU availability");
         assert!(err
@@ -4591,12 +4774,13 @@ mod tests {
         unsafe {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
             std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
-            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
+            std::env::set_var("FULLMAG_FEM_GPU_INDEX", "99999");
             std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
         }
         let result = resolve_fem_engine(&problem);
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
         }
         let err = result.expect_err("FULLMAG_FEM_ALL_IN_GPU should force native GPU availability");
         assert!(err
@@ -4721,8 +4905,9 @@ mod tests {
             built_with_ceed: false,
             native_fem_cpu_available: cpu,
             native_fem_gpu_available: gpu,
+            native_fem_gpu_full_demag_available: gpu,
             mfem_cuda_available: gpu,
-            hypre_gpu_available: false,
+            hypre_gpu_available: gpu,
             libceed_used_hot_path: false,
             visible_cuda_device_count: if gpu { 1 } else { 0 },
             requested_gpu_index: -1,

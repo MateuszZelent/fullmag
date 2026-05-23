@@ -167,6 +167,54 @@ void fullmag_cuda_legacy_sparse_exchange_energy_blocks(
     int rows,
     cudaStream_t stream = nullptr);
 
+/// Device Poisson demag RHS: b = Bx mx + By my + Bz mz.
+void fullmag_cuda_demag_rhs_csr(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const fem_real_t *csr_values_x,
+    const fem_real_t *csr_values_y,
+    const fem_real_t *csr_values_z,
+    const fem_real_t *mx,
+    const fem_real_t *my,
+    const fem_real_t *mz,
+    fem_real_t *rhs,
+    int rows,
+    cudaStream_t stream = nullptr);
+
+/// Device Poisson demag recovery: h_component = G_component u.
+void fullmag_cuda_demag_recovery_csr(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const fem_real_t *csr_values,
+    const fem_real_t *u,
+    const uint8_t *magnetic_node_mask,
+    fem_real_t *h_component,
+    int rows,
+    cudaStream_t stream = nullptr);
+
+/// Zero a sparse index list in a device vector.
+void fullmag_cuda_zero_indexed_values(
+    fem_real_t *values,
+    const uint32_t *indices,
+    int count,
+    cudaStream_t stream = nullptr);
+
+/// Per-block demag energy partials:
+/// -0.5 * mu0 * Ms_i * (m_i . H_demag_i) * lumped_mass_i.
+void fullmag_cuda_demag_energy_blocks(
+    const fem_real_t *mx,
+    const fem_real_t *my,
+    const fem_real_t *mz,
+    const fem_real_t *h_demag_x,
+    const fem_real_t *h_demag_y,
+    const fem_real_t *h_demag_z,
+    const fem_real_t *ms,
+    const fem_real_t *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    fem_real_t *block_sums,
+    int N,
+    cudaStream_t stream = nullptr);
+
 /// Per-block Zeeman energy partials:
 /// -mu0 * Ms_i * (m_i . H_ext_i) * lumped_mass_i.
 void fullmag_cuda_external_energy_blocks(

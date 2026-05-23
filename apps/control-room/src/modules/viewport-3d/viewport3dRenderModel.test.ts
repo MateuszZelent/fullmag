@@ -725,7 +725,7 @@ describe("viewport3dRenderModel", () => {
     expect(secondFieldModel?.scalarColors).toBe(firstFieldModel?.scalarColors);
   });
 
-  it("builds scalar color buffers for every requested target shader mode", () => {
+  it("builds scalar color buffers for every requested target shader mode from any active quantity", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
       [],
@@ -734,11 +734,17 @@ describe("viewport3dRenderModel", () => {
 
     const model = buildViewport3DFieldRenderModel(
       topologyModel,
-      fieldVectorFixture(),
+      {
+        ...fieldVectorFixture(),
+        quantityId: "h_demag",
+      },
       0.5,
       {
         scalarColorModes: new Set([
           "orientation",
+          "x",
+          "y",
+          "z",
           "magnitude",
           "monochrome",
         ]),
@@ -746,6 +752,9 @@ describe("viewport3dRenderModel", () => {
     );
 
     expect(model?.scalarColorsByMode.get("orientation")?.colors.length).toBe(12);
+    expect(model?.scalarColorsByMode.get("x")?.colors.length).toBe(12);
+    expect(model?.scalarColorsByMode.get("y")?.colors.length).toBe(12);
+    expect(model?.scalarColorsByMode.get("z")?.colors.length).toBe(12);
     expect(model?.scalarColorsByMode.get("magnitude")?.colors.length).toBe(12);
     expect(model?.scalarColorsByMode.has("monochrome")).toBe(false);
   });
@@ -870,6 +879,36 @@ describe("viewport3dRenderModel", () => {
       21,
     );
     expect(fullFieldModel?.partVectorSegments.get("part-a")?.length).toBe(28);
+  });
+
+  it("builds airbox vector glyphs from full-domain field data", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          nodeCount: 4,
+          nodeStart: 0,
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partVectorBudgets: new Map([["airbox", 4]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(28);
   });
 
   it("uses an explicit global vector budget instead of per-part fixed budgets", () => {

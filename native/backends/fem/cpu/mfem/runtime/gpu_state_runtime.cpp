@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "gpu_demag_poisson.hpp"
 #include "gpu_state.hpp"
 
 #include <cstdint>
@@ -106,6 +107,10 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
 #if FULLMAG_HAS_MFEM_STACK
     if (!context_upload_mfem_exchange_to_gpu_state(ctx, error)) {
+        context_destroy_mfem(ctx);
+        return false;
+    }
+    if (!gpu_demag_poisson_initialize(ctx, error)) {
         context_destroy_mfem(ctx);
         return false;
     }

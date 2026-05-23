@@ -31,10 +31,10 @@ bool initialize_backend_runtime(
 
 void destroy_backend_runtime(Context &ctx)
 {
-    gpu_state_destroy(ctx.gpu_state.device);
 #if FULLMAG_HAS_MFEM_STACK
     context_destroy_mfem(ctx);
 #endif
+    gpu_state_destroy(ctx.gpu_state.device);
 }
 
 } // namespace fullmag::fem

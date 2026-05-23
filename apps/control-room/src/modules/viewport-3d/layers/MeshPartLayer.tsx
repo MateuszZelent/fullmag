@@ -37,8 +37,8 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
-  shaderColorFromSettings,
   shaderUsesVertexColors,
+  surfaceMaterialColorFromSettings,
   surfaceScalarColorModeFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -156,13 +156,14 @@ export function MeshPartLayer({
       effectiveScalarColors,
       topologyModel?.nodeCount ?? 0,
     );
-  const meshColor = shaderColorFromSettings(
+  const meshColor = surfaceMaterialColorFromSettings(
     settings,
     hasScalarColors
       ? colors.mesh
       : (settings.surfaceColorSource !== "solid"
           ? magnetizationTexturePreview?.color
           : null) ?? colors.mesh,
+    hasScalarColors,
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();

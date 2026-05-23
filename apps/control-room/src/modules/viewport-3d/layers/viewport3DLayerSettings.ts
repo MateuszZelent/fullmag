@@ -7,6 +7,8 @@ import type { ColorRepresentation } from "three";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
+export const VERTEX_COLOR_MATERIAL_COLOR = "#ffffff";
+
 export function opacityFromSettings(
   settings: VisualizationTargetSettings,
 ): number {
@@ -24,6 +26,16 @@ export function shaderColorFromSettings(
   return settings.shaderColorMode === "monochrome"
     ? renderableColor(settings.shaderMonoColor, fallback)
     : fallback;
+}
+
+export function surfaceMaterialColorFromSettings(
+  settings: VisualizationTargetSettings,
+  fallback: ColorRepresentation,
+  hasVertexColors: boolean,
+): ColorRepresentation {
+  return hasVertexColors
+    ? VERTEX_COLOR_MATERIAL_COLOR
+    : shaderColorFromSettings(settings, fallback);
 }
 
 export function shaderUsesVertexColors(

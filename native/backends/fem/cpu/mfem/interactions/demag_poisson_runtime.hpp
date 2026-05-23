@@ -51,6 +51,10 @@ struct PoissonDemagRuntimeState {
     mfem::Vector *periodic_solution = nullptr;
     PeriodicPoissonReducedWorkspace *periodic_workspace = nullptr;
     bool periodic_reduced_ready = false;
+    void *gpu_workspace = nullptr;
+    bool gpu_workspace_ready = false;
+    uint64_t gpu_workspace_device_bytes = 0;
+    int gpu_demag_mode = 0;
     int boundary_marker = 99;
     int robin_beta_mode = 0;
     double robin_beta_factor = 1.0;

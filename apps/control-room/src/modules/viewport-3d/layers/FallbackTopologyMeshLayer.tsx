@@ -37,8 +37,8 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
-  shaderColorFromSettings,
   shaderUsesVertexColors,
+  surfaceMaterialColorFromSettings,
   surfaceScalarColorModeFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -160,6 +160,12 @@ export function FallbackTopologyMeshLayer({
 
     onSelectDomain();
   };
+  const hasScalarColors =
+    vertexColorsEnabled &&
+    canApplyVertexScalarColorBuffer(
+      effectiveScalarColors,
+      topologyModel?.nodeCount ?? 0,
+    );
 
   return (
     <group onPointerDown={handlePointerDown}>
@@ -171,16 +177,14 @@ export function FallbackTopologyMeshLayer({
             : RENDER_POLICIES.solidSurface.renderOrder}
         >
           <meshStandardMaterial
-            color={shaderColorFromSettings(fallbackSettings, colors.mesh)}
+            color={surfaceMaterialColorFromSettings(
+              fallbackSettings,
+              colors.mesh,
+              hasScalarColors,
+            )}
             opacity={opacityFromSettings(fallbackSettings)}
             {...materialProfile.magneticSurface}
-            vertexColors={
-              vertexColorsEnabled &&
-              canApplyVertexScalarColorBuffer(
-                effectiveScalarColors,
-                topologyModel?.nodeCount ?? 0,
-              )
-            }
+            vertexColors={hasScalarColors}
             {...surfaceMaterialPolicyProps(opacityFromSettings(fallbackSettings))}
           />
         </mesh>

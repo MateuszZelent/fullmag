@@ -19,6 +19,12 @@ import {
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
+import {
+  applyVertexScalarColorBuffer,
+  canApplyVertexScalarColorBuffer,
+} from "../viewport3dGeometryColors";
+import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
   isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
@@ -39,10 +45,20 @@ import {
   opacityFromSettings,
   percentToUnit,
   shaderColorFromSettings,
+  shaderUsesVertexColors,
+  surfaceMaterialColorFromSettings,
+  surfaceScalarColorModeFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
 } from "./viewport3DLayerSettings";
+
+export interface AirboxSurfaceColorState {
+  hasScalarColors: boolean;
+  materialColor: ColorRepresentation;
+  scalarColors: ScalarColorBuffer | null;
+  vertexColorsEnabled: boolean;
+}
 
 export function BoundsBox({
   bounds,
@@ -173,6 +189,7 @@ function AirboxMeshPartLayer({
   vectorColorMode: string;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
+  const invalidate = useBatchedInvalidate();
   const resolvedSettings =
     resolveAirboxTopologyVisualizationSettings(settings, topologyFreshness);
   const geometry = useMemo(() => {
@@ -208,6 +225,31 @@ function AirboxMeshPartLayer({
   const part = partModel.part;
   const airboxWireframeSemantic =
     resolveAirboxWireframeSemantic(resolvedSettings);
+  const surfaceColorState = resolveAirboxSurfaceColorState(
+    resolvedSettings,
+    fieldModel,
+    topologyModel.nodeCount,
+    colors.mesh,
+  );
+  useEffect(() => {
+    if (!geometry) return;
+    applyVertexScalarColorBuffer(
+      geometry,
+      surfaceColorState.vertexColorsEnabled
+        ? surfaceColorState.scalarColors
+        : null,
+      topologyModel.nodeCount,
+    );
+    tracker.recordDirtyFrame("airbox-field-colors");
+    invalidate();
+  }, [
+    geometry,
+    invalidate,
+    surfaceColorState.scalarColors,
+    topologyModel.nodeCount,
+    tracker,
+    surfaceColorState.vertexColorsEnabled,
+  ]);
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -303,9 +345,10 @@ function AirboxMeshPartLayer({
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
         >
           <meshStandardMaterial
-            color={shaderColorFromSettings(resolvedSettings, colors.mesh)}
+            color={surfaceColorState.materialColor}
             opacity={opacity}
             {...materialProfile.airSurface}
+            vertexColors={surfaceColorState.hasScalarColors}
             {...materialPolicyProps("airSurface")}
           />
         </mesh>
@@ -469,6 +512,33 @@ export function resolveAirboxTopologyVisualizationSettings(
   return {
     ...resolveStaleTopologyVisualizationSettings(settings),
     geometryScope: settings.geometryScope,
+  };
+}
+
+export function resolveAirboxSurfaceColorState(
+  settings: VisualizationTargetSettings,
+  fieldModel: Pick<Viewport3DFieldRenderModel, "scalarColorsByMode"> | null,
+  nodeCount: number,
+  fallbackColor: ColorRepresentation,
+): AirboxSurfaceColorState {
+  const scalarColorMode = surfaceScalarColorModeFromSettings(settings);
+  const scalarColors: ScalarColorBuffer | null = scalarColorMode
+    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
+    : null;
+  const vertexColorsEnabled = shaderUsesVertexColors(settings);
+  const hasScalarColors =
+    vertexColorsEnabled &&
+    canApplyVertexScalarColorBuffer(scalarColors, nodeCount);
+
+  return {
+    hasScalarColors,
+    materialColor: surfaceMaterialColorFromSettings(
+      settings,
+      fallbackColor,
+      hasScalarColors,
+    ),
+    scalarColors,
+    vertexColorsEnabled,
   };
 }
 

@@ -55,11 +55,18 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         gpu_rk_plan.find("does not support demag yet") == std::string::npos,
         "GPU RK plan must not hard-block demag now that hybrid CPU-demag upload is supported");
     check(
-        gpu_rk_cuda.find("compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
-        "GPU RK CUDA path must compute demag through the documented CPU-Hypre hybrid stage path");
+        gpu_rk_cuda.find("compute_device_demag_for_device_stage") != std::string::npos,
+        "GPU RK CUDA path must compute strict demag through the device Hypre Poisson stage path");
     check(
-        gpu_rk_cuda.find("gpu_state_upload_demag_field_aos") != std::string::npos,
-        "GPU RK CUDA path must upload freshly solved CPU H_demag before RHS accumulation");
+        gpu_rk_cuda.find("FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON") != std::string::npos,
+        "hybrid CPU Poisson demag must remain an explicitly named compatibility mode");
+    const auto rhs_pos = gpu_rk_cuda.find("bool compute_rhs_for_magnetization");
+    check(rhs_pos != std::string::npos, "GPU RK CUDA source must expose compute_rhs_for_magnetization");
+    const auto rhs_source = gpu_rk_cuda.substr(rhs_pos);
+    check(
+        rhs_source.find("compute_device_demag_for_device_stage") != std::string::npos &&
+            rhs_source.find("compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
+        "RHS demag must choose strict device Poisson by default and reserve hybrid CPU Poisson for explicit compatibility mode");
     check(
         gpu_rk_cuda.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             gpu_rk_cuda.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
@@ -180,9 +187,20 @@ int main() {
                                const char *reason_fragment,
                                const char *message) {
         reason.clear();
-        const auto blocked = fullmag::fem::gpu_rk_plan_exchange_only(blocked_ctx, reason);
+        auto ready_ctx = blocked_ctx;
+        ready_ctx.gpu_state.device.allocated = true;
+        ready_ctx.gpu_state.device.node_count = ctx.mesh.n_nodes;
+        ready_ctx.gpu_state.device.dof_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
+        const auto blocked = fullmag::fem::gpu_rk_plan_exchange_only(ready_ctx, reason);
         check(!blocked.enabled, message);
-        check(reason.find(reason_fragment) != std::string::npos, "missing expected block reason");
+        if (reason.find(reason_fragment) == std::string::npos) {
+            std::fprintf(
+                stderr,
+                "FAIL: missing expected block reason '%s' in '%s'\n",
+                reason_fragment,
+                reason.c_str());
+            std::exit(1);
+        }
     };
 
     {

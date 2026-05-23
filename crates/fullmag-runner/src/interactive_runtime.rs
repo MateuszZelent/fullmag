@@ -3936,6 +3936,9 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fem_data_residency: None,
         uses_cuda_kernels: None,
         uses_gpu_poisson: None,
+        fem_demag_operator_mode: None,
+        hypre_execution_policy: None,
+        demag_residency: None,
         hot_loop_host_sync_count: None,
         hot_loop_exchange_h2d_bytes: None,
         hot_loop_exchange_d2h_bytes: None,
@@ -4015,6 +4018,9 @@ fn cuda_execution_provenance(
         fem_data_residency: None,
         uses_cuda_kernels: None,
         uses_gpu_poisson: None,
+        fem_demag_operator_mode: None,
+        hypre_execution_policy: None,
+        demag_residency: None,
         hot_loop_host_sync_count: None,
         hot_loop_exchange_h2d_bytes: None,
         hot_loop_exchange_d2h_bytes: None,
@@ -4094,14 +4100,47 @@ fn fem_gpu_execution_provenance(
             if plan.mfem_device_string.as_deref() == Some("cpu") {
                 "cpu_native"
             } else {
-                "hybrid_legacy_sparse"
+                "all_in_gpu_legacy_sparse"
             }
             .to_string(),
         ),
         fem_exchange_operator_mode: Some("unsupported".to_string()),
-        fem_data_residency: Some("host_source_of_truth".to_string()),
-        uses_cuda_kernels: Some(false),
-        uses_gpu_poisson: Some(false),
+        fem_demag_operator_mode: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "none"
+            } else {
+                "device_hypre_poisson"
+            }
+            .to_string(),
+        ),
+        hypre_execution_policy: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "host"
+            } else {
+                "device"
+            }
+            .to_string(),
+        ),
+        demag_residency: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "host"
+            } else {
+                "device"
+            }
+            .to_string(),
+        ),
+        fem_data_residency: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "host_source_of_truth"
+            } else {
+                "device_source_of_truth"
+            }
+            .to_string(),
+        ),
+        uses_cuda_kernels: Some(plan.mfem_device_string.as_deref() != Some("cpu")),
+        uses_gpu_poisson: Some(
+            plan.mfem_device_string.as_deref() != Some("cpu") && plan.enable_demag,
+        ),
         hot_loop_host_sync_count: None,
         hot_loop_exchange_h2d_bytes: None,
         hot_loop_exchange_d2h_bytes: None,

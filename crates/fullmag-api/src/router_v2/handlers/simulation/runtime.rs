@@ -9,7 +9,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::session::effective_runtime_status_code;
 use crate::schemas::runtime::{
     CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
     CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
@@ -17,6 +16,7 @@ use crate::schemas::runtime::{
     RuntimeCommandReadinessResource, SolverEnergyCurrentResource, SolverEnergyHistoryResource,
     SolverEnergyRow, SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
+use crate::session::{build_runtime_status_view, effective_runtime_status_code};
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, ScalarRow, SessionStateResponse,
     StageExecutionRecord, StageExecutionState, TrackedCommandRecord,
@@ -191,15 +191,16 @@ pub async fn get_solver_status(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step);
+    let runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
 
     Ok(Json(SolverStatusResource {
         revision: snapshot.state_version,
-        runtime_state: effective_runtime_status_code(snapshot),
-        runtime_status_kind: runtime_status_kind(snapshot),
-        runtime_status_code: snapshot.runtime_status.code.clone(),
+        runtime_state: runtime_status.code.clone(),
+        runtime_status_kind: runtime_status_kind(&runtime_status),
+        runtime_status_code: runtime_status.code.clone(),
         session_status: snapshot.session.status.clone(),
-        is_busy: snapshot.runtime_status.is_busy,
-        can_accept_commands: snapshot.runtime_status.can_accept_commands,
+        is_busy: runtime_status.is_busy,
+        can_accept_commands: runtime_status.can_accept_commands,
         run_id: snapshot.run.as_ref().map(|value| value.run_id.clone()),
         stage_kind: snapshot
             .stage_execution
@@ -535,7 +536,7 @@ fn runtime_command_disabled_reason(
     let Some(snapshot) = snapshot else {
         return Some("Runtime state is unavailable.".into());
     };
-    let state = snapshot.runtime_status.kind;
+    let state = RuntimeStatus::from_status_code(&effective_runtime_status_code(snapshot));
     match kind {
         "pause" => (state != RuntimeStatus::Running).then(|| "Runtime is not running.".into()),
         "resume" => (state != RuntimeStatus::Paused).then(|| "Runtime is not paused.".into()),
@@ -543,14 +544,13 @@ fn runtime_command_disabled_reason(
             .then(|| "Runtime is not active.".into()),
         "skip" => runtime_skip_disabled_reason(snapshot, state),
         "solve" | "compute_fields" | "compute_energies" => {
-            runtime_compute_disabled_reason(snapshot, ledger, state)
+            runtime_compute_disabled_reason(ledger, state)
         }
         _ => Some("Unsupported runtime command.".into()),
     }
 }
 
 fn runtime_compute_disabled_reason(
-    snapshot: &SessionStateResponse,
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     state: RuntimeStatus,
 ) -> Option<String> {
@@ -560,7 +560,7 @@ fn runtime_compute_disabled_reason(
     if matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused) {
         return Some("Runtime is already active.".into());
     }
-    if !snapshot.runtime_status.can_accept_commands {
+    if !state.can_accept_commands() {
         return Some("Runtime is not accepting compute commands.".into());
     }
     if matches!(
@@ -940,8 +940,8 @@ fn stage_stop_reason_string(reason: &fullmag_ir::StageStopReason) -> String {
         .unwrap_or_else(|| format!("{reason:?}"))
 }
 
-fn runtime_status_kind(snapshot: &SessionStateResponse) -> String {
-    format!("{:?}", snapshot.runtime_status.kind).to_ascii_lowercase()
+fn runtime_status_kind(status: &crate::types::RuntimeStatusView) -> String {
+    format!("{:?}", status.kind).to_ascii_lowercase()
 }
 
 fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResource {

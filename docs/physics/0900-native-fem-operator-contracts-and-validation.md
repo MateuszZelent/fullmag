@@ -180,6 +180,31 @@ energy
 telemetry
 ```
 
+FEM GPU demag has two explicit runtime modes:
+
+| Mode | Contract |
+|---|---|
+| `device_hypre_poisson` | Strict GPU demag. RHS assembly, hypre PCG/GMRES+BoomerAMG, warm-start potential, recovery `H_demag`, and demag energy stay device-resident during RK stage evaluation. |
+| `hybrid_cpu_poisson` | Compatibility/debug mode only. A stage performs `D->H` magnetization transfer, CPU MFEM/Hypre Poisson, then `H->D` demag-field upload. This mode must never be silently selected for strict `study.device("gpu")`. |
+
+Strict `device_hypre_poisson` must publish provenance:
+
+```text
+fem_execution_mode = all_in_gpu_legacy_sparse
+uses_gpu_poisson = true
+fem_demag_operator_mode = device_hypre_poisson
+hypre_execution_policy = device
+demag_residency = device
+hot_loop_compute_h2d_bytes = 0
+hot_loop_compute_d2h_bytes = 0
+hot_loop_compute_host_sync_count = 0
+```
+
+Initial strict GPU scope is P1, double precision, non-periodic shared-domain
+airbox Poisson with Dirichlet/Robin boundary policy. `fe_order > 1`, periodic
+demag, and Fredkin-Koehler GPU demag must reject with an actionable diagnostic
+until their operator contracts and validation gates are written.
+
 Poisson/airbox/Robin is an executable approximation to open-boundary
 magnetostatics. It is not a blanket proof of full-space demag accuracy. Release
 documentation must state the airbox and boundary-condition limits.

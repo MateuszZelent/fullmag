@@ -247,6 +247,8 @@ typedef struct {
     uint64_t                   thermal_seed;
     /* FEM-030: explicit MFEM device string (null = env / compiled default) */
     const char                *mfem_device_string;
+    /* Strict FEM GPU demag policy. 0 = runner/default policy. */
+    int                        gpu_demag_mode;
     /* FND-013: use consistent (full) mass matrix instead of lumped for exchange.
        0 = lumped (default), 1 = consistent (CG solve). */
     int                        use_consistent_mass;
@@ -306,6 +308,8 @@ typedef struct {
     int compute_capability_minor;
     int driver_version;
     int runtime_version;
+    uint64_t gpu_memory_free_bytes;
+    uint64_t gpu_memory_total_bytes;
 } fullmag_fem_device_info;
 
 typedef struct {
@@ -315,6 +319,7 @@ typedef struct {
     int built_with_ceed;
     int native_fem_cpu_available;
     int native_fem_gpu_available;
+    int native_fem_gpu_full_demag_available;
     int mfem_cuda_available;
     int hypre_gpu_available;
     int libceed_used_hot_path;
@@ -357,6 +362,12 @@ typedef enum {
     FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH = 2,
 } fullmag_fem_data_residency;
 
+typedef enum {
+    FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED = 0,
+    FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON = 1,
+    FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON = 2,
+} fullmag_fem_gpu_demag_mode;
+
 typedef struct {
     int allocated;
     uint64_t node_count;
@@ -373,7 +384,11 @@ typedef struct {
     int uses_cuda_kernels;
     int allows_exchange_host_sync;
     int stage_exchange_device_resident;
+    int uses_gpu_poisson;
     char exchange_operator_mode[64];
+    char demag_operator_mode[64];
+    char hypre_execution_policy[32];
+    char demag_residency[32];
     char reason[256];
 } fullmag_fem_gpu_rk_plan_info;
 

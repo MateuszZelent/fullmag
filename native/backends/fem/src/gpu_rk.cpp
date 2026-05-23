@@ -9,6 +9,7 @@
 #include "gpu_rk.hpp"
 
 #include "context.hpp"
+#include "gpu_demag_poisson.hpp"
 #include "gpu_exchange.hpp"
 #include "gpu_state.hpp"
 
@@ -146,6 +147,27 @@ GpuRkPlan gpu_rk_plan_exchange_only(const Context &ctx, std::string &reason)
     const auto exchange_plan = gpu_exchange_plan_stage_exchange(ctx, exchange_reason);
     plan.stage_exchange_device_resident = exchange_plan.stage_exchange_device_resident;
     plan.exchange_operator_mode = exchange_plan.operator_mode;
+    if (ctx.demag.enabled) {
+#if FULLMAG_HAS_MFEM_STACK
+        if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
+            plan.demag_operator_mode = "hybrid_cpu_poisson";
+            plan.hypre_execution_policy = "host";
+            plan.demag_residency = "host_device_roundtrip";
+        } else {
+            plan.demag_operator_mode = gpu_demag_poisson_operator_mode(ctx);
+            plan.hypre_execution_policy = gpu_demag_poisson_hypre_policy(ctx);
+            plan.demag_residency = gpu_demag_poisson_ready(ctx) ? "device" : "unavailable";
+            plan.uses_gpu_poisson = gpu_demag_poisson_ready(ctx);
+            if (!plan.uses_gpu_poisson) {
+                reason = "GPU RK strict demag requires device_hypre_poisson workspace";
+                return plan;
+            }
+        }
+#else
+        reason = "GPU RK demag requires MFEM stack";
+        return plan;
+#endif
+    }
     if (!exchange_plan.stage_exchange_device_resident) {
 #if FULLMAG_HAS_CUDA_RUNTIME
     plan.uses_cuda_kernels = true;

@@ -6857,6 +6857,61 @@ async fn commands_endpoint_exposes_runtime_control_readiness() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "waiting_for_compute".into();
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 0,
+                time: 0.0,
+                dt: 0.0,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        crate::session::refresh_runtime_status(snapshot);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let controls = json["runtime_controls"]
+        .as_array()
+        .expect("runtime_controls should be an array");
+    assert_runtime_control(controls, "solve", true, None);
+}
+
+#[tokio::test]
 async fn commands_endpoint_disables_skip_without_active_stage() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

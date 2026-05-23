@@ -1236,8 +1236,14 @@ mod tests {
 
         refresh_runtime_status(&mut current);
 
-        assert_eq!(effective_runtime_status_code(&current), "waiting_for_compute");
-        assert_eq!(current.runtime_status.kind, RuntimeStatus::WaitingForCompute);
+        assert_eq!(
+            effective_runtime_status_code(&current),
+            "waiting_for_compute"
+        );
+        assert_eq!(
+            current.runtime_status.kind,
+            RuntimeStatus::WaitingForCompute
+        );
         assert!(!current.runtime_status.is_busy);
         assert!(current.runtime_status.can_accept_commands);
     }

@@ -139,6 +139,14 @@ void context_populate_device_info(Context &ctx) {
         if (cudaRuntimeGetVersion(&runtime_version) == cudaSuccess) {
             ctx.mfem_device.device_info_cache.runtime_version = runtime_version;
         }
+        size_t memory_free_bytes = 0;
+        size_t memory_total_bytes = 0;
+        if (cudaMemGetInfo(&memory_free_bytes, &memory_total_bytes) == cudaSuccess) {
+            ctx.mfem_device.device_info_cache.gpu_memory_free_bytes =
+                static_cast<uint64_t>(memory_free_bytes);
+            ctx.mfem_device.device_info_cache.gpu_memory_total_bytes =
+                static_cast<uint64_t>(memory_total_bytes);
+        }
     }
 #endif
     std::strncpy(
@@ -158,7 +166,20 @@ void context_populate_device_info(Context &ctx) {
 
 fullmag_fem_device_info device_info_snapshot(const Context &ctx)
 {
-    return ctx.mfem_device.device_info_cache;
+    auto info = ctx.mfem_device.device_info_cache;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.mfem_context.selected_device_index >= 0) {
+        size_t memory_free_bytes = 0;
+        size_t memory_total_bytes = 0;
+        if (cudaMemGetInfo(&memory_free_bytes, &memory_total_bytes) == cudaSuccess) {
+            info.gpu_memory_free_bytes = static_cast<uint64_t>(memory_free_bytes);
+            info.gpu_memory_total_bytes = static_cast<uint64_t>(memory_total_bytes);
+        }
+    }
+#else
+    (void)ctx;
+#endif
+    return info;
 }
 
 } // namespace fullmag::fem

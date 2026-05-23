@@ -29,7 +29,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
-  shaderColorFromSettings,
+  surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
@@ -669,7 +669,11 @@ export function FdmCuboidLayer({
       tracker.track(
         "material",
         new MeshStandardMaterial({
-          color: shaderColorFromSettings(settings, colors.mesh),
+          color: surfaceMaterialColorFromSettings(
+            settings,
+            colors.mesh,
+            usesInstanceColors,
+          ),
           opacity: surfaceOpacity,
           vertexColors: usesInstanceColors,
           ...materialProfile.magneticSurface,

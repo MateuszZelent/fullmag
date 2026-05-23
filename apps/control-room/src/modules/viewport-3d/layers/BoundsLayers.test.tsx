@@ -7,19 +7,24 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
-import type { Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
+import type {
+  Viewport3DFieldRenderModel,
+  Viewport3DTopologyRenderModel,
+} from "../viewport3dRenderModel";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import {
   AirboxLayer,
   SelectionHighlightLayer,
   airboxWireframeOpacityFromSettings,
   buildBoundsVolumeWireframePositions,
+  resolveAirboxSurfaceColorState,
   resolveAirboxTopologyVisualizationSettings,
   resolveAirboxWireframeEdgeIndices,
   resolveAirboxWireframePrimitive,
   resolveAirboxWireframeSemantic,
   shouldRenderAirboxFullBoundsOverlay,
 } from "./BoundsLayers";
+import { VERTEX_COLOR_MATERIAL_COLOR } from "./viewport3DLayerSettings";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 const colors = {
@@ -221,6 +226,37 @@ describe("AirboxLayer", () => {
         { opacity: 0.5 },
       ),
     ).toBe(0.4);
+  });
+
+  it("uses active field scalar colors for airbox surface coloring", () => {
+    const colorsByComponent = {
+      colors: new Float32Array(12).fill(0.5),
+      range: { max: 1, min: -1 },
+    };
+    const fieldModel = {
+      fullVectorSegments: null,
+      partVectorSegments: new Map(),
+      scalarColors: null,
+      scalarColorsByMode: new Map([["x", colorsByComponent]]),
+    } satisfies Viewport3DFieldRenderModel;
+
+    expect(
+      resolveAirboxSurfaceColorState(
+        {
+          ...DEFAULT_AIRBOX_VISUALIZATION,
+          shaderVisible: true,
+          surfaceColorSource: "component_x",
+        },
+        fieldModel,
+        4,
+        colors.mesh,
+      ),
+    ).toEqual({
+      hasScalarColors: true,
+      materialColor: VERTEX_COLOR_MATERIAL_COLOR,
+      scalarColors: colorsByComponent,
+      vertexColorsEnabled: true,
+    });
   });
 
   it("builds an interior volume wireframe for full airbox fallback overlays", () => {

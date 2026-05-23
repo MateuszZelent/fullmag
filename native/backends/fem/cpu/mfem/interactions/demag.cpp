@@ -29,6 +29,7 @@ void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &pla
     ctx.poisson_demag.boundary_marker = plan.poisson_boundary_marker;
     ctx.poisson_demag.robin_beta_mode = plan.robin_beta_mode;
     ctx.poisson_demag.robin_beta_factor = plan.robin_beta_factor;
+    ctx.poisson_demag.gpu_demag_mode = plan.gpu_demag_mode;
 #endif
 }
 
