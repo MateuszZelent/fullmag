@@ -302,7 +302,36 @@ The adaptive controller requires reductions for:
 
 Those reductions should remain GPU-resident until the final scalar is copied back.
 
-#### 3.1.6 Stability guardrails
+#### 3.1.6 Staged multilayer CUDA fixed-step RK23 boundary
+
+For `multilayer_convolution` plans that execute through the staged native CUDA
+v2 boundary, fixed-step Bogacki-Shampine RK23 is a legal explicit stepper when
+the plan has no `adaptive_timestep`. The runner may use a configured fixed
+timestep or its existing default, and each native step requires `dt_seconds >
+0`. It uses
+the third-order accepted weights
+
+\[
+m_{n+1} =
+\mathcal{N}\left(
+m_n + dt\left(\frac{2}{9}k_1 + \frac{1}{3}k_2 + \frac{4}{9}k_3\right)
+\right),
+\]
+
+with stage locations `c = (0, 1/2, 3/4)` and cellwise normalization
+`\mathcal{N}` at each staged state and accepted output. Each RHS evaluation
+must use the same staged multilayer field realization as Heun and RK4:
+optional multilayer demag, layer-local exchange, requested uniform external
+field, per-layer uniform uniaxial/cubic anisotropy, and global
+interfacial/bulk DMI.
+
+This fixed-step capability does **not** implement the embedded second-order
+error estimator, FSAL reuse, adaptive accept/reject/retry, or ABM/RK45 staged
+multilayer execution. A request carrying `adaptive_timestep` must continue to
+fail before staged CUDA execution until the device-resident adaptive lifecycle
+is implemented and validated.
+
+#### 3.1.7 Stability guardrails
 
 Pure local error control is not enough in micromagnetics because exchange and DMI can make the problem stiff.
 

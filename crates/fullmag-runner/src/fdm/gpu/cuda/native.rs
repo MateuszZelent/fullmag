@@ -376,7 +376,7 @@ impl NativeFdmBackend {
         if !err.is_null() {
             let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
             if !msg.contains(
-                "native Heun/RK4 timestep with demag and layer-local exchange is available",
+                "native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available",
             ) && !msg
                 .contains("native Heun timestep with demag and layer-local exchange is available")
                 && !msg.contains("native demag-only Heun timestep is available")

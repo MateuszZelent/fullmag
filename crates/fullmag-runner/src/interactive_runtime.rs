@@ -3928,6 +3928,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         requested_demag_realization: None,
         resolved_demag_realization: None,
         dt_policy: None,
+        llg_mode: None,
         mfem_device: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
@@ -4010,6 +4011,14 @@ fn cuda_execution_provenance(
         requested_demag_realization: None,
         resolved_demag_realization: None,
         dt_policy,
+        llg_mode: Some(
+            if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+                "pure_damping"
+            } else {
+                "precessional"
+            }
+            .to_string(),
+        ),
         mfem_device: None,
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
@@ -4090,6 +4099,14 @@ fn fem_gpu_execution_provenance(
         resolved_demag_realization: resolved_demag_realization
             .map(|realization| realization.provenance_name().to_string()),
         dt_policy,
+        llg_mode: Some(
+            if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+                "pure_damping"
+            } else {
+                "precessional"
+            }
+            .to_string(),
+        ),
         mfem_device: plan.mfem_device_string.clone(),
         demag_refresh_interval_s: plan
             .field_refresh

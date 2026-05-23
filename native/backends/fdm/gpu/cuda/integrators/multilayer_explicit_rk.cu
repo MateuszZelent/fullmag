@@ -1,5 +1,10 @@
 /*
- * multilayer_rk4.cu - Native CUDA RK4 stepping for staged FDM v2 layers.
+ * multilayer_explicit_rk.cu - Native CUDA fixed-step explicit RK stepping for
+ * staged FDM v2 layers.
+ *
+ * RK4 and Bogacki-Shampine RK23 share the staged multilayer RHS realization.
+ * RK23 here is fixed-step only; adaptive error reduction and retry remain out
+ * of this owner until the staged v2 adaptive lifecycle is implemented.
  */
 
 #include "context.hpp"
@@ -302,6 +307,57 @@ __global__ void multilayer_rk4_corrector_kernel(
     mz[idx] = static_cast<Scalar>(cz * inv_norm);
 }
 
+template <typename Scalar>
+__global__ void multilayer_rk23_corrector_kernel(
+    const Scalar * __restrict__ orig_x,
+    const Scalar * __restrict__ orig_y,
+    const Scalar * __restrict__ orig_z,
+    const Scalar * __restrict__ k1x,
+    const Scalar * __restrict__ k1y,
+    const Scalar * __restrict__ k1z,
+    const Scalar * __restrict__ k2x,
+    const Scalar * __restrict__ k2y,
+    const Scalar * __restrict__ k2z,
+    const Scalar * __restrict__ k3x,
+    const Scalar * __restrict__ k3y,
+    const Scalar * __restrict__ k3z,
+    const uint8_t * __restrict__ active_mask,
+    Scalar * __restrict__ mx,
+    Scalar * __restrict__ my,
+    Scalar * __restrict__ mz,
+    uint64_t n,
+    double dt)
+{
+    const uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+
+    if (active_mask && active_mask[idx] == 0) {
+        mx[idx] = orig_x[idx];
+        my[idx] = orig_y[idx];
+        mz[idx] = orig_z[idx];
+        return;
+    }
+
+    const double cx = static_cast<double>(orig_x[idx]) +
+        dt * ((2.0 / 9.0) * static_cast<double>(k1x[idx]) +
+              (1.0 / 3.0) * static_cast<double>(k2x[idx]) +
+              (4.0 / 9.0) * static_cast<double>(k3x[idx]));
+    const double cy = static_cast<double>(orig_y[idx]) +
+        dt * ((2.0 / 9.0) * static_cast<double>(k1y[idx]) +
+              (1.0 / 3.0) * static_cast<double>(k2y[idx]) +
+              (4.0 / 9.0) * static_cast<double>(k3y[idx]));
+    const double cz = static_cast<double>(orig_z[idx]) +
+        dt * ((2.0 / 9.0) * static_cast<double>(k1z[idx]) +
+              (1.0 / 3.0) * static_cast<double>(k2z[idx]) +
+              (4.0 / 9.0) * static_cast<double>(k3z[idx]));
+    const double norm = sqrt(cx * cx + cy * cy + cz * cz);
+    const double inv_norm = norm > 0.0 ? 1.0 / norm : 0.0;
+
+    mx[idx] = static_cast<Scalar>(cx * inv_norm);
+    my[idx] = static_cast<Scalar>(cy * inv_norm);
+    mz[idx] = static_cast<Scalar>(cz * inv_norm);
+}
+
 bool layer_launch_grid(Context &ctx, uint64_t n, const char *operation, int &grid) {
     const uint64_t blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     if (blocks > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
@@ -520,6 +576,49 @@ bool correct_rk4(Context &ctx, double dt, const char *operation) {
 }
 
 template <typename Scalar>
+bool correct_rk23(Context &ctx, double dt, const char *operation) {
+    if (!context_begin_compute_stream_work(ctx, operation)) {
+        return false;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+
+    for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+        int grid = 0;
+        if (!layer_launch_grid(ctx, layer.cell_count, operation, grid)) {
+            context_end_compute_stream_work(ctx, operation);
+            return false;
+        }
+        multilayer_rk23_corrector_kernel<Scalar><<<grid, BLOCK_SIZE, 0, stream>>>(
+            static_cast<const Scalar *>(layer.tmp.x),
+            static_cast<const Scalar *>(layer.tmp.y),
+            static_cast<const Scalar *>(layer.tmp.z),
+            static_cast<const Scalar *>(layer.k1.x),
+            static_cast<const Scalar *>(layer.k1.y),
+            static_cast<const Scalar *>(layer.k1.z),
+            static_cast<const Scalar *>(layer.k2.x),
+            static_cast<const Scalar *>(layer.k2.y),
+            static_cast<const Scalar *>(layer.k2.z),
+            static_cast<const Scalar *>(layer.k3.x),
+            static_cast<const Scalar *>(layer.k3.y),
+            static_cast<const Scalar *>(layer.k3.z),
+            layer.active_mask,
+            static_cast<Scalar *>(layer.m.x),
+            static_cast<Scalar *>(layer.m.y),
+            static_cast<Scalar *>(layer.m.z),
+            layer.cell_count,
+            dt);
+    }
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, operation, err);
+        context_end_compute_stream_work(ctx, operation);
+        return false;
+    }
+    return context_end_compute_stream_work(ctx, operation);
+}
+
+template <typename Scalar>
 void launch_multilayer_rk4_step_impl(
     Context &ctx,
     double dt,
@@ -536,16 +635,14 @@ void launch_multilayer_rk4_step_impl(
         ctx.last_error = std::string(operation) + " requires dt_seconds > 0";
         return;
     }
-    if (!ctx.enable_demag) {
-        ctx.last_error = std::string(operation) + " currently requires demag-enabled v2 plans";
-        return;
-    }
 
     ctx.last_error.clear();
     if (!save_original<Scalar>(ctx, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -553,8 +650,10 @@ void launch_multilayer_rk4_step_impl(
     if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k1, operation)) return;
     if (!predict_from_stage<Scalar>(ctx, &DeviceMultilayerLayer::k1, 0.5 * dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -562,8 +661,10 @@ void launch_multilayer_rk4_step_impl(
     if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k2, operation)) return;
     if (!predict_from_stage<Scalar>(ctx, &DeviceMultilayerLayer::k2, 0.5 * dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -571,8 +672,10 @@ void launch_multilayer_rk4_step_impl(
     if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k3, operation)) return;
     if (!predict_from_stage<Scalar>(ctx, &DeviceMultilayerLayer::k3, dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -580,8 +683,78 @@ void launch_multilayer_rk4_step_impl(
     if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k4, operation)) return;
     if (!correct_rk4<Scalar>(ctx, dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (ctx.enable_exchange) {
+        refresh_exchange(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+
+    ctx.step_count++;
+    ctx.current_time += dt;
+    fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
+}
+
+template <typename Scalar>
+void launch_multilayer_rk23_step_impl(
+    Context &ctx,
+    double dt,
+    fullmag_fdm_step_stats *stats,
+    void (*refresh_demag)(Context &ctx),
+    void (*refresh_exchange)(Context &ctx),
+    const char *operation)
+{
+    if (!ctx.has_multilayer_plan_v2) {
+        ctx.last_error = std::string(operation) + " requires a staged v2 multilayer plan";
+        return;
+    }
+    if (dt <= 0.0) {
+        ctx.last_error = std::string(operation) + " requires dt_seconds > 0";
+        return;
+    }
+
+    ctx.last_error.clear();
+    if (!save_original<Scalar>(ctx, operation)) return;
+
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (ctx.enable_exchange) {
+        refresh_exchange(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k1, operation)) return;
+    if (!predict_from_stage<Scalar>(ctx, &DeviceMultilayerLayer::k1, 0.5 * dt, operation)) return;
+
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (ctx.enable_exchange) {
+        refresh_exchange(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k2, operation)) return;
+    if (!predict_from_stage<Scalar>(ctx, &DeviceMultilayerLayer::k2, 0.75 * dt, operation)) return;
+
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (ctx.enable_exchange) {
+        refresh_exchange(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
+    if (!compute_rhs_into<Scalar>(ctx, &DeviceMultilayerLayer::k3, operation)) return;
+    if (!correct_rk23<Scalar>(ctx, dt, operation)) return;
+
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -620,6 +793,34 @@ void launch_multilayer_rk4_step_fp32(
         launch_multilayer_demag_field_fp32,
         launch_multilayer_exchange_field_fp32,
         "launch_multilayer_rk4_step_fp32");
+}
+
+void launch_multilayer_rk23_step_fp64(
+    Context &ctx,
+    double dt,
+    fullmag_fdm_step_stats *stats)
+{
+    launch_multilayer_rk23_step_impl<double>(
+        ctx,
+        dt,
+        stats,
+        launch_multilayer_demag_field_fp64,
+        launch_multilayer_exchange_field_fp64,
+        "launch_multilayer_rk23_step_fp64");
+}
+
+void launch_multilayer_rk23_step_fp32(
+    Context &ctx,
+    double dt,
+    fullmag_fdm_step_stats *stats)
+{
+    launch_multilayer_rk23_step_impl<float>(
+        ctx,
+        dt,
+        stats,
+        launch_multilayer_demag_field_fp32,
+        launch_multilayer_exchange_field_fp32,
+        "launch_multilayer_rk23_step_fp32");
 }
 
 } // namespace fdm

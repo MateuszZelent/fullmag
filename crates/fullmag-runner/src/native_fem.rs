@@ -16,6 +16,8 @@ use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_ac
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
 #[cfg(feature = "fem-gpu")]
+use crate::relaxation::llg_overdamped_uses_pure_damping;
+#[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
@@ -46,6 +48,11 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
 #[cfg(feature = "fem-gpu")]
 fn has_zhang_li_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.current_density.is_some() && plan.stt_degree.is_some() && !has_slonczewski_stt(plan)
+}
+
+#[cfg(feature = "fem-gpu")]
+pub(crate) fn native_fem_precession_enabled(plan: &fullmag_ir::FemPlanIR) -> bool {
+    !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref())
 }
 
 pub(crate) fn is_gpu_available() -> bool {
@@ -857,6 +864,12 @@ impl NativeFemBackend {
                 0
             },
             eager_initial_effective_field: if eager_initial_effective_field { 1 } else { 0 },
+            has_precession_enabled: 1,
+            precession_enabled: if native_fem_precession_enabled(plan) {
+                1
+            } else {
+                0
+            },
         };
 
         // Build adaptive config if present
@@ -1707,7 +1720,8 @@ mod tests {
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FemPlanIR, IntegratorChoice, MaterialIR,
-        MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
+        MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR,
+        RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
     fn make_test_plan() -> FemPlanIR {
@@ -1809,6 +1823,57 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn native_fem_disables_precession_for_llg_overdamped_relaxation() {
+        let mut plan = make_test_plan();
+        assert!(native_fem_precession_enabled(&plan));
+
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+        assert!(!native_fem_precession_enabled(&plan));
+
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+        assert!(native_fem_precession_enabled(&plan));
+    }
+
+    #[test]
+    fn native_fem_ffi_plan_carries_precession_mode() {
+        let source = include_str!("native_fem.rs");
+        let plan_desc_start = source
+            .find("let mut plan_desc = ffi::fullmag_fem_plan_desc")
+            .expect("native FEM FFI plan desc literal");
+        let plan_desc_body = &source[plan_desc_start..];
+        let plan_desc_end = plan_desc_body
+            .find("        // Build adaptive config if present")
+            .expect("native FEM FFI plan desc end");
+        let plan_desc_body = &plan_desc_body[..plan_desc_end];
+        assert!(
+            plan_desc_body.contains("has_precession_enabled: 1"),
+            "native FEM FFI plan must explicitly set the precession mode field"
+        );
+        assert!(
+            plan_desc_body.contains("precession_enabled: if native_fem_precession_enabled(plan)"),
+            "native FEM FFI plan must lower llg_overdamped into the native precession flag"
+        );
     }
 
     #[test]

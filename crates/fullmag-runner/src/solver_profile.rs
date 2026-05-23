@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,13 @@ pub struct SolverProfileConfig {
     pub enabled: bool,
     #[serde(default = "default_sample_every")]
     pub sample_every: u64,
+    /// When non-zero, gates sampling by real wall-clock time instead of step
+    /// number. At most one sample is recorded per `sample_interval_wall_ms`
+    /// milliseconds. Useful for fast GPU runs where per-step recording would
+    /// flood the ring buffer. Set to e.g. 10_000 (10 s) for GPU profiling.
+    /// When 0, step-number gating via `sample_every` is used instead.
+    #[serde(default)]
+    pub sample_interval_wall_ms: u64,
     #[serde(default = "default_max_samples")]
     pub max_samples: usize,
     #[serde(default)]
@@ -27,6 +35,7 @@ impl Default for SolverProfileConfig {
         Self {
             enabled: false,
             sample_every: DEFAULT_SAMPLE_EVERY,
+            sample_interval_wall_ms: 0,
             max_samples: DEFAULT_MAX_SAMPLES,
             emit_engine_log: false,
             persist_artifact: false,
@@ -260,6 +269,7 @@ pub struct SolverProfileState {
     revision: u64,
     samples: VecDeque<SolverProfileStepSample>,
     artifact_refs: Vec<String>,
+    last_sampled_instant: Option<Instant>,
 }
 
 impl Default for SolverProfileState {
@@ -275,6 +285,7 @@ impl SolverProfileState {
             revision: 0,
             samples: VecDeque::new(),
             artifact_refs: Vec::new(),
+            last_sampled_instant: None,
         }
     }
 
@@ -288,6 +299,7 @@ impl SolverProfileState {
             self.samples.clear();
         }
         self.config = config;
+        self.last_sampled_instant = None;
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -296,7 +308,17 @@ impl SolverProfileState {
         if !self.config.enabled {
             return None;
         }
-        if self.config.sample_every > 1 && stats.step % self.config.sample_every != 0 {
+        if self.config.sample_interval_wall_ms > 0 {
+            let now = Instant::now();
+            let threshold =
+                std::time::Duration::from_millis(self.config.sample_interval_wall_ms);
+            if let Some(last) = self.last_sampled_instant {
+                if now.duration_since(last) < threshold {
+                    return None;
+                }
+            }
+            self.last_sampled_instant = Some(now);
+        } else if self.config.sample_every > 1 && stats.step % self.config.sample_every != 0 {
             return None;
         }
 

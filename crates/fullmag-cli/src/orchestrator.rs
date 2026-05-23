@@ -336,7 +336,10 @@ impl LiveProgressCadence {
     }
 
     fn should_log(&mut self, step: u64, finished: bool) -> bool {
-        if finished || is_step_progress_milestone(step) {
+        // Always log step 1 (simulation started) and the final step.
+        // All other steps go through the time gate so fast GPU runs don't flood
+        // the terminal with milestone-based lines.
+        if finished || step <= 1 {
             self.last_log_at = Some(Instant::now());
             return true;
         }
@@ -348,13 +351,6 @@ impl LiveProgressCadence {
         }
         should_log
     }
-}
-
-fn is_step_progress_milestone(step: u64) -> bool {
-    step <= 10
-        || (step <= 100 && step % 10 == 0)
-        || (step <= 1000 && step % 100 == 0)
-        || step % 1000 == 0
 }
 
 fn has_heavy_live_payload(update: &fullmag_runner::StepUpdate) -> bool {
@@ -542,6 +538,33 @@ fn format_stage_progress_line(
         append_detailed_fem_step_profile(&mut line, stats);
         line
     }
+}
+
+fn format_stop_reason(completion: Option<&fullmag_ir::StageCompletionIR>) -> String {
+    let reason = completion
+        .and_then(|c| c.reason.as_ref())
+        .map(|r| match r {
+            fullmag_ir::StageStopReason::Torque => "torque",
+            fullmag_ir::StageStopReason::Energy => "energy",
+            fullmag_ir::StageStopReason::MaxSteps => "max_steps",
+            fullmag_ir::StageStopReason::MaxPseudotime => "max_pseudotime",
+            fullmag_ir::StageStopReason::MaxPhysicalTime => "max_physical_time",
+            fullmag_ir::StageStopReason::UserCancelled => "user_cancelled",
+            fullmag_ir::StageStopReason::BackendError => "backend_error",
+        })
+        .unwrap_or("?");
+    let metric_desc = completion
+        .and_then(|c| c.metric_value.map(|v| (c.metric_name.as_deref(), v, c.threshold)))
+        .map(|(name, value, threshold)| {
+            let name = name.unwrap_or("metric");
+            if let Some(thr) = threshold {
+                format!("  {name}={value:.4e} (threshold={thr:.4e})")
+            } else {
+                format!("  {name}={value:.4e}")
+            }
+        })
+        .unwrap_or_default();
+    format!("{reason}{metric_desc}")
 }
 
 #[derive(Clone)]
@@ -4900,6 +4923,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             continuation_magnetization = Some(synthetic_outcome.magnetization);
             continuation_source = None; // synthetic remesh — inherit unknown source
             live_workspace.push_log("success", synthetic_outcome.message);
+            eprintln!(
+                "[fullmag] stage {}/{} ({}) completed (synthetic/mesh)",
+                stage_index + 1,
+                stage_count,
+                stage.entrypoint_kind
+            );
             live_workspace.push_log(
                 "success",
                 format!(
@@ -5339,6 +5368,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             break;
         }
 
+        {
+            let final_step = stage_result.steps.last();
+            eprintln!(
+                "[fullmag] stage {}/{} ({}) completed — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
+                stage_index + 1,
+                stage_count,
+                stage.entrypoint_kind,
+                stage_result.steps.len(),
+                final_step.map(|s| s.time).unwrap_or(0.0),
+                final_step.map(|s| s.max_torque_T).unwrap_or(0.0),
+                format_stop_reason(stage_result.completion.as_ref()),
+            );
+        }
         live_workspace.push_log(
             "success",
             format!(
@@ -6553,7 +6595,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     sequence.total_stages(),
                     stage.entrypoint_kind
                 );
-                eprintln!("[fullmag] {}", stage_message);
+                {
+                    let final_step = stage_result.steps.last();
+                    eprintln!(
+                        "[fullmag] {} — steps={}  t={:.4e}  max_torque[T]={:.4e}  stop: {}",
+                        stage_message,
+                        stage_result.steps.len(),
+                        final_step.map(|s| s.time).unwrap_or(0.0),
+                        final_step.map(|s| s.max_torque_T).unwrap_or(0.0),
+                        format_stop_reason(stage_result.completion.as_ref()),
+                    );
+                }
                 live_workspace.push_log("success", stage_message);
             }
 

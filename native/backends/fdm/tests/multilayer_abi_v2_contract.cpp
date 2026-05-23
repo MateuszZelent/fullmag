@@ -256,7 +256,7 @@ void native_sources_stage_multilayer_upload_path() {
     check(
         c_api.find("context_upload_multilayer_plan_v2(*ctx, *plan)") != std::string::npos &&
             c_api.find("uploaded ") != std::string::npos &&
-            c_api.find("native Heun/RK4 timestep with demag and layer-local exchange is available") !=
+            c_api.find("native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available") !=
                 std::string::npos,
         "create_v2 must upload validated multilayer payload before exposing native v2 timestep scope");
 }
@@ -372,24 +372,30 @@ void native_sources_expose_multilayer_cuda_demag_boundary() {
 
 void native_multilayer_demag_transforms_all_vector_components() {
     const std::filesystem::path root = native_root();
+    const std::string context_source =
+        read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu");
     const std::string multilayer_source =
         read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "demag" /
                        "multilayer_convolution.cu");
 
-    for (const char *component : {"ctx.fft_x", "ctx.fft_y", "ctx.fft_z"}) {
-        check(
-            count_occurrences(
-                multilayer_source,
-                std::string("cufftExecZ2Z(\n            ctx.fft_plan,\n            static_cast<cufftDoubleComplex*>(") +
-                component) >= 2,
-            "fp64 multilayer demag must forward and inverse transform every vector component");
-        check(
-            count_occurrences(
-                multilayer_source,
-                std::string("cufftExecC2C(\n            ctx.fft_plan,\n            static_cast<cufftComplex*>(") +
-                component) >= 2,
-            "fp32 multilayer demag must forward and inverse transform every vector component");
-    }
+    check(
+        context_source.find("cufftMakePlanMany(\n            workspace.plan") !=
+                std::string::npos &&
+            context_source.find("CUFFT_Z2Z,\n            3,") != std::string::npos &&
+            context_source.find("CUFFT_C2C,\n            3,") != std::string::npos,
+        "cached multilayer cuFFT workspaces must plan x/y/z as one batch");
+    check(
+        count_occurrences(multilayer_source, "CUFFT_FORWARD") == 2 &&
+            count_occurrences(multilayer_source, "CUFFT_INVERSE") == 2 &&
+            multilayer_source.find("cufftExecZ2Z(multilayer batch forward)") !=
+                std::string::npos &&
+            multilayer_source.find("cufftExecZ2Z(multilayer batch inverse)") !=
+                std::string::npos &&
+            multilayer_source.find("cufftExecC2C(multilayer batch forward)") !=
+                std::string::npos &&
+            multilayer_source.find("cufftExecC2C(multilayer batch inverse)") !=
+                std::string::npos,
+        "multilayer demag must transform x/y/z through one batched forward and inverse cuFFT per precision");
 }
 
 void native_multilayer_identity_transfer_accepts_padded_fft_grid() {
@@ -528,7 +534,7 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
                        "multilayer_heun.cu");
     const std::filesystem::path rk4_path =
         native_root() / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
-        "multilayer_rk4.cu";
+        "multilayer_explicit_rk.cu";
     const bool rk4_exists = std::filesystem::exists(rk4_path);
     const std::string rk4_source = rk4_exists ? read_text_file(rk4_path) : std::string();
     const std::size_t create_v2 = c_api.find("fullmag_fdm_backend_create_v2");
@@ -552,6 +558,10 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             c_api.find("launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, out_stats)") !=
                 std::string::npos &&
             c_api.find("launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, out_stats)") !=
+                std::string::npos &&
+            c_api.find("launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, out_stats)") !=
+                std::string::npos &&
+            c_api.find("launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, out_stats)") !=
                 std::string::npos,
         "step must route staged v2 multilayer handles through native timestep launchers");
     check(
@@ -567,9 +577,23 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             std::string::npos,
         "v2 multilayer step must not keep the Heun-only integrator gate");
     check(
-        multilayer_cuda_runner.find("IntegratorChoice::Heun | IntegratorChoice::Rk4") !=
+        c_api.find("native v2 multilayer timestep currently requires enable_demag = 1") ==
+                std::string::npos &&
+            heun_source.find("currently requires demag-enabled v2 plans") ==
+                std::string::npos &&
+            rk4_source.find("currently requires demag-enabled v2 plans") ==
+                std::string::npos,
+        "staged v2 Heun/RK4/RK23 steps must allow local/exchange-only multilayer plans without demag");
+    check(
+        heun_source.find("if (ctx.enable_demag) {\n        refresh_demag(ctx);") !=
+                std::string::npos &&
+            rk4_source.find("if (ctx.enable_demag) {\n        refresh_demag(ctx);") !=
+                std::string::npos,
+        "staged v2 Heun/RK4/RK23 steps must refresh demag conditionally when demag is enabled");
+    check(
+        multilayer_cuda_runner.find("IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23") !=
             std::string::npos,
-        "public CUDA-assisted multilayer runner must not reject RK4 before native v2 dispatch");
+        "public CUDA-assisted multilayer runner must not reject fixed-step RK23 before native v2 dispatch");
     check(
         kernels_header.find("launch_multilayer_heun_step_fp64") != std::string::npos &&
             kernels_header.find("launch_multilayer_heun_step_fp32") != std::string::npos,
@@ -579,6 +603,10 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             kernels_header.find("launch_multilayer_rk4_step_fp32") != std::string::npos,
         "kernel header must expose native v2 multilayer RK4 timestep launchers");
     check(
+        kernels_header.find("launch_multilayer_rk23_step_fp64") != std::string::npos &&
+            kernels_header.find("launch_multilayer_rk23_step_fp32") != std::string::npos,
+        "kernel header must expose native v2 multilayer fixed-step RK23 timestep launchers");
+    check(
         kernels_header.find("launch_multilayer_exchange_field_fp64") != std::string::npos &&
             kernels_header.find("launch_multilayer_exchange_field_fp32") != std::string::npos,
         "kernel header must expose native v2 multilayer exchange field launchers");
@@ -586,8 +614,9 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
         cmake.find("gpu/cuda/integrators/multilayer_heun.cu") != std::string::npos,
         "CMake must compile the native v2 multilayer Heun GPU/CUDA owner");
     check(
-        cmake.find("gpu/cuda/integrators/multilayer_rk4.cu") != std::string::npos,
-        "CMake must compile the native v2 multilayer RK4 GPU/CUDA owner");
+        cmake.find("gpu/cuda/integrators/multilayer_explicit_rk.cu") != std::string::npos &&
+            cmake.find("gpu/cuda/integrators/multilayer_rk4.cu") == std::string::npos,
+        "CMake must compile the shared native v2 explicit RK4/RK23 GPU/CUDA owner");
     check(
         cmake.find("gpu/cuda/interactions/multilayer_exchange.cu") != std::string::npos,
         "CMake must compile the native v2 multilayer exchange GPU/CUDA owner");
@@ -607,10 +636,11 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
     check(
         rk4_exists &&
             rk4_source.find("launch_multilayer_rk4_step_fp64") != std::string::npos &&
+            rk4_source.find("launch_multilayer_rk23_step_fp64") != std::string::npos &&
             rk4_source.find("launch_multilayer_exchange_field_fp64") !=
                 std::string::npos &&
             rk4_source.find("layer.k4.x") != std::string::npos,
-        "v2 multilayer RK4 must have a native owner with exchange-aware stage fields");
+        "v2 multilayer RK4/RK23 must share a native owner with exchange-aware stage fields");
 }
 
 void native_multilayer_v2_rhs_includes_uniform_external_field() {
@@ -626,7 +656,7 @@ void native_multilayer_v2_rhs_includes_uniform_external_field() {
                        "multilayer_heun.cu");
     const std::string rk4_source =
         read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
-                       "multilayer_rk4.cu");
+                       "multilayer_explicit_rk.cu");
     const std::string c_v2_plan = slice_between(
         c_header,
         "typedef struct {\n    fullmag_fdm_plan_kind",
@@ -691,7 +721,7 @@ void native_multilayer_v2_rhs_includes_uniaxial_anisotropy() {
                        "multilayer_heun.cu");
     const std::string rk4_source =
         read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
-                       "multilayer_rk4.cu");
+                       "multilayer_explicit_rk.cu");
     const std::string c_v2_layer = slice_between(
         c_header,
         "typedef struct {\n    fullmag_fdm_grid_desc      native_grid",
@@ -781,7 +811,7 @@ void native_multilayer_v2_rhs_includes_cubic_anisotropy() {
                        "multilayer_heun.cu");
     const std::string rk4_source =
         read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
-                       "multilayer_rk4.cu");
+                       "multilayer_explicit_rk.cu");
     const std::string c_v2_layer = slice_between(
         c_header,
         "typedef struct {\n    fullmag_fdm_grid_desc      native_grid",
@@ -887,7 +917,7 @@ void native_multilayer_v2_rhs_includes_dmi() {
                        "multilayer_heun.cu");
     const std::string rk4_source =
         read_text_file(root / "backends" / "fdm" / "gpu" / "cuda" / "integrators" /
-                       "multilayer_rk4.cu");
+                       "multilayer_explicit_rk.cu");
     const std::string c_v2_plan = slice_between(
         c_header,
         "typedef struct {\n    fullmag_fdm_plan_kind      kind",
@@ -1193,7 +1223,7 @@ void rust_runner_builds_multilayer_v2_plan_descriptor() {
             rust_runner.find("fullmag_fdm_layer_desc_v2") != std::string::npos &&
             rust_runner.find("fullmag_fdm_tensor_kernel_desc_v2") != std::string::npos &&
             rust_runner.find("fullmag_fdm_backend_create_v2") != std::string::npos &&
-            rust_runner.find("native Heun/RK4 timestep with demag and layer-local exchange is available") !=
+            rust_runner.find("native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available") !=
                 std::string::npos,
         "Rust native runner wrapper must build and submit v2 multilayer plan descriptors");
 }

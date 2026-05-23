@@ -444,7 +444,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
  *
  * This entrypoint stages multilayer convolution plans without overloading the
  * legacy single-grid plan.  Supported staged v2 handles execute native CUDA
- * multilayer Heun/RK4 slices with explicit per-layer field copy/upload and
+ * multilayer fixed-step Heun/RK4/RK23 slices with explicit per-layer field copy/upload and
  * demag-refresh entrypoints; unsupported v2 variants fail explicitly rather
  * than silently falling back to single-grid execution.
  */

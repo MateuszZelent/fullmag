@@ -3406,11 +3406,40 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         ..ir.materials[0].clone()
     });
     ir.magnets[1].material = "CoFeB".to_string();
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics:
+            fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "rk23".to_string();
+        *fixed_timestep = Some(1e-13);
+    }
+    let staged_rk23 =
+        plan(&ir).expect("heterogeneous CUDA multilayer fixed-step RK23 should lower");
+    match staged_rk23.backend_plan {
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk23);
+            assert_eq!(multilayer.fixed_timestep, Some(1e-13));
+        }
+        other => panic!("expected FDM multilayer plan, got {other:?}"),
+    }
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg { integrator, .. },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "rk45".to_string();
+    }
     let err = plan(&ir).expect_err("heterogeneous CUDA multilayer RK45 should remain unsupported");
     assert!(
-        err.reasons
-            .iter()
-            .any(|reason| reason.contains("staged v2") && reason.contains("'heun' and 'rk4'")),
+        err.reasons.iter().any(|reason| {
+            reason.contains("staged v2") && reason.contains("'heun', 'rk4', and fixed-step 'rk23'")
+        }),
         "unexpected planner errors: {:?}",
         err.reasons
     );

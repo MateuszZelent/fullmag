@@ -54,6 +54,9 @@ bool refresh_initial_effective_field_from_plan(
     if (plan.eager_initial_effective_field == 0) {
         return true;
     }
+    if (plan.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        return true;
+    }
     if (!ctx.exchange.enabled && !ctx.demag.enabled) {
         return true;
     }

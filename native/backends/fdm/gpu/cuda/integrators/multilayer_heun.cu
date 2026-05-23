@@ -528,14 +528,12 @@ void launch_multilayer_heun_step_impl(
         ctx.last_error = std::string(operation) + " requires dt_seconds > 0";
         return;
     }
-    if (!ctx.enable_demag) {
-        ctx.last_error = std::string(operation) + " currently requires demag-enabled v2 plans";
-        return;
-    }
 
     ctx.last_error.clear();
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -543,8 +541,10 @@ void launch_multilayer_heun_step_impl(
 
     if (!save_original_and_predict<Scalar>(ctx, dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;
@@ -552,8 +552,10 @@ void launch_multilayer_heun_step_impl(
 
     if (!correct_from_predicted<Scalar>(ctx, dt, operation)) return;
 
-    refresh_demag(ctx);
-    if (!ctx.last_error.empty()) return;
+    if (ctx.enable_demag) {
+        refresh_demag(ctx);
+        if (!ctx.last_error.empty()) return;
+    }
     if (ctx.enable_exchange) {
         refresh_exchange(ctx);
         if (!ctx.last_error.empty()) return;

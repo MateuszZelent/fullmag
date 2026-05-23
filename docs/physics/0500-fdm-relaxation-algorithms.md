@@ -328,6 +328,12 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     `torque`, including shared `H_eff` assembly for cached `H_eff`/`torque`
     preview fields, with full observables reserved for quantities that have no
     direct accessor.
+    Native CUDA scheduled and final field outputs should use the same published
+    field names where the native backend already exposes device observables;
+    in this slice the single-grid CUDA output boundary carries `H_OE` and
+    `H_ani` through the same helper as `m`, `H_ex`, `H_demag`, `H_ext`, and
+    `H_eff`, instead of accepting them only through preview or async snapshot
+    entrypoints.
     Interactive CPU step-stat snapshots after a completed step should reuse the
     last `StepReport` when it matches the current state time.
 

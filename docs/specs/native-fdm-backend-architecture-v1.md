@@ -60,8 +60,9 @@ The current native CUDA boundary stages v2 layers and tensor kernels in
 `Context`, owns identity-grid `push_m`, tensor multiply, and `pull_h` kernels
 under `gpu/cuda/demag/multilayer_convolution.cu`, owns cached multilayer cuFFT
 workspaces keyed by tensor-kernel `fft_grid`, binds the active workspace before
-each tensor-kernel launch, and rejects v2 handles from the legacy single-grid
-`step()` path. A dedicated
+each tensor-kernel launch, runs staged v2 component transforms through one
+batched x/y/z forward and one batched x/y/z inverse cuFFT per tensor kernel,
+and rejects v2 handles from the legacy single-grid `step()` path. A dedicated
 `fullmag_fdm_backend_refresh_multilayer_demag` ABI refreshes native multilayer
 demag for demag-enabled v2 plans without pretending to advance time. The
 identity-grid v2 demag operator must forward-transform and inverse-transform
@@ -89,27 +90,33 @@ native v2 handle as an identity-grid demag operator. The
 v2 exchange field slice: a uniform-A six-neighbor stencil on each layer native
 grid, with open Neumann boundary clamping and active-mask clamping. The
 `gpu/cuda/integrators/multilayer_heun.cu` and
-`gpu/cuda/integrators/multilayer_rk4.cu` owners provide the first native v2
-timestep slices: Heun and RK4 for staged multilayer layers in fp64/fp32, using
-per-layer `tmp`, `k1`, `k2`, `k3`, and `k4` buffers with demag plus
-the requested uniform external field, per-layer uniform uniaxial anisotropy,
+`gpu/cuda/integrators/multilayer_explicit_rk.cu` owners provide the first native v2
+timestep slices: Heun, RK4, and fixed-step RK23 for staged multilayer layers in fp64/fp32, using
+per-layer `tmp`, `k1`, `k2`, `k3`, and `k4` buffers with optional demag plus the
+requested uniform external field, per-layer uniform uniaxial anisotropy,
 per-layer uniform cubic anisotropy, global interfacial/bulk DMI, and
-layer-local exchange. Local-field RHS coverage beyond uniform external field,
+layer-local exchange. Local/exchange-only plans keep staged `H_DEMAG` zero
+instead of requiring demag tensor kernels. Local-field RHS coverage beyond uniform external field,
 per-layer uniform uniaxial/cubic anisotropy, global DMI, and layer-local exchange,
 optimized interpolation, and adaptive/multistep v2 integrators remain explicit
 future work.
 The public multilayer planner and CUDA-assisted multilayer runner may carry
-fixed-step RK4 to this native v2 boundary; adaptive and multistep v2 integrators
+fixed-step RK4 and RK23 to this native v2 boundary; adaptive and multistep v2 integrators
 remain rejected instead of falling back into single-grid execution.
 For CPU-reference multilayer execution the public planner keeps the wider
 fixed-step CPU contract: Heun, RK4, RK23, RK45, and ABM3 may lower when CUDA is
-not explicitly requested. The narrower Heun/RK4 gate applies only to explicit
+not explicitly requested. The narrower fixed-step Heun/RK4/RK23 gate applies only to explicit
 CUDA/native v2 multilayer execution.
 
 Native step diagnostics now have a dedicated CUDA runtime owner in
 `gpu/cuda/runtime/telemetry.cu`. The C ABI requests current stats through
 `Context`; it no longer owns the energy-reduction and field-amplitude wiring
 directly.
+Single-grid native CUDA field outputs use one runner helper for scheduled and
+final non-streaming snapshots, so the runtime-facing observable surface does
+not drift from the native copy/snapshot ABI: `m`, `H_ex`, `H_demag`, `H_ext`,
+`H_OE`, `H_ani`, and `H_eff` are routed through `NativeFdmBackend` instead of
+being split across preview-only and artifact-only allow lists.
 CUDA stream lifecycle and legacy-default/compute-stream handoff are owned by
 `gpu/cuda/runtime/streams.cu`, so `gpu/cuda/runtime/context.cu` keeps stream
 pointers as state without owning runtime scheduling policy.
@@ -138,9 +145,9 @@ crates/fullmag-engine/src/fdm/
     state.rs
 ```
 
-The crate root and `fdm/mod.rs` may temporarily keep compatibility modules such
-as `fdm_fft`, `fdm_types`, `fdm_fft_backend`, `fdm::fft`, and `fdm::state` so
-existing callers can compile while imports are migrated.
+The crate root and `fdm/mod.rs` no longer keep compatibility modules such as
+`fdm_fft`, `fdm_types`, `fdm_fft_backend`, `fdm::fft`, or `fdm::state`;
+internal callers import the `fdm/shared` and `fdm/cpu` owner modules directly.
 
 The second accepted layout step is the runner FDM owner module:
 
@@ -338,27 +345,28 @@ style:
   native unsupported placeholder.
 - The ABI source contract proves staged v2 `step()` routes to
   `launch_multilayer_heun_step_fp64/fp32` and
-  `launch_multilayer_rk4_step_fp64/fp32`, and that Heun/RK4 owners are compiled
+  `launch_multilayer_rk4_step_fp64/fp32`, and
+  `launch_multilayer_rk23_step_fp64/fp32`, and that the fixed-step owners are compiled
   from `gpu/cuda/integrators/multilayer_heun.cu` and
-  `gpu/cuda/integrators/multilayer_rk4.cu` instead of keeping the old
+  `gpu/cuda/integrators/multilayer_explicit_rk.cu` instead of keeping the old
   timestep-unsupported placeholder.
 - The ABI source contract proves staged v2 Heun does not reject exchange-enabled
   plans, compiles `gpu/cuda/interactions/multilayer_exchange.cu`, and stores
   per-layer `H_EX` separately from `H_DEMAG`.
 - The ABI source contract proves staged v2 multilayer plans carry the requested
   uniform external field through the C ABI, Rust FFI, Rust native runner
-  wrapper, native `Context`, and Heun/RK4 RHS kernels.
+  wrapper, native `Context`, and staged explicit-RK RHS kernels.
 - The ABI source contract proves staged v2 layer descriptors carry per-layer
   uniform uniaxial anisotropy (`Ku1`, `Ku2`, axis) through the C ABI, Rust FFI,
-  Rust native runner wrapper, native staged layer state, and Heun/RK4 RHS
+  Rust native runner wrapper, native staged layer state, and staged explicit-RK RHS
   kernels.
 - The ABI source contract proves staged v2 layer descriptors carry per-layer
   uniform cubic anisotropy (`Kc1`, `Kc2`, `Kc3`, axes) through the C ABI, Rust
-  FFI, Rust native runner wrapper, native staged layer state, and Heun/RK4 RHS
+  FFI, Rust native runner wrapper, native staged layer state, and staged explicit-RK RHS
   kernels.
 - The planner and ABI source contracts prove staged v2 multilayer plans carry
   global interfacial/bulk DMI constants through `FdmMultilayerPlanIR`, the C
-  ABI, Rust FFI, Rust native runner wrapper, native `Context`, and Heun/RK4 RHS
+  ABI, Rust FFI, Rust native runner wrapper, native `Context`, and staged explicit-RK RHS
   kernels.
 - The runner stats contract proves `cuda_native_multilayer_single_grid` keeps
   native timestep metadata but derives scalar/live/relaxation `StepStats` from

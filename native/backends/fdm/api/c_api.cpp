@@ -34,6 +34,8 @@ extern void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fd
 extern void launch_multilayer_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_multilayer_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_multilayer_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern void launch_multilayer_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 #if FULLMAG_HAS_CUDA
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 #endif
@@ -729,7 +731,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->last_error =
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
-        + " tensor kernels; prepared initial FFT workspace; native Heun/RK4 timestep with demag and layer-local exchange is available for v2 multilayer handles";
+        + " tensor kernels; prepared initial FFT workspace; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
@@ -754,26 +756,26 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_INVALID;
         }
         if (ctx->integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
-            ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK4)
+            ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK4 &&
+            ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23)
         {
             ctx->last_error =
-                "native v2 multilayer timestep currently supports only Heun and RK4 integrators";
-            return FULLMAG_FDM_ERR_INVALID;
-        }
-        if (!ctx->enable_demag) {
-            ctx->last_error =
-                "native v2 multilayer timestep currently requires enable_demag = 1";
+                "native v2 multilayer timestep currently supports only Heun, RK4, and fixed-step RK23 integrators";
             return FULLMAG_FDM_ERR_INVALID;
         }
 
         if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
+                launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, out_stats);
+            } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
                 launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, out_stats);
             } else {
                 launch_multilayer_heun_step_fp64(*ctx, dt_seconds, out_stats);
             }
         } else {
-            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
+                launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, out_stats);
+            } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
                 launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, out_stats);
             } else {
                 launch_multilayer_heun_step_fp32(*ctx, dt_seconds, out_stats);

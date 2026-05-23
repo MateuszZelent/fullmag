@@ -3,7 +3,7 @@
 //! Current scope:
 //! - body-local exchange / local field observables on CUDA per layer,
 //! - global cross-body demag via the existing multilayer convolution runtime,
-//! - fixed-step Heun/RK4 staged native v2 stepping for explicit CUDA execution,
+//! - fixed-step Heun/RK4/RK23 staged native v2 stepping for explicit CUDA execution,
 //! - scalar traces and concatenated field snapshots.
 
 use fullmag_engine::{
@@ -182,12 +182,12 @@ fn resolve_cuda_multilayer_execution_shape(
     if native_stacked.is_none()
         && !matches!(
             plan.integrator,
-            IntegratorChoice::Heun | IntegratorChoice::Rk4
+            IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23
         )
     {
         return Err(RunError {
             message: format!(
-                "the staged v2 CUDA multilayer FDM runner currently supports only 'heun' and 'rk4' integrators; {:?} is executable only for native single-grid-compatible multilayer stacks",
+                "the staged v2 CUDA multilayer FDM runner currently supports only 'heun', 'rk4', and fixed-step 'rk23' integrators; {:?} is executable only for native single-grid-compatible multilayer stacks",
                 plan.integrator
             ),
         });
@@ -2995,7 +2995,7 @@ mod tests {
     }
 
     #[test]
-    fn native_stacked_cuda_allows_single_grid_integrators_beyond_staged_v2() {
+    fn staged_v2_cuda_allows_fixed_step_rk23_but_rejects_rk45() {
         let mut plan = make_plan(false, ExecutionPrecision::Double);
         plan.integrator = IntegratorChoice::Rk45;
 
@@ -3005,13 +3005,22 @@ mod tests {
         assert_eq!(native.combined_plan.integrator, IntegratorChoice::Rk45);
 
         let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
+        assisted.integrator = IntegratorChoice::Rk23;
+        assert!(
+            resolve_cuda_multilayer_execution_shape(&assisted)
+                .expect("heterogeneous staged v2 fixed-step RK23 should be accepted")
+                .is_none(),
+            "heterogeneous staged v2 should not resolve through the native stacked fast path"
+        );
+
         assisted.integrator = IntegratorChoice::Rk45;
         let err = match resolve_cuda_multilayer_execution_shape(&assisted) {
             Err(err) => err,
             Ok(_) => panic!("heterogeneous staged v2 RK45 should remain unsupported"),
         };
         assert!(
-            err.message.contains("staged v2") && err.message.contains("'heun' and 'rk4'"),
+            err.message.contains("staged v2")
+                && err.message.contains("'heun', 'rk4', and fixed-step 'rk23'"),
             "unexpected error: {}",
             err.message
         );

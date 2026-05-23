@@ -215,6 +215,17 @@ bool gpu_rk_finalize_step_stats(
     (void)reason;
     return true;
 }
+
+bool gpu_rk_snapshot_current_state(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    (void)ctx;
+    stats = {};
+    reason = "GPU RK snapshot requires CUDA runtime support";
+    return false;
+}
 #endif
 
 } // namespace fullmag::fem

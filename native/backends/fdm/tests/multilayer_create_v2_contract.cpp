@@ -148,7 +148,7 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
     check(handle != nullptr, "valid create_v2 plan should return a staged v2 handle");
     check_error_contains(handle, "uploaded 2 layers and 4 tensor kernels");
-    check_error_contains(handle, "native Heun/RK4 timestep with demag and layer-local exchange is available");
+    check_error_contains(handle, "native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available");
 
     double h_ani[3] = {};
     const int h_ani_status = fullmag_fdm_backend_copy_layer_field_f64(
@@ -253,12 +253,81 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void valid_plan_runs_heun_step_without_demag() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("non-demag create_v2 step check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double m0[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, m0);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_exchange = 0;
+    plan.enable_demag = 0;
+    plan.has_external_field = 1;
+    plan.external_field_am[1] = 1.0e3;
+    plan.kernels = nullptr;
+    plan.kernel_count = 0;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "valid non-demag create_v2 plan should return a staged v2 handle");
+    check_error_contains(handle, "native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available");
+
+    fullmag_fdm_step_stats stats{};
+    const int step_status = fullmag_fdm_backend_step(handle, 1.0e-13, &stats);
+    check(step_status == FULLMAG_FDM_OK, "v2 multilayer Heun step without demag should succeed");
+    check(stats.step == 1, "non-demag v2 multilayer Heun step should advance step metadata");
+
+    double h_demag[3] = {1.0, 1.0, 1.0};
+    const int h_status = fullmag_fdm_backend_copy_layer_field_f64(
+        handle,
+        0,
+        FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+        h_demag,
+        3);
+    check(h_status == FULLMAG_FDM_OK, "copy layer H_DEMAG should succeed for non-demag v2 handles");
+    check_close(h_demag[0], 0.0, 1e-12, "non-demag v2 H_DEMAG x should remain zero");
+    check_close(h_demag[1], 0.0, 1e-12, "non-demag v2 H_DEMAG y should remain zero");
+    check_close(h_demag[2], 0.0, 1e-12, "non-demag v2 H_DEMAG z should remain zero");
+
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void valid_plan_runs_fixed_step_rk23_without_demag() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("fixed-step RK23 create_v2 step check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double m0[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, m0);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_RK23;
+    plan.enable_exchange = 0;
+    plan.enable_demag = 0;
+    plan.has_external_field = 1;
+    plan.external_field_am[1] = 1.0e3;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "valid fixed-step RK23 plan should return a staged v2 handle");
+
+    fullmag_fdm_step_stats stats{};
+    const int step_status = fullmag_fdm_backend_step(handle, 1.0e-13, &stats);
+    check(step_status == FULLMAG_FDM_OK, "v2 multilayer fixed-step RK23 should succeed");
+    check(stats.step == 1, "v2 multilayer fixed-step RK23 should advance step metadata");
+    check(stats.time_seconds > 0.0, "v2 multilayer fixed-step RK23 should advance time metadata");
+
+    fullmag_fdm_backend_destroy(handle);
+}
+
 } // namespace
 
 int main() {
     invalid_plan_reports_validation_error();
     invalid_transfer_kind_reports_validation_error();
     valid_plan_runs_heun_step_with_demag_and_exchange();
+    valid_plan_runs_heun_step_without_demag();
+    valid_plan_runs_fixed_step_rk23_without_demag();
     std::printf("multilayer create_v2 contract: PASS\n");
     return 0;
 }

@@ -284,6 +284,7 @@ bool context_step_explicit_rk_mfem(
         llg_rhs_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz,
                     ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
                     ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
+                    ctx.base_plan.precession_enabled,
                     ws.k[0], max_rhs_final);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);

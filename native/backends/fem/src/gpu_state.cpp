@@ -319,6 +319,58 @@ bool gpu_state_download_magnetization_aos(
 #endif
 }
 
+bool gpu_state_download_component_aos(
+    FemGpuState &state,
+    const FemGpuComponentField &field,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    const char *label,
+    std::string &error)
+{
+    if (!state.allocated) {
+        return true;
+    }
+    if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
+        error = std::string("FemGpuState ") + label +
+            " readback requires allocated device buffers";
+        return false;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    size_t component_bytes = 0;
+    if (!checked_node_bytes(state.node_count, component_bytes, error)) {
+        return false;
+    }
+    if (state.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = std::string("FemGpuState ") + label +
+            " download node count exceeds CUDA kernel range";
+        return false;
+    }
+
+    out_xyz.resize(static_cast<size_t>(state.dof_len));
+    fullmag_cuda_download_soa_to_aos(
+        field.x,
+        field.y,
+        field.z,
+        out_xyz.data(),
+        static_cast<int>(state.node_count),
+        nullptr);
+    if (!cuda_ok(cudaStreamSynchronize(nullptr),
+            (std::string("fullmag_cuda_download_soa_to_aos FemGpuState ") +
+                label + " device->host").c_str(),
+            error)) {
+        return false;
+    }
+
+    record_device_to_host(audit, static_cast<uint64_t>(component_bytes) * 3ull);
+    return true;
+#else
+    (void)audit;
+    error = "FemGpuState was marked allocated but fullmag_fem was built without CUDA runtime support";
+    return false;
+#endif
+}
+
 bool gpu_state_upload_component_aos(
     FemGpuState &state,
     FemGpuComponentField &field,

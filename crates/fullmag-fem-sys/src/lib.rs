@@ -280,6 +280,10 @@ pub struct fullmag_fem_plan_desc {
     pub use_consistent_mass: i32,
     /// Compute initial effective field during backend creation. 0 = lazy, 1 = eager.
     pub eager_initial_effective_field: i32,
+    /// Whether precession mode is explicitly set. 0 = default precessional mode.
+    pub has_precession_enabled: i32,
+    /// 1 = full Gilbert LLG, 0 = pure damping relaxation.
+    pub precession_enabled: i32,
 }
 
 #[repr(C)]
@@ -590,6 +594,8 @@ mod tests {
         let plan = unsafe { plan.assume_init() };
         assert_eq!(plan.use_consistent_mass, 0);
         assert_eq!(plan.eager_initial_effective_field, 0);
+        assert_eq!(plan.has_precession_enabled, 0);
+        assert_eq!(plan.precession_enabled, 0);
     }
 
     /// Verify native solver policy ABI carries the Hypre print level knob.

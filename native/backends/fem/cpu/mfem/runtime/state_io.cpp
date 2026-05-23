@@ -20,6 +20,19 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+#if FULLMAG_HAS_MFEM_STACK
+bool strict_gpu_demag_upload_path(const Context &ctx)
+{
+    return ctx.gpu_state.device.allocated &&
+        ctx.poisson_demag.gpu_demag_mode ==
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+}
+#endif
+
+} // namespace
+
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
 {
     if (!ctx.gpu_state.device.allocated ||
@@ -165,6 +178,14 @@ int context_upload_magnetization_f64(
     ctx.demag.last_refresh_time = -1.0;
 
 #if FULLMAG_HAS_MFEM_STACK
+    if (strict_gpu_demag_upload_path(ctx)) {
+        ctx.thermal_brown.sigma = 0.0;
+        std::fill(ctx.thermal_brown.h_xyz.begin(), ctx.thermal_brown.h_xyz.end(), 0.0);
+        ctx.thermal_brown.last_refresh_time = -1.0;
+        ctx.thermal_brown.last_refresh_dt = -1.0;
+        return FULLMAG_FEM_OK;
+    }
+
     // FND-004 fix: delegate H_eff assembly to compute_effective_fields_for_magnetization
     // so that all terms (exchange, demag, external, anisotropy, cubic anisotropy,
     // interfacial DMI, bulk DMI, Oersted, magnetoelastic) are included after upload.

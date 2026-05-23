@@ -51,6 +51,8 @@ void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_
 void launch_multilayer_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 void launch_multilayer_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 void launch_multilayer_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_multilayer_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+void launch_multilayer_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 
 // DP45 adaptive integrators
 void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);

@@ -75,6 +75,8 @@ bool initialize_base_plan_fields(
     ctx.base_plan.air_box_factor = plan.air_box_factor;
     ctx.base_plan.precision = plan.precision;
     ctx.base_plan.integrator = plan.integrator;
+    ctx.base_plan.precession_enabled =
+        plan.has_precession_enabled == 0 ? true : plan.precession_enabled != 0;
     return true;
 }
 

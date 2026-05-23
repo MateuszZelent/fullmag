@@ -2868,6 +2868,15 @@ fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_fem_llg_mode(plan: &FemPlanIR) -> &'static str {
+    if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+        "pure_damping"
+    } else {
+        "precessional"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn validate_all_in_gpu_fem_runtime_contract(
     execution_mode: &str,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
@@ -2950,6 +2959,7 @@ fn apply_native_fem_runtime_contract(
     gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
 ) {
     provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
+    provenance.llg_mode = Some(native_fem_llg_mode(plan).to_string());
     provenance.fem_data_residency =
         Some(native_fem_data_residency(plan, stats, gpu_state).to_string());
     provenance.uses_cuda_kernels = Some(
@@ -3022,6 +3032,7 @@ fn execute_native_fem(
                 | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
         )
     });
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
@@ -3038,13 +3049,14 @@ fn execute_native_fem(
     validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
     let demag_policy = plan.demag_solver_policy.clone().unwrap_or_default();
     runtime_info_once(&format!(
-        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
+        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse llg_mode={} demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
         execution_engine,
         device_info.name,
         device_info.compute_capability,
         device_info.driver_version,
         device_info.runtime_version,
         plan.mfem_device_string.as_deref().unwrap_or("cpu"),
+        native_fem_llg_mode(plan),
         demag_policy.solver,
         demag_policy.preconditioner,
         gpu_rk_plan_info.demag_operator_mode,
@@ -3647,7 +3659,7 @@ fn execute_native_fem(
                         energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
-                        false,
+                        pure_damping_relax,
                     );
                     if max_steps_hit || converged {
                         eprintln!(
@@ -3968,18 +3980,7 @@ fn capture_initial_cuda_fields(
             let snapshot = backend.begin_field_snapshot(&name, 0, 0.0, 0.0)?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = match name.as_str() {
-                "m" => backend.copy_m(cell_count)?,
-                "H_ex" => backend.copy_h_ex(cell_count)?,
-                "H_demag" => backend.copy_h_demag(cell_count)?,
-                "H_ext" => backend.copy_h_ext(cell_count)?,
-                "H_eff" => backend.copy_h_eff(cell_count)?,
-                other => {
-                    return Err(RunError {
-                        message: format!("unsupported CUDA field snapshot '{}'", other),
-                    })
-                }
-            };
+            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: 0,
@@ -4022,18 +4023,7 @@ fn record_cuda_due_outputs(
             let snapshot = backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = match name.as_str() {
-                "m" => backend.copy_m(cell_count)?,
-                "H_ex" => backend.copy_h_ex(cell_count)?,
-                "H_demag" => backend.copy_h_demag(cell_count)?,
-                "H_ext" => backend.copy_h_ext(cell_count)?,
-                "H_eff" => backend.copy_h_eff(cell_count)?,
-                other => {
-                    return Err(RunError {
-                        message: format!("unsupported CUDA field snapshot '{}'", other),
-                    })
-                }
-            };
+            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
@@ -4099,18 +4089,7 @@ fn record_cuda_final_outputs(
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = match name.as_str() {
-                "m" => backend.copy_m(cell_count)?,
-                "H_ex" => backend.copy_h_ex(cell_count)?,
-                "H_demag" => backend.copy_h_demag(cell_count)?,
-                "H_ext" => backend.copy_h_ext(cell_count)?,
-                "H_eff" => backend.copy_h_eff(cell_count)?,
-                other => {
-                    return Err(RunError {
-                        message: format!("unsupported CUDA field snapshot '{}'", other),
-                    })
-                }
-            };
+            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name,
                 step: latest_stats.step,
@@ -4124,13 +4103,37 @@ fn record_cuda_final_outputs(
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
+fn copy_cuda_field_snapshot(
+    backend: &NativeFdmBackend,
+    name: &str,
+    cell_count: usize,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let quantity = normalized_quantity_name(name).map_err(|_| RunError {
+        message: format!("unsupported CUDA field snapshot '{}'", name),
+    })?;
+    match quantity {
+        "m" => backend.copy_m(cell_count),
+        "H_ex" => backend.copy_h_ex(cell_count),
+        "H_demag" => backend.copy_h_demag(cell_count),
+        "H_ext" => backend.copy_h_ext(cell_count),
+        "H_oe" => backend.copy_h_oe(cell_count),
+        "H_ani" => backend.copy_h_ani(cell_count),
+        "H_eff" => backend.copy_h_eff(cell_count),
+        other => Err(RunError {
+            message: format!("unsupported CUDA field snapshot '{}'", other),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fullmag_ir::{
         AntennaIR, BackendTarget, CurrentModuleIR, CurrentTransportModelIR, DiscretizationHintsIR,
         FdmHintsIR, FemHintsIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RfDriveIR,
+        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RelaxStopIR, RelaxationAlgorithmIR,
+        RelaxationControlIR, RfDriveIR,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -4173,6 +4176,37 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn native_cuda_field_outputs_use_shared_local_field_copy_helper() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("dispatch.rs should be readable");
+
+        assert!(
+            source.contains("fn copy_cuda_field_snapshot("),
+            "native CUDA field outputs should share one copy helper"
+        );
+        assert!(
+            source.contains("\"H_oe\" => backend.copy_h_oe(cell_count)")
+                && source.contains("\"H_ani\" => backend.copy_h_ani(cell_count)"),
+            "native CUDA field output helper must expose H_oe and H_ani local fields"
+        );
+
+        for function_name in [
+            "capture_initial_cuda_fields",
+            "record_cuda_due_outputs",
+            "record_cuda_final_outputs",
+        ] {
+            let body_start = source
+                .find(&format!("fn {function_name}("))
+                .unwrap_or_else(|| panic!("{function_name} should exist"));
+            let body = &source[body_start..];
+            assert!(
+                body.contains("copy_cuda_field_snapshot(backend, &name, cell_count)?"),
+                "{function_name} should use the shared native CUDA field copy helper"
+            );
+        }
     }
 
     fn fem_policy_problem() -> ProblemIR {
@@ -4456,6 +4490,32 @@ mod tests {
             provenance.fem_gpu_state_reduction_workspace_bytes,
             Some(512)
         );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_records_llg_mode() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(&mut provenance, &plan, None, None, None);
+
+        assert_eq!(provenance.llg_mode.as_deref(), Some("pure_damping"));
+
+        plan.relaxation = None;
+        apply_native_fem_runtime_contract(&mut provenance, &plan, None, None, None);
+
+        assert_eq!(provenance.llg_mode.as_deref(), Some("precessional"));
     }
 
     #[cfg(feature = "fem-gpu")]

@@ -100,7 +100,8 @@ void base_plan_fields_are_owned_by_core_module() {
     check(
         plan_header.find("uint32_t fe_order") != std::string::npos &&
             plan_header.find("double dt_seconds") != std::string::npos &&
-            plan_header.find("fullmag_fem_integrator integrator") != std::string::npos,
+            plan_header.find("fullmag_fem_integrator integrator") != std::string::npos &&
+            plan_header.find("bool precession_enabled") != std::string::npos,
         "FemBasePlan runtime state must own scalar base-plan settings");
     check(
         context_header.find("FemBasePlanRuntimeState base_plan{}") != std::string::npos,
@@ -153,6 +154,8 @@ fullmag_fem_plan_desc valid_base_plan() {
 void base_plan_import_copies_runtime_scalars_and_counts() {
     fullmag::fem::Context ctx;
     fullmag_fem_plan_desc plan = valid_base_plan();
+    plan.has_precession_enabled = 1;
+    plan.precession_enabled = 0;
 
     std::string error;
     check(fullmag::fem::initialize_base_plan_fields(ctx, plan, error), error.c_str());
@@ -166,6 +169,16 @@ void base_plan_import_copies_runtime_scalars_and_counts() {
     check(ctx.base_plan.air_box_factor == 3.5, "base plan imports air_box_factor");
     check(ctx.base_plan.precision == FULLMAG_FEM_PRECISION_SINGLE, "base plan imports precision");
     check(ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54, "base plan imports integrator");
+    check(!ctx.base_plan.precession_enabled, "base plan imports explicit pure-damping mode");
+}
+
+void base_plan_defaults_to_precessional_llg_for_legacy_abi_callers() {
+    fullmag::fem::Context ctx;
+    fullmag_fem_plan_desc plan = valid_base_plan();
+
+    std::string error;
+    check(fullmag::fem::initialize_base_plan_fields(ctx, plan, error), error.c_str());
+    check(ctx.base_plan.precession_enabled, "zero-initialized ABI plan defaults to precession");
 }
 
 void base_plan_validation_rejects_invalid_inputs() {
@@ -212,6 +225,7 @@ void base_plan_validation_rejects_invalid_inputs() {
 int main() {
     base_plan_fields_are_owned_by_core_module();
     base_plan_import_copies_runtime_scalars_and_counts();
+    base_plan_defaults_to_precessional_llg_for_legacy_abi_callers();
     base_plan_validation_rejects_invalid_inputs();
     return 0;
 }

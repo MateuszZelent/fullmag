@@ -33,6 +33,7 @@ void llg_rhs_aos(
     double gamma,
     double alpha,
     const std::vector<double> *alpha_field,
+    bool precession_enabled,
     std::vector<double> &rhs_xyz,
     double &max_rhs)
 {
@@ -61,9 +62,10 @@ void llg_rhs_aos(
         const double dy = mz * px - mx * pz;
         const double dz = mx * py - my * px;
 
-        rhs_xyz[base + 0] = -gamma_bar * (px + alpha_i * dx);
-        rhs_xyz[base + 1] = -gamma_bar * (py + alpha_i * dy);
-        rhs_xyz[base + 2] = -gamma_bar * (pz + alpha_i * dz);
+        const double precession_scale = precession_enabled ? 1.0 : 0.0;
+        rhs_xyz[base + 0] = -gamma_bar * (precession_scale * px + alpha_i * dx);
+        rhs_xyz[base + 1] = -gamma_bar * (precession_scale * py + alpha_i * dy);
+        rhs_xyz[base + 2] = -gamma_bar * (precession_scale * pz + alpha_i * dz);
 
         max_rhs = std::max(
             max_rhs,

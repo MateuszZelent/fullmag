@@ -27,6 +27,27 @@ contract pins that this module consumes an already composed `H_eff`: it does
 not own effective-field composition, interaction field evaluation, time
 advancement, or step metrics.
 
+## Relaxation Mode
+
+The public relaxation algorithm `llg_overdamped` disables the precessional
+`m x H_eff` term and keeps only damping descent:
+
+```text
+dm/dt =
+  -gamma_mu0 / (1 + alpha^2)
+    [alpha m x (m x H_eff)]
+  + tau_direct
+```
+
+Native FEM CPU and GPU must carry this as an explicit runtime contract named
+`precession_enabled`. `precession_enabled = true` selects the full
+precessional Gilbert RHS above. `precession_enabled = false` selects pure
+damping relaxation. The default for ABI callers that do not specify the field
+is precessional mode, preserving existing explicit LLG behavior.
+
+Runtime provenance and startup logs must expose the resolved LLG mode as
+`llg_mode = precessional` or `llg_mode = pure_damping`.
+
 ## Field Path
 
 Interactions implemented as fields contribute additively to `H_eff`:

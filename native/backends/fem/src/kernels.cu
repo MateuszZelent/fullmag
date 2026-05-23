@@ -113,7 +113,8 @@ void fullmag_cuda_download_soa_to_aos(
 }
 
 // ── LLG RHS fused kernel ──────────────────────────────────────────────
-// Computes dm/dt = -γ̄ (m×H + α m×(m×H)) per node.
+// Computes dm/dt = -γ̄ (p m×H + α m×(m×H)) per node.
+// p=0 when pure damping relaxation disables precession.
 // Also stores per-block max |dm/dt| for later device-side reduction.
 
 __global__ void llg_rhs_fused_kernel(
@@ -124,6 +125,7 @@ __global__ void llg_rhs_fused_kernel(
     const double *__restrict__ alpha_field,
     double gamma, double uniform_alpha,
     bool use_alpha_field,
+    bool precession_enabled,
     int N)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -146,9 +148,10 @@ __global__ void llg_rhs_fused_kernel(
         const double dy = lmz * px - lmx * pz;
         const double dz = lmx * py - lmy * px;
 
-        const double rx = -gamma_bar * (px + alpha * dx);
-        const double ry = -gamma_bar * (py + alpha * dy);
-        const double rz = -gamma_bar * (pz + alpha * dz);
+        const double precession_scale = precession_enabled ? 1.0 : 0.0;
+        const double rx = -gamma_bar * (precession_scale * px + alpha * dx);
+        const double ry = -gamma_bar * (precession_scale * py + alpha * dy);
+        const double rz = -gamma_bar * (precession_scale * pz + alpha * dz);
 
         dmx[i] = rx;
         dmy[i] = ry;
@@ -1327,12 +1330,13 @@ void fullmag_cuda_llg_rhs_fused(
     const double *alpha_field,
     double gamma, double alpha,
     bool use_alpha_field,
+    bool precession_enabled,
     int N, cudaStream_t stream)
 {
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
     llg_rhs_fused_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         mx, my, mz, hx, hy, hz, dmx, dmy, dmz,
-        block_max_rhs, alpha_field, gamma, alpha, use_alpha_field, N);
+        block_max_rhs, alpha_field, gamma, alpha, use_alpha_field, precession_enabled, N);
 }
 
 void fullmag_cuda_add_slonczewski_stt_rhs(

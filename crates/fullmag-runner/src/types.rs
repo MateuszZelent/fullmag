@@ -501,6 +501,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
             fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
             hypre_execution_policy: Some("device".to_string()),
             demag_residency: Some("device".to_string()),
+            llg_mode: Some("pure_damping".to_string()),
             hot_loop_host_sync_count: Some(0),
             hot_loop_exchange_host_sync_count: Some(0),
             hot_loop_compute_host_sync_count: Some(0),
@@ -523,6 +524,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         );
         assert_eq!(provenance.hypre_execution_policy.as_deref(), Some("device"));
         assert_eq!(provenance.demag_residency.as_deref(), Some("device"));
+        assert_eq!(provenance.llg_mode.as_deref(), Some("pure_damping"));
         assert_eq!(provenance.hot_loop_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
@@ -1178,6 +1180,9 @@ pub struct ExecutionProvenance {
     /// Timestep policy: "user", "adaptive", or "fallback".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dt_policy: Option<String>,
+    /// Resolved LLG RHS mode: "precessional" or "pure_damping".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llg_mode: Option<String>,
     /// FEM-030: MFEM device string used for this run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfem_device: Option<String>,

@@ -70,7 +70,7 @@ void expected_owner_paths_exist() {
         "gpu/cuda/integrators/llg_abm3_fp64.cu",
         "gpu/cuda/integrators/llg_abm3_fp32.cu",
         "gpu/cuda/integrators/multilayer_heun.cu",
-        "gpu/cuda/integrators/multilayer_rk4.cu",
+        "gpu/cuda/integrators/multilayer_explicit_rk.cu",
         "gpu/cuda/demag/multilayer_convolution.cu",
         "gpu/cuda/demag/newell_gpu_fp64.cu",
         "gpu/cuda/demag/newell_gpu_fp32.cu",
@@ -131,7 +131,7 @@ void cmake_uses_gpu_runtime_owner_paths() {
              "gpu/cuda/interactions/multilayer_anisotropy.cu",
              "gpu/cuda/interactions/multilayer_effective_field.cu",
              "gpu/cuda/integrators/multilayer_heun.cu",
-             "gpu/cuda/integrators/multilayer_rk4.cu",
+             "gpu/cuda/integrators/multilayer_explicit_rk.cu",
          }) {
         check(cmake.find(path) != std::string::npos, path);
     }
@@ -195,6 +195,7 @@ void old_flat_sources_are_gone() {
         "cuda/integrators/llg_abm3_fp32.cu",
         "cuda/integrators/multilayer_heun.cu",
         "cuda/integrators/multilayer_rk4.cu",
+        "gpu/cuda/integrators/multilayer_rk4.cu",
         "cuda/demag/multilayer_convolution.cu",
         "cuda/demag/newell_gpu_fp64.cu",
         "cuda/demag/newell_gpu_fp32.cu",

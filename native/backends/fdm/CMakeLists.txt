@@ -41,7 +41,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/integrators/llg_abm3_fp64.cu
         gpu/cuda/integrators/llg_abm3_fp32.cu
         gpu/cuda/integrators/multilayer_heun.cu
-        gpu/cuda/integrators/multilayer_rk4.cu
+        gpu/cuda/integrators/multilayer_explicit_rk.cu
         gpu/cuda/demag/multilayer_convolution.cu
         gpu/cuda/demag/newell_gpu_fp64.cu
         gpu/cuda/demag/newell_gpu_fp32.cu

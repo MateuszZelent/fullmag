@@ -91,7 +91,7 @@ void llg_rhs_uses_llg_gilbert_form_and_nodewise_damping() {
     std::vector<double> rhs;
     double max_rhs = 0.0;
 
-    fullmag::fem::llg_rhs_aos(m, h, 10.0, 0.5, &alpha_field, rhs, max_rhs);
+    fullmag::fem::llg_rhs_aos(m, h, 10.0, 0.5, &alpha_field, true, rhs, max_rhs);
 
     check(rhs.size() == m.size(), "LLG RHS preserves AOS field size");
     check_near(rhs[0], 0.0, 1e-15, "node 0 rhs x");
@@ -118,7 +118,7 @@ void damping_only_macrospin_energy_decreases_under_relaxation() {
     double max_rhs = 0.0;
 
     const double initial_energy = zeeman_like_energy(m, h);
-    fullmag::fem::llg_rhs_aos(m, h, 10.0, 0.5, nullptr, rhs, max_rhs);
+    fullmag::fem::llg_rhs_aos(m, h, 10.0, 0.5, nullptr, true, rhs, max_rhs);
 
     const double dt = 1.0e-3;
     for (size_t i = 0; i < m.size(); ++i) {
@@ -131,6 +131,43 @@ void damping_only_macrospin_energy_decreases_under_relaxation() {
         relaxed_energy < initial_energy,
         "damping-only macrospin relaxation must decrease Zeeman-like energy");
     check(max_rhs > 0.0, "damping-only macrospin fixture must exercise LLG RHS");
+}
+
+void llg_rhs_can_disable_precession_for_overdamped_relaxation() {
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    const std::vector<double> h = {0.0, 0.0, 1.0};
+    std::vector<double> precessional_rhs;
+    std::vector<double> pure_damping_rhs;
+    double precessional_max = 0.0;
+    double pure_damping_max = 0.0;
+
+    fullmag::fem::llg_rhs_aos(
+        m,
+        h,
+        10.0,
+        0.5,
+        nullptr,
+        true,
+        precessional_rhs,
+        precessional_max);
+    fullmag::fem::llg_rhs_aos(
+        m,
+        h,
+        10.0,
+        0.5,
+        nullptr,
+        false,
+        pure_damping_rhs,
+        pure_damping_max);
+
+    check_near(precessional_rhs[0], 0.0, 1e-15, "precessional rhs x");
+    check_near(precessional_rhs[1], 8.0, 1e-15, "precessional rhs y");
+    check_near(precessional_rhs[2], 4.0, 1e-15, "precessional rhs z");
+    check_near(pure_damping_rhs[0], 0.0, 1e-15, "pure damping rhs x");
+    check_near(pure_damping_rhs[1], 0.0, 1e-15, "pure damping disables precession y");
+    check_near(pure_damping_rhs[2], 4.0, 1e-15, "pure damping keeps damping z");
+    check_near(precessional_max, std::sqrt(80.0), 1e-14, "precessional max norm");
+    check_near(pure_damping_max, 4.0, 1e-14, "pure damping max norm");
 }
 
 void aos_helpers_normalize_and_mask_nodes() {
@@ -194,6 +231,13 @@ void gamma_mu0_convention_is_pinned_by_docs_and_material_validation() {
         rhs_header.find("configured `gamma_mu0`-style factor used by the native FEM runtime") !=
             std::string::npos,
         "LLG RHS header must document that the RHS consumes gamma_mu0-style scaling");
+    check(
+        llg_docs.find("`precession_enabled = false` selects pure\n"
+                      "damping relaxation") != std::string::npos,
+        "LLG conventions doc must document the native pure-damping relaxation mode");
+    check(
+        rhs_header.find("precession_enabled") != std::string::npos,
+        "LLG RHS header must expose the native precession mode contract");
 }
 
 void progress_report_marks_gamma_mu0_convention_contract_covered() {
@@ -223,6 +267,7 @@ int main() {
     llg_rhs_is_owned_by_integrator_module();
     llg_rhs_uses_llg_gilbert_form_and_nodewise_damping();
     damping_only_macrospin_energy_decreases_under_relaxation();
+    llg_rhs_can_disable_precession_for_overdamped_relaxation();
     aos_helpers_normalize_and_mask_nodes();
     gamma_mu0_convention_is_pinned_by_docs_and_material_validation();
     progress_report_marks_gamma_mu0_convention_contract_covered();

@@ -137,6 +137,14 @@ bool gpu_state_download_magnetization_aos(
     TransferAudit &audit,
     std::string &error);
 
+bool gpu_state_download_component_aos(
+    FemGpuState &state,
+    const FemGpuComponentField &field,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    const char *label,
+    std::string &error);
+
 bool gpu_state_upload_effective_fields_aos(
     FemGpuState &state,
     const double *h_ex_xyz,

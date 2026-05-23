@@ -38,7 +38,8 @@ void fullmag_cuda_download_soa_to_aos(
     int N,
     cudaStream_t stream = nullptr);
 
-/// Fused LLG RHS: dm/dt = -γ̄ (m×H + α m×(m×H)), per-block max reduction.
+/// Fused LLG RHS: dm/dt = -γ̄ (p m×H + α m×(m×H)), per-block max reduction.
+/// `precession_enabled=false` sets p=0 for pure damping relaxation.
 /// Input/output: SoA layout (separate mx, my, mz arrays).
 void fullmag_cuda_llg_rhs_fused(
     const fem_real_t *mx, const fem_real_t *my, const fem_real_t *mz,
@@ -48,6 +49,7 @@ void fullmag_cuda_llg_rhs_fused(
     const fem_real_t *alpha_field,
     fem_real_t gamma, fem_real_t alpha,
     bool use_alpha_field,
+    bool precession_enabled,
     int N, cudaStream_t stream = nullptr);
 
 /// Add Slonczewski spin-transfer torque to an already assembled RHS.

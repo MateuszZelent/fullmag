@@ -77,7 +77,8 @@ std::size_t count_occurrences(const std::string &text, const std::string &needle
 void demag_fft_resources_are_batched() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string context = read_text_file(root / "core" / "context.cu");
+    const std::string context =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu");
 
     check(
         context_header.find("fft_components_share_allocation") != std::string::npos,
@@ -102,7 +103,8 @@ void demag_fft_resources_are_batched() {
 void demag_fft_work_area_is_owned_by_context() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string context = read_text_file(root / "core" / "context.cu");
+    const std::string context =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu");
 
     check(
         context_header.find("fft_work_area") != std::string::npos,
@@ -124,13 +126,15 @@ void demag_fft_work_area_is_owned_by_context() {
 void demag_fft_runs_on_context_compute_stream() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string context = read_text_file(root / "core" / "context.cu");
-arc    const std::string streams = read_text_file(root / "cuda" / "runtime" / "streams.cu");
+    const std::string context =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu");
+    const std::string streams =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "streams.cu");
     const std::string fp64 = function_body(
-        read_text_file(root / "cuda" / "interactions" / "demag_fp64.cu"),
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "demag_fp64.cu"),
         "void launch_demag_field_fp64(Context &ctx)");
     const std::string fp32 = function_body(
-        read_text_file(root / "cuda" / "interactions" / "demag_fp32.cu"),
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "demag_fp32.cu"),
         "void launch_demag_field_fp32(Context &ctx)");
 
     check(
@@ -177,10 +181,10 @@ arc    const std::string streams = read_text_file(root / "cuda" / "runtime" / "s
 void demag_launches_use_one_forward_and_inverse_batch() {
     const std::filesystem::path root = fdm_source_root();
     const std::string fp64 = function_body(
-        read_text_file(root / "cuda" / "interactions" / "demag_fp64.cu"),
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "demag_fp64.cu"),
         "void launch_demag_field_fp64(Context &ctx)");
     const std::string fp32 = function_body(
-        read_text_file(root / "cuda" / "interactions" / "demag_fp32.cu"),
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "demag_fp32.cu"),
         "void launch_demag_field_fp32(Context &ctx)");
 
     check(
@@ -199,6 +203,31 @@ void demag_launches_use_one_forward_and_inverse_batch() {
         "fp32 demag field launch must use one forward and one inverse batch");
 }
 
+void multilayer_demag_launches_use_one_forward_and_inverse_batch_per_kernel() {
+    const std::filesystem::path root = fdm_source_root();
+    const std::string fp64 = function_body(
+        read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu"),
+        "void launch_multilayer_demag_field_fp64(Context &ctx)");
+    const std::string fp32 = function_body(
+        read_text_file(root / "gpu" / "cuda" / "demag" / "multilayer_convolution.cu"),
+        "void launch_multilayer_demag_field_fp32(Context &ctx)");
+
+    check(
+        fp64.find("cufftExecZ2Z(") != std::string::npos,
+        "fp64 multilayer demag field launch must call cufftExecZ2Z");
+    check(
+        count_occurrences(fp64, "CUFFT_FORWARD") == 1 &&
+            count_occurrences(fp64, "CUFFT_INVERSE") == 1,
+        "fp64 multilayer demag field launch must use one forward and one inverse batch per tensor kernel");
+    check(
+        fp32.find("cufftExecC2C(") != std::string::npos,
+        "fp32 multilayer demag field launch must call cufftExecC2C");
+    check(
+        count_occurrences(fp32, "CUFFT_FORWARD") == 1 &&
+            count_occurrences(fp32, "CUFFT_INVERSE") == 1,
+        "fp32 multilayer demag field launch must use one forward and one inverse batch per tensor kernel");
+}
+
 } // namespace
 
 int main() {
@@ -206,6 +235,7 @@ int main() {
     demag_fft_work_area_is_owned_by_context();
     demag_fft_runs_on_context_compute_stream();
     demag_launches_use_one_forward_and_inverse_batch();
+    multilayer_demag_launches_use_one_forward_and_inverse_batch_per_kernel();
     std::printf("batched demag FFT contract: PASS\n");
     return 0;
 }

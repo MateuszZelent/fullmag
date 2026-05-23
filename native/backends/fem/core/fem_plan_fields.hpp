@@ -22,6 +22,7 @@ struct FemBasePlanRuntimeState {
     double air_box_factor = 0.0;
     fullmag_fem_precision precision = FULLMAG_FEM_PRECISION_DOUBLE;
     fullmag_fem_integrator integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
+    bool precession_enabled = true;
 };
 
 /*

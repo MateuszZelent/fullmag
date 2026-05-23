@@ -914,6 +914,7 @@ bool compute_rhs_for_magnetization(
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,
         !ctx.material_fields.alpha_field.empty(),
+        ctx.base_plan.precession_enabled,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK RHS", reason)) {
@@ -1884,6 +1885,10 @@ bool gpu_rk_finalize_step_stats(
 
     double max_h_demag = 0.0;
     if (ctx.demag.enabled) {
+        // Use gpu.error.y as a scratch target for block_max_torque — we only
+        // need block_max_h (scalar_reduce_workspace) from this call. gpu.error.x
+        // must not be overwritten here because it holds the per-block H_eff
+        // torque values that are reduced into max_torque immediately below.
         fullmag_cuda_field_metric_blocks(
             gpu.m.x,
             gpu.m.y,
@@ -1893,7 +1898,7 @@ bool gpu_rk_finalize_step_stats(
             gpu.h_demag.z,
             gpu.magnetic_node_mask,
             gpu.scalar_reduce_workspace,
-            gpu.error.x,
+            gpu.error.y,
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK demag field metric blocks", reason)) {
@@ -2067,6 +2072,71 @@ bool gpu_rk_finalize_step_stats(
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
     context_update_stage_completion_from_stats(ctx, stats);
+    return true;
+}
+
+bool gpu_rk_snapshot_current_state(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    if (!gpu.allocated || gpu.m.x == nullptr || gpu.k[0].x == nullptr) {
+        reason = "GPU snapshot requires allocated FemGpuState magnetization and RHS buffers";
+        return false;
+    }
+    if (gpu.node_count == 0 || gpu.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        reason = "GPU snapshot node count is outside CUDA kernel range";
+        return false;
+    }
+    if (gpu.scalar_reduce_temp_storage == nullptr ||
+        gpu.scalar_reduce_temp_storage_bytes == 0 ||
+        gpu.scalar_reduce_result == nullptr ||
+        gpu.scalar_reduce_workspace == nullptr) {
+        reason = "GPU snapshot requires preallocated scalar reduction workspace";
+        return false;
+    }
+
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
+    const int n = static_cast<int>(gpu.node_count);
+    const int blocks = std::max(1, (n + kBlockSize - 1) / kBlockSize);
+
+    ctx.adaptive_dt.current_dt = ctx.adaptive_dt.current_dt > 0.0
+        ? ctx.adaptive_dt.current_dt
+        : ctx.base_plan.dt_seconds;
+    if (!compute_rhs_for_magnetization(
+            ctx,
+            gpu.m,
+            gpu.k[0],
+            stream,
+            n,
+            "launch GPU snapshot h_eff accumulation",
+            reason)) {
+        return false;
+    }
+
+    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    fullmag_cuda_device_max(
+        gpu.scalar_reduce_workspace,
+        blocks,
+        gpu.scalar_reduce_result,
+        gpu.scalar_reduce_temp_storage,
+        reduce_bytes,
+        stream);
+    if (!cuda_launch_ok("launch GPU snapshot max RHS reduction", reason)) {
+        return false;
+    }
+
+    stats = {};
+    stats.step = ctx.state.step_count;
+    stats.time_seconds = ctx.state.current_time;
+    stats.dt_seconds = 0.0;
+    gpu.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    gpu.device_state = FemGpuSyncState::DeviceClean;
+    if (!gpu_rk_finalize_step_stats(ctx, stats, reason)) {
+        return false;
+    }
+    reason.clear();
     return true;
 }
 

@@ -178,24 +178,29 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
 - [x] Transform all three vector components through forward and inverse cuFFT in
   the native identity-grid multilayer demag operator before tensor multiply and
   pull-back.
+- [x] Batch the three staged v2 multilayer demag component transforms through
+  the existing `cufftMakePlanMany(..., batch=3)` workspace, so each tensor
+  kernel uses one forward and one inverse cuFFT launch instead of separate
+  x/y/z launches.
 - [x] Validate native identity transfer against `native_grid == convolution_grid`
   while allowing the tensor-kernel FFT grid to be padded.
 - [x] Prepare cached native cuFFT workspaces for staged v2 multilayer tensor
   kernels, keyed by each tensor-kernel `fft_grid`.
 - [x] Wire staged v2 handles through `step()` for the first native timestep
-  slices: Heun and RK4 over staged multilayer layers in fp64/fp32 with demag
-  and layer-local exchange fields; adaptive and multistep integrators are still
-  rejected explicitly.
+  slices: Heun, RK4, and fixed-step RK23 over staged multilayer layers in fp64/fp32 with optional
+  demag and layer-local exchange fields; local/exchange-only plans keep
+  `H_DEMAG = 0` instead of requiring demag kernels. Adaptive and multistep
+  integrators are still rejected explicitly.
 - [x] Allow the public multilayer FDM planner and CUDA-assisted multilayer
-  runner gate to carry fixed-step RK4 into the staged native v2 path instead of
-  rejecting it at the older Heun-only public boundary. Adaptive and multistep
+  runner gate to carry fixed-step RK4 and RK23 into the staged native v2 path instead of
+  rejecting them at the older Heun-only public boundary. Adaptive and multistep
   v2 integrators remain explicit non-goals for this slice.
 - [x] Split the public fixed-step integrator gate by execution target:
   CPU-reference multilayer execution can carry Heun, RK4, RK23, RK45, and ABM3,
   compatible `cuda_native_multilayer_single_grid` stacks can carry RK23, RK45,
   and ABM3 through the existing native single-grid CUDA backend, while staged
-  native v2 multilayer execution remains limited to Heun and RK4 until staged
-  adaptive and multistep owners exist.
+  native v2 multilayer execution carries fixed-step Heun, RK4, and RK23;
+  staged adaptive RK23/RK45 and multistep owners remain deferred.
 - [x] Add an explicit `fullmag_fdm_backend_refresh_multilayer_demag` ABI so the
   CUDA-assisted identity-grid path refreshes staged v2 demag without using
   `step(0)` as an operator call.
@@ -206,12 +211,12 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
 - [x] Expose per-layer v2 `H_DMI` copy entrypoints for staged CUDA multilayer
   handles. `Context` owns a layer-local `h_dmi` buffer and refreshes it on
   demand with the same centered interfacial/bulk DMI stencil used by the
-  staged v2 Heun/RK4 RHS.
+  staged v2 explicit-RK RHS.
 - [x] Expose per-layer v2 `H_ANI` copy entrypoints for staged CUDA multilayer
   handles. `Context` owns a layer-local `h_ani` buffer and
   `gpu/cuda/interactions/multilayer_anisotropy.cu` refreshes it on demand with
   the same uniaxial/cubic anisotropy field equations used by the staged v2
-  Heun/RK4 RHS.
+  explicit-RK RHS.
 - [x] Expose per-layer v2 `H_EFF` copy entrypoints for staged CUDA multilayer
   handles. `gpu/cuda/interactions/multilayer_effective_field.cu` assembles
   `H_EX + H_DEMAG + H_DMI + H_ANI + H_EXT` on demand into the existing layer
@@ -236,21 +241,26 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
   uniform-A six-neighbor stencil on each layer native grid, open Neumann
   boundary clamping, and active-mask clamping.
 - [x] Add native CUDA RK4 timestep ownership for staged v2 layers, using
-  per-layer `k1`/`k2`/`k3`/`k4` stage fields and the same demag plus
+  per-layer `k1`/`k2`/`k3`/`k4` stage fields and the same optional demag plus
   layer-local exchange RHS as the Heun slice.
+- [x] Add fixed-step native CUDA Bogacki-Shampine RK23 ownership for staged v2
+  layers, reusing the shared explicit-RK RHS and existing `k1`/`k2`/`k3`
+  buffers. `adaptive_timestep` remains rejected; each native step requires a
+  positive `dt_seconds`. Embedded-error reduction, FSAL and adaptive
+  accept/reject/retry remain deferred.
 - [x] Carry the requested uniform external field through
   `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust runner wrapper, and
-  native `Context`, and include it in the staged v2 Heun/RK4 RHS alongside
-  demag and layer-local exchange.
+  native `Context`, and include it in the staged v2 explicit-RK RHS alongside
+  optional demag and layer-local exchange.
 - [x] Carry per-layer uniform uniaxial anisotropy (`Ku1`, `Ku2`, axis) through
   `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner wrapper, and native staged
-  layer state. The staged v2 Heun/RK4 RHS uses the same FDM field convention as
+  layer state. The staged v2 explicit-RK RHS uses the same FDM field convention as
   the single-grid backend,
   `H_ani = [2/(mu0 Ms)] [Ku1 (m.u) + 2 Ku2 (m.u)^3] u`, for fp64/fp32 layers.
   Per-cell anisotropy fields remain outside this slice.
 - [x] Carry per-layer uniform cubic anisotropy (`Kc1`, `Kc2`, `Kc3`,
   `axis1`, `axis2`) through `fullmag_fdm_layer_desc_v2`, Rust FFI, Rust runner
-  wrapper, and native staged layer state. The staged v2 Heun/RK4 RHS uses the
+  wrapper, and native staged layer state. The staged v2 explicit-RK RHS uses the
   existing single-grid native FDM cubic field convention in the local cubic
   basis where `axis3 = axis1 x axis2`; per-cell `kc*_field` inputs remain
   outside this slice.
@@ -264,7 +274,7 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
   anisotropy, and DMI before scratch-backed effective-field assembly.
 - [x] Carry global interfacial and bulk DMI constants through
   `FdmMultilayerPlanIR`, `fullmag_fdm_multilayer_plan_desc_v2`, Rust FFI, Rust
-  runner wrapper, and native `Context`. The staged v2 Heun/RK4 RHS applies the
+  runner wrapper, and native `Context`. The staged v2 explicit-RK RHS applies the
   same centered finite-difference FDM DMI convention as the single-grid backend
   on each layer native grid, with open/active-mask clamping. Per-layer DMI and
   per-cell DMI fields remain outside this slice; global DMI exposes a separate
@@ -297,6 +307,9 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
   demag: mixed `fft_grid` tensor kernels bind a cached
   `DeviceMultilayerFftWorkspace` instead of freeing and recreating the context
   FFT plan/buffers on every grid switch.
+- [x] Execute staged v2 multilayer demag cuFFT as one batched x/y/z forward and
+  one batched x/y/z inverse per tensor kernel, reusing the cached per-grid
+  workspace.
 - [x] Key staged v2 `push_pull` pull maps by tensor-kernel `fft_grid`: layer
   push maps remain per source layer because they depend only on
   native/convolution overlap, while each tensor kernel owns the destination
@@ -304,7 +317,8 @@ the same kernel. For z-only shifts, a kernel computed for `+Δz` can be reused f
 - [ ] Finish optimized interpolation backends and remaining local-field RHS
   coverage for thermal noise, Oersted, spin torque,
   per-layer/per-cell DMI and per-cell anisotropy fields, and the remaining v2
-  integrators beyond Heun/RK4.
+  integrators beyond fixed-step Heun/RK4/RK23, including adaptive RK23/RK45
+  and multistep ABM3.
 
 ### Phase 1: Data model
 - [ ] Add `Layer` concept to `ExchangeLlgProblem` (rect, cell count, cell size per layer)

@@ -21,10 +21,11 @@ void normalize_aos_field(std::vector<double> &m_xyz);
  * configured `gamma_mu0`-style factor used by the native FEM runtime. For each
  * node the implementation evaluates
  *
- *   dm/dt = -gamma/(1+alpha_i^2) [m x H + alpha_i m x (m x H)]
+ *   dm/dt = -gamma/(1+alpha_i^2) [p m x H + alpha_i m x (m x H)]
  *
- * with optional per-node damping from `alpha_field`. The function returns the
- * largest RHS vector norm through `max_rhs`.
+ * where `p` is 1 when `precession_enabled` is true and 0 for pure damping
+ * relaxation. Optional per-node damping is read from `alpha_field`. The
+ * function returns the largest RHS vector norm through `max_rhs`.
  */
 void llg_rhs_aos(
     const std::vector<double> &m_xyz,
@@ -32,6 +33,7 @@ void llg_rhs_aos(
     double gamma,
     double alpha,
     const std::vector<double> *alpha_field,
+    bool precession_enabled,
     std::vector<double> &rhs_xyz,
     double &max_rhs);
 

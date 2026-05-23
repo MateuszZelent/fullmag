@@ -1295,11 +1295,14 @@ pub(crate) fn plan_fdm_multilayer(
         })
         .collect::<Vec<_>>();
     if runtime_requests_cuda(problem)
-        && !matches!(integrator, IntegratorChoice::Heun | IntegratorChoice::Rk4)
+        && !matches!(
+            integrator,
+            IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23
+        )
         && !fdm_multilayer_cuda_native_single_grid_eligible(&layers)
     {
         errors.push(
-            "the public staged v2 CUDA multilayer FDM runner currently supports only 'heun' and 'rk4' integrators; RK23/RK45/ABM3 are executable only for native single-grid-compatible multilayer stacks"
+            "the public staged v2 CUDA multilayer FDM runner currently supports only 'heun', 'rk4', and fixed-step 'rk23' integrators; RK45/ABM3 are executable only for native single-grid-compatible multilayer stacks"
                 .to_string(),
         );
     }

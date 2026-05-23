@@ -16,6 +16,8 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
+#include "gpu_rk.hpp"
+#include "gpu_state.hpp"
 
 #include <utility>
 #include <vector>
@@ -32,6 +34,46 @@ void apply_phase_timings(
     stats.rhs_wall_time_ns = timings.rhs_wall_time_ns;
     stats.extra_energy_wall_time_ns = timings.extra_energy_wall_time_ns;
     stats.snapshot_wall_time_ns = timings.snapshot_wall_time_ns;
+}
+
+bool strict_gpu_snapshot_path(const fullmag::fem::Context &ctx)
+{
+    return ctx.gpu_state.device.allocated &&
+        ctx.poisson_demag.gpu_demag_mode ==
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+}
+
+bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error)
+{
+    auto &gpu = ctx.gpu_state.device;
+    if (!fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_ex, ctx.exchange.h_xyz, ctx.transfer_audit.audit, "h_ex", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_demag, ctx.demag.h_xyz, ctx.transfer_audit.audit, "h_demag", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_ext, ctx.zeeman.h_ext_xyz, ctx.transfer_audit.audit, "h_ext", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_eff, ctx.effective_field.h_xyz, ctx.transfer_audit.audit, "h_eff", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_ani, ctx.anisotropy.h_uniaxial_xyz, ctx.transfer_audit.audit, "h_ani", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_cubic_ani, ctx.anisotropy.h_cubic_xyz, ctx.transfer_audit.audit, "h_cubic_ani", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_dmi, ctx.dmi.h_interfacial_xyz, ctx.transfer_audit.audit, "h_dmi", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_bulk_dmi, ctx.dmi.h_bulk_xyz, ctx.transfer_audit.audit, "h_bulk_dmi", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_oe, ctx.oersted.h_xyz, ctx.transfer_audit.audit, "h_oe", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_therm, ctx.thermal_brown.h_xyz, ctx.transfer_audit.audit, "h_therm", error) ||
+        !fullmag::fem::gpu_state_download_component_aos(
+            gpu, gpu.h_mel, ctx.magnetoelastic.h_xyz, ctx.transfer_audit.audit, "h_mel", error)) {
+        error = "GPU snapshot field readback failed: " + error;
+        return false;
+    }
+    ctx.demag.h_visual_xyz = ctx.demag.h_xyz;
+    ctx.effective_field.h_visual_xyz = ctx.effective_field.h_xyz;
+    return true;
 }
 #endif
 
@@ -57,6 +99,18 @@ bool context_snapshot_stats_mfem(
     if (!has_any_field_or_direct_torque_term(ctx)) {
         error = "native FEM snapshot requires at least one effective-field term";
         return false;
+    }
+    if (strict_gpu_snapshot_path(ctx)) {
+        if (!gpu_rk_snapshot_current_state(ctx, stats, error)) {
+            error = "strict FEM GPU snapshot failed: " + error;
+            return false;
+        }
+        if (!download_gpu_snapshot_fields(ctx, error)) {
+            return false;
+        }
+        stats.snapshot_wall_time_ns = elapsed_ns(wall_start);
+        stats.wall_time_ns = stats.snapshot_wall_time_ns;
+        return true;
     }
     if (!context_sync_gpu_magnetization_to_host(ctx, error)) {
         return false;
@@ -99,6 +153,7 @@ bool context_snapshot_stats_mfem(
             ctx.material_fields.material.gyromagnetic_ratio,
             ctx.material_fields.material.damping,
             ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
+            ctx.base_plan.precession_enabled,
             rhs_current,
             max_rhs_current);
         add_stt_rhs_aos(ctx, ctx.state.m_xyz, rhs_current, max_rhs_current);

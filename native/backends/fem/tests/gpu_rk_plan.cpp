@@ -50,6 +50,12 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         read_text_file(root / "src" / "kernels.cu");
     const std::string kernels_header =
         read_text_file(root / "include" / "kernels.h");
+    const std::string snapshot =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
+    const std::string state_io =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "state_io.cpp");
+    const std::string effective =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
 
     check(
         gpu_rk_plan.find("does not support demag yet") == std::string::npos,
@@ -57,6 +63,19 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
     check(
         gpu_rk_cuda.find("compute_device_demag_for_device_stage") != std::string::npos,
         "GPU RK CUDA path must compute strict demag through the device Hypre Poisson stage path");
+    check(
+        gpu_rk_cuda.find("bool gpu_rk_snapshot_current_state(") != std::string::npos,
+        "strict FEM GPU compute_fields/snapshot must reuse the device RHS/finalize path");
+    check(
+        snapshot.find("strict_gpu_snapshot_path(ctx)") != std::string::npos &&
+            snapshot.find("gpu_rk_snapshot_current_state(ctx, stats, error)") != std::string::npos,
+        "MFEM snapshot_stats must route strict FEM GPU snapshots through the GPU path");
+    check(
+        state_io.find("strict_gpu_demag_upload_path(ctx)") != std::string::npos,
+        "strict FEM GPU magnetization upload must not refresh H_eff through the CPU Poisson path");
+    check(
+        effective.find("FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON") != std::string::npos,
+        "strict FEM GPU startup must not refresh initial H_eff through the CPU Poisson path");
     check(
         gpu_rk_cuda.find("FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON") != std::string::npos,
         "hybrid CPU Poisson demag must remain an explicitly named compatibility mode");
@@ -83,6 +102,13 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         kernels.find("dmi_element_residual_kernel") != std::string::npos &&
             kernels.find("atomic_add_double(&residual_x") != std::string::npos,
         "CUDA DMI implementation must use per-element parallel residual accumulation with atomics");
+    check(
+        kernels_header.find("bool precession_enabled") != std::string::npos &&
+            kernels.find("bool precession_enabled") != std::string::npos,
+        "CUDA LLG RHS wrapper and kernel must expose the native precession mode contract");
+    check(
+        gpu_rk_cuda.find("ctx.base_plan.precession_enabled") != std::string::npos,
+        "GPU RK RHS must pass the imported native FEM precession mode into the CUDA kernel");
 }
 
 } // namespace

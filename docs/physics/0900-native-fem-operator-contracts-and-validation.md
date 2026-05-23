@@ -40,6 +40,19 @@ dm/dt = -gamma_mu0/(1 + alpha^2)
         + tau_direct
 ```
 
+For `llg_overdamped` relaxation, native FEM must disable precession explicitly:
+
+```text
+dm/dt = -gamma_mu0/(1 + alpha^2)
+        [alpha m x (m x H_eff)]
+        + tau_direct
+```
+
+The native runtime contract field is `precession_enabled`. It must be imported
+from the planner/FFI plan, stored in native FEM runtime state, consumed by both
+CPU and GPU RHS implementations, and reported as `llg_mode = precessional` or
+`llg_mode = pure_damping` in provenance/startup diagnostics.
+
 where:
 
 - `H_eff` is in `A/m`;

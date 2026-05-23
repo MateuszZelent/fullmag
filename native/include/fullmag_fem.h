@@ -255,6 +255,11 @@ typedef struct {
     /* Compute initial effective field during backend creation.
        0 = lazy, 1 = eager (default for interactive/live paths). */
     int                        eager_initial_effective_field;
+    /* Explicit LLG mode.
+       has_precession_enabled=0 defaults to precessional mode for legacy ABI callers.
+       precession_enabled=1 = full Gilbert LLG, 0 = pure damping relaxation. */
+    int                        has_precession_enabled;
+    int                        precession_enabled;
 } fullmag_fem_plan_desc;
 
 typedef struct {

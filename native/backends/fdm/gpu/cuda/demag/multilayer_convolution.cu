@@ -827,25 +827,7 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
             static_cast<cufftDoubleComplex*>(ctx.fft_x),
             CUFFT_FORWARD);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer forward x)", fft_err);
-            break;
-        }
-        fft_err = cufftExecZ2Z(
-            ctx.fft_plan,
-            static_cast<cufftDoubleComplex*>(ctx.fft_y),
-            static_cast<cufftDoubleComplex*>(ctx.fft_y),
-            CUFFT_FORWARD);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer forward y)", fft_err);
-            break;
-        }
-        fft_err = cufftExecZ2Z(
-            ctx.fft_plan,
-            static_cast<cufftDoubleComplex*>(ctx.fft_z),
-            static_cast<cufftDoubleComplex*>(ctx.fft_z),
-            CUFFT_FORWARD);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer forward z)", fft_err);
+            set_cufft_error(ctx, "cufftExecZ2Z(multilayer batch forward)", fft_err);
             break;
         }
 
@@ -867,25 +849,7 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
             static_cast<cufftDoubleComplex*>(ctx.fft_x),
             CUFFT_INVERSE);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer inverse x)", fft_err);
-            break;
-        }
-        fft_err = cufftExecZ2Z(
-            ctx.fft_plan,
-            static_cast<cufftDoubleComplex*>(ctx.fft_y),
-            static_cast<cufftDoubleComplex*>(ctx.fft_y),
-            CUFFT_INVERSE);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer inverse y)", fft_err);
-            break;
-        }
-        fft_err = cufftExecZ2Z(
-            ctx.fft_plan,
-            static_cast<cufftDoubleComplex*>(ctx.fft_z),
-            static_cast<cufftDoubleComplex*>(ctx.fft_z),
-            CUFFT_INVERSE);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecZ2Z(multilayer inverse z)", fft_err);
+            set_cufft_error(ctx, "cufftExecZ2Z(multilayer batch inverse)", fft_err);
             break;
         }
 
@@ -1021,25 +985,7 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
             static_cast<cufftComplex*>(ctx.fft_x),
             CUFFT_FORWARD);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer forward x)", fft_err);
-            break;
-        }
-        fft_err = cufftExecC2C(
-            ctx.fft_plan,
-            static_cast<cufftComplex*>(ctx.fft_y),
-            static_cast<cufftComplex*>(ctx.fft_y),
-            CUFFT_FORWARD);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer forward y)", fft_err);
-            break;
-        }
-        fft_err = cufftExecC2C(
-            ctx.fft_plan,
-            static_cast<cufftComplex*>(ctx.fft_z),
-            static_cast<cufftComplex*>(ctx.fft_z),
-            CUFFT_FORWARD);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer forward z)", fft_err);
+            set_cufft_error(ctx, "cufftExecC2C(multilayer batch forward)", fft_err);
             break;
         }
 
@@ -1061,25 +1007,7 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
             static_cast<cufftComplex*>(ctx.fft_x),
             CUFFT_INVERSE);
         if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer inverse x)", fft_err);
-            break;
-        }
-        fft_err = cufftExecC2C(
-            ctx.fft_plan,
-            static_cast<cufftComplex*>(ctx.fft_y),
-            static_cast<cufftComplex*>(ctx.fft_y),
-            CUFFT_INVERSE);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer inverse y)", fft_err);
-            break;
-        }
-        fft_err = cufftExecC2C(
-            ctx.fft_plan,
-            static_cast<cufftComplex*>(ctx.fft_z),
-            static_cast<cufftComplex*>(ctx.fft_z),
-            CUFFT_INVERSE);
-        if (fft_err != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftExecC2C(multilayer inverse z)", fft_err);
+            set_cufft_error(ctx, "cufftExecC2C(multilayer batch inverse)", fft_err);
             break;
         }
 
