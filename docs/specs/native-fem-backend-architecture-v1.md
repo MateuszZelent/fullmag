@@ -229,10 +229,29 @@ GPU RK readiness planning is owned by
 `gpu/cuda/integrators/rk/rk.hpp` and `gpu/cuda/integrators/rk/rk_plan.cpp`, and uses the device-resident planner name
 `gpu_rk_plan_device_resident`; the older internal
 `gpu_rk_plan_exchange_only` wrapper has been removed. GPU RK CUDA step orchestration
-is owned by `gpu/cuda/integrators/rk/rk_step.cu`. Device-resident per-attempt RK
-stage scheduling, including magnetization backup, FSAL reuse, Heun/RK4/RK23/RK45
-predictor and accept sequencing, normalization, and BS23 adaptive k3 evaluation,
-is owned by `gpu/cuda/integrators/rk/rk_stage_schedule.hpp/.cu`.
+is owned by `gpu/cuda/integrators/rk/rk_step.cu`. GPU RK step-level preflight,
+including device-resident planning gates, integrator support validation, dt
+validation, source-of-truth enforcement, exchange-mode validation, CUDA
+stream/block setup, adaptive flagging, and FSAL policy resolution, is owned by
+`gpu/cuda/integrators/rk/rk_step_preflight.hpp/.cu`. Device-resident common RK
+attempt setup, including magnetization backup, FSAL reuse, k0 refresh, common
+predictor sequencing, normalization, k1 refresh, and setup RHS accounting, is
+owned by `gpu/cuda/integrators/rk/rk_attempt_setup.hpp/.cu`. Device-resident
+per-attempt RK stage scheduling, including attempt setup delegation,
+accepted-state normalization, integrator sequence dispatch, adaptive RK23 k3
+dispatch, and final stage RHS accounting,
+is owned by `gpu/cuda/integrators/rk/rk_stage_schedule.hpp/.cu`. The
+Dormand-Prince RK45 stage sequence and DP54 accept sequence are owned by
+`gpu/cuda/integrators/rk/rk45_stage_sequence.hpp/.cu`. RK4 and
+Bogacki-Shampine RK23 midpoint/endpoint predictor and accept sequences are
+owned by `gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.hpp/.cu`. Heun accept
+sequencing is owned by `gpu/cuda/integrators/rk/heun_stage_sequence.hpp/.cu`.
+The post-accept BS23 k3 RHS refresh needed for adaptive RK23 error estimation
+is owned by `gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp/.cu`.
+Device-resident fixed/adaptive RK accepted-attempt looping, including
+stage-attempt dispatch, embedded error-norm evaluation, PI accept/reject
+decisions, rejected-attempt restore, and accepted-attempt result publication,
+is owned by `gpu/cuda/integrators/rk/rk_attempt_loop.hpp/.cu`.
 Accepted-step final RHS/H_eff refresh, FSAL k0 propagation, max-RHS reduction,
 base step-stat publication, and device/host residency marking are owned by
 `gpu/cuda/integrators/rk/rk_final_refresh.hpp/.cu`. Strict GPU RK snapshot
@@ -242,21 +261,45 @@ GPU RK final scalar slots, no-CUDA stats fallback, batched readback, and stats
 publication are owned by `gpu/cuda/integrators/rk/rk_step_stats.hpp/.cpp/.cu`.
 Final accepted-step energy reductions for exchange, demag, Zeeman,
 anisotropy, DMI, and magnetoelastic terms are owned by
-`gpu/cuda/integrators/rk/rk_energy_reductions.hpp/.cu`. Final accepted-step
+`gpu/cuda/integrators/rk/rk_energy_reductions.hpp/.cu`; exchange final energy
+kernel launch and scalar reduction are owned by
+`gpu/cuda/integrators/rk/rk_exchange_energy_reductions.hpp/.cu`; demag final
+energy, Robin boundary energy dispatch, validation, kernel launch, and scalar
+reduction are owned by
+`gpu/cuda/integrators/rk/rk_demag_energy_reductions.hpp/.cu`; uniaxial and
+cubic anisotropy final energy validation, kernel launch, and scalar reduction are
+owned by `gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.hpp/.cu`;
+interfacial and bulk DMI final energy validation, kernel launch, and scalar reduction are owned by
+`gpu/cuda/integrators/rk/rk_dmi_energy_reductions.hpp/.cu`; prescribed-strain
+magnetoelastic final energy validation, kernel launch, and scalar reduction
+are owned by
+`gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.hpp/.cu`. Final accepted-step
 observable reductions for effective-field amplitude, demag-field amplitude,
 torque amplitude, and average magnetization are owned by
 `gpu/cuda/integrators/rk/rk_observable_reductions.hpp/.cu`. Embedded RK adaptive-error CUDA block
 reducers are owned by `gpu/cuda/integrators/rk/adaptive_error_kernels.hpp/.cu`.
-Adaptive RK PI-step policy, reject restore, and device error-norm runtime
-helpers are owned by `gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp/.cu`.
+Adaptive RK PI-step policy and reject restore helpers are owned by
+`gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp/.cu`. Device adaptive
+error-norm runtime reductions are owned by
+`gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp/.cu`.
+GPU RK FSAL reuse policy for autonomous RHS gating is owned by
+`gpu/cuda/integrators/rk/rk_fsal_policy.hpp/.cpp`.
 RK predictor/accept CUDA stage kernels are owned by
 `gpu/cuda/integrators/rk/rk_stage_kernels.hpp/.cu`.
 RK audited scalar-result reads and component device-copy helpers are owned by
 `gpu/cuda/integrators/rk/rk_device_io.hpp/.cu`.
-Device-resident RK RHS assembly orchestration, including exchange dispatch,
-demag dispatch, local-field contribution dispatch, H_eff accumulation, LLG RHS,
-and direct torque terms, is owned by
-`gpu/cuda/integrators/rk/rk_rhs_runtime.hpp/.cu`. Per-stage local field
+Device-resident RK RHS assembly orchestration, including exchange dispatch
+delegation, demag dispatch delegation, local-field contribution dispatch, H_eff
+accumulation, LLG RHS dispatch delegation, and direct torque terms, is owned by
+`gpu/cuda/integrators/rk/rk_rhs_runtime.hpp/.cu`. Legacy sparse exchange
+validation and CUDA launch dispatch are owned by
+`gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp/.cu`. Per-stage RK demag
+mode dispatch, including strict device Poisson and explicit hybrid CPU Poisson
+compatibility routing, is owned by
+`gpu/cuda/integrators/rk/rk_demag_dispatch.hpp/.cu`. Fused RK LLG RHS launch,
+including gamma, damping, alpha-field selection, and precession mode argument
+plumbing, is owned by `gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp/.cu`.
+Per-stage local field
 contribution generation for uniaxial anisotropy, cubic anisotropy,
 prescribed-strain magnetoelasticity, and deterministic Brown thermal fields is
 owned by `gpu/cuda/integrators/rk/rk_local_fields.hpp/.cu`. Per-stage

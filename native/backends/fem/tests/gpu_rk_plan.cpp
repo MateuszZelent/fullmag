@@ -50,8 +50,12 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_snapshot.cu");
     const std::string gpu_rk_rhs =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rhs_runtime.cu");
+    const std::string gpu_rk_demag_dispatch =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_dispatch.cu");
     const std::string gpu_rk_dmi_fields =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
+    const std::string gpu_rk_llg_rhs_dispatch =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_llg_rhs_dispatch.cu");
     const std::string kernels_header =
         read_text_file(root / "gpu" / "cuda" / "kernels" / "kernels.hpp");
     const std::string llg_kernels =
@@ -83,8 +87,8 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             gpu_rk_plan.find("gpu_rk_plan_exchange_only") == std::string::npos,
         "legacy exchange-only GPU RK planner wrapper must be removed from internal API");
     check(
-        gpu_rk_rhs.find("compute_device_demag_for_device_stage") != std::string::npos,
-        "GPU RK CUDA path must compute strict demag through the device Hypre Poisson stage path");
+        gpu_rk_demag_dispatch.find("compute_device_demag_for_device_stage") != std::string::npos,
+        "GPU RK demag dispatch must compute strict demag through the device Hypre Poisson stage path");
     check(
         gpu_rk_snapshot.find("bool gpu_rk_snapshot_current_state(") != std::string::npos,
         "strict FEM GPU compute_fields/snapshot must reuse the device RHS/finalize path");
@@ -99,15 +103,16 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         effective.find("FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON") != std::string::npos,
         "strict FEM GPU startup must not refresh initial H_eff through the CPU Poisson path");
     check(
-        gpu_rk_rhs.find("FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON") != std::string::npos,
+        gpu_rk_demag_dispatch.find("FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON") != std::string::npos,
         "hybrid CPU Poisson demag must remain an explicitly named compatibility mode");
     const auto rhs_pos = gpu_rk_rhs.find("bool gpu_rk_compute_rhs_for_magnetization");
     check(rhs_pos != std::string::npos, "GPU RK RHS runtime source must expose gpu_rk_compute_rhs_for_magnetization");
     const auto rhs_source = gpu_rk_rhs.substr(rhs_pos);
     check(
-        rhs_source.find("compute_device_demag_for_device_stage") != std::string::npos &&
-            rhs_source.find("gpu_rk_compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
-        "RHS demag must choose strict device Poisson by default and reserve hybrid CPU Poisson for explicit compatibility mode");
+        rhs_source.find("gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason)") != std::string::npos &&
+            gpu_rk_demag_dispatch.find("compute_device_demag_for_device_stage") != std::string::npos &&
+            gpu_rk_demag_dispatch.find("gpu_rk_compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
+        "RHS demag must delegate to a demag dispatch module that chooses strict device Poisson by default and reserves hybrid CPU Poisson for explicit compatibility mode");
     check(
         gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
@@ -131,8 +136,9 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             llg_kernels.find("bool precession_enabled") != std::string::npos,
         "CUDA LLG RHS wrapper and kernel must expose the native precession mode contract");
     check(
-        gpu_rk_rhs.find("ctx.base_plan.precession_enabled") != std::string::npos,
-        "GPU RK RHS must pass the imported native FEM precession mode into the CUDA kernel");
+        gpu_rk_rhs.find("gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)") != std::string::npos &&
+            gpu_rk_llg_rhs_dispatch.find("ctx.base_plan.precession_enabled") != std::string::npos,
+        "GPU RK RHS must delegate to LLG RHS dispatch that passes the imported native FEM precession mode into the CUDA kernel");
 }
 
 } // namespace

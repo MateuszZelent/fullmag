@@ -50,17 +50,17 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string gpu_rk_stats =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
-    const std::string gpu_rk_energy =
-        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_energy_reductions.cu");
+    const std::string gpu_rk_demag_energy =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.cu");
 
     check(
         gpu_stage.find("ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns") !=
             std::string::npos,
         "strict GPU demag stage must accumulate Hypre solver apply wall time for the step");
     check(
-        gpu_rk_energy.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") !=
+        gpu_rk_demag_energy.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") !=
             std::string::npos,
-        "strict GPU RK final energy reductions must include the demag stage compute declarations");
+        "strict GPU RK demag final energy reductions must include the demag stage compute declarations");
     check(
         gpu_rk_stats.find("demag_timings.solver_apply_wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns") !=
             std::string::npos,

@@ -22,7 +22,6 @@ import {
   resolveAirboxWireframeEdgeIndices,
   resolveAirboxWireframePrimitive,
   resolveAirboxWireframeSemantic,
-  shouldRenderAirboxFullBoundsOverlay,
 } from "./BoundsLayers";
 import { VERTEX_COLOR_MATERIAL_COLOR } from "./viewport3DLayerSettings";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -178,35 +177,7 @@ describe("AirboxLayer", () => {
     expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
   });
 
-  it("does not add a second bounds overlay when full airbox uses procedural bounds", () => {
-    expect(
-      shouldRenderAirboxFullBoundsOverlay(
-        {
-          ...visibleWireframeAirbox,
-          geometryScope: "full",
-        },
-        resolveAirboxWireframePrimitive(true, true, "full"),
-      ),
-    ).toBe(false);
-    expect(
-      shouldRenderAirboxFullBoundsOverlay(
-        {
-          ...visibleWireframeAirbox,
-          geometryScope: "surface",
-        },
-        "lines",
-      ),
-    ).toBe(false);
-    expect(
-      shouldRenderAirboxFullBoundsOverlay(
-        {
-          ...visibleWireframeAirbox,
-          geometryScope: "full",
-        },
-        "bounds",
-      ),
-    ).toBe(false);
-  });
+
 
   it("keeps airbox wireframe opacity independent from air surface opacity", () => {
     expect(

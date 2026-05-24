@@ -407,7 +407,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--integrators",
         type=str,
-        default=",".join(DEFAULT_INTEGRATORS),
+        default=None,
         help="Comma-separated integrators: heun, rk4, rk23, rk45",
     )
     parser.add_argument(
@@ -513,6 +513,12 @@ def parse_args() -> argparse.Namespace:
         type=positive_float_arg,
         default=None,
         help="Relaxation torque stop tolerance in A/m for the benchmark script",
+    )
+    parser.add_argument(
+        "--case-timeout-s",
+        type=positive_float_arg,
+        default=300.0,
+        help="Maximum wall time in seconds for each backend/scenario/integrator case",
     )
     parser.add_argument(
         "--fem-cpu-no-pbc-adaptive-ready-preset",
@@ -669,7 +675,8 @@ def apply_fem_cpu_no_pbc_adaptive_ready_preset(args: argparse.Namespace) -> None
         return
     args.backends = "cpu"
     args.scenarios = "exchange_demag_anis_uniaxial,exchange_demag_anis_cubic"
-    args.integrators = "rk23,rk45"
+    if args.integrators is None:
+        args.integrators = "rk23,rk45"
     args.timestep_policies = "adaptive"
     args.thread_counts = "1,physical_cores/2,physical_cores,auto"
     args.require_mfem_stack = True
@@ -686,7 +693,8 @@ def apply_box500_airbox_exchange_only_preset(args: argparse.Namespace) -> None:
     args.backends = "cpu,gpu"
     args.meshes = "coarse"
     args.scenarios = BOX500_AIRBOX_SCENARIO
-    args.integrators = "heun"
+    if args.integrators is None:
+        args.integrators = "heun"
     args.timestep_policies = "fixed"
     args.thread_counts = "auto"
     args.require_mfem_stack = True
@@ -700,7 +708,8 @@ def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace)
     args.backends = "cpu,gpu"
     args.meshes = "coarse"
     args.scenarios = ",".join(BOX500_AIRBOX_CONSISTENCY_SCENARIOS)
-    args.integrators = "heun"
+    if args.integrators is None:
+        args.integrators = "heun"
     args.timestep_policies = "fixed"
     args.thread_counts = "auto"
     args.require_mfem_stack = True
@@ -1308,6 +1317,7 @@ def run_backend(
     extra_env: dict[str, str],
     timestep_policy: str = "fixed",
     thread_spec: ThreadCountSpec = ThreadCountSpec(label="auto", env_value="auto"),
+    timeout_s: float | None = None,
 ) -> dict[str, object]:
     row = {
         "backend": backend_label,
@@ -1318,6 +1328,7 @@ def run_backend(
         "steps": steps,
         "dt_s": dt,
         "requested_cpu_thread_spec": thread_spec.label,
+        "case_timeout_s": timeout_s,
         **load_mesh_stats(mesh_path),
     }
     env = os.environ.copy()
@@ -1397,14 +1408,36 @@ def run_backend(
     with tempfile.TemporaryDirectory(prefix=f"fullmag_{backend_label.lower()}_bench_") as run_dir:
         env["FULLMAG_RUN_DIR"] = run_dir
         started = time.perf_counter_ns()
-        completed = subprocess.run(
-            [str(binary), str(BENCH_SCRIPT), "--headless"],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        run_kwargs = {
+            "cwd": REPO_ROOT,
+            "env": env,
+            "capture_output": True,
+            "text": True,
+            "check": False,
+        }
+        if timeout_s is not None:
+            run_kwargs["timeout"] = timeout_s
+        try:
+            completed = subprocess.run(
+                [str(binary), str(BENCH_SCRIPT), "--headless"],
+                **run_kwargs,
+            )
+        except subprocess.TimeoutExpired as exc:
+            wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            row.update(execution_plan_mesh_stats(load_run_metadata(run_dir)))
+            row.update(
+                {
+                    "status": "timeout",
+                    "returncode": None,
+                    "wall_time_ms": round(wall_time_ms, 3),
+                    "stdout_lines": len(str(stdout).splitlines()),
+                    "stderr_lines": len(str(stderr).splitlines()),
+                    "error": f"benchmark case timed out after {timeout_s} s",
+                }
+            )
+            return row
         wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000.0
         metadata = load_run_metadata(run_dir)
         final_scalar_row = load_final_scalar_row(run_dir)
@@ -3583,7 +3616,7 @@ def main() -> None:
 
     meshes = resolve_meshes(args.meshes, args.sizes)
     scenarios = resolve_scenarios(args.scenarios)
-    integrators = resolve_integrators(args.integrators)
+    integrators = resolve_integrators(args.integrators or ",".join(DEFAULT_INTEGRATORS))
     timestep_policies = resolve_timestep_policies(args.timestep_policies)
     backends = resolve_backends(args.backends)
     thread_specs = resolve_thread_count_specs(args.thread_counts)
@@ -3670,6 +3703,7 @@ def main() -> None:
                                             dt=args.dt,
                                             timestep_policy=timestep_policy,
                                             thread_spec=thread_spec,
+                                            timeout_s=args.case_timeout_s,
                                             extra_env={
                                                 "FULLMAG_FEM_EXECUTION": "cpu",
                                                 **demag_env,
@@ -3688,6 +3722,7 @@ def main() -> None:
                                             dt=args.dt,
                                             timestep_policy=timestep_policy,
                                             thread_spec=thread_spec,
+                                            timeout_s=args.case_timeout_s,
                                             extra_env={
                                                 "FULLMAG_FEM_GPU_INDEX": "0",
                                                 **demag_env,

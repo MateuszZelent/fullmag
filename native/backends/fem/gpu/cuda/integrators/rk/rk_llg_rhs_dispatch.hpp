@@ -1,8 +1,8 @@
 /*
- * GPU CUDA RK RHS runtime module header.
+ * GPU CUDA RK LLG RHS dispatch module header.
  *
- * Declares device-resident RHS assembly helpers used by the RK stepper. Stage
- * scheduling remains in rk_step.cu; final statistics live in rk_step_stats.
+ * Declares the fused LLG RHS launch used by the RK RHS runtime after H_eff has
+ * been assembled. LLG kernel wrappers remain in gpu/cuda/integrators/llg.
  */
 #pragma once
 
@@ -17,13 +17,12 @@ namespace fullmag::fem {
 
 struct Context;
 
-bool gpu_rk_compute_rhs_for_magnetization(
+bool gpu_rk_compute_llg_rhs(
     Context &ctx,
     const FemGpuComponentField &m,
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
-    const char *label,
     std::string &reason);
 
 } // namespace fullmag::fem

@@ -3,7 +3,7 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { type ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, memo } from "react";
 import {
   BoxGeometry,
   Color,
@@ -581,7 +581,7 @@ function useFdmCuboidColorUpload({
   ]);
 }
 
-export function FdmCuboidLayer({
+export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   colors,
   domain,
   materialProfile,
@@ -786,4 +786,4 @@ export function FdmCuboidLayer({
       ) : null}
     </group>
   );
-}
+});

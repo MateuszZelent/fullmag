@@ -1,8 +1,9 @@
 /*
- * GPU CUDA RK RHS runtime module header.
+ * GPU CUDA RK demag dispatch module header.
  *
- * Declares device-resident RHS assembly helpers used by the RK stepper. Stage
- * scheduling remains in rk_step.cu; final statistics live in rk_step_stats.
+ * Declares per-stage demag dispatch used by the RK RHS runtime. Strict device
+ * Poisson and explicit hybrid CPU Poisson compatibility routing live behind
+ * this boundary.
  */
 #pragma once
 
@@ -17,13 +18,10 @@ namespace fullmag::fem {
 
 struct Context;
 
-bool gpu_rk_compute_rhs_for_magnetization(
+bool gpu_rk_compute_demag_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,
-    FemGpuComponentField &rhs,
     cudaStream_t stream,
-    int n,
-    const char *label,
     std::string &reason);
 
 } // namespace fullmag::fem

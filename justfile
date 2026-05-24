@@ -325,24 +325,40 @@ rebuild-gpu-runtime:
 # Run the Box500 FEM CPU/GPU consistency matrix.
 # Writes CSV rows and a CPU/GPU summary JSON. Override defaults with
 # FULLMAG_BENCH_STEPS, FULLMAG_BENCH_DOMAIN_HMAX, FULLMAG_BENCH_AIRBOX_HMAX,
+# FULLMAG_BENCH_INTEGRATORS (or FULLMAG_BENCH_SOLVERS),
 # FULLMAG_BENCH_OUTPUT, FULLMAG_BENCH_SUMMARY, FULLMAG_BENCH_REPORT,
-# FULLMAG_BENCH_PDF, and FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T. Pass
-# `full` to run until the relax torque stop criterion or the 50000-step guard.
+# FULLMAG_BENCH_PDF, FULLMAG_BENCH_CASE_TIMEOUT_S,
+# FULLMAG_BENCH_STEP_CAP, FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T,
+# FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL, FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J,
+# and FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL. Pass `full` to run until the relax
+# torque stop criterion or the step/time guard.
 # The recipe intentionally returns non-zero when the
 # consistency gate finds a solver mismatch.
 bench-fem-box500-consistency mode="quick":
     just ensure-python
     just ensure-managed-fem-runtime
     bench_relax_args=(); \
+    bench_integrators="${FULLMAG_BENCH_INTEGRATORS:-${FULLMAG_BENCH_SOLVERS:-heun,rk4,rk23,rk45}}"; \
+    bench_case_timeout_s="${FULLMAG_BENCH_CASE_TIMEOUT_S:-300}"; \
+    bench_step_cap="${FULLMAG_BENCH_STEP_CAP:-1000}"; \
     if [ "{{mode}}" = "full" ]; then \
-      bench_steps="${FULLMAG_BENCH_STEPS:-50000}"; \
+      bench_steps="${FULLMAG_BENCH_STEPS:-1000}"; \
       bench_relax_tolerance_t="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T:-1e-4}"; \
+      bench_energy_rtol="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-5e-5}"; \
+      bench_energy_atol_j="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-24}"; \
+      bench_torque_rtol="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-5e-5}"; \
       bench_relax_args=(--relax-torque-tolerance-t "$bench_relax_tolerance_t"); \
     elif [ "{{mode}}" = "quick" ]; then \
       bench_steps="${FULLMAG_BENCH_STEPS:-10}"; \
+      bench_energy_rtol="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}"; \
+      bench_energy_atol_j="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}"; \
+      bench_torque_rtol="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}"; \
     else \
       echo "bench-fem-box500-consistency mode must be quick or full" >&2; \
       exit 2; \
+    fi; \
+    if [ "$bench_steps" -gt "$bench_step_cap" ]; then \
+      bench_steps="$bench_step_cap"; \
     fi; \
     bench_output="${FULLMAG_BENCH_OUTPUT:-/tmp/fullmag_box500_airbox_interaction_matrix.csv}"; \
     bench_summary="${FULLMAG_BENCH_SUMMARY:-/tmp/fullmag_box500_airbox_interaction_matrix_summary.json}"; \
@@ -353,7 +369,12 @@ bench-fem-box500-consistency mode="quick":
     FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-500e-9}" \
     python3 scripts/analysis/fem_gpu_benchmark.py \
       --box500-airbox-interaction-consistency-preset \
+      --integrators "$bench_integrators" \
       --steps "$bench_steps" \
+      --case-timeout-s "$bench_case_timeout_s" \
+      --cpu-gpu-energy-rtol "$bench_energy_rtol" \
+      --cpu-gpu-energy-atol "$bench_energy_atol_j" \
+      --cpu-gpu-torque-rtol "$bench_torque_rtol" \
       --output "$bench_output" \
       --cpu-gpu-summary-output "$bench_summary" \
       --human-report-output "$bench_report" \

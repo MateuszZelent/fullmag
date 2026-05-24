@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, memo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import {
   RENDER_POLICIES,
@@ -46,7 +46,7 @@ import {
   wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
 
-export function MeshPartLayer({
+export const MeshPartLayer = memo(function MeshPartLayer({
   colors,
   vectorColorMode,
   fieldModel,
@@ -252,7 +252,7 @@ export function MeshPartLayer({
       ) : null}
     </group>
   );
-}
+});
 
 export function resolveMeshPartWireframeEdgeIndices(
   geometryScope: VisualizationTargetSettings["geometryScope"],

@@ -220,27 +220,32 @@ export function VectorFieldLayer({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: useInstanceColors ? "white" : resolvedStyle.materialColor,
           depthWrite: glyphPolicy.depthWrite,
           depthTest: glyphPolicy.depthTest,
-          opacity: resolvedStyle.materialOpacity,
           side: glyphPolicy.side,
-          toneMapped: materialProfile?.toneMapped ?? false,
-          transparent:
-            glyphPolicy.transparent ||
-            resolvedStyle.materialOpacity < 0.99,
-          vertexColors: useInstanceColors,
         }),
       ),
-    [
-      glyphPolicy,
-      resolvedStyle.materialColor,
-      resolvedStyle.materialOpacity,
-      tracker,
-      useInstanceColors,
-      materialProfile?.toneMapped,
-    ],
+    [glyphPolicy, tracker],
   );
+
+  useEffect(() => {
+    material.opacity = resolvedStyle.materialOpacity;
+    material.transparent =
+      glyphPolicy.transparent || resolvedStyle.materialOpacity < 0.99;
+    material.toneMapped = materialProfile?.toneMapped ?? false;
+    material.vertexColors = useInstanceColors;
+    material.color.set(useInstanceColors ? "white" : resolvedStyle.materialColor);
+    material.needsUpdate = true;
+    invalidate();
+  }, [
+    material,
+    resolvedStyle.materialOpacity,
+    glyphPolicy.transparent,
+    materialProfile?.toneMapped,
+    useInstanceColors,
+    resolvedStyle.materialColor,
+    invalidate,
+  ]);
 
   const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);
 

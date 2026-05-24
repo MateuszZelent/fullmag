@@ -1,7 +1,7 @@
 "use client";
 
 import type { ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, memo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import type { ColorRepresentation } from "three";
 import {
@@ -164,7 +164,7 @@ function BoundsVolumeWireframe({
   );
 }
 
-function AirboxMeshPartLayer({
+const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   colors,
   fieldModel,
   materialProfile,
@@ -233,6 +233,7 @@ function AirboxMeshPartLayer({
   );
   useEffect(() => {
     if (!geometry) return;
+    if (!resolvedSettings.shaderVisible) return;
     applyVertexScalarColorBuffer(
       geometry,
       surfaceColorState.vertexColorsEnabled
@@ -245,6 +246,7 @@ function AirboxMeshPartLayer({
   }, [
     geometry,
     invalidate,
+    resolvedSettings.shaderVisible,
     surfaceColorState.scalarColors,
     topologyModel.nodeCount,
     tracker,
@@ -260,8 +262,6 @@ function AirboxMeshPartLayer({
     Boolean(edgeGeometry),
     resolvedSettings.geometryScope,
   );
-  const showFullWireframeBoundsOverlay =
-    shouldRenderAirboxFullBoundsOverlay(resolvedSettings, wireframePrimitive);
 
   if (!geometry) {
     return (
@@ -298,15 +298,7 @@ function AirboxMeshPartLayer({
             tracker={tracker}
           />
         ) : null}
-        {showFullWireframeBoundsOverlay ? (
-          <BoundsVolumeWireframe
-            bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-            opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
-            policySemantic={airboxWireframeSemantic}
-            tracker={tracker}
-          />
-        ) : null}
+
         {resolvedSettings.boundsVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
@@ -344,47 +336,36 @@ function AirboxMeshPartLayer({
           geometry={geometry}
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
         >
-          <meshStandardMaterial
+          <meshBasicMaterial
             color={surfaceColorState.materialColor}
             opacity={opacity}
-            {...materialProfile.airSurface}
+            toneMapped={materialProfile.airSurface.toneMapped}
             vertexColors={surfaceColorState.hasScalarColors}
             {...materialPolicyProps("airSurface")}
           />
         </mesh>
       ) : null}
-      {resolvedSettings.wireframeVisible ? (
-        edgeGeometry ? (
-          <lineSegments
-            geometry={edgeGeometry}
-            renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
-          >
-            <lineBasicMaterial
-              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-              opacity={airboxWireframeOpacityFromSettings(
-                resolvedSettings,
-                materialProfile.featureEdges,
-              )}
-              {...materialPolicyProps(airboxWireframeSemantic)}
-            />
-          </lineSegments>
-        ) : (
-          <AirboxWireframeFallback
-            bounds={resolveMeshPartBounds(part)}
+      {wireframePrimitive === "lines" && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
+          renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
+        >
+          <lineBasicMaterial
             color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-            opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
-            policySemantic={airboxWireframeSemantic}
-            settings={resolvedSettings}
-            tracker={tracker}
+            opacity={airboxWireframeOpacityFromSettings(
+              resolvedSettings,
+              materialProfile.featureEdges,
+            )}
+            {...materialPolicyProps(airboxWireframeSemantic)}
           />
-        )
-      ) : null}
-      {showFullWireframeBoundsOverlay ? (
-        <BoundsVolumeWireframe
+        </lineSegments>
+      ) : wireframePrimitive === "bounds" ? (
+        <AirboxWireframeFallback
           bounds={resolveMeshPartBounds(part)}
           color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
           opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
           policySemantic={airboxWireframeSemantic}
+          settings={resolvedSettings}
           tracker={tracker}
         />
       ) : null}
@@ -423,7 +404,7 @@ function AirboxMeshPartLayer({
       ) : null}
     </group>
   );
-}
+});
 
 function AirboxWireframeFallback({
   bounds,
@@ -489,17 +470,7 @@ export function resolveAirboxWireframePrimitive(
   return hasEdgeGeometry ? "lines" : "bounds";
 }
 
-export function shouldRenderAirboxFullBoundsOverlay(
-  settings: VisualizationTargetSettings,
-  wireframePrimitive: "bounds" | "lines" | null,
-): boolean {
-  return (
-    settings.visible &&
-    settings.wireframeVisible &&
-    settings.geometryScope === "full" &&
-    wireframePrimitive === "lines"
-  );
-}
+
 
 export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
