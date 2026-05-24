@@ -7,6 +7,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -167,6 +168,10 @@ DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
 DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
+MU0 = 4.0 * math.pi * 1e-7
+RELAX_TORQUE_TOLERANCE_T = 1e-4
+RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
+FULL_RELAXATION_MAX_STEPS = 50_000
 PERFORMANCE_REGRESSION_METRICS = (
     "wall_time_ms",
     "demag_solver_apply_wall_time_ms",
@@ -498,6 +503,18 @@ def parse_args() -> argparse.Namespace:
         help="Suppress large machine-readable JSON summary lines on stdout",
     )
     parser.add_argument(
+        "--relax-torque-tolerance-t",
+        type=positive_float_arg,
+        default=None,
+        help="Relaxation torque stop tolerance in tesla; converted to A/m for the benchmark script",
+    )
+    parser.add_argument(
+        "--relax-torque-tolerance-apm",
+        type=positive_float_arg,
+        default=None,
+        help="Relaxation torque stop tolerance in A/m for the benchmark script",
+    )
+    parser.add_argument(
         "--fem-cpu-no-pbc-adaptive-ready-preset",
         action="store_true",
         help="Preset the sweep and gates for FEM CPU no-PBC exchange+demag+anisotropy adaptive readiness",
@@ -629,6 +646,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_relax_torque_tolerance_apm(args: argparse.Namespace) -> float | None:
+    tolerance_t = args.relax_torque_tolerance_t
+    tolerance_apm = args.relax_torque_tolerance_apm
+    if tolerance_t is None:
+        return tolerance_apm
+    converted_apm = tolerance_t / MU0
+    if tolerance_apm is not None and not math.isclose(
+        converted_apm,
+        tolerance_apm,
+        rel_tol=1e-12,
+        abs_tol=1e-18,
+    ):
+        raise ValueError(
+            "--relax-torque-tolerance-t conflicts with --relax-torque-tolerance-apm"
+        )
+    return converted_apm
+
+
 def apply_fem_cpu_no_pbc_adaptive_ready_preset(args: argparse.Namespace) -> None:
     if not args.fem_cpu_no_pbc_adaptive_ready_preset:
         return
@@ -716,11 +751,22 @@ def box500_airbox_interaction_manifest(
     torque_atol_apm: float,
     torque_atol_t: float,
     max_step_delta: int,
+    relax_torque_tolerance_apm: float | None = None,
+    relax_torque_tolerance_t: float | None = None,
 ) -> dict[str, object]:
     contract = interaction_contract_for_scenario(scenario)
     if contract is None:
         raise ValueError(f"unsupported box500 airbox consistency scenario: {scenario}")
     interactions = [str(item) for item in contract["interactions"]]
+    relaxation: dict[str, object] = {
+        "algorithm": "llg_overdamped",
+        "max_steps": steps,
+        "dt_s": dt,
+    }
+    if relax_torque_tolerance_apm is not None:
+        relaxation["torque_tolerance_apm"] = relax_torque_tolerance_apm
+    if relax_torque_tolerance_t is not None:
+        relaxation["torque_tolerance_t"] = relax_torque_tolerance_t
     return {
         "case_id": scenario,
         "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
@@ -728,11 +774,7 @@ def box500_airbox_interaction_manifest(
         "initial_magnetization": BOX500_AIRBOX_INITIAL_M,
         "interactions": interactions,
         "demag_enabled": "demag" in interactions,
-        "relaxation": {
-            "algorithm": "llg_overdamped",
-            "max_steps": steps,
-            "dt_s": dt,
-        },
+        "relaxation": relaxation,
         "observables": scenario_observables(scenario),
         "cpu_gpu_tolerances": {
             "energy_rtol": energy_rtol,
@@ -755,6 +797,8 @@ def box500_airbox_exchange_manifest(
     torque_atol_apm: float,
     torque_atol_t: float,
     max_step_delta: int,
+    relax_torque_tolerance_apm: float | None = None,
+    relax_torque_tolerance_t: float | None = None,
 ) -> dict[str, object]:
     return box500_airbox_interaction_manifest(
         BOX500_AIRBOX_SCENARIO,
@@ -766,6 +810,8 @@ def box500_airbox_exchange_manifest(
         torque_atol_apm=torque_atol_apm,
         torque_atol_t=torque_atol_t,
         max_step_delta=max_step_delta,
+        relax_torque_tolerance_apm=relax_torque_tolerance_apm,
+        relax_torque_tolerance_t=relax_torque_tolerance_t,
     )
 
 
@@ -780,6 +826,8 @@ def cpu_gpu_case_manifests(
     torque_atol_apm: float,
     torque_atol_t: float,
     max_step_delta: int,
+    relax_torque_tolerance_apm: float | None = None,
+    relax_torque_tolerance_t: float | None = None,
 ) -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
     for scenario in scenarios:
@@ -796,6 +844,8 @@ def cpu_gpu_case_manifests(
                 torque_atol_apm=torque_atol_apm,
                 torque_atol_t=torque_atol_t,
                 max_step_delta=max_step_delta,
+                relax_torque_tolerance_apm=relax_torque_tolerance_apm,
+                relax_torque_tolerance_t=relax_torque_tolerance_t,
             )
         )
     return manifests
@@ -1304,6 +1354,10 @@ def run_backend(
     row["requested_demag_print_level"] = env_text(
         env,
         "FULLMAG_BENCH_DEMAG_PRINT_LEVEL",
+    )
+    row["requested_relax_torque_tolerance_apm"] = env_text(
+        env,
+        "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
     )
     if (
         backend_label == "fem_gpu"
@@ -3538,6 +3592,15 @@ def main() -> None:
         args.demag_preconditioners,
         args.demag_preconditioner,
     )
+    try:
+        relax_torque_tolerance_apm = resolve_relax_torque_tolerance_apm(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    relax_env = {}
+    if relax_torque_tolerance_apm is not None:
+        relax_env["FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE"] = repr(
+            relax_torque_tolerance_apm
+        )
     cpu_gpu_manifests = cpu_gpu_case_manifests(
         scenarios=scenarios,
         steps=args.steps,
@@ -3548,6 +3611,8 @@ def main() -> None:
         torque_atol_apm=args.cpu_gpu_torque_atol_apm,
         torque_atol_t=args.cpu_gpu_torque_atol_t,
         max_step_delta=args.cpu_gpu_max_step_delta,
+        relax_torque_tolerance_apm=relax_torque_tolerance_apm,
+        relax_torque_tolerance_t=args.relax_torque_tolerance_t,
     )
     mesh_env = {}
     if args.gmsh_threads is not None:
@@ -3609,6 +3674,7 @@ def main() -> None:
                                                 "FULLMAG_FEM_EXECUTION": "cpu",
                                                 **demag_env,
                                                 **mesh_env,
+                                                **relax_env,
                                             },
                                         )
                                     elif backend == "fem_gpu":
@@ -3626,6 +3692,7 @@ def main() -> None:
                                                 "FULLMAG_FEM_GPU_INDEX": "0",
                                                 **demag_env,
                                                 **mesh_env,
+                                                **relax_env,
                                             },
                                         )
                                     else:

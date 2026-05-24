@@ -6,19 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "fullmag"
 version = "0.1.0"
 description = "Embedded Python DSL for the Fullmag micromagnetics platform."
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
-    "numpy>=1.24",
-    "zarr>=2.18,<3",
-    "h5py>=3.9",
+    "numpy>=2.4,<3",
+    "zarr>=3.2,<4",
+    "h5py>=3.16,<4",
 ]
 
 [project.optional-dependencies]
 meshing = [
-    "gmsh>=4.12",
-    "meshio>=5.3",
-    "scipy>=1.10",
-    "trimesh>=4.2",
+    "gmsh>=4.15,<5",
+    "meshio>=5.3.5,<6",
+    "scipy>=1.17,<2",
+    "trimesh>=4.12,<5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
 ]
 
 [project.scripts]

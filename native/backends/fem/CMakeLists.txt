@@ -19,6 +19,7 @@ set(FEM_SOURCES
     core/fem_state.cpp
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
+    gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/state/gpu_state.cpp
     gpu/cuda/transfer/transfer_audit.cpp
@@ -130,8 +131,17 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/rk_adaptive_runtime.cu
             gpu/cuda/integrators/rk/rk_device_io.cu
+            gpu/cuda/integrators/rk/rk_direct_torques.cu
+            gpu/cuda/integrators/rk/rk_dmi_fields.cu
+            gpu/cuda/integrators/rk/rk_effective_field.cu
+            gpu/cuda/integrators/rk/rk_energy_reductions.cu
+            gpu/cuda/integrators/rk/rk_final_refresh.cu
+            gpu/cuda/integrators/rk/rk_local_fields.cu
+            gpu/cuda/integrators/rk/rk_observable_reductions.cu
             gpu/cuda/integrators/rk/rk_rhs_runtime.cu
+            gpu/cuda/integrators/rk/rk_snapshot.cu
             gpu/cuda/integrators/rk/rk_stage_kernels.cu
+            gpu/cuda/integrators/rk/rk_stage_schedule.cu
             gpu/cuda/integrators/rk/rk_step_stats.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu

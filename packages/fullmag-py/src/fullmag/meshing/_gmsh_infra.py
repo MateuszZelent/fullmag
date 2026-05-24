@@ -40,7 +40,7 @@ def _import_gmsh() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise ImportError(
             "Gmsh Python SDK is required for FEM meshing. "
-            "Install with: python -m pip install 'gmsh>=4.12'"
+            "Install with: python -m pip install 'gmsh>=4.15,<5'"
         ) from exc
     return gmsh
 
@@ -51,7 +51,7 @@ def _import_meshio() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise ImportError(
             "meshio is required to read pre-generated mesh files. "
-            "Install with: python -m pip install 'meshio>=5.3'"
+            "Install with: python -m pip install 'meshio>=5.3.5,<6'"
         ) from exc
     return meshio
 

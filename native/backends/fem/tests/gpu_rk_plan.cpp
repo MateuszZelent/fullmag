@@ -50,6 +50,8 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_snapshot.cu");
     const std::string gpu_rk_rhs =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rhs_runtime.cu");
+    const std::string gpu_rk_dmi_fields =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
     const std::string kernels_header =
         read_text_file(root / "gpu" / "cuda" / "kernels" / "kernels.hpp");
     const std::string llg_kernels =
@@ -107,8 +109,8 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             rhs_source.find("gpu_rk_compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
         "RHS demag must choose strict device Poisson by default and reserve hybrid CPU Poisson for explicit compatibility mode");
     check(
-        gpu_rk_rhs.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
-            gpu_rk_rhs.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
+        gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+            gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
         "GPU RK must call the parallel DMI kernel wrapper, not the serial placeholder");
     check(
         kernels_header.find("#include \"gpu/cuda/interactions/dmi/dmi_kernels.hpp\"") != std::string::npos &&

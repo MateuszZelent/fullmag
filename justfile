@@ -325,13 +325,25 @@ rebuild-gpu-runtime:
 # Run the Box500 FEM CPU/GPU consistency matrix.
 # Writes CSV rows and a CPU/GPU summary JSON. Override defaults with
 # FULLMAG_BENCH_STEPS, FULLMAG_BENCH_DOMAIN_HMAX, FULLMAG_BENCH_AIRBOX_HMAX,
-# FULLMAG_BENCH_OUTPUT, FULLMAG_BENCH_SUMMARY, FULLMAG_BENCH_REPORT, and
-# FULLMAG_BENCH_PDF. The recipe intentionally returns non-zero when the
+# FULLMAG_BENCH_OUTPUT, FULLMAG_BENCH_SUMMARY, FULLMAG_BENCH_REPORT,
+# FULLMAG_BENCH_PDF, and FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T. Pass
+# `full` to run until the relax torque stop criterion or the 50000-step guard.
+# The recipe intentionally returns non-zero when the
 # consistency gate finds a solver mismatch.
-bench-fem-box500-consistency:
+bench-fem-box500-consistency mode="quick":
     just ensure-python
     just ensure-managed-fem-runtime
-    bench_steps="${FULLMAG_BENCH_STEPS:-1}"; \
+    bench_relax_args=(); \
+    if [ "{{mode}}" = "full" ]; then \
+      bench_steps="${FULLMAG_BENCH_STEPS:-50000}"; \
+      bench_relax_tolerance_t="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T:-1e-4}"; \
+      bench_relax_args=(--relax-torque-tolerance-t "$bench_relax_tolerance_t"); \
+    elif [ "{{mode}}" = "quick" ]; then \
+      bench_steps="${FULLMAG_BENCH_STEPS:-10}"; \
+    else \
+      echo "bench-fem-box500-consistency mode must be quick or full" >&2; \
+      exit 2; \
+    fi; \
     bench_output="${FULLMAG_BENCH_OUTPUT:-/tmp/fullmag_box500_airbox_interaction_matrix.csv}"; \
     bench_summary="${FULLMAG_BENCH_SUMMARY:-/tmp/fullmag_box500_airbox_interaction_matrix_summary.json}"; \
     bench_report="${FULLMAG_BENCH_REPORT:-/tmp/fullmag_box500_airbox_interaction_matrix_report.md}"; \
@@ -346,6 +358,7 @@ bench-fem-box500-consistency:
       --cpu-gpu-summary-output "$bench_summary" \
       --human-report-output "$bench_report" \
       --pdf-report-output "$bench_pdf" \
+      "${bench_relax_args[@]}" \
       --quiet-json-summary
 
 # Run FEM CPU scaling benchmark: tests thread counts 4, 8, 20, 40 across mesh sizes.

@@ -26,6 +26,8 @@ from fullmag.model.geometry import (
 from ._gmsh_types import (
     ALGO_2D_FRONTAL_DELAUNAY,
     ALGO_2D_FRONTAL_QUADS,
+    ALGO_3D_DELAUNAY,
+    ALGO_3D_HXT,
     AirboxOptions,
     ComponentDescriptor,
     MeshData,
@@ -165,6 +167,41 @@ def _sanitize_volume_mesh_options(
         "falling back to algorithm_2d=6 (Frontal-Delaunay)"
     )
     return _dc_replace(opts, algorithm_2d=ALGO_2D_FRONTAL_DELAUNAY)
+
+
+def _geometry_contains_arch_waveguide(geometry: Geometry) -> bool:
+    if isinstance(geometry, ArchWaveguide):
+        return True
+    if isinstance(geometry, Translate):
+        return _geometry_contains_arch_waveguide(geometry.geometry)
+    if isinstance(geometry, Difference):
+        return _geometry_contains_arch_waveguide(geometry.base) or _geometry_contains_arch_waveguide(
+            geometry.tool
+        )
+    if isinstance(geometry, (Union, Intersection)):
+        return _geometry_contains_arch_waveguide(geometry.a) or _geometry_contains_arch_waveguide(
+            geometry.b
+        )
+    return False
+
+
+def _sanitize_csg_mesh_options(
+    opts: MeshOptions,
+    geometry: Geometry,
+    *,
+    context: str,
+) -> MeshOptions:
+    resolved = _sanitize_volume_mesh_options(opts, context=context)
+    if (
+        _geometry_contains_arch_waveguide(geometry)
+        and resolved.algorithm_3d == ALGO_3D_DELAUNAY
+    ):
+        emit_progress(
+            f"Gmsh: {context}: algorithm_3d=1 (Delaunay) fails boundary recovery "
+            "for lofted ArchWaveguide solids in Gmsh 4.15; falling back to HXT"
+        )
+        return _dc_replace(resolved, algorithm_3d=ALGO_3D_HXT)
+    return resolved
 
 
 def generate_mesh(
@@ -462,8 +499,9 @@ def _generate_csg_mesh(
 
     Uses micrometre scaling (×1e6) for OCC numerical stability.
     """
-    opts = _sanitize_volume_mesh_options(
+    opts = _sanitize_csg_mesh_options(
         options or MeshOptions(),
+        geometry,
         context="CSG mesh",
     )
     SCALE = 1e6

@@ -135,10 +135,13 @@ def _require_zarr() -> tuple[Any, Any, Any]:
         raise ModuleNotFoundError("zarr magnetization state support requires zarr") from exc
     try:
         from zarr.storage import DirectoryStore
-    except ImportError as exc:
-        raise RuntimeError(
-            f"zarr magnetization state I/O requires zarr>=2.18,<3; found zarr {zarr.__version__}"
-        ) from exc
+    except ImportError:
+        try:
+            from zarr.storage import LocalStore as DirectoryStore
+        except ImportError as exc:
+            raise RuntimeError(
+                f"zarr magnetization state I/O requires zarr>=2.18 or zarr>=3; found zarr {zarr.__version__}"
+            ) from exc
     return zarr, DirectoryStore, ZipStore
 
 
@@ -299,30 +302,41 @@ def _write_zarr_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
     if path.exists() and path.is_dir():
         shutil.rmtree(path)
     store = _open_zarr_store(path, mode="w")
+    root_attrs = {
+        "fullmag_kind": "magnetization_state",
+        "observable": "m",
+        "format": "zarr",
+    }
+    target_attrs = {
+        "observable": "m",
+        "vector_count": int(values.shape[0]),
+    }
     try:
-        root = zarr.group(store=store, overwrite=True)
-        root.attrs.update(
-            {
-                "fullmag_kind": "magnetization_state",
-                "observable": "m",
-                "format": "zarr",
-            }
-        )
+        try:
+            root = zarr.group(store=store, overwrite=True, attributes=root_attrs)
+        except TypeError:
+            root = zarr.group(store=store, overwrite=True)
+            root.attrs.update(root_attrs)
         parent, leaf = _ensure_zarr_group(root, dataset)
-        target = parent.create_dataset(
-            leaf,
-            data=values,
-            shape=values.shape,
-            dtype="f8",
-            chunks=(min(max(values.shape[0], 1), 4096), 3),
-            overwrite=True,
-        )
-        target.attrs.update(
-            {
-                "observable": "m",
-                "vector_count": int(values.shape[0]),
-            }
-        )
+        chunks = (min(max(values.shape[0], 1), 4096), 3)
+        if hasattr(parent, "create_array"):
+            target = parent.create_array(
+                leaf,
+                data=values,
+                chunks=chunks,
+                attributes=target_attrs,
+                overwrite=True,
+            )
+        else:
+            target = parent.create_dataset(
+                leaf,
+                data=values,
+                shape=values.shape,
+                dtype="f8",
+                chunks=chunks,
+                overwrite=True,
+            )
+            target.attrs.update(target_attrs)
     finally:
         store.close()
 
@@ -424,4 +438,6 @@ def _open_zarr_store(path: Path, *, mode: str) -> Any:
     _, DirectoryStore, ZipStore = _require_zarr()
     if path.name.lower().endswith(".zip"):
         return ZipStore(str(path), mode=mode)
+    if getattr(DirectoryStore, "__name__", "") == "LocalStore":
+        return DirectoryStore(str(path), read_only=mode == "r")
     return DirectoryStore(str(path))

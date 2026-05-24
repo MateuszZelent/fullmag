@@ -10,6 +10,7 @@ import subprocess
 import struct
 import sys
 import textwrap
+import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -672,6 +673,37 @@ class ProblemApiTests(unittest.TestCase):
             for path in (json_path, zarr_path, h5_path):
                 loaded = fm.load_magnetization(path)
                 self.assertEqual(loaded.values, [tuple(row) for row in values])
+
+    def test_zarr3_local_store_is_accepted_without_directory_store(self) -> None:
+        from fullmag.init import state_io
+
+        class LocalStore:
+            def __init__(self, path: str, *, read_only: bool = False) -> None:
+                self.path = path
+                self.read_only = read_only
+
+        class ZipStore:
+            def __init__(self, path: str, *, mode: str | None = None) -> None:
+                self.path = path
+                self.mode = mode
+
+        fake_zarr = types.ModuleType("zarr")
+        fake_zarr.__version__ = "3.2.1"
+        fake_storage = types.ModuleType("zarr.storage")
+        fake_storage.LocalStore = LocalStore
+        fake_storage.ZipStore = ZipStore
+
+        with patch.dict(sys.modules, {"zarr": fake_zarr, "zarr.storage": fake_storage}):
+            _, Store, ResolvedZipStore = state_io._require_zarr()
+            directory_store = state_io._open_zarr_store(Path("state.zarr"), mode="w")
+            zip_store = state_io._open_zarr_store(Path("state.zarr.zip"), mode="r")
+
+        self.assertIs(Store, LocalStore)
+        self.assertIs(ResolvedZipStore, ZipStore)
+        self.assertIsInstance(directory_store, LocalStore)
+        self.assertFalse(directory_store.read_only)
+        self.assertIsInstance(zip_store, ZipStore)
+        self.assertEqual(zip_store.mode, "r")
 
     def test_flat_magnet_handle_loadfile_assigns_sampled_state(self) -> None:
         with TemporaryDirectory() as tmp_dir:

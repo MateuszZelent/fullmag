@@ -41,7 +41,7 @@ def _import_trimesh() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise ImportError(
             "trimesh is required for STL voxelization helpers. "
-            "Install with: python -m pip install 'trimesh>=4.2'"
+            "Install with: python -m pip install 'trimesh>=4.12,<5'"
         ) from exc
     return trimesh
 
@@ -53,7 +53,7 @@ def _import_trimesh_voxelization_stack() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise ImportError(
             "scipy is required for STL voxelization through trimesh. "
-            "Install with: python -m pip install 'scipy>=1.10'"
+            "Install with: python -m pip install 'scipy>=1.17,<2'"
         ) from exc
     return trimesh
 

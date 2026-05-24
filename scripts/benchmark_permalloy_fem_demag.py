@@ -22,7 +22,7 @@ DEFAULT_GPU_BIN = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host" / "bin" /
 DEFAULT_LOGS_DIR = REPO_ROOT / ".fullmag" / "logs"
 DEFAULT_REPORT = REPO_ROOT / "docs" / "reports" / "2026-05-17" / "permalloy_fem_demag_benchmark.md"
 FULLMAG_PY_SRC = REPO_ROOT / "packages" / "fullmag-py" / "src"
-BUNDLED_PY_SITE = REPO_ROOT / ".fullmag" / "local" / "python" / "lib" / "python3.10" / "site-packages"
+BUNDLED_PY_LIB = REPO_ROOT / ".fullmag" / "local" / "python" / "lib"
 BUNDLED_PY_BIN = REPO_ROOT / ".fullmag" / "local" / "python" / "bin"
 
 ENGINE_RE = re.compile(
@@ -76,6 +76,11 @@ def _median(values: list[float]) -> float | None:
     if not values:
         return None
     return float(statistics.median(values))
+
+
+def bundled_python_site_packages() -> Path | None:
+    candidates = sorted(BUNDLED_PY_LIB.glob("python*/site-packages"), reverse=True)
+    return candidates[0] if candidates else None
 
 
 def _mean(values: list[float]) -> float | None:
@@ -173,8 +178,9 @@ def build_case_environment(
 ) -> dict[str, str]:
     env = dict(os.environ if base_env is None else base_env)
     python_paths = [str(FULLMAG_PY_SRC)]
-    if BUNDLED_PY_SITE.exists():
-        python_paths.append(str(BUNDLED_PY_SITE))
+    bundled_py_site = bundled_python_site_packages()
+    if bundled_py_site is not None:
+        python_paths.append(str(bundled_py_site))
     if env.get("PYTHONPATH"):
         python_paths.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(python_paths)

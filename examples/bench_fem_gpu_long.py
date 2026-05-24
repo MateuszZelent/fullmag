@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -20,6 +21,10 @@ BOX500_AIRBOX_SIZE = (1e-6, 1e-6, 1e-6)
 BOX500_DOMAIN_HMAX = 20e-9
 BOX500_AIRBOX_HMAX = 100e-9
 DEFAULT_RELAX_TORQUE_TOLERANCE = 1e-6
+MU0 = 4.0 * math.pi * 1e-7
+RELAX_TORQUE_TOLERANCE_T = 1e-4
+RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
+FULL_RELAXATION_MAX_STEPS = 50_000
 BOX500_AIRBOX_SCENARIO_ALIASES = {
     BOX500_AIRBOX_SCENARIO: "exchange_only",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
