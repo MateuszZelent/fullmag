@@ -930,15 +930,30 @@ export class ControlRoomApi {
           headers["if-none-match"] = options.etag;
         }
 
-        const result = await this.transport.GET(path as never, {
-          cache: "no-store",
-          fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-            this.executeBinaryOpenApiFetch(input, init),
-          headers,
-          params: { path: pathParams, query },
-          parseAs: "arrayBuffer",
-          signal: options.signal,
-        } as never);
+        let lastResponse: Response | null = null;
+        let result: any;
+        try {
+          result = await this.transport.GET(path as never, {
+            cache: "no-store",
+            fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+              const resp = await this.executeBinaryOpenApiFetch(input, init);
+              lastResponse = resp;
+              return resp;
+            },
+            headers,
+            params: { path: pathParams, query },
+            parseAs: "arrayBuffer",
+            signal: options.signal,
+          } as never);
+        } catch (error) {
+          if (lastResponse && !lastResponse.ok) {
+            throw new ControlRoomApiError(
+              `Request failed with status ${lastResponse.status}`,
+              lastResponse.status,
+            );
+          }
+          throw error;
+        }
         const response = result.response;
         const etag = response.headers.get("etag");
 
@@ -1383,14 +1398,18 @@ function formatOpenApiError(error: unknown): string {
 }
 
 async function formatResponseError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return "Request failed";
-  }
-
   try {
-    return formatOpenApiError(JSON.parse(text));
+    const text = await response.text();
+    if (!text) {
+      return `Request failed with status ${response.status}`;
+    }
+
+    try {
+      return formatOpenApiError(JSON.parse(text));
+    } catch {
+      return text;
+    }
   } catch {
-    return text;
+    return `Request failed with status ${response.status}`;
   }
 }

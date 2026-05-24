@@ -1146,6 +1146,29 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("handles binary resource request failures safely without throwing TypeError in error formatter", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => {
+        const resp = new Response("Resource not found", {
+          headers: contractHeaders,
+          status: 404,
+        });
+        // Simulate a response whose body has already been consumed (typical for parseAs: arrayBuffer clients)
+        Object.defineProperty(resp, "text", {
+          value: async () => {
+            throw new TypeError("Failed to execute 'text' on 'Response': body stream already read");
+          },
+        });
+        return resp;
+      },
+    });
+
+    await expect(api.data.fields.vector("H_demag")).rejects.toThrow(
+      "Request failed with status 404"
+    );
+  });
+
   it("patches visualization state through the typed v2 facade", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
