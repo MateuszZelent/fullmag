@@ -310,8 +310,7 @@ impl SolverProfileState {
         }
         if self.config.sample_interval_wall_ms > 0 {
             let now = Instant::now();
-            let threshold =
-                std::time::Duration::from_millis(self.config.sample_interval_wall_ms);
+            let threshold = std::time::Duration::from_millis(self.config.sample_interval_wall_ms);
             if let Some(last) = self.last_sampled_instant {
                 if now.duration_since(last) < threshold {
                     return None;

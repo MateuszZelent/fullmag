@@ -8,7 +8,7 @@
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 
 #include "context.hpp"
-#include "gpu_state.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
 
 #include <limits>
 

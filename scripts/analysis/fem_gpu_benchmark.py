@@ -21,9 +21,21 @@ BENCHMARK_DIR = REPO_ROOT / "docs" / "reports"
 CSV_PATH = BENCHMARK_DIR / "fem_gpu_benchmark_results.csv"
 FULLMAG_CPU = REPO_ROOT / ".fullmag" / "local" / "bin" / "fullmag"
 FULLMAG_GPU = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host" / "bin" / "fullmag-fem-gpu"
+MANAGED_FEM_RUNTIME_ROOT = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host"
 BENCH_SCRIPT = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
 FEM_CMAKE = REPO_ROOT / "native" / "backends" / "fem" / "CMakeLists.txt"
-GPU_RK_CUDA_SOURCE = REPO_ROOT / "native" / "backends" / "fem" / "src" / "gpu_rk.cu"
+GPU_RK_CUDA_SOURCE = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_step.cu"
+)
+GPU_RK_CMAKE_SOURCE = "gpu/cuda/integrators/rk/rk_step.cu"
 
 PRESET_MESHES = {
     "coarse": REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json",
@@ -34,10 +46,127 @@ PRESET_MESHES = {
 }
 DEFAULT_MESHES = ["coarse", "medium", "fine"]
 DEFAULT_SCENARIOS = ["exchange_only", "exchange_demag", "exchange_dmi", "stt_oersted"]
+BOX500_AIRBOX_SCENARIO = "exchange_only_box500_airbox1um"
+BOX500_AIRBOX_SCENARIO_ALIASES = {
+    BOX500_AIRBOX_SCENARIO: "exchange_only",
+    "box500_airbox_exchange_zeeman": "exchange_zeeman",
+    "box500_airbox_exchange_demag": "exchange_demag",
+    "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
+    "box500_airbox_exchange_anis_cubic": "exchange_anis_cubic",
+    "box500_airbox_exchange_demag_anis_uniaxial": "exchange_demag_anis_uniaxial",
+    "box500_airbox_exchange_demag_anis_cubic": "exchange_demag_anis_cubic",
+    "box500_airbox_exchange_dmi": "exchange_dmi",
+    "box500_airbox_stt_oersted": "stt_oersted",
+}
+BOX500_AIRBOX_CONSISTENCY_SCENARIOS = tuple(BOX500_AIRBOX_SCENARIO_ALIASES)
+BOX500_AIRBOX_BODY_SIZE_M = [500e-9, 100e-9, 10e-9]
+BOX500_AIRBOX_SIZE_M = [1e-6, 1e-6, 1e-6]
+BOX500_AIRBOX_INITIAL_M = [1.0, 0.0, 0.0]
+BASE_CPU_GPU_OBSERVABLES = [
+    "final_e_total_j",
+    "final_e_ex_j",
+    "final_torque_apm",
+    "final_torque_t",
+    "executed_steps",
+    "wall_time_ms",
+    "step_wall_time_ms",
+    "rhs_wall_time_ms",
+    "exchange_wall_time_ms",
+]
+INTERACTION_CONTRACTS = {
+    "exchange_only": {
+        "interactions": ["exchange"],
+        "energy_fields": [],
+        "timing_fields": [],
+    },
+    "exchange_zeeman": {
+        "interactions": ["exchange", "zeeman"],
+        "energy_fields": ["final_e_ext_j"],
+        "timing_fields": ["extra_energy_wall_time_ms"],
+    },
+    "exchange_demag": {
+        "interactions": ["exchange", "demag", "zeeman"],
+        "energy_fields": ["final_e_demag_j", "final_e_ext_j"],
+        "timing_fields": [
+            "demag_wall_time_ms",
+            "demag_solver_apply_wall_time_ms",
+        ],
+    },
+    "exchange_anis_uniaxial": {
+        "interactions": ["exchange", "uniaxial_anisotropy"],
+        "energy_fields": ["final_e_ani_j"],
+        "timing_fields": ["extra_energy_wall_time_ms"],
+    },
+    "exchange_anis_cubic": {
+        "interactions": ["exchange", "cubic_anisotropy"],
+        "energy_fields": ["final_e_ani_j"],
+        "timing_fields": ["extra_energy_wall_time_ms"],
+    },
+    "exchange_demag_anis_uniaxial": {
+        "interactions": ["exchange", "demag", "zeeman", "uniaxial_anisotropy"],
+        "energy_fields": ["final_e_demag_j", "final_e_ext_j", "final_e_ani_j"],
+        "timing_fields": [
+            "demag_wall_time_ms",
+            "demag_solver_apply_wall_time_ms",
+            "extra_energy_wall_time_ms",
+        ],
+    },
+    "exchange_demag_anis_cubic": {
+        "interactions": ["exchange", "demag", "zeeman", "cubic_anisotropy"],
+        "energy_fields": ["final_e_demag_j", "final_e_ext_j", "final_e_ani_j"],
+        "timing_fields": [
+            "demag_wall_time_ms",
+            "demag_solver_apply_wall_time_ms",
+            "extra_energy_wall_time_ms",
+        ],
+    },
+    "exchange_demag_anisotropy": {
+        "interactions": ["exchange", "demag", "zeeman", "uniaxial_anisotropy"],
+        "energy_fields": ["final_e_demag_j", "final_e_ext_j", "final_e_ani_j"],
+        "timing_fields": [
+            "demag_wall_time_ms",
+            "demag_solver_apply_wall_time_ms",
+            "extra_energy_wall_time_ms",
+        ],
+    },
+    "exchange_dmi": {
+        "interactions": ["exchange", "interfacial_dmi", "zeeman"],
+        "energy_fields": ["final_e_dmi_j", "final_e_ext_j"],
+        "timing_fields": ["extra_energy_wall_time_ms"],
+    },
+    "stt_oersted": {
+        "interactions": ["exchange", "zeeman", "oersted", "zhang_li_stt"],
+        "energy_fields": ["final_e_ext_j"],
+        "timing_fields": ["rhs_wall_time_ms"],
+    },
+}
+CPU_GPU_ENERGY_FIELDS = (
+    "final_e_total_j",
+    "final_e_ex_j",
+    "final_e_ext_j",
+    "final_e_demag_j",
+    "final_e_ani_j",
+    "final_e_dmi_j",
+)
+CPU_GPU_TIMING_FIELDS = {
+    "wall_time_ms": "wall_time",
+    "step_wall_time_ms": "step_wall_time",
+    "rhs_wall_time_ms": "rhs_wall_time",
+    "exchange_wall_time_ms": "exchange_wall_time",
+    "extra_energy_wall_time_ms": "extra_energy_wall_time",
+    "demag_wall_time_ms": "demag_wall_time",
+    "demag_solver_apply_wall_time_ms": "demag_solver_apply_wall_time",
+}
 DEFAULT_INTEGRATORS = ["heun", "rk4", "rk23", "rk45"]
 DEFAULT_TIMESTEP_POLICIES = ["fixed"]
 DEFAULT_BACKENDS = ["cpu", "gpu"]
 DEFAULT_MAX_PERFORMANCE_REGRESSION_PERCENT = 10.0
+DEFAULT_CPU_GPU_ENERGY_RTOL = 1e-6
+DEFAULT_CPU_GPU_ENERGY_ATOL_J = 1e-30
+DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
+DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
+DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
+DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
 PERFORMANCE_REGRESSION_METRICS = (
     "wall_time_ms",
     "demag_solver_apply_wall_time_ms",
@@ -268,7 +397,7 @@ def parse_args() -> argparse.Namespace:
         "--scenarios",
         type=str,
         default=",".join(DEFAULT_SCENARIOS),
-        help="Comma-separated scenarios: exchange_only, exchange_demag, exchange_anis_uniaxial, exchange_anis_cubic, exchange_demag_anis_uniaxial, exchange_demag_anis_cubic, exchange_demag_anisotropy, exchange_dmi, stt_oersted",
+        help="Comma-separated scenarios: exchange_only, exchange_only_box500_airbox1um, exchange_demag, exchange_anis_uniaxial, exchange_anis_cubic, exchange_demag_anis_uniaxial, exchange_demag_anis_cubic, exchange_demag_anisotropy, exchange_dmi, stt_oersted",
     )
     parser.add_argument(
         "--integrators",
@@ -341,9 +470,30 @@ def parse_args() -> argparse.Namespace:
         help="Fail unless results prove FEM CPU no-PBC exchange+demag+anisotropy adaptive readiness with demag timing telemetry",
     )
     parser.add_argument(
+        "--require-cpu-gpu-consistency",
+        action="store_true",
+        help="Fail unless matching FEM CPU/GPU rows agree on final energy, max torque, and relaxation step count",
+    )
+    parser.add_argument(
+        "--cpu-gpu-summary-output",
+        type=str,
+        default=None,
+        help="Optional JSON output path for paired FEM CPU/GPU consistency and timing summary",
+    )
+    parser.add_argument(
         "--fem-cpu-no-pbc-adaptive-ready-preset",
         action="store_true",
         help="Preset the sweep and gates for FEM CPU no-PBC exchange+demag+anisotropy adaptive readiness",
+    )
+    parser.add_argument(
+        "--box500-airbox-exchange-only-preset",
+        action="store_true",
+        help="Preset the first FEM CPU/GPU consistency case: 500x100x10 nm box, 1 um airbox, exchange only",
+    )
+    parser.add_argument(
+        "--box500-airbox-interaction-consistency-preset",
+        action="store_true",
+        help="Preset the deterministic FEM CPU/GPU interaction consistency matrix on the 500x100x10 nm box with 1 um airbox",
     )
     parser.add_argument(
         "--demag-convergence-residual",
@@ -383,6 +533,42 @@ def parse_args() -> argparse.Namespace:
         type=positive_float_arg,
         default=DEFAULT_MAX_PERFORMANCE_REGRESSION_PERCENT,
         help="Maximum accepted performance regression versus --accepted-baseline for identical solver_mesh_signature cases",
+    )
+    parser.add_argument(
+        "--cpu-gpu-energy-rtol",
+        type=positive_float_arg,
+        default=DEFAULT_CPU_GPU_ENERGY_RTOL,
+        help="Relative tolerance for FEM CPU/GPU energy consistency checks",
+    )
+    parser.add_argument(
+        "--cpu-gpu-energy-atol",
+        type=positive_float_arg,
+        default=DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+        help="Absolute tolerance in joules for FEM CPU/GPU energy consistency checks",
+    )
+    parser.add_argument(
+        "--cpu-gpu-torque-rtol",
+        type=positive_float_arg,
+        default=DEFAULT_CPU_GPU_TORQUE_RTOL,
+        help="Relative tolerance for FEM CPU/GPU max-torque consistency checks",
+    )
+    parser.add_argument(
+        "--cpu-gpu-torque-atol-apm",
+        type=positive_float_arg,
+        default=DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+        help="Absolute tolerance in A/m for FEM CPU/GPU max_torque_Apm consistency checks",
+    )
+    parser.add_argument(
+        "--cpu-gpu-torque-atol-t",
+        type=positive_float_arg,
+        default=DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+        help="Absolute tolerance in T for FEM CPU/GPU max_torque_T consistency checks",
+    )
+    parser.add_argument(
+        "--cpu-gpu-max-step-delta",
+        type=nonnegative_int_arg,
+        default=DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+        help="Maximum allowed FEM CPU/GPU executed-step count difference",
     )
     parser.add_argument(
         "--gmsh-threads",
@@ -440,6 +626,162 @@ def apply_fem_cpu_no_pbc_adaptive_ready_preset(args: argparse.Namespace) -> None
     args.require_stable_solver_mesh = True
     args.emit_best_demag_policy = True
     args.require_best_demag_policy = True
+
+
+def apply_box500_airbox_exchange_only_preset(args: argparse.Namespace) -> None:
+    if not args.box500_airbox_exchange_only_preset:
+        return
+    args.backends = "cpu,gpu"
+    args.meshes = "coarse"
+    args.scenarios = BOX500_AIRBOX_SCENARIO
+    args.integrators = "heun"
+    args.timestep_policies = "fixed"
+    args.thread_counts = "auto"
+    args.require_mfem_stack = True
+    args.require_stable_solver_mesh = True
+    args.require_cpu_gpu_consistency = True
+
+
+def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace) -> None:
+    if not args.box500_airbox_interaction_consistency_preset:
+        return
+    args.backends = "cpu,gpu"
+    args.meshes = "coarse"
+    args.scenarios = ",".join(BOX500_AIRBOX_CONSISTENCY_SCENARIOS)
+    args.integrators = "heun"
+    args.timestep_policies = "fixed"
+    args.thread_counts = "auto"
+    args.require_mfem_stack = True
+    args.require_stable_solver_mesh = True
+    args.require_demag_converged = True
+    args.require_cpu_gpu_consistency = True
+
+
+def canonical_consistency_scenario(scenario: str) -> str:
+    return BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+
+
+def interaction_contract_for_scenario(scenario: str) -> Mapping[str, object] | None:
+    return INTERACTION_CONTRACTS.get(canonical_consistency_scenario(scenario))
+
+
+def scenario_energy_fields(scenario: str) -> list[str]:
+    contract = interaction_contract_for_scenario(scenario)
+    extra_fields = contract.get("energy_fields", []) if contract else []
+    fields = ["final_e_total_j", "final_e_ex_j"]
+    for field in extra_fields:
+        if field not in fields:
+            fields.append(str(field))
+    return fields
+
+
+def scenario_observables(scenario: str) -> list[str]:
+    contract = interaction_contract_for_scenario(scenario)
+    extra_timings = contract.get("timing_fields", []) if contract else []
+    observables = list(BASE_CPU_GPU_OBSERVABLES)
+    for field in scenario_energy_fields(scenario):
+        if field not in observables:
+            observables.append(field)
+    for field in extra_timings:
+        if field not in observables:
+            observables.append(str(field))
+    return observables
+
+
+def box500_airbox_interaction_manifest(
+    scenario: str,
+    *,
+    steps: int,
+    dt: float,
+    energy_rtol: float,
+    energy_atol: float,
+    torque_rtol: float,
+    torque_atol_apm: float,
+    torque_atol_t: float,
+    max_step_delta: int,
+) -> dict[str, object]:
+    contract = interaction_contract_for_scenario(scenario)
+    if contract is None:
+        raise ValueError(f"unsupported box500 airbox consistency scenario: {scenario}")
+    interactions = [str(item) for item in contract["interactions"]]
+    return {
+        "case_id": scenario,
+        "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
+        "airbox_size_m": BOX500_AIRBOX_SIZE_M,
+        "initial_magnetization": BOX500_AIRBOX_INITIAL_M,
+        "interactions": interactions,
+        "demag_enabled": "demag" in interactions,
+        "relaxation": {
+            "algorithm": "llg_overdamped",
+            "max_steps": steps,
+            "dt_s": dt,
+        },
+        "observables": scenario_observables(scenario),
+        "cpu_gpu_tolerances": {
+            "energy_rtol": energy_rtol,
+            "energy_atol_j": energy_atol,
+            "torque_rtol": torque_rtol,
+            "torque_atol_apm": torque_atol_apm,
+            "torque_atol_t": torque_atol_t,
+            "max_step_delta": max_step_delta,
+        },
+    }
+
+
+def box500_airbox_exchange_manifest(
+    *,
+    steps: int,
+    dt: float,
+    energy_rtol: float,
+    energy_atol: float,
+    torque_rtol: float,
+    torque_atol_apm: float,
+    torque_atol_t: float,
+    max_step_delta: int,
+) -> dict[str, object]:
+    return box500_airbox_interaction_manifest(
+        BOX500_AIRBOX_SCENARIO,
+        steps=steps,
+        dt=dt,
+        energy_rtol=energy_rtol,
+        energy_atol=energy_atol,
+        torque_rtol=torque_rtol,
+        torque_atol_apm=torque_atol_apm,
+        torque_atol_t=torque_atol_t,
+        max_step_delta=max_step_delta,
+    )
+
+
+def cpu_gpu_case_manifests(
+    *,
+    scenarios: list[str],
+    steps: int,
+    dt: float,
+    energy_rtol: float,
+    energy_atol: float,
+    torque_rtol: float,
+    torque_atol_apm: float,
+    torque_atol_t: float,
+    max_step_delta: int,
+) -> list[dict[str, object]]:
+    manifests: list[dict[str, object]] = []
+    for scenario in scenarios:
+        if scenario not in BOX500_AIRBOX_SCENARIO_ALIASES:
+            continue
+        manifests.append(
+            box500_airbox_interaction_manifest(
+                scenario,
+                steps=steps,
+                dt=dt,
+                energy_rtol=energy_rtol,
+                energy_atol=energy_atol,
+                torque_rtol=torque_rtol,
+                torque_atol_apm=torque_atol_apm,
+                torque_atol_t=torque_atol_t,
+                max_step_delta=max_step_delta,
+            )
+        )
+    return manifests
 
 
 def env_text(env: Mapping[str, str], key: str) -> str | None:
@@ -561,7 +903,7 @@ def build_preflight_report(
         "assert_no_hot_loop_compute_sync": assert_no_hot_loop_compute_sync,
         "gpu_rk_cuda_source_path": str(GPU_RK_CUDA_SOURCE),
         "gpu_rk_cuda_source_present": GPU_RK_CUDA_SOURCE.is_file(),
-        "gpu_rk_cmake_wired": "src/gpu_rk.cu" in fem_cmake_text,
+        "gpu_rk_cmake_wired": GPU_RK_CMAKE_SOURCE in fem_cmake_text,
         "remediation": preflight_remediation(),
     }
 
@@ -598,9 +940,11 @@ def adaptive_gpu_rk_acceptance_blockers(report: Mapping[str, object]) -> list[st
     if not report.get("cuda_compiler_available"):
         blockers.append("nvcc")
     if not report.get("gpu_rk_cuda_source_present"):
-        blockers.append("native/backends/fem/src/gpu_rk.cu is required")
+        blockers.append("native/backends/fem/gpu/cuda/integrators/rk/rk_step.cu is required")
     if not report.get("gpu_rk_cmake_wired"):
-        blockers.append("native/backends/fem/CMakeLists.txt must wire src/gpu_rk.cu")
+        blockers.append(
+            "native/backends/fem/CMakeLists.txt must wire gpu/cuda/integrators/rk/rk_step.cu"
+        )
     if not report.get("assert_no_hot_loop_compute_sync"):
         blockers.append("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1")
     return blockers
@@ -911,9 +1255,16 @@ def run_backend(
     }
     env = os.environ.copy()
     env.update(extra_env)
+    apply_bundled_openmpi_runtime_env(env)
+    if "FULLMAG_FEM_EXECUTION" not in extra_env:
+        if backend_label == "fem_cpu":
+            env["FULLMAG_FEM_EXECUTION"] = "cpu"
+        elif backend_label == "fem_gpu":
+            env["FULLMAG_FEM_EXECUTION"] = "gpu"
     env["FULLMAG_CPU_THREADS"] = thread_spec.env_value
     env.setdefault("FULLMAG_PYTHON", sys.executable)
     row["requested_fullmag_python"] = env_text(env, "FULLMAG_PYTHON")
+    row["requested_fem_execution"] = env_text(env, "FULLMAG_FEM_EXECUTION")
     row["requested_cpu_threads"] = env_text(env, "FULLMAG_CPU_THREADS")
     row["requested_gmsh_threads"] = env_text(env, "FULLMAG_GMSH_THREADS")
     row["requested_demag_solver"] = env_text(env, "FULLMAG_BENCH_DEMAG_SOLVER")
@@ -1042,6 +1393,11 @@ def run_backend(
                 "final_e_ex_j": first_present(
                     payload.get("final_e_ex_j"), final_scalar_row.get("E_ex")
                 ),
+                "final_e_ext_j": first_present(
+                    payload.get("final_e_ext_j"),
+                    payload.get("e_ext"),
+                    final_scalar_row.get("E_ext"),
+                ),
                 "final_e_demag_j": first_present(
                     payload.get("final_e_demag_j"), final_scalar_row.get("E_demag")
                 ),
@@ -1056,8 +1412,16 @@ def run_backend(
                     final_scalar_row.get("E_dmi"),
                 ),
                 "stop_reason": qualification.get("stop_reason"),
-                "final_torque_apm": qualification.get("final_torque_apm"),
-                "final_torque_t": qualification.get("final_torque_t"),
+                "final_torque_apm": first_present(
+                    qualification.get("final_torque_apm"),
+                    payload.get("max_torque_Apm"),
+                    final_scalar_row.get("max_torque_Apm"),
+                ),
+                "final_torque_t": first_present(
+                    qualification.get("final_torque_t"),
+                    payload.get("max_torque_T"),
+                    final_scalar_row.get("max_torque_T"),
+                ),
                 "norm_defect": qualification.get("norm_defect"),
                 "step_wall_time_ms": ns_to_ms(payload.get("wall_time_ns")),
                 "exchange_wall_time_ms": ns_to_ms(payload.get("exchange_wall_time_ns")),
@@ -1147,6 +1511,9 @@ def run_backend(
                 "fem_gpu_rk_exchange_only_enabled": provenance.get(
                     "fem_gpu_rk_exchange_only_enabled"
                 ),
+                "fem_gpu_qualification_status": provenance.get(
+                    "fem_gpu_qualification_status"
+                ),
                 "fem_gpu_rk_stage_count": provenance.get("fem_gpu_rk_stage_count"),
                 "fem_gpu_rk_uses_cuda_kernels": provenance.get(
                     "fem_gpu_rk_uses_cuda_kernels"
@@ -1199,6 +1566,39 @@ def run_backend(
     attach_phase2_gate(row)
 
     return row
+
+
+def prepend_env_path(value: str | None, prefix: Path) -> str:
+    prefix_text = str(prefix)
+    if not value:
+        return prefix_text
+    paths = value.split(os.pathsep)
+    if prefix_text in paths:
+        return value
+    return os.pathsep.join([prefix_text, value])
+
+
+def apply_bundled_openmpi_runtime_env(env: dict[str, str]) -> None:
+    openmpi_root = MANAGED_FEM_RUNTIME_ROOT / "openmpi"
+    if (openmpi_root / "share" / "openmpi").is_dir():
+        env.setdefault("OPAL_PREFIX", str(openmpi_root))
+        env["PATH"] = prepend_env_path(env.get("PATH"), openmpi_root / "bin")
+        env.setdefault(
+            "OMPI_MCA_mca_base_component_path",
+            str(openmpi_root / "lib" / "openmpi3"),
+        )
+        env.setdefault(
+            "OMPI_MCA_orte_launch_agent",
+            str(openmpi_root / "bin" / "orted"),
+        )
+        env.setdefault("OMPI_MCA_reachable", "weighted")
+        env.setdefault("OMPI_MCA_mca_base_component_show_load_errors", "0")
+
+    pmix_root = MANAGED_FEM_RUNTIME_ROOT / "lib" / "pmix2"
+    if (pmix_root / "share" / "pmix").is_dir():
+        env.setdefault("PMIX_PREFIX", str(pmix_root))
+        env.setdefault("PMIX_EXEC_PREFIX", str(pmix_root))
+        env.setdefault("PMIX_MCA_pcompress_base_silence_warning", "1")
 
 
 def as_int(value: object) -> int | None:
@@ -1311,6 +1711,11 @@ def truncate_error(output: str, limit: int = 400) -> str:
 
 def classify_benchmark_error(output: str) -> str | None:
     lowered = output.lower()
+    if (
+        "cudagetdevicecount" in lowered
+        and "driver version is insufficient for cuda runtime version" in lowered
+    ):
+        return "cuda_driver_runtime_mismatch"
     if "mpi_init" in lowered or "pmix" in lowered:
         return "mpi_init_or_pmix_startup"
     if "modulenotfounderror" in lowered and "no module named" in lowered:
@@ -1474,6 +1879,606 @@ def performance_regression_failures(
                 f"{accepted_value:.6g} by {regression_percent:.2f}% "
                 f"(limit {max_regression_percent:.2f}%)"
             )
+    return failures
+
+
+def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
+    signature = row.get("solver_mesh_signature")
+    if not signature:
+        return ()
+    return (
+        signature,
+        row.get("scenario"),
+        row.get("integrator"),
+        row.get("timestep_policy"),
+        row.get("dt_s"),
+        row.get("steps"),
+        row.get("reported_precision"),
+    )
+
+
+def numeric_values_close(
+    left: float,
+    right: float,
+    *,
+    rtol: float,
+    atol: float,
+) -> bool:
+    return abs(left - right) <= atol + rtol * max(abs(left), abs(right))
+
+
+def compare_cpu_gpu_numeric_field(
+    cpu_row: Mapping[str, object],
+    gpu_row: Mapping[str, object],
+    field: str,
+    *,
+    rtol: float,
+    atol: float,
+    failures: list[str],
+    case: tuple[object, ...],
+) -> None:
+    cpu_value = as_float(cpu_row.get(field))
+    gpu_value = as_float(gpu_row.get(field))
+    if cpu_value is None or gpu_value is None:
+        failures.append(
+            f"case={case} is missing numeric {field}: cpu={cpu_row.get(field)!r} gpu={gpu_row.get(field)!r}"
+        )
+        return
+    if numeric_values_close(cpu_value, gpu_value, rtol=rtol, atol=atol):
+        return
+    diff = abs(cpu_value - gpu_value)
+    failures.append(
+        f"case={case} {field} mismatch: cpu={cpu_value:.16g} gpu={gpu_value:.16g} "
+        f"diff={diff:.6g} tolerance={atol + rtol * max(abs(cpu_value), abs(gpu_value)):.6g}"
+    )
+
+
+def compare_cpu_gpu_step_count(
+    cpu_row: Mapping[str, object],
+    gpu_row: Mapping[str, object],
+    *,
+    max_step_delta: int,
+    failures: list[str],
+    case: tuple[object, ...],
+) -> None:
+    cpu_steps = as_int(cpu_row.get("executed_steps"))
+    gpu_steps = as_int(gpu_row.get("executed_steps"))
+    if cpu_steps is None or gpu_steps is None:
+        failures.append(
+            f"case={case} is missing executed_steps: cpu={cpu_row.get('executed_steps')!r} gpu={gpu_row.get('executed_steps')!r}"
+        )
+        return
+    delta = abs(cpu_steps - gpu_steps)
+    if delta > max_step_delta:
+        failures.append(
+            f"case={case} executed_steps mismatch: cpu={cpu_steps} gpu={gpu_steps} "
+            f"delta={delta} limit={max_step_delta}"
+        )
+
+
+def row_has_resolved_cpu_execution(row: Mapping[str, object]) -> bool:
+    return (
+        row.get("execution_engine") == "fem_cpu_native"
+        and row.get("fem_execution_mode") == "cpu_native"
+        and row.get("mfem_device") == "cpu"
+        and row.get("uses_cuda_kernels") is False
+    )
+
+
+def row_has_resolved_gpu_execution(row: Mapping[str, object]) -> bool:
+    execution_engine = str(row.get("execution_engine") or "")
+    execution_mode = str(row.get("fem_execution_mode") or "")
+    mfem_device = str(row.get("mfem_device") or "").lower()
+    return (
+        execution_engine == "fem_native_gpu"
+        or "gpu" in execution_mode
+        or mfem_device.startswith("cuda")
+        or row.get("uses_cuda_kernels") is True
+    )
+
+
+def resolved_execution_failure(row: Mapping[str, object]) -> str | None:
+    backend = row.get("backend")
+    if backend == "fem_cpu" and not row_has_resolved_cpu_execution(row):
+        return (
+            "fem_cpu resolved execution is not native CPU: "
+            f"execution_engine={row.get('execution_engine')!r} "
+            f"fem_execution_mode={row.get('fem_execution_mode')!r} "
+            f"mfem_device={row.get('mfem_device')!r} "
+            f"uses_cuda_kernels={row.get('uses_cuda_kernels')!r}"
+        )
+    if backend == "fem_gpu" and not row_has_resolved_gpu_execution(row):
+        return (
+            "fem_gpu resolved execution is not GPU: "
+            f"execution_engine={row.get('execution_engine')!r} "
+            f"fem_execution_mode={row.get('fem_execution_mode')!r} "
+            f"mfem_device={row.get('mfem_device')!r} "
+            f"uses_cuda_kernels={row.get('uses_cuda_kernels')!r}"
+        )
+    return None
+
+
+def numeric_abs_diff(left: object, right: object) -> float | None:
+    left_value = as_float(left)
+    right_value = as_float(right)
+    if left_value is None or right_value is None:
+        return None
+    return abs(left_value - right_value)
+
+
+def numeric_rel_diff(left: object, right: object) -> float | None:
+    left_value = as_float(left)
+    right_value = as_float(right)
+    if left_value is None or right_value is None:
+        return None
+    denominator = max(abs(left_value), abs(right_value))
+    if denominator == 0.0:
+        return 0.0
+    return abs(left_value - right_value) / denominator
+
+
+def numeric_speedup(numerator: object, denominator: object) -> float | None:
+    numerator_value = as_float(numerator)
+    denominator_value = as_float(denominator)
+    if numerator_value is None or denominator_value in {None, 0.0}:
+        return None
+    return numerator_value / denominator_value
+
+
+def add_numeric_pair_summary(
+    summary: dict[str, object],
+    cpu_row: Mapping[str, object],
+    gpu_row: Mapping[str, object],
+    *,
+    field: str,
+    output_prefix: str,
+) -> None:
+    summary[f"cpu_{output_prefix}"] = as_float(cpu_row.get(field))
+    summary[f"gpu_{output_prefix}"] = as_float(gpu_row.get(field))
+    summary[f"{output_prefix}_abs_diff"] = numeric_abs_diff(
+        cpu_row.get(field),
+        gpu_row.get(field),
+    )
+    summary[f"{output_prefix}_rel_diff"] = numeric_rel_diff(
+        cpu_row.get(field),
+        gpu_row.get(field),
+    )
+
+
+def add_timing_pair_summary(
+    summary: dict[str, object],
+    cpu_row: Mapping[str, object],
+    gpu_row: Mapping[str, object],
+    *,
+    field: str,
+    output_prefix: str,
+) -> None:
+    summary[f"cpu_{output_prefix}_ms"] = as_float(cpu_row.get(field))
+    summary[f"gpu_{output_prefix}_ms"] = as_float(gpu_row.get(field))
+    summary[f"{output_prefix}_speedup_cpu_over_gpu"] = numeric_speedup(
+        cpu_row.get(field),
+        gpu_row.get(field),
+    )
+
+
+def cpu_gpu_consistency_pair_summary(
+    case: tuple[object, ...],
+    cpu_row: Mapping[str, object],
+    gpu_row: Mapping[str, object],
+) -> dict[str, object]:
+    cpu_steps = as_int(cpu_row.get("executed_steps"))
+    gpu_steps = as_int(gpu_row.get("executed_steps"))
+    summary: dict[str, object] = {
+        "case_key": list(case),
+        "solver_mesh_signature": case[0],
+        "scenario": case[1],
+        "integrator": case[2],
+        "timestep_policy": case[3],
+        "dt_s": case[4],
+        "steps": case[5],
+        "precision": case[6],
+        "cpu_execution_engine": cpu_row.get("execution_engine"),
+        "gpu_execution_engine": gpu_row.get("execution_engine"),
+        "cpu_executed_steps": cpu_steps,
+        "gpu_executed_steps": gpu_steps,
+        "executed_step_delta": (
+            abs(cpu_steps - gpu_steps)
+            if cpu_steps is not None and gpu_steps is not None
+            else None
+        ),
+    }
+    add_numeric_pair_summary(
+        summary, cpu_row, gpu_row, field="final_e_total_j", output_prefix="final_e_total_j"
+    )
+    for field in CPU_GPU_ENERGY_FIELDS:
+        if field == "final_e_total_j":
+            continue
+        add_numeric_pair_summary(
+            summary,
+            cpu_row,
+            gpu_row,
+            field=field,
+            output_prefix=field,
+        )
+    add_numeric_pair_summary(
+        summary,
+        cpu_row,
+        gpu_row,
+        field="final_torque_apm",
+        output_prefix="final_torque_apm",
+    )
+    add_numeric_pair_summary(
+        summary,
+        cpu_row,
+        gpu_row,
+        field="final_torque_t",
+        output_prefix="final_torque_t",
+    )
+    for field, output_prefix in CPU_GPU_TIMING_FIELDS.items():
+        add_timing_pair_summary(
+            summary,
+            cpu_row,
+            gpu_row,
+            field=field,
+            output_prefix=output_prefix,
+        )
+    return summary
+
+
+def cpu_gpu_consistency_pair_summaries(
+    results: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[object, ...], dict[str, list[dict[str, object]]]] = {}
+    for row in results:
+        backend = row.get("backend")
+        if backend not in {"fem_cpu", "fem_gpu"}:
+            continue
+        if row.get("status") != "ok" or resolved_execution_failure(row) is not None:
+            continue
+        key = cpu_gpu_consistency_case_key(row)
+        if not key:
+            continue
+        grouped.setdefault(key, {}).setdefault(str(backend), []).append(row)
+
+    summaries: list[dict[str, object]] = []
+    for key, by_backend in sorted(grouped.items(), key=lambda item: str(item[0])):
+        for cpu_row in by_backend.get("fem_cpu", []):
+            for gpu_row in by_backend.get("fem_gpu", []):
+                summaries.append(cpu_gpu_consistency_pair_summary(key, cpu_row, gpu_row))
+    return summaries
+
+
+def manifest_case_ids(case_manifests: list[dict[str, object]] | None) -> list[str]:
+    case_ids: list[str] = []
+    for manifest in case_manifests or []:
+        case_id = manifest.get("case_id")
+        if isinstance(case_id, str) and case_id and case_id not in case_ids:
+            case_ids.append(case_id)
+    return case_ids
+
+
+def cpu_gpu_required_case_coverage(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    case_ids = manifest_case_ids(case_manifests)
+    if not case_ids:
+        return []
+
+    pair_counts_by_scenario: dict[str, int] = {}
+    for pair in cpu_gpu_consistency_pair_summaries(results):
+        scenario = pair.get("scenario")
+        if isinstance(scenario, str):
+            pair_counts_by_scenario[scenario] = pair_counts_by_scenario.get(scenario, 0) + 1
+
+    coverage: list[dict[str, object]] = []
+    for case_id in case_ids:
+        rows = [row for row in results if row.get("scenario") == case_id]
+        cpu_rows = [row for row in rows if row.get("backend") == "fem_cpu"]
+        gpu_rows = [row for row in rows if row.get("backend") == "fem_gpu"]
+        cpu_ok_count = sum(1 for row in cpu_rows if row.get("status") == "ok")
+        gpu_ok_count = sum(1 for row in gpu_rows if row.get("status") == "ok")
+        pair_count = pair_counts_by_scenario.get(case_id, 0)
+        failures: list[str] = []
+        if not rows:
+            failures.append(f"required case_id={case_id} produced no benchmark rows")
+        if rows and not cpu_ok_count:
+            failures.append(f"required case_id={case_id} has no completed fem_cpu row")
+        if rows and not gpu_ok_count:
+            failures.append(f"required case_id={case_id} has no completed fem_gpu row")
+        if cpu_ok_count and gpu_ok_count and pair_count == 0:
+            failures.append(
+                f"required case_id={case_id} has no completed CPU/GPU pair on the same solver_mesh_signature"
+            )
+        cpu_summary = backend_case_summary_fields(cpu_rows, case_id)
+        gpu_summary = backend_case_summary_fields(gpu_rows, case_id)
+        coverage.append(
+            {
+                "case_id": case_id,
+                "status": "pass" if not failures else "fail",
+                "row_count": len(rows),
+                "cpu_row_count": len(cpu_rows),
+                "gpu_row_count": len(gpu_rows),
+                "cpu_ok_count": cpu_ok_count,
+                "gpu_ok_count": gpu_ok_count,
+                "pair_count": pair_count,
+                "cpu_average_timing_ms": cpu_summary["average_timing_ms"],
+                "gpu_average_timing_ms": gpu_summary["average_timing_ms"],
+                "cpu_observable_summary": cpu_summary["observable_summary"],
+                "gpu_observable_summary": gpu_summary["observable_summary"],
+                "failures": failures,
+            }
+        )
+    return coverage
+
+
+def average_numeric_fields(
+    rows: list[dict[str, object]],
+    fields: list[str] | tuple[str, ...],
+) -> dict[str, float]:
+    averages: dict[str, float] = {}
+    for field in fields:
+        values = [
+            value
+            for row in rows
+            if row.get("status") == "ok"
+            if (value := as_float(row.get(field))) is not None
+        ]
+        if values:
+            averages[field] = sum(values) / len(values)
+    return averages
+
+
+def backend_case_summary_fields(rows: list[dict[str, object]], scenario: str) -> dict[str, object]:
+    observable_fields = [
+        "executed_steps",
+        "final_torque_apm",
+        "final_torque_t",
+        *scenario_energy_fields(scenario),
+    ]
+    return {
+        "average_timing_ms": average_numeric_fields(
+            rows,
+            tuple(CPU_GPU_TIMING_FIELDS),
+        ),
+        "observable_summary": average_numeric_fields(rows, observable_fields),
+    }
+
+
+def cpu_gpu_required_case_failures(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None,
+) -> list[str]:
+    failures: list[str] = []
+    for case in cpu_gpu_required_case_coverage(
+        results,
+        case_manifests=case_manifests,
+    ):
+            failures.extend(str(failure) for failure in case.get("failures", []))
+    return failures
+
+
+def consistency_failure_mentions_case(failure: str, case_id: str) -> bool:
+    return (
+        f"required case_id={case_id}" in failure
+        or f"'{case_id}'" in failure
+        or f'"{case_id}"' in failure
+    )
+
+
+def case_coverage_with_consistency_failures(
+    case_coverage: list[dict[str, object]],
+    failures: list[str],
+) -> list[dict[str, object]]:
+    coverage: list[dict[str, object]] = []
+    for case in case_coverage:
+        case_id = str(case.get("case_id") or "")
+        case_failures = [str(failure) for failure in case.get("failures", [])]
+        for failure in failures:
+            if (
+                case_id
+                and consistency_failure_mentions_case(failure, case_id)
+                and failure not in case_failures
+            ):
+                case_failures.append(failure)
+        updated = dict(case)
+        updated["failures"] = case_failures
+        updated["status"] = "pass" if not case_failures else "fail"
+        coverage.append(updated)
+    return coverage
+
+
+def cpu_gpu_consistency_summary(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+) -> dict[str, object]:
+    pairs = cpu_gpu_consistency_pair_summaries(results)
+    failures = cpu_gpu_consistency_failures(
+        results,
+        case_manifests=case_manifests,
+        energy_rtol=energy_rtol,
+        energy_atol=energy_atol,
+        torque_rtol=torque_rtol,
+        torque_atol_apm=torque_atol_apm,
+        torque_atol_t=torque_atol_t,
+        max_step_delta=max_step_delta,
+    )
+    case_coverage = case_coverage_with_consistency_failures(
+        cpu_gpu_required_case_coverage(
+            results,
+            case_manifests=case_manifests,
+        ),
+        failures,
+    )
+    return {
+        "case_manifests": case_manifests or [],
+        "failed_count": sum(1 for row in results if row.get("status") != "ok"),
+        "failure_count": len(failures),
+        "failures": failures,
+        "ok_count": sum(1 for row in results if row.get("status") == "ok"),
+        "pair_count": len(pairs),
+        "pairs": pairs,
+        "required_case_count": len(case_coverage),
+        "covered_case_count": sum(1 for case in case_coverage if int(case["row_count"]) > 0),
+        "completed_pair_case_count": sum(
+            1 for case in case_coverage if int(case["pair_count"]) > 0
+        ),
+        "case_coverage": case_coverage,
+        "row_count": len(results),
+        "status": "pass" if not failures else "fail",
+    }
+
+
+def emit_cpu_gpu_consistency_summary(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+) -> None:
+    print(
+        "FEM_CPU_GPU_CONSISTENCY_SUMMARY="
+        + json.dumps(
+            cpu_gpu_consistency_summary(
+                results,
+                case_manifests=case_manifests,
+                energy_rtol=energy_rtol,
+                energy_atol=energy_atol,
+                torque_rtol=torque_rtol,
+                torque_atol_apm=torque_atol_apm,
+                torque_atol_t=torque_atol_t,
+                max_step_delta=max_step_delta,
+            ),
+            sort_keys=True,
+        )
+    )
+
+
+def write_cpu_gpu_consistency_summary(
+    results: list[dict[str, object]],
+    output_path: str | Path,
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+) -> dict[str, object]:
+    summary = cpu_gpu_consistency_summary(
+        results,
+        case_manifests=case_manifests,
+        energy_rtol=energy_rtol,
+        energy_atol=energy_atol,
+        torque_rtol=torque_rtol,
+        torque_atol_apm=torque_atol_apm,
+        torque_atol_t=torque_atol_t,
+        max_step_delta=max_step_delta,
+    )
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def cpu_gpu_consistency_failures(
+    results: list[dict[str, object]],
+    *,
+    case_manifests: list[dict[str, object]] | None = None,
+    energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
+    energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
+    torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
+    torque_atol_apm: float = DEFAULT_CPU_GPU_TORQUE_ATOL_APM,
+    torque_atol_t: float = DEFAULT_CPU_GPU_TORQUE_ATOL_T,
+    max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
+) -> list[str]:
+    failures = cpu_gpu_required_case_failures(
+        results,
+        case_manifests=case_manifests,
+    )
+    grouped: dict[tuple[object, ...], dict[str, list[dict[str, object]]]] = {}
+    for row in results:
+        backend = row.get("backend")
+        if backend not in {"fem_cpu", "fem_gpu"}:
+            continue
+        case = repeated_case_key(row)
+        if row.get("status") != "ok":
+            failures.append(f"case={case} backend={backend} did not complete{runtime_error_suffix(row)}")
+            continue
+        execution_failure = resolved_execution_failure(row)
+        if execution_failure is not None:
+            failures.append(f"case={case} {execution_failure}")
+            continue
+        key = cpu_gpu_consistency_case_key(row)
+        if not key:
+            failures.append(f"case={case} backend={backend} is missing solver_mesh_signature")
+            continue
+        grouped.setdefault(key, {}).setdefault(str(backend), []).append(row)
+
+    if not grouped:
+        failures.append("no completed FEM CPU/GPU rows with solver_mesh_signature were produced")
+        return failures
+
+    for key, by_backend in sorted(grouped.items(), key=lambda item: str(item[0])):
+        cpu_rows = by_backend.get("fem_cpu", [])
+        gpu_rows = by_backend.get("fem_gpu", [])
+        if not cpu_rows:
+            failures.append(f"case={key} is missing a completed fem_cpu row")
+            continue
+        if not gpu_rows:
+            failures.append(f"case={key} is missing a completed fem_gpu row")
+            continue
+        for cpu_row in cpu_rows:
+            for gpu_row in gpu_rows:
+                for field in scenario_energy_fields(str(key[1] or "")):
+                    compare_cpu_gpu_numeric_field(
+                        cpu_row,
+                        gpu_row,
+                        field,
+                        rtol=energy_rtol,
+                        atol=energy_atol,
+                        failures=failures,
+                        case=key,
+                    )
+                compare_cpu_gpu_numeric_field(
+                    cpu_row,
+                    gpu_row,
+                    "final_torque_apm",
+                    rtol=torque_rtol,
+                    atol=torque_atol_apm,
+                    failures=failures,
+                    case=key,
+                )
+                compare_cpu_gpu_numeric_field(
+                    cpu_row,
+                    gpu_row,
+                    "final_torque_t",
+                    rtol=torque_rtol,
+                    atol=torque_atol_t,
+                    failures=failures,
+                    case=key,
+                )
+                compare_cpu_gpu_step_count(
+                    cpu_row,
+                    gpu_row,
+                    max_step_delta=max_step_delta,
+                    failures=failures,
+                    case=key,
+                )
     return failures
 
 
@@ -2039,6 +3044,8 @@ def best_demag_policy_failures(
 def main() -> None:
     args = parse_args()
     apply_fem_cpu_no_pbc_adaptive_ready_preset(args)
+    apply_box500_airbox_exchange_only_preset(args)
+    apply_box500_airbox_interaction_consistency_preset(args)
     if not args.skip_preflight:
         preflight = build_preflight_report()
         print(f"FEM_PREFLIGHT={json.dumps(preflight, sort_keys=True)}", flush=True)
@@ -2068,6 +3075,17 @@ def main() -> None:
     demag_preconditioners = resolve_demag_preconditioners(
         args.demag_preconditioners,
         args.demag_preconditioner,
+    )
+    cpu_gpu_manifests = cpu_gpu_case_manifests(
+        scenarios=scenarios,
+        steps=args.steps,
+        dt=args.dt,
+        energy_rtol=args.cpu_gpu_energy_rtol,
+        energy_atol=args.cpu_gpu_energy_atol,
+        torque_rtol=args.cpu_gpu_torque_rtol,
+        torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+        torque_atol_t=args.cpu_gpu_torque_atol_t,
+        max_step_delta=args.cpu_gpu_max_step_delta,
     )
     mesh_env = {}
     if args.gmsh_threads is not None:
@@ -2154,6 +3172,18 @@ def main() -> None:
                                     results.append(row)
 
     write_csv(results, args.output)
+    if args.cpu_gpu_summary_output:
+        write_cpu_gpu_consistency_summary(
+            results,
+            args.cpu_gpu_summary_output,
+            case_manifests=cpu_gpu_manifests,
+            energy_rtol=args.cpu_gpu_energy_rtol,
+            energy_atol=args.cpu_gpu_energy_atol,
+            torque_rtol=args.cpu_gpu_torque_rtol,
+            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+            torque_atol_t=args.cpu_gpu_torque_atol_t,
+            max_step_delta=args.cpu_gpu_max_step_delta,
+        )
     gate_failures: list[str] = []
     gate_exit_code = 0
     demag_residual_threshold = args.demag_convergence_residual or args.demag_rtol
@@ -2185,6 +3215,30 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 5
+    if args.require_cpu_gpu_consistency:
+        emit_cpu_gpu_consistency_summary(
+            results,
+            case_manifests=cpu_gpu_manifests,
+            energy_rtol=args.cpu_gpu_energy_rtol,
+            energy_atol=args.cpu_gpu_energy_atol,
+            torque_rtol=args.cpu_gpu_torque_rtol,
+            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+            torque_atol_t=args.cpu_gpu_torque_atol_t,
+            max_step_delta=args.cpu_gpu_max_step_delta,
+        )
+        failures = cpu_gpu_consistency_failures(
+            results,
+            case_manifests=cpu_gpu_manifests,
+            energy_rtol=args.cpu_gpu_energy_rtol,
+            energy_atol=args.cpu_gpu_energy_atol,
+            torque_rtol=args.cpu_gpu_torque_rtol,
+            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+            torque_atol_t=args.cpu_gpu_torque_atol_t,
+            max_step_delta=args.cpu_gpu_max_step_delta,
+        )
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 8
     if args.emit_best_demag_policy:
         best_policy_rows = best_demag_policy_rows(
             results,

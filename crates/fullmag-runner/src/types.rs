@@ -407,6 +407,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         let mut profile = crate::SolverProfileState::new(crate::SolverProfileConfig {
             enabled: true,
             sample_every: 1,
+            sample_interval_wall_ms: 0,
             max_samples: 2,
             emit_engine_log: false,
             persist_artifact: false,
@@ -1198,6 +1199,10 @@ pub struct ExecutionProvenance {
     /// FEM GPU execution contract: hybrid_legacy_sparse, all_in_gpu_legacy_sparse, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_execution_mode: Option<String>,
+    /// Native FEM GPU qualification status: unsupported, source_visible,
+    /// production_executable, or validated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_qualification_status: Option<String>,
     /// FEM exchange operator mode selected by the native GPU exchange planner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_exchange_operator_mode: Option<String>,
@@ -1258,7 +1263,7 @@ pub struct ExecutionProvenance {
     /// Native FEM GPU reduction workspace bytes allocated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_gpu_state_reduction_workspace_bytes: Option<u64>,
-    /// Whether the native FEM exchange-only GPU RK path is eligible for this run.
+    /// Compatibility field: whether the native FEM device-resident GPU RK path is eligible.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_gpu_rk_exchange_only_enabled: Option<bool>,
     /// RK stage count selected by the native FEM GPU RK planner.

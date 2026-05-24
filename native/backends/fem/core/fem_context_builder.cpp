@@ -30,7 +30,7 @@
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/field_refresh.hpp"
-#include "cpu/mfem/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"

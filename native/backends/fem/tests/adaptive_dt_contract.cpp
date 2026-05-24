@@ -191,18 +191,18 @@ void rejected_error_shrinks_dt_and_counts_rejection() {
     check_near(floor.dt_next, 1.0e-15, 0.0, "rejected dt respects minimum");
 }
 
-void adaptive_error_norm_scales_each_aos_component() {
+void adaptive_error_norm_uses_nodewise_vector_l2_scale() {
     const std::vector<double> err{
-        0.16, -0.02, 0.03,
-        -0.16, 0.05, -0.01,
+        0.3, 0.4, 0.0,
+        0.01, 0.02, 0.02,
     };
     const std::vector<double> m_old{
-        1.0, -2.0, 0.5,
-        3.0, 4.0, -5.0,
+        0.0, 0.0, 0.0,
+        4.0, 0.0, 0.0,
     };
     const std::vector<double> m_new{
-        -1.5, -1.0, 0.25,
-        2.0, -8.0, 1.0,
+        0.6, 0.8, 0.0,
+        0.0, 0.0, 0.0,
     };
 
     const double norm = fullmag::fem::compute_adaptive_error_norm(
@@ -212,7 +212,37 @@ void adaptive_error_norm_scales_each_aos_component() {
         0.01,
         0.1);
 
-    check_near(norm, 1.0, 1e-15, "adaptive error norm uses max scaled AoS component");
+    check_near(
+        norm,
+        0.5 / 0.11,
+        1e-15,
+        "adaptive error norm uses nodewise vector l2 scale");
+}
+
+void gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string kernels = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "adaptive_error_kernels.cu");
+    const std::string physics = read_text_file(
+        repo_root() / "docs" / "physics" /
+        "0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md");
+
+    check(
+        physics.find("\\|e_a\\|_2") != std::string::npos &&
+            physics.find("\\|u^{hi}_a\\|_2") != std::string::npos,
+        "physics note must define nodewise vector l2 adaptive error control");
+    check(
+        kernels.find("const double error_norm = sqrt(err_x * err_x + err_y * err_y + err_z * err_z);") !=
+            std::string::npos,
+        "GPU adaptive error norm must reduce the vector l2 embedded error per node");
+    check(
+        kernels.find("const double state_norm = sqrt(new_mx[i] * new_mx[i] + new_my[i] * new_my[i] + new_mz[i] * new_mz[i]);") !=
+            std::string::npos,
+        "GPU adaptive error norm must scale by the high-order vector state norm");
+    check(
+        kernels.find("const double scale_x = adaptive_atol") == std::string::npos &&
+            kernels.find("const double scaled_x =") == std::string::npos,
+        "GPU adaptive error norm must not use componentwise scaling");
 }
 
 void adaptive_plan_import_validates_and_copies_config() {
@@ -266,7 +296,7 @@ void progress_report_marks_adaptive_validation_contract_covered() {
     check(
         progress.find("`fem_adaptive_dt_contract`") != std::string::npos &&
             progress.find("PI-controllera") != std::string::npos &&
-            progress.find("komponentowej normy bledu") != std::string::npos &&
+            progress.find("wezlowej wektorowej normy bledu") != std::string::npos &&
             progress.find("plan importu") != std::string::npos,
         "progress report must cite the adaptive DT gate and covered validation surfaces");
     check(
@@ -281,7 +311,8 @@ int main() {
     disabled_or_nonpositive_error_keeps_current_dt();
     accepted_error_grows_dt_and_updates_previous_error();
     rejected_error_shrinks_dt_and_counts_rejection();
-    adaptive_error_norm_scales_each_aos_component();
+    adaptive_error_norm_uses_nodewise_vector_l2_scale();
+    gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale();
     adaptive_plan_import_validates_and_copies_config();
     progress_report_marks_adaptive_validation_contract_covered();
     return 0;

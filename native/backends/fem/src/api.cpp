@@ -20,9 +20,9 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
-#include "gpu_rk.hpp"
-#include "gpu_state.hpp"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -278,7 +278,7 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     std::string reason;
-    const auto plan = fullmag::fem::gpu_rk_plan_exchange_only(handle->context, reason);
+    const auto plan = fullmag::fem::gpu_rk_plan_device_resident(handle->context, reason);
     *out_info = {};
     out_info->exchange_only_enabled = plan.enabled ? 1 : 0;
     out_info->stage_count = plan.stage_count;

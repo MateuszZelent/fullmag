@@ -18,6 +18,12 @@ field variable.
 
 See parent note `0700-shared-magnetoelastic-semantics.md` for the continuum formulation.
 
+Prescribed-strain FEM/GPU inputs use Voigt engineering-shear order
+`[e11, e22, e33, 2e23, 2e13, 2e12]`. CPU and GPU evaluators convert the last
+three entries to tensor shear before applying the B1/B2 energy and field
+formula, so the factor `2 B2` in the tensor-strain expression is not silently
+absorbed into the public input convention.
+
 ## 3. Numerical interpretation — FEM
 
 ### 3.1 Finite element spaces

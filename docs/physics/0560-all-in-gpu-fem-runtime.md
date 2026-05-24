@@ -121,7 +121,7 @@ zamiast mylic ten przypadek z niekompletnym, ale udanym runem. Kolumna `error`
 ma zachowywac poczatek i koniec dlugiego stderr/stdout, zeby koncowy
 `fallback_reason` albo natywny powod awarii nie zostal obciety.
 
-Powierzchnia `gpu_rk_exchange_only_step` nie moze uzywac
+Powierzchnia `gpu_rk_device_resident_step` nie moze uzywac
 `cudaStreamSynchronize` w hot loopie. Dopuszczalne sa tylko asynchroniczne
 walidacje launchy bez odczytu wyniku redukcji na hosta; wartosc redukcji moze
 zostac skonsumowana dopiero przez jawnie oznaczona sciezke diagnostyczna albo
@@ -195,14 +195,14 @@ Heun/RK4/RK23/RK45 path na device:
 `FemGpuState` przechowuje CSR exchange, mass, odwrotny lumped mass,
 wspolczynniki runtime, SoA magnetyzacji oraz device backup `m_backup` wymagany
 do przyszlego adaptive reject/retry, a GPU RK uzywa tych buforow do stage RHS.
-`gpu_rk.cu` ma rowniez device-side restore `m_backup -> m`, ktory uniewaznia
+`gpu/cuda/integrators/rk/rk_step.cu` ma rowniez device-side restore `m_backup -> m`, ktory uniewaznia
 FSAL i nie wymaga hostowego readbacku odrzuconej proby.
 Kernele CUDA udostepniaja tez `fullmag_cuda_adaptive_error_norm_blocks(...)`
-jako prerekwizyt device-side embedded error norm dla RK23/RK45. `gpu_rk.cu`
+jako prerekwizyt device-side embedded error norm dla RK23/RK45. `gpu/cuda/integrators/rk/rk_step.cu`
 ma helper, ktory uruchamia ten kernel, redukuje max scaled error przez
 prealokowany workspace CUB i odczytuje pojedynczy skalar telemetryczny. GPU RK
 ma tez helper decyzji PI zgodny z CPU semantics dla accept/reject i propozycji
-`dt_next`, a `gpu_rk_exchange_only_step(...)` ma juz wewnetrzny scaffold petli
+`dt_next`, a `gpu_rk_device_resident_step(...)` ma juz wewnetrzny scaffold petli
 retry, ktory liczy blad, podejmuje decyzje PI, przy reject odtwarza
 `m_backup -> m` i raportuje `rejected_attempts`. Plan wykonania nie blokuje juz
 adaptive RK23/RK45 osobnym powodem, ale ta sciezka nadal wymaga kompilacji `.cu`,
@@ -281,7 +281,7 @@ te pola rowniez dla `ok_prebuilt` i `invalid_prebuilt`, zeby prebuilt runtime
 nie omijal adaptive acceptance gate. Dla brakujacej binarki GPU `exchange_only`
 CSV musi tez publikowac `phase2_compute_hot_loop_sync_clean=false` oraz
 `phase2_gate_reason=gpu_binary=missing`, a kolumna `error` ma jawnie wskazywac
-brak binarki; samo istnienie scaffoldu retry w `gpu_rk.cu` nie jest rownowazne
+brak binarki; samo istnienie scaffoldu retry w `gpu/cuda/integrators/rk/rk_step.cu` nie jest rownowazne
 akceptacji adaptive GPU RK.
 Tryb benchmarku `--require-adaptive-gpu-rk-acceptance` ma przerywac run, jezeli
 ten gate nie jest gotowy. Sam preflight mozna uruchomic przez jawny alias

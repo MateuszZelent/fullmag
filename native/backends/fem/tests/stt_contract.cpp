@@ -8,6 +8,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -430,6 +431,36 @@ void macrospin_cpp_sign_and_precession_direction_match_reference() {
         "macrospin CPP current sign reverses the reference precession direction");
 }
 
+void slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zero() {
+    auto ctx = make_slonczewski_context();
+    ctx.stt.free_layer_thickness = 0.0;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.nodes_xyz = {
+        0.0, 0.0, 0.0,
+        0.0, 0.0, 2.0e-9,
+    };
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> rhs(6u, 0.0);
+
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
+
+    const double fallback_thickness = 2.0e-9;
+    const double prefactor =
+        (1.0e12 * kHbarTest) /
+        (2.0 * kElectronChargeTest * kMu0Test *
+         ctx.material_fields.material.saturation_magnetisation * fallback_thickness);
+    const double beta_stt = prefactor * 0.5;
+
+    check_near(
+        rhs[2],
+        -beta_stt,
+        beta_stt * 1e-12,
+        "Slonczewski geometry-derived thickness fallback");
+}
+
 void slonczewski_skips_nonmagnetic_nodes() {
     auto ctx = make_slonczewski_context();
     ctx.mesh.magnetic_node_mask = {0u};
@@ -484,6 +515,31 @@ void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
     check_near(rhs[2], u_x, u_x * 1e-12, "Zhang-Li node0 rhs z");
     check_near(rhs[3], -u_x, u_x * 1e-12, "Zhang-Li node1 rhs x");
     check_near(rhs[5], u_x, u_x * 1e-12, "Zhang-Li node1 rhs z");
+}
+
+void zhang_li_current_direction_reverses_rhs() {
+    auto forward = make_zhang_li_context();
+    auto reverse = make_zhang_li_context();
+    reverse.stt.current_density_am2 = {-1.0e12, 0.0, 0.0};
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> forward_rhs(12u, 0.0);
+    std::vector<double> reverse_rhs(12u, 0.0);
+
+    fullmag::fem::add_zhang_li_stt_rhs_aos(forward, m, forward_rhs);
+    fullmag::fem::add_zhang_li_stt_rhs_aos(reverse, m, reverse_rhs);
+
+    for (size_t i = 0; i < forward_rhs.size(); ++i) {
+        check_near(
+            reverse_rhs[i],
+            -forward_rhs[i],
+            std::max(std::fabs(forward_rhs[i]) * 1e-12, 1e-24),
+            "Zhang-Li current direction reversal");
+    }
 }
 
 void zhang_li_adds_torque_without_scaling_existing_rhs() {
@@ -577,8 +633,10 @@ int main() {
     stt_leaf_headers_document_non_owning_boundaries();
     slonczewski_cpp_rhs_uses_current_sign_and_field_like_term();
     macrospin_cpp_sign_and_precession_direction_match_reference();
+    slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zero();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
+    zhang_li_current_direction_reverses_rhs();
     zhang_li_adds_torque_without_scaling_existing_rhs();
     combined_stt_updates_max_rhs();
     stt_plan_import_copies_parameters_and_validates_family();

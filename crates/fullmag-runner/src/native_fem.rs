@@ -1719,9 +1719,10 @@ mod tests {
     use fullmag_engine::fem::{FemLlgProblem, FemLlgState, MeshTopology};
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FemPlanIR, IntegratorChoice, MaterialIR,
-        MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR,
-        RelaxationAlgorithmIR, RelaxationControlIR,
+        AdaptiveTimeStepIR, AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision,
+        FemPlanIR, IntegratorChoice, MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR,
+        MeshPeriodicNodePairIR, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedFemDemagIR,
     };
 
     fn make_test_plan() -> FemPlanIR {
@@ -2213,6 +2214,132 @@ mod tests {
         }
     }
 
+    fn vector_field_error_norms(actual: &[[f64; 3]], expected: &[[f64; 3]]) -> (f64, f64) {
+        assert_eq!(actual.len(), expected.len(), "field length mismatch");
+        let mut sum_sq = 0.0;
+        let mut linf = 0.0;
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            for component in 0..3 {
+                let diff = (a[component] - e[component]).abs();
+                sum_sq += diff * diff;
+                if diff > linf {
+                    linf = diff;
+                }
+            }
+        }
+        (sum_sq.sqrt(), linf)
+    }
+
+    fn assert_vector_field_parity(
+        label: &str,
+        cpu: &[[f64; 3]],
+        gpu: &[[f64; 3]],
+        rel_tol: f64,
+        abs_tol: f64,
+    ) {
+        let (l2, linf) = vector_field_error_norms(gpu, cpu);
+        assert_vector_field_close(label, gpu, cpu, rel_tol, abs_tol);
+        eprintln!("{label} CPU/GPU parity: L2={l2:.6e} Linf={linf:.6e}");
+    }
+
+    fn native_cpu_gpu_parity_available(require_full_demag: bool) -> bool {
+        let availability = native_availability();
+        let available = availability.native_fem_cpu_available
+            && availability.native_fem_gpu_available
+            && (!require_full_demag || availability.native_fem_gpu_full_demag_available);
+        if !available {
+            eprintln!(
+                "skipping native FEM CPU/GPU parity test: cpu={} gpu={} full_demag={} mfem_stack={} cuda_runtime={}",
+                availability.native_fem_cpu_available,
+                availability.native_fem_gpu_available,
+                availability.native_fem_gpu_full_demag_available,
+                availability.built_with_mfem_stack,
+                availability.built_with_cuda_runtime
+            );
+        }
+        available
+    }
+
+    fn native_plan_for_device(plan: &FemPlanIR, device: &str) -> FemPlanIR {
+        let mut copy = plan.clone();
+        copy.mfem_device_string = Some(device.to_string());
+        copy
+    }
+
+    struct NativeParityStep {
+        m: Vec<[f64; 3]>,
+        h_ex: Vec<[f64; 3]>,
+        h_demag: Vec<[f64; 3]>,
+        h_eff: Vec<[f64; 3]>,
+        stats: StepStats,
+        device_name: String,
+    }
+
+    fn run_native_parity_step(plan: &FemPlanIR) -> NativeParityStep {
+        let mut backend = NativeFemBackend::create(plan).expect("native fem parity create");
+        let stats = backend
+            .step(
+                crate::resolve_initial_timestep(
+                    plan.fixed_timestep,
+                    plan.adaptive_timestep.as_ref(),
+                )
+                .expect("parity plan timestep"),
+            )
+            .expect("native fem parity step");
+        let node_count = plan.mesh.nodes.len();
+        let device_name = backend.device_info().expect("device info").name;
+        NativeParityStep {
+            m: backend.copy_m(node_count).expect("copy m"),
+            h_ex: backend.copy_h_ex(node_count).expect("copy H_ex"),
+            h_demag: backend.copy_h_demag(node_count).expect("copy H_demag"),
+            h_eff: backend.copy_h_eff(node_count).expect("copy H_eff"),
+            stats,
+            device_name,
+        }
+    }
+
+    fn assert_same_parity_mesh(cpu_plan: &FemPlanIR, gpu_plan: &FemPlanIR) {
+        assert_eq!(cpu_plan.mesh.mesh_name, gpu_plan.mesh.mesh_name);
+        assert_eq!(cpu_plan.mesh.nodes, gpu_plan.mesh.nodes);
+        assert_eq!(cpu_plan.mesh.elements, gpu_plan.mesh.elements);
+        assert_eq!(cpu_plan.precision, ExecutionPrecision::Double);
+        assert_eq!(gpu_plan.precision, ExecutionPrecision::Double);
+    }
+
+    fn with_poisson_demag(mut plan: FemPlanIR) -> FemPlanIR {
+        plan.enable_demag = true;
+        plan.demag_realization = Some(ResolvedFemDemagIR::PoissonRobin);
+        plan.air_box_config = Some(AirBoxConfigIR {
+            factor: 1.5,
+            grading: 1.0,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("legacy".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("parity_fixture".to_string()),
+            boundary_marker_source: Some("parity_fixture".to_string()),
+        });
+        plan
+    }
+
+    fn with_adaptive_dt(mut plan: FemPlanIR) -> FemPlanIR {
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            atol: 1e-8,
+            rtol: 1e-5,
+            dt_initial: Some(2.5e-13),
+            dt_min: 1e-16,
+            dt_max: Some(1e-12),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.5,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+        plan
+    }
+
     fn cpu_reference_single_step(
         plan: &FemPlanIR,
     ) -> (
@@ -2520,6 +2647,136 @@ mod tests {
         assert_eq!(stats.rhs_evals, 3);
         assert_eq!(stats.demag_solves, 0);
         assert!(!stats.demag_refreshed);
+    }
+
+    #[test]
+    fn native_fem_cpu_gpu_exchange_h_eff_and_rhs_parity_when_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        for pure_damping in [false, true] {
+            let mut plan = make_exchange_only_plan();
+            if pure_damping {
+                plan.relaxation = Some(RelaxationControlIR {
+                    algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+                    stop: RelaxStopIR {
+                        torque_tolerance_apm: None,
+                        energy_tolerance_j: None,
+                        max_steps: None,
+                        max_pseudotime_s: None,
+                        max_physical_time_s: None,
+                    },
+                });
+            }
+            let cpu_plan = native_plan_for_device(&plan, "cpu");
+            let gpu_plan = native_plan_for_device(&plan, "cuda");
+            assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+            let cpu = run_native_parity_step(&cpu_plan);
+            let gpu = run_native_parity_step(&gpu_plan);
+            assert!(
+                cpu.device_name.contains("cpu") || cpu.device_name.contains("mfem"),
+                "CPU parity provenance device was {}",
+                cpu.device_name
+            );
+            assert!(
+                gpu.device_name.contains("cuda")
+                    || gpu.device_name.contains("NVIDIA")
+                    || gpu.device_name.contains("GeForce")
+                    || gpu.device_name.contains("RTX"),
+                "GPU parity provenance device was {}",
+                gpu.device_name
+            );
+
+            let mode = if pure_damping {
+                "pure_damping"
+            } else {
+                "precessional"
+            };
+            assert_vector_field_parity(&format!("{mode}.H_ex"), &cpu.h_ex, &gpu.h_ex, 5e-8, 1e-6);
+            assert_vector_field_parity(
+                &format!("{mode}.H_eff"),
+                &cpu.h_eff,
+                &gpu.h_eff,
+                5e-8,
+                1e-6,
+            );
+            assert_vector_field_parity(&format!("{mode}.m"), &cpu.m, &gpu.m, 5e-8, 1e-10);
+            assert_scalar_close(
+                &format!("{mode}.max_rhs_amplitude"),
+                gpu.stats.max_dm_dt,
+                cpu.stats.max_dm_dt,
+                5e-8,
+                1e-9,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_cpu_gpu_demag_parity_when_full_gpu_demag_is_available() {
+        if !native_cpu_gpu_parity_available(true) {
+            return;
+        }
+
+        let plan = with_poisson_demag(make_exchange_only_plan());
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+        let cpu = run_native_parity_step(&cpu_plan);
+        let gpu = run_native_parity_step(&gpu_plan);
+        assert_vector_field_parity("demag.H_demag", &cpu.h_demag, &gpu.h_demag, 5e-8, 1e-6);
+        assert_vector_field_parity("demag.H_eff", &cpu.h_eff, &gpu.h_eff, 5e-8, 1e-6);
+        assert_scalar_close(
+            "demag_energy_joules",
+            gpu.stats.e_demag,
+            cpu.stats.e_demag,
+            5e-8,
+            1e-18,
+        );
+        assert!(
+            gpu.stats.demag_solves > 0,
+            "GPU demag parity fixture must exercise the Poisson solve"
+        );
+    }
+
+    #[test]
+    fn native_fem_cpu_gpu_integrator_parity_when_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+        ] {
+            let mut plan = make_exchange_only_plan();
+            plan.integrator = integrator;
+            if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
+                plan = with_adaptive_dt(plan);
+            }
+            let cpu_plan = native_plan_for_device(&plan, "cpu");
+            let gpu_plan = native_plan_for_device(&plan, "cuda");
+            assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+            let cpu = run_native_parity_step(&cpu_plan);
+            let gpu = run_native_parity_step(&gpu_plan);
+            assert_vector_field_parity(&format!("{integrator:?}.m"), &cpu.m, &gpu.m, 5e-8, 1e-10);
+            assert_vector_field_parity(
+                &format!("{integrator:?}.H_eff"),
+                &cpu.h_eff,
+                &gpu.h_eff,
+                5e-8,
+                1e-6,
+            );
+            assert_eq!(
+                gpu.stats.rhs_evals, cpu.stats.rhs_evals,
+                "RHS evaluation count mismatch for {integrator:?}"
+            );
+        }
     }
 
     #[test]

@@ -16,8 +16,8 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
-#include "gpu_rk.hpp"
-#include "gpu_state.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
 
 #include <utility>
 #include <vector>

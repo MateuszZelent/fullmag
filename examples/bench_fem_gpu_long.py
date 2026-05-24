@@ -14,6 +14,24 @@ DEFAULT_DT = 1e-13
 DEFAULT_SHARED_DOMAIN_HMAX = 12e-9
 DEFAULT_AIRBOX_HMAX = 48e-9
 DEFAULT_AIRBOX_SIZE = (360e-9, 180e-9, 90e-9)
+BOX500_AIRBOX_SCENARIO = "exchange_only_box500_airbox1um"
+BOX500_AIRBOX_BODY_SIZE = (500e-9, 100e-9, 10e-9)
+BOX500_AIRBOX_SIZE = (1e-6, 1e-6, 1e-6)
+BOX500_DOMAIN_HMAX = 20e-9
+BOX500_AIRBOX_HMAX = 100e-9
+DEFAULT_RELAX_TORQUE_TOLERANCE = 1e-6
+BOX500_AIRBOX_SCENARIO_ALIASES = {
+    BOX500_AIRBOX_SCENARIO: "exchange_only",
+    "box500_airbox_exchange_zeeman": "exchange_zeeman",
+    "box500_airbox_exchange_demag": "exchange_demag",
+    "box500_airbox_exchange_anis_uniaxial": "exchange_anis_uniaxial",
+    "box500_airbox_exchange_anis_cubic": "exchange_anis_cubic",
+    "box500_airbox_exchange_demag_anis_uniaxial": "exchange_demag_anis_uniaxial",
+    "box500_airbox_exchange_demag_anis_cubic": "exchange_demag_anis_cubic",
+    "box500_airbox_exchange_dmi": "exchange_dmi",
+    "box500_airbox_stt_oersted": "stt_oersted",
+}
+BOX500_AIRBOX_SCENARIOS = set(BOX500_AIRBOX_SCENARIO_ALIASES)
 DEFAULT_DEMAG_SOLVER = "CG"
 DEFAULT_DEMAG_PRECONDITIONER = "AMG"
 DEFAULT_DEMAG_RTOL = 1e-8
@@ -32,6 +50,7 @@ SUPPORTED_TIMESTEP_POLICIES = {
 }
 SUPPORTED_SCENARIOS = {
     "exchange_only",
+    "exchange_zeeman",
     "exchange_demag",
     "exchange_anis_uniaxial",
     "exchange_anis_cubic",
@@ -40,6 +59,7 @@ SUPPORTED_SCENARIOS = {
     "exchange_demag_anisotropy",
     "exchange_dmi",
     "stt_oersted",
+    *BOX500_AIRBOX_SCENARIOS,
 }
 
 
@@ -142,9 +162,20 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
     }
 
 
+def canonical_scenario(scenario: str) -> str:
+    return BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+
+
+def scenario_is_box500_airbox(scenario: str) -> bool:
+    return scenario in BOX500_AIRBOX_SCENARIOS
+
+
 def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
-    if scenario == "exchange_only":
+    scenario = canonical_scenario(scenario)
+    if scenario in {"exchange_only", BOX500_AIRBOX_SCENARIO}:
         return [fm.Exchange()], {}
+    if scenario == "exchange_zeeman":
+        return [fm.Exchange(), fm.Zeeman(B=(0.0, 0.0, 0.05))], {}
     if scenario in {"exchange_anis_uniaxial", "exchange_anis_cubic"}:
         return [fm.Exchange()], {}
     if scenario == "exchange_demag":
@@ -177,10 +208,37 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
 
 
 def scenario_requires_shared_domain(scenario: str) -> bool:
-    return "demag" in scenario
+    return "demag" in canonical_scenario(scenario) or scenario_is_box500_airbox(scenario)
+
+
+def scenario_uses_relaxation(scenario: str) -> bool:
+    return scenario_is_box500_airbox(scenario)
+
+
+def scenario_body_size(scenario: str) -> tuple[float, float, float]:
+    if scenario_is_box500_airbox(scenario):
+        return BOX500_AIRBOX_BODY_SIZE
+    return (200e-9, 50e-9, 10e-9)
+
+
+def scenario_airbox_size(scenario: str) -> tuple[float, float, float]:
+    if scenario_is_box500_airbox(scenario):
+        return BOX500_AIRBOX_SIZE
+    return DEFAULT_AIRBOX_SIZE
+
+
+def scenario_domain_hmax(scenario: str) -> float:
+    default = BOX500_DOMAIN_HMAX if scenario_is_box500_airbox(scenario) else DEFAULT_SHARED_DOMAIN_HMAX
+    return env_float("FULLMAG_BENCH_DOMAIN_HMAX", default)
+
+
+def scenario_airbox_hmax(scenario: str) -> float:
+    default = BOX500_AIRBOX_HMAX if scenario_is_box500_airbox(scenario) else DEFAULT_AIRBOX_HMAX
+    return env_float("FULLMAG_BENCH_AIRBOX_HMAX", default)
 
 
 def scenario_material_kwargs(scenario: str) -> dict[str, object]:
+    scenario = canonical_scenario(scenario)
     if scenario in {"exchange_anis_uniaxial", "exchange_demag_anis_uniaxial", "exchange_demag_anisotropy"}:
         return {"Ku1": 0.5e6, "anisU": (0.0, 0.0, 1.0)}
     if scenario in {"exchange_anis_cubic", "exchange_demag_anis_cubic"}:
@@ -235,7 +293,7 @@ def build(
         else fm.LLG(integrator=integrator, fixed_timestep=dt)
     )
 
-    body = fm.Box(size=(200e-9, 50e-9, 10e-9), name="body")
+    body = fm.Box(size=scenario_body_size(scenario), name="body")
     material = fm.Material(
         name="Py",
         Ms=800e3,
@@ -256,10 +314,10 @@ def build(
         runtime_metadata = {
             "study_universe": {
                 "mode": "manual",
-                "size": list(DEFAULT_AIRBOX_SIZE),
+                "size": list(scenario_airbox_size(scenario)),
                 "center": [0.0, 0.0, 0.0],
                 "padding": [0.0, 0.0, 0.0],
-                "airbox_hmax": env_float("FULLMAG_BENCH_AIRBOX_HMAX", DEFAULT_AIRBOX_HMAX),
+                "airbox_hmax": scenario_airbox_hmax(scenario),
                 "airbox_hmin": None,
                 "airbox_growth_rate": None,
                 "airbox_grading": None,
@@ -270,21 +328,34 @@ def build(
             },
         }
 
+    study = (
+        fm.Relaxation(
+            algorithm="llg_overdamped",
+            torque_tolerance=env_float(
+                "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
+                DEFAULT_RELAX_TORQUE_TOLERANCE,
+            ),
+            max_steps=steps,
+            dynamics=dynamics,
+            outputs=[fm.SaveScalar("E_total", every=dt * steps)],
+        )
+        if scenario_uses_relaxation(scenario)
+        else fm.TimeEvolution(
+            dynamics=dynamics,
+            outputs=[fm.SaveScalar("E_total", every=dt * steps)],
+        )
+    )
+
     return fm.Problem(
         name=f"bench_fem_gpu_long_{scenario}",
         magnets=[magnet],
         energy=energy_terms,
-        study=fm.TimeEvolution(
-            dynamics=dynamics,
-            outputs=[fm.SaveScalar("E_total", every=dt * steps)],
-        ),
+        study=study,
         discretization=fm.DiscretizationHints(
             fem=fm.FEM(
                 order=1,
                 maximum_element_size=(
-                    env_float("FULLMAG_BENCH_DOMAIN_HMAX", DEFAULT_SHARED_DOMAIN_HMAX)
-                    if requires_shared_domain
-                    else 3e-9
+                    scenario_domain_hmax(scenario) if requires_shared_domain else 3e-9
                 ),
                 mesh=None if requires_shared_domain else str(mesh_path),
                 demag_solver_policy=fm.FemLinearSolverPolicy(
@@ -334,6 +405,9 @@ def emit_summary(
         ),
         "final_e_total_j": final.e_total if final is not None else None,
         "final_e_ex_j": final.e_ex if final is not None else None,
+        "final_e_ext_j": (
+            getattr(final, "e_ext", None) if final is not None else None
+        ),
         "final_e_demag_j": final.e_demag if final is not None else None,
         "wall_time_ns": final.wall_time_ns if final is not None else None,
         "exchange_wall_time_ns": final.exchange_wall_time_ns if final is not None else None,
@@ -385,6 +459,12 @@ def emit_summary(
         "max_dm_dt": final.max_dm_dt if final is not None else None,
         "max_h_eff": final.max_h_eff if final is not None else None,
         "max_h_demag": final.max_h_demag if final is not None else None,
+        "max_torque_Apm": (
+            getattr(final, "max_torque_Apm", None) if final is not None else None
+        ),
+        "max_torque_T": (
+            getattr(final, "max_torque_T", None) if final is not None else None
+        ),
         "e_ani": final.e_ani if final is not None else None,
         "e_dmi": final.e_dmi if final is not None else None,
         **load_mesh_stats(mesh_path),

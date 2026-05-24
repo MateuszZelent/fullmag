@@ -12,7 +12,7 @@
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>

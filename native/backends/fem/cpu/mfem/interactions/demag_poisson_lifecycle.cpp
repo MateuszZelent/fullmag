@@ -15,7 +15,7 @@
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "fem_common.hpp"
-#include "gpu_demag_poisson.hpp"
+#include "gpu/cuda/demag_poisson/poisson.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>

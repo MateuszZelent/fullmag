@@ -7,7 +7,7 @@
 #include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 
 #include "context.hpp"
-#include "gpu_state.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>

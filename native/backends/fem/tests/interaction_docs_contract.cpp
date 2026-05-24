@@ -224,6 +224,31 @@ void validation_matrix_documents_scope_and_runtime_boundary() {
         "validation matrix must keep runtime-open numerical fixture gates separate from local contracts");
 }
 
+void capability_matrix_blocks_validation_promotion_for_risky_fem_terms() {
+    const std::filesystem::path root = repo_root();
+    const std::string matrix =
+        read_text_file(root / "docs" / "specs" / "capability-matrix-v0.md");
+
+    const char *features[] = {
+        "Slonczewski STT",
+        "Zhang-Li STT",
+        "DMI interfacial/bulk",
+        "thermal noise",
+        "generalized/current-solution Oersted on FEM",
+        "two-way magnetoelasticity",
+    };
+
+    check(
+        matrix.find("must not be described as `validated` until their feature-specific gates pass") !=
+            std::string::npos,
+        "capability matrix must keep risky native FEM terms out of validated status");
+    for (const char *feature : features) {
+        check(
+            matrix.find(feature) != std::string::npos,
+            "capability matrix must list each risky native FEM feature");
+    }
+}
+
 void progress_report_marks_interaction_docs_gate_closed() {
     const std::filesystem::path root = repo_root();
     const std::string progress = read_text_file(
@@ -340,6 +365,7 @@ int main() {
     validation_matrix_names_mfem_stack_fixture_statuses();
     validation_matrix_names_periodic_fixture_coverage();
     validation_matrix_documents_scope_and_runtime_boundary();
+    capability_matrix_blocks_validation_promotion_for_risky_fem_terms();
     progress_report_marks_interaction_docs_gate_closed();
     progress_report_marks_local_interaction_split_contract_covered();
     progress_report_marks_validation_matrix_contract_covered();

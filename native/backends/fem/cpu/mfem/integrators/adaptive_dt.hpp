@@ -74,11 +74,12 @@ bool initialize_adaptive_dt_plan_fields(
 AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm);
 
 /*
- * Compute the componentwise normalized error for an adaptive explicit RK step.
+ * Compute the nodewise vector-normalized error for an adaptive explicit RK step.
  *
- * Inputs are AoS magnetization vectors. For each component, the scale is
- * `atol + rtol * max(abs(m_old), abs(m_new))`; the returned norm is the maximum
- * absolute error divided by that scale. A value of `1` is exactly at tolerance.
+ * Inputs are AoS magnetization vectors. For each node, the scale is
+ * `atol + rtol * max(||m_new||_2, 1)`; the returned norm is the maximum
+ * vector error norm divided by that scale. A value of `1` is exactly at
+ * tolerance.
  */
 double compute_adaptive_error_norm(
     const std::vector<double> &err,

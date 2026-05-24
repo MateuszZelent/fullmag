@@ -2885,16 +2885,7 @@ fn validate_all_in_gpu_fem_runtime_contract(
         return Ok(());
     }
     if execution_mode != "all_in_gpu_legacy_sparse"
-        || !gpu_rk_plan.exchange_only_enabled
-        || !gpu_rk_plan.stage_exchange_device_resident
-        || !gpu_rk_plan.uses_gpu_poisson
-        || gpu_rk_plan.demag_operator_mode != "device_hypre_poisson"
-        || gpu_rk_plan.hypre_execution_policy != "device"
-        || gpu_rk_plan.demag_residency != "device"
-        || !matches!(
-            gpu_rk_plan.exchange_operator_mode.as_str(),
-            "legacy_sparse_gpu" | "partial_assembly_gpu"
-        )
+        || !native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan)
     {
         return Err(RunError {
             message: format!(
@@ -2921,6 +2912,20 @@ fn validate_all_in_gpu_fem_runtime_contract(
         });
     }
     Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRkPlanInfo) -> bool {
+    gpu_rk_plan.exchange_only_enabled
+        && gpu_rk_plan.stage_exchange_device_resident
+        && gpu_rk_plan.uses_gpu_poisson
+        && gpu_rk_plan.demag_operator_mode == "device_hypre_poisson"
+        && gpu_rk_plan.hypre_execution_policy == "device"
+        && gpu_rk_plan.demag_residency == "device"
+        && matches!(
+            gpu_rk_plan.exchange_operator_mode.as_str(),
+            "legacy_sparse_gpu" | "partial_assembly_gpu"
+        )
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2951,6 +2956,35 @@ fn native_fem_uses_gpu_poisson(plan: &FemPlanIR) -> bool {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_fem_gpu_qualification_status(
+    plan: &FemPlanIR,
+    stats: Option<&StepStats>,
+    gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
+) -> &'static str {
+    if plan.mfem_device_string.as_deref() == Some("cpu") {
+        return "unsupported";
+    }
+    let Some(rk_plan) = gpu_rk_plan else {
+        return if native_fem_uses_cuda_kernels(plan) {
+            "source_visible"
+        } else {
+            "unsupported"
+        };
+    };
+    let hot_loop_clean = stats
+        .map(|entry| entry.hot_loop_host_sync_count == 0)
+        .unwrap_or(true);
+    if native_fem_execution_mode(plan) == "all_in_gpu_legacy_sparse"
+        && native_fem_gpu_rk_plan_is_strict_device_resident(rk_plan)
+        && hot_loop_clean
+    {
+        "production_executable"
+    } else {
+        "source_visible"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn apply_native_fem_runtime_contract(
     provenance: &mut ExecutionProvenance,
     plan: &FemPlanIR,
@@ -2959,6 +2993,8 @@ fn apply_native_fem_runtime_contract(
     gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
 ) {
     provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
+    provenance.fem_gpu_qualification_status =
+        Some(native_fem_gpu_qualification_status(plan, stats, gpu_rk_plan).to_string());
     provenance.llg_mode = Some(native_fem_llg_mode(plan).to_string());
     provenance.fem_data_residency =
         Some(native_fem_data_residency(plan, stats, gpu_state).to_string());
@@ -4132,9 +4168,10 @@ mod tests {
     use fullmag_ir::{
         AntennaIR, BackendTarget, CurrentModuleIR, CurrentTransportModelIR, DiscretizationHintsIR,
         FdmHintsIR, FemHintsIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
-        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RelaxStopIR, RelaxationAlgorithmIR,
-        RelaxationControlIR, RfDriveIR,
+        FemObjectSegmentIR, FemPlanIR, MeshIR, ProblemIR, RfDriveIR,
     };
+    #[cfg(feature = "fem-gpu")]
+    use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::fs;
@@ -4650,6 +4687,48 @@ mod tests {
         );
         assert_eq!(provenance.hot_loop_host_sync_count, Some(3));
         assert_eq!(provenance.fem_gpu_state_allocated, Some(true));
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("source_visible")
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_marks_strict_device_gpu_as_executable_not_validated() {
+        let plan = tiny_fem_plan();
+        let stats = StepStats {
+            hot_loop_host_sync_count: 0,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            Some(&rk_plan),
+        );
+
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("production_executable")
+        );
+        assert_ne!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("validated")
+        );
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -4667,13 +4746,17 @@ mod tests {
             demag_operator_mode: "unsupported".to_string(),
             hypre_execution_policy: "unavailable".to_string(),
             demag_residency: "unavailable".to_string(),
-            reason: "GPU RK exchange-only path requires CUDA runtime support".to_string(),
+            reason: "GPU RK device-resident path requires CUDA runtime support".to_string(),
         };
         let mut provenance = ExecutionProvenance::default();
 
         apply_native_fem_runtime_contract(&mut provenance, &plan, None, None, Some(&rk_plan));
 
         assert_eq!(provenance.fem_gpu_rk_exchange_only_enabled, Some(false));
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("source_visible")
+        );
         assert_eq!(provenance.fem_gpu_rk_stage_count, Some(2));
         assert_eq!(provenance.fem_gpu_rk_uses_cuda_kernels, Some(false));
         assert_eq!(provenance.fem_gpu_rk_allows_exchange_host_sync, Some(false));
@@ -4696,7 +4779,7 @@ mod tests {
         assert_eq!(provenance.demag_residency.as_deref(), Some("unavailable"));
         assert_eq!(
             provenance.fem_gpu_rk_block_reason.as_deref(),
-            Some("GPU RK exchange-only path requires CUDA runtime support")
+            Some("GPU RK device-resident path requires CUDA runtime support")
         );
     }
 

@@ -20,13 +20,13 @@
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
-#include "cpu/mfem/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fullmag_fem.h"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <array>
 #include <cstdint>

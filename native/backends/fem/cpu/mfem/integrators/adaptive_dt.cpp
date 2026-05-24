@@ -2,7 +2,7 @@
  * Adaptive timestep source contract.
  *
  * This source owns adaptive RK plan-field validation/import, scalar PI
- * accept/reject control, and AoS componentwise embedded-error normalization. It does not evaluate RK stages, compose H_eff, update magnetization, or publish step metrics.
+ * accept/reject control, and nodewise vector embedded-error normalization. It does not evaluate RK stages, compose H_eff, update magnetization, or publish step metrics.
  */
 
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
@@ -88,15 +88,21 @@ double compute_adaptive_error_norm(
     double atol,
     double rtol)
 {
+    (void)m_old;
     double max_scaled = 0.0;
     const size_t n = err.size() / 3u;
     for (size_t i = 0; i < n; ++i) {
         const size_t b = i * 3u;
-        for (int d = 0; d < 3; ++d) {
-            const double scale =
-                atol + rtol * std::max(std::abs(m_old[b + d]), std::abs(m_new[b + d]));
-            max_scaled = std::max(max_scaled, std::abs(err[b + d]) / scale);
-        }
+        const double error_norm = std::sqrt(
+            err[b] * err[b] +
+            err[b + 1] * err[b + 1] +
+            err[b + 2] * err[b + 2]);
+        const double state_norm = std::sqrt(
+            m_new[b] * m_new[b] +
+            m_new[b + 1] * m_new[b + 1] +
+            m_new[b + 2] * m_new[b + 2]);
+        const double scale = atol + rtol * std::max(state_norm, 1.0);
+        max_scaled = std::max(max_scaled, scale > 0.0 ? error_norm / scale : 0.0);
     }
     return max_scaled;
 }

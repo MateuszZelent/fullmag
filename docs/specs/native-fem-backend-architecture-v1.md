@@ -1,7 +1,7 @@
 # Native FEM Backend Architecture v1
 
 - Status: canonical target architecture
-- Last updated: 2026-05-16
+- Last updated: 2026-05-23
 - Related ADRs:
   - `docs/adr/0014-native-fem-backend-modularization.md`
 - Related physics:
@@ -208,6 +208,66 @@ owned by `native/backends/fem/core/fem_field_buffers.hpp/.cpp`; `Context` still
 stores the compatibility vectors until the full `FemFieldBuffers` state owner
 lands.
 
+GPU ownership migration has started with behavior-preserving source moves under
+`native/backends/fem/gpu/cuda/`. GPU exchange readiness planning is owned by
+`gpu/cuda/exchange/exchange_plan.hpp/.cpp`; legacy sparse exchange field and
+energy CUDA wrappers are owned by `gpu/cuda/exchange/exchange_kernels.hpp/.cu`.
+`FemGpuState` allocation/transfer/device
+metadata is owned by `gpu/cuda/state/gpu_state.hpp/.cpp`, and transfer-audit scope
+tracking is owned by `gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
+host-device CUDA transfer wrappers are owned by
+`gpu/cuda/transfer/transfer_kernels.hpp/.cu`. GPU-state
+runtime bootstrap and CUDA stream/snapshot metadata are owned by
+`gpu/cuda/runtime/gpu_state_runtime.hpp/.cpp`. The legacy empty
+`src/gpu_exchange.cpp`, `src/gpu_rk.cpp`, `src/gpu_state.cpp`, and
+`src/transfer_audit.cpp` placeholder sources have been removed from the build.
+GPU fused LLG RHS CUDA wrappers are owned by
+`gpu/cuda/integrators/llg/llg_rhs_kernels.hpp/.cu`.
+GPU RK readiness planning is owned by
+`gpu/cuda/integrators/rk/rk.hpp` and `gpu/cuda/integrators/rk/rk_plan.cpp`, and uses the device-resident planner name
+`gpu_rk_plan_device_resident`; the older internal
+`gpu_rk_plan_exchange_only` wrapper has been removed. GPU RK CUDA step orchestration, final scalar
+statistics, and strict GPU snapshot recomputation are owned by
+`gpu/cuda/integrators/rk/rk_step.cu`. Embedded RK adaptive-error CUDA block
+reducers are owned by `gpu/cuda/integrators/rk/adaptive_error_kernels.hpp/.cu`.
+Shared exported CUDA kernels and the
+compatibility umbrella header are owned by `gpu/cuda/kernels/kernels.hpp/.cu`;
+uniaxial/cubic anisotropy CUDA field/energy wrappers are owned by
+`gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp/.cu`;
+external-field Zeeman CUDA energy wrappers are owned by
+`gpu/cuda/interactions/zeeman/zeeman_kernels.hpp/.cu`;
+scaled Oersted CUDA field-add wrappers are owned by
+`gpu/cuda/interactions/oersted/oersted_kernels.hpp/.cu`;
+interfacial/bulk DMI weak-residual CUDA wrappers are owned by
+`gpu/cuda/interactions/dmi/dmi_kernels.hpp/.cu`;
+Slonczewski/Zhang-Li STT CUDA RHS wrappers are owned by
+`gpu/cuda/interactions/stt/stt_kernels.hpp/.cu`;
+deterministic Brown thermal CUDA field wrappers are owned by
+`gpu/cuda/interactions/thermal/thermal_kernels.hpp/.cu`;
+prescribed-strain magnetoelastic CUDA field/energy wrappers are owned by
+`gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp/.cu`;
+strict device Poisson demag RHS, recovery, and energy CUDA wrappers are owned by
+`gpu/cuda/kernels/demag_kernels.hpp/.cu`. GPU step metric and average magnetization
+observable wrappers are owned by
+`gpu/cuda/observables/observable_kernels.hpp/.cu`. GPU device-wide scalar reductions
+are owned by `gpu/cuda/reductions/reduction_kernels.hpp/.cu`. Strict GPU demag Poisson public lifecycle and
+status reporting are owned by `gpu/cuda/demag_poisson/poisson.hpp/.cpp`; per-stage
+RHS/solve/recovery/energy orchestration is owned by
+`gpu/cuda/demag_poisson/stage_compute.hpp/.cpp`; Hypre device-policy solver setup
+and iteration/residual extraction are owned by
+`gpu/cuda/demag_poisson/hypre_device_solver.hpp/.cpp`; internal P1 RHS/recovery CSR
+operator records, workspace layout, and device upload/destroy helpers are owned by
+`gpu/cuda/demag_poisson/operators.hpp/.cpp`.
+The device-resident GPU RK execution entrypoint is `gpu_rk_device_resident_step`;
+the previous `gpu_rk_exchange_only_step` name is not used for production step
+dispatch because the path now covers exchange plus eligible local, demag, DMI,
+thermal, Oersted, STT, and magnetoelastic terms.
+Runner provenance publishes `fem_gpu_qualification_status` as
+`unsupported`, `source_visible`, `production_executable`, or `validated`.
+The strict GPU path may reach `production_executable` only when resolved
+operator modes are device-resident and the hot-loop synchronization audit is
+clean; `validated` is reserved for documented validation workloads.
+
 ## 5. Target Native Layout
 
 The target native FEM layout is:
@@ -391,6 +451,21 @@ cubic anisotropy after derivative tests
 Poisson demag airbox with documented boundary limits
 explicit RK fixed/adaptive with stop-reason telemetry
 ```
+
+FEM GPU parity gates live in `crates/fullmag-runner/src/native_fem.rs` and
+compare native FEM CPU against native FEM GPU on the same mesh signature,
+precision, material configuration, and timestep policy. The required gate set
+is:
+
+```text
+native_fem_cpu_gpu_exchange_h_eff_and_rhs_parity_when_available
+native_fem_cpu_gpu_demag_parity_when_full_gpu_demag_is_available
+native_fem_cpu_gpu_integrator_parity_when_available
+```
+
+Each gate reports `L2` and `Linf` field error norms when the host exposes the
+required MFEM CPU/CUDA runtime. Passing source-only tests or availability probes
+is not enough to mark strict FEM GPU as `validated`.
 
 Do not promote these without feature-specific gates:
 

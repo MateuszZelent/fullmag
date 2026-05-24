@@ -19,6 +19,19 @@ static void check(bool condition, const char *msg) {
     }
 }
 
+static fullmag_fem_backend *create_backend_or_fail(
+    const fullmag_fem_plan_desc *plan,
+    const char *msg)
+{
+    fullmag_fem_backend *handle = fullmag_fem_backend_create(plan);
+    if (handle == nullptr) {
+        const char *error = fullmag_fem_backend_last_error(nullptr);
+        std::fprintf(stderr, "FAIL: %s: %s\n", msg, error != nullptr ? error : "no error");
+        std::exit(1);
+    }
+    return handle;
+}
+
 int main() {
     const double nodes[] = {
         0.0, 0.0, 0.0,
@@ -62,8 +75,8 @@ int main() {
     plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     plan.gpu_device_index = -1;
 
-    fullmag_fem_backend *handle = fullmag_fem_backend_create(&plan);
-    check(handle != nullptr, "fullmag_fem_backend_create returned null");
+    fullmag_fem_backend *handle =
+        create_backend_or_fail(&plan, "fullmag_fem_backend_create returned null");
 
     fullmag_fem_gpu_state_info info = {};
     const int rc = fullmag_fem_backend_get_gpu_state_info(handle, &info);
@@ -101,7 +114,7 @@ int main() {
     if (availability.built_with_cuda_runtime == 0) {
         check(
             rk_plan.exchange_only_enabled == 0,
-            "no-CUDA build must not enable exchange-only GPU RK");
+            "no-CUDA build must not enable device-resident GPU RK");
         check(
             std::strlen(rk_plan.reason) > 0,
             "no-CUDA GPU RK plan must expose a block reason through C ABI");
@@ -114,8 +127,7 @@ int main() {
     fullmag_fem_backend_destroy(handle);
 
     plan.integrator = FULLMAG_FEM_INTEGRATOR_RK23_BS;
-    handle = fullmag_fem_backend_create(&plan);
-    check(handle != nullptr, "RK23 fullmag_fem_backend_create returned null");
+    handle = create_backend_or_fail(&plan, "RK23 fullmag_fem_backend_create returned null");
 
     info = {};
     check(
@@ -135,8 +147,7 @@ int main() {
     fullmag_fem_backend_destroy(handle);
 
     plan.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
-    handle = fullmag_fem_backend_create(&plan);
-    check(handle != nullptr, "RK45 fullmag_fem_backend_create returned null");
+    handle = create_backend_or_fail(&plan, "RK45 fullmag_fem_backend_create returned null");
 
     info = {};
     check(
@@ -156,8 +167,7 @@ int main() {
     fullmag_fem_backend_destroy(handle);
 
     plan.integrator = FULLMAG_FEM_INTEGRATOR_RK4;
-    handle = fullmag_fem_backend_create(&plan);
-    check(handle != nullptr, "RK4 fullmag_fem_backend_create returned null");
+    handle = create_backend_or_fail(&plan, "RK4 fullmag_fem_backend_create returned null");
 
     info = {};
     check(

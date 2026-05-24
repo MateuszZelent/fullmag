@@ -12,8 +12,8 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
-#include "gpu_state.hpp"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 namespace fullmag::fem {
 

@@ -3933,6 +3933,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
+        fem_gpu_qualification_status: None,
         fem_exchange_operator_mode: None,
         fem_data_residency: None,
         uses_cuda_kernels: None,
@@ -4023,6 +4024,7 @@ fn cuda_execution_provenance(
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
+        fem_gpu_qualification_status: None,
         fem_exchange_operator_mode: None,
         fem_data_residency: None,
         uses_cuda_kernels: None,
@@ -4118,6 +4120,14 @@ fn fem_gpu_execution_provenance(
                 "cpu_native"
             } else {
                 "all_in_gpu_legacy_sparse"
+            }
+            .to_string(),
+        ),
+        fem_gpu_qualification_status: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "unsupported"
+            } else {
+                "source_visible"
             }
             .to_string(),
         ),

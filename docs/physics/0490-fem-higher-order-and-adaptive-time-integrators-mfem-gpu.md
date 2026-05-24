@@ -165,6 +165,8 @@ That rule has a direct performance consequence:
   after the accepted state is formed;
 - FSAL methods such as Bogacki-Shampine RK23 and Dormand-Prince RK45 may reuse
   the final stage only when that stage is evaluated at the accepted final state;
+- FSAL reuse is disabled for stochastic Brown thermal fields and time-dependent Oersted fields,
+  because those RHS terms are not autonomous across accepted step boundaries;
 - `rhs_evals` must include the post-step RHS/effective-field refresh when it is
   executed;
 - `demag_solve_count` must include every Poisson demag solve, including the

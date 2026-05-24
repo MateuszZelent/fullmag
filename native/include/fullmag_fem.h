@@ -384,6 +384,7 @@ typedef struct {
 } fullmag_fem_gpu_state_info;
 
 typedef struct {
+    /* Legacy ABI name for device-resident GPU RK eligibility. */
     int exchange_only_enabled;
     uint32_t stage_count;
     int uses_cuda_kernels;

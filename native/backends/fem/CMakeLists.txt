@@ -17,6 +17,10 @@ set(FEM_SOURCES
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
     core/fem_state.cpp
+    gpu/cuda/exchange/exchange_plan.cpp
+    gpu/cuda/integrators/rk/rk_plan.cpp
+    gpu/cuda/state/gpu_state.cpp
+    gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp
     cpu/mfem/interactions/anisotropy_uniaxial.cpp
@@ -90,7 +94,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/cpu_threads.cpp
     cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
-    cpu/mfem/runtime/gpu_state_runtime.cpp
+    gpu/cuda/runtime/gpu_state_runtime.cpp
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
@@ -98,15 +102,14 @@ set(FEM_SOURCES
     cpu/mfem/runtime/stage_completion.cpp
     cpu/mfem/runtime/state_io.cpp
     cpu/mfem/runtime/step_metrics.cpp
+    gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/demag_poisson/operators.cpp
+    gpu/cuda/demag_poisson/poisson.cpp
+    gpu/cuda/demag_poisson/stage_compute.cpp
     src/api.cpp
     src/context.cpp
     src/dmi_weak_residual.cpp
-    src/gpu_demag_poisson.cpp
     src/error.cpp
-    src/gpu_exchange.cpp
-    src/gpu_rk.cpp
-    src/gpu_state.cpp
-    src/transfer_audit.cpp
 )
 
 if(FULLMAG_USE_MFEM_STACK)
@@ -120,8 +123,22 @@ if(FULLMAG_USE_MFEM_STACK)
     if(FULLMAG_ENABLE_CUDA)
         enable_language(CUDA)
         list(APPEND FEM_SOURCES
-            src/kernels.cu
-            src/gpu_rk.cu
+            gpu/cuda/exchange/exchange_kernels.cu
+            gpu/cuda/integrators/llg/llg_rhs_kernels.cu
+            gpu/cuda/integrators/rk/adaptive_error_kernels.cu
+            gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
+            gpu/cuda/interactions/dmi/dmi_kernels.cu
+            gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
+            gpu/cuda/interactions/oersted/oersted_kernels.cu
+            gpu/cuda/interactions/stt/stt_kernels.cu
+            gpu/cuda/interactions/thermal/thermal_kernels.cu
+            gpu/cuda/interactions/zeeman/zeeman_kernels.cu
+            gpu/cuda/kernels/kernels.cu
+            gpu/cuda/kernels/demag_kernels.cu
+            gpu/cuda/observables/observable_kernels.cu
+            gpu/cuda/reductions/reduction_kernels.cu
+            gpu/cuda/transfer/transfer_kernels.cu
+            gpu/cuda/integrators/rk/rk_step.cu
         )
     endif()
 endif()
@@ -175,9 +192,15 @@ target_include_directories(fem_gpu_rk_plan PRIVATE
 )
 add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
 
+add_executable(fem_cuda_tetra_gradient_contract tests/cuda_tetra_gradient_contract.cpp)
+add_test(NAME fem_cuda_tetra_gradient_contract COMMAND fem_cuda_tetra_gradient_contract)
+
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
-target_include_directories(fem_transfer_audit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(fem_transfer_audit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
 
 add_executable(fem_source_facade_contract tests/source_facade_contract.cpp)

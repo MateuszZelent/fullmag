@@ -3,7 +3,7 @@
  */
 
 #include "context.hpp"
-#include "cpu/mfem/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -68,9 +68,10 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
         read_text_file(root / "core" / "fem_context_builder.cpp");
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
-        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
     const std::string runtime_header =
-        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.hpp");
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string build_context_from_plan = extract_function_body(
         context_builder,
         "bool build_context_from_plan(");
@@ -100,6 +101,27 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
     check(
         runtime.find("bool initialize_context_gpu_state(") != std::string::npos,
         "GPU-state bootstrap must be defined in gpu_state_runtime.cpp");
+    check(
+        cmake.find("gpu/cuda/runtime/gpu_state_runtime.cpp") != std::string::npos,
+        "FEM CMake source list must build GPU-state runtime bootstrap from gpu/cuda/runtime");
+    check(
+        cmake.find("cpu/mfem/runtime/gpu_state_runtime.cpp") == std::string::npos,
+        "FEM CMake source list must not build GPU-state runtime bootstrap from cpu/mfem/runtime");
+    check(
+        !std::filesystem::exists(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp") &&
+            !std::filesystem::exists(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.hpp"),
+        "GPU-state runtime bootstrap must not remain under cpu/mfem/runtime");
+    check(
+        runtime.find("#include \"gpu/cuda/runtime/gpu_state_runtime.hpp\"") !=
+            std::string::npos,
+        "GPU-state runtime source must include its GPU/CUDA runtime-owned header");
+    check(
+        runtime.find("GPU CUDA state-runtime source contract") != std::string::npos,
+        "GPU-state runtime source must document its GPU/CUDA runtime ownership");
+    check(
+        runtime_header.find("GPU CUDA state-runtime module header") !=
+            std::string::npos,
+        "GPU-state runtime header must document its GPU/CUDA runtime ownership");
     check(
         runtime.find("gpu_state_upload_runtime_coefficients(") != std::string::npos,
         "gpu_state_runtime.cpp must upload runtime coefficients");
@@ -191,11 +213,13 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
 void gpu_state_audit04_memory_contracts_are_source_visible() {
     const std::filesystem::path root = fem_source_root();
     const std::string gpu_state =
-        read_text_file(root / "src" / "gpu_state.cpp");
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string gpu_state_header =
-        read_text_file(root / "include" / "gpu_state.hpp");
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
     const std::string runtime =
-        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
+    const std::string transfer_kernels =
+        read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_kernels.cu");
 
     const std::string initialize_body =
         extract_function_body(gpu_state, "bool gpu_state_initialize(");
@@ -217,6 +241,10 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         extract_function_body(gpu_state, "bool gpu_state_upload_component_aos(");
     const std::string upload_optional_component_body =
         extract_function_body(gpu_state, "bool gpu_state_upload_optional_component_aos(");
+    const std::string download_component_body =
+        extract_function_body(gpu_state, "bool gpu_state_download_component_aos(");
+    const std::string zero_component_body =
+        extract_function_body(gpu_state, "bool gpu_state_zero_component_device(");
     check(
         upload_m_body.find("std::vector<double> mx") == std::string::npos &&
             upload_m_body.find("std::vector<double> my") == std::string::npos &&
@@ -248,6 +276,25 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
             (download_m_body.find("cudaMemcpy2D") != std::string::npos ||
                 download_m_body.find("fullmag_cuda_download_soa_to_aos") != std::string::npos),
         "GPU state transfers must use cudaMemcpy2D or device-side AoS/SoA transpose helpers");
+    check(
+        transfer_kernels.find("cudaError_t fullmag_cuda_upload_aos_to_soa(") != std::string::npos &&
+            transfer_kernels.find("cudaError_t fullmag_cuda_download_soa_to_aos(") !=
+                std::string::npos,
+        "AoS/SoA CUDA transfer helpers must return cudaError_t to avoid hidden sync-as-error-checking");
+    check(
+        transfer_kernels.find("cudaMemcpy2DAsync(") == std::string::npos,
+        "AoS/SoA CUDA transfer helpers must not enqueue async host transfers that callers immediately synchronize");
+    for (const std::string *body : {
+             &upload_m_body,
+             &download_m_body,
+             &upload_component_body,
+             &download_component_body,
+             &zero_component_body,
+         }) {
+        check(
+            body->find("cudaStreamSynchronize(nullptr)") == std::string::npos,
+            "GPU-state host I/O helpers must not force a default-stream synchronization");
+    }
 }
 
 void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {

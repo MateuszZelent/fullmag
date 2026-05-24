@@ -10,8 +10,8 @@
 #include "context.hpp"
 #include "core/fem_field_buffers.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
-#include "gpu_state.hpp"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
 #include <cstring>

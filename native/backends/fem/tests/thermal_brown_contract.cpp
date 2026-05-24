@@ -382,6 +382,29 @@ void seeded_replay_is_deterministic_for_same_time_and_dt() {
         "fixed Brown seed replay keeps the same sigma diagnostic");
 }
 
+void changed_accepted_dt_resamples_thermal_field() {
+    auto ctx = make_thermal_context();
+
+    fullmag::fem::refresh_thermal_brown_field(ctx);
+    const auto first_refresh = ctx.thermal_brown.h_xyz;
+    const double first_sigma = ctx.thermal_brown.sigma;
+
+    ctx.adaptive_dt.current_dt *= 2.0;
+    fullmag::fem::refresh_thermal_brown_field(ctx);
+
+    check(
+        ctx.thermal_brown.h_xyz != first_refresh,
+        "changed accepted dt must resample the Brown thermal field");
+    check(
+        ctx.thermal_brown.sigma != first_sigma,
+        "changed accepted dt must update the Brown sigma diagnostic");
+    check_near(
+        ctx.thermal_brown.last_refresh_dt,
+        ctx.adaptive_dt.current_dt,
+        0.0,
+        "changed accepted dt cache key");
+}
+
 void disabled_or_invalid_state_clears_thermal_field() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 1;
@@ -440,6 +463,7 @@ int main() {
     sigma_formula_matches_brown_field_contract();
     refresh_uses_per_node_sigma_mask_and_cache();
     seeded_replay_is_deterministic_for_same_time_and_dt();
+    changed_accepted_dt_resamples_thermal_field();
     disabled_or_invalid_state_clears_thermal_field();
     thermal_field_adds_to_effective_field();
     thermal_plan_import_sets_temperature_seed_and_initializes_buffer();

@@ -189,7 +189,7 @@ void runtime_source_files_document_module_boundaries() {
     const std::string field_refresh =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "field_refresh.cpp");
     const std::string gpu_state =
-        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
     const std::string interrupt =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "interrupt.cpp");
     const std::string mfem_context =
@@ -230,7 +230,7 @@ void runtime_source_files_document_module_boundaries() {
         field_refresh.find("does not solve demag, compose H_eff, own state I/O, or publish step metrics") != std::string::npos,
         "field-refresh runtime source file must document its non-owning module boundary");
     check(
-        gpu_state.find("GPU-state runtime source contract") != std::string::npos,
+        gpu_state.find("GPU CUDA state-runtime source contract") != std::string::npos,
         "GPU-state runtime source file must document its source contract");
     check(
         gpu_state.find("does not choose MFEM devices, assemble exchange operators, execute RK stages, or own state I/O") != std::string::npos,
@@ -288,7 +288,7 @@ void runtime_headers_document_module_boundaries() {
     const std::string field_refresh =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "field_refresh.hpp");
     const std::string gpu_state =
-        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.hpp");
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
     const std::string interrupt =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "interrupt.hpp");
     const std::string mfem_device =

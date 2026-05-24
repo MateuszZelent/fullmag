@@ -1,4 +1,4 @@
-#include "transfer_audit.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -40,9 +40,12 @@ int main()
 {
     const std::filesystem::path root = fem_source_root();
     const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string transfer_header = read_text_file(root / "include" / "transfer_audit.hpp");
-    const std::string transfer_impl = read_text_file(root / "src" / "transfer_audit.cpp");
+    const std::string transfer_header =
+        read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_audit.hpp");
+    const std::string transfer_impl =
+        read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_audit.cpp");
     check(
         api.find("env_flag(\"FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC\")") ==
             std::string::npos,
@@ -70,6 +73,27 @@ int main()
         transfer_impl.find("void configure_transfer_audit_from_env(TransferAudit &audit)") !=
             std::string::npos,
         "transfer audit implementation must own env gate import");
+    check(
+        cmake.find("gpu/cuda/transfer/transfer_audit.cpp") != std::string::npos,
+        "FEM CMake source list must build transfer audit from gpu/cuda/transfer");
+    check(
+        cmake.find("src/transfer_audit.cpp") == std::string::npos &&
+            !std::filesystem::exists(root / "src" / "transfer_audit.cpp"),
+        "legacy transfer-audit placeholder source must be removed");
+    check(
+        !std::filesystem::exists(root / "include" / "transfer_audit.hpp"),
+        "transfer audit header must not remain in root include");
+    check(
+        transfer_header.find("GPU CUDA transfer-audit module header") !=
+            std::string::npos,
+        "transfer audit header must document its module ownership");
+    check(
+        transfer_impl.find("#include \"gpu/cuda/transfer/transfer_audit.hpp\"") !=
+            std::string::npos,
+        "transfer audit implementation must include its module-owned header");
+    check(
+        transfer_impl.find("GPU CUDA transfer-audit source contract") != std::string::npos,
+        "GPU CUDA transfer-audit module must document its source contract");
     check(
         transfer_header.find("Return the current transfer-audit public counters") !=
             std::string::npos,

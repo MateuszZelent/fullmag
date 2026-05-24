@@ -46,9 +46,9 @@ void compute_magnetoelastic_field(
         const double e11 = eps[0];
         const double e22 = eps[1];
         const double e33 = eps[2];
-        const double e23 = eps[3] * 0.5;
-        const double e13 = eps[4] * 0.5;
-        const double e12 = eps[5] * 0.5;
+        const double tensor_e23 = eps[3] * 0.5;
+        const double tensor_e13 = eps[4] * 0.5;
+        const double tensor_e12 = eps[5] * 0.5;
 
         const size_t base = i * 3u;
         const double mx = m_xyz[base + 0];
@@ -56,16 +56,16 @@ void compute_magnetoelastic_field(
         const double mz = m_xyz[base + 2];
 
         ctx.magnetoelastic.h_xyz[base + 0] =
-            inv_mu0_ms * (2.0 * b1 * mx * e11 + 2.0 * b2 * (my * e12 + mz * e13));
+            inv_mu0_ms * (2.0 * b1 * mx * e11 + 2.0 * b2 * (my * tensor_e12 + mz * tensor_e13));
         ctx.magnetoelastic.h_xyz[base + 1] =
-            inv_mu0_ms * (2.0 * b1 * my * e22 + 2.0 * b2 * (mx * e12 + mz * e23));
+            inv_mu0_ms * (2.0 * b1 * my * e22 + 2.0 * b2 * (mx * tensor_e12 + mz * tensor_e23));
         ctx.magnetoelastic.h_xyz[base + 2] =
-            inv_mu0_ms * (2.0 * b1 * mz * e33 + 2.0 * b2 * (mx * e13 + my * e23));
+            inv_mu0_ms * (2.0 * b1 * mz * e33 + 2.0 * b2 * (mx * tensor_e13 + my * tensor_e23));
 
         if (i < ctx.integration_weights.mfem_lumped_mass.size()) {
             const double e_density =
                 b1 * (mx * mx * e11 + my * my * e22 + mz * mz * e33) +
-                2.0 * b2 * (mx * my * e12 + mx * mz * e13 + my * mz * e23);
+                2.0 * b2 * (mx * my * tensor_e12 + mx * mz * tensor_e13 + my * mz * tensor_e23);
             energy += e_density * ctx.integration_weights.mfem_lumped_mass[i];
         }
     }

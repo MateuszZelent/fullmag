@@ -15,8 +15,8 @@
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
-#include "gpu_rk.hpp"
-#include "transfer_audit.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 namespace fullmag::fem {
 

@@ -117,6 +117,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         demag_refresh_interval_s: None,
         fem_assembly_mode: None,
         fem_execution_mode: None,
+        fem_gpu_qualification_status: None,
         fem_exchange_operator_mode: None,
         fem_data_residency: None,
         uses_cuda_kernels: None,

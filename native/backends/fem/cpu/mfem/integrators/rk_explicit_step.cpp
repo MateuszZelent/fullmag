@@ -21,7 +21,7 @@
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
-#include "gpu_rk.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
 
 #include <cstddef>
 #include <string>
@@ -39,6 +39,17 @@ void apply_phase_timings(
     stats.rhs_wall_time_ns = timings.rhs_wall_time_ns;
     stats.extra_energy_wall_time_ns = timings.extra_energy_wall_time_ns;
     stats.snapshot_wall_time_ns = timings.snapshot_wall_time_ns;
+}
+
+bool rk_rhs_allows_fsal_reuse(const fullmag::fem::Context &ctx)
+{
+    if (ctx.thermal_brown.temperature > 0.0) {
+        return false;
+    }
+    if (ctx.oersted.time_dep_kind != 0u) {
+        return false;
+    }
+    return true;
 }
 #endif
 
@@ -77,9 +88,9 @@ bool context_step_explicit_rk_mfem(
         (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS && tab.stages == 4) ||
         (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54 && tab.stages == 7)) {
         std::string gpu_rk_reason;
-        const auto gpu_rk_plan = gpu_rk_plan_exchange_only(ctx, gpu_rk_reason);
+        const auto gpu_rk_plan = gpu_rk_plan_device_resident(ctx, gpu_rk_reason);
         if (gpu_rk_plan.enabled) {
-            if (!gpu_rk_exchange_only_step(ctx, tab, dt_seconds, stats, gpu_rk_reason)) {
+            if (!gpu_rk_device_resident_step(ctx, tab, dt_seconds, stats, gpu_rk_reason)) {
                 error = gpu_rk_reason;
                 return false;
             }
@@ -100,6 +111,7 @@ bool context_step_explicit_rk_mfem(
     uint32_t total_rhs = 0;
     bool fsal_used = false;
     bool final_stage_cache_valid = false;
+    const bool fsal_reuse_allowed = rk_rhs_allows_fsal_reuse(ctx);
     double exchange_energy_final = 0.0;
     double demag_energy_final = 0.0;
 
@@ -108,7 +120,7 @@ bool context_step_explicit_rk_mfem(
         ws.m_backup = ctx.state.m_xyz;
         final_stage_cache_valid = false;
 
-        if (tab.fsal && ws.fsal_valid) {
+        if (tab.fsal && fsal_reuse_allowed && ws.fsal_valid) {
             fsal_used = true;
         } else {
             double exchange_energy_s0 = 0.0;
@@ -235,7 +247,7 @@ bool context_step_explicit_rk_mfem(
             stats.dt_suggested = dt;
         }
 
-        if (tab.fsal) {
+        if (tab.fsal && fsal_reuse_allowed) {
             std::swap(ws.k[0], ws.k[tab.stages - 1]);
             ws.fsal_valid = true;
         } else {

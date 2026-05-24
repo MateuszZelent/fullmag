@@ -1,6 +1,6 @@
 #pragma once
 
-#include "transfer_audit.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
 #include <cstdint>

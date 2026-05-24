@@ -245,6 +245,49 @@ void magnetoelastic_runtime_state_is_owned_by_prescribed_strain_module() {
         "Context must not own a flat magnetoelastic step-metrics energy cache");
 }
 
+void engineering_shear_voigt_convention_is_backend_neutral() {
+    const std::filesystem::path root = fem_source_root();
+    const std::filesystem::path repo_root = root.parent_path().parent_path().parent_path();
+    const std::string prescribed =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.cpp");
+    const std::string prescribed_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.hpp");
+    const std::string gpu_magnetoelastic =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_kernels.cu");
+    const std::string fem_note =
+        read_text_file(repo_root / "docs" / "physics" / "0720-fem-magnetoelastic-small-strain-mfem-gpu.md");
+    const char *voigt_order = "[e11, e22, e33, 2e23, 2e13, 2e12]";
+
+    check(
+        prescribed_header.find(voigt_order) != std::string::npos,
+        "CPU magnetoelastic header must document engineering-shear Voigt order");
+    check(
+        fem_note.find(voigt_order) != std::string::npos,
+        "FEM GPU magnetoelastic physics note must document engineering-shear Voigt order");
+    check(
+        prescribed.find("const double tensor_e23 = eps[3] * 0.5;") != std::string::npos,
+        "CPU magnetoelastic evaluator must convert engineering 2e23 to tensor e23");
+    check(
+        prescribed.find("const double tensor_e13 = eps[4] * 0.5;") != std::string::npos,
+        "CPU magnetoelastic evaluator must convert engineering 2e13 to tensor e13");
+    check(
+        prescribed.find("const double tensor_e12 = eps[5] * 0.5;") != std::string::npos,
+        "CPU magnetoelastic evaluator must convert engineering 2e12 to tensor e12");
+    check(
+        gpu_magnetoelastic.find("tensor_e23 = eps[3] * 0.5;") != std::string::npos,
+        "GPU magnetoelastic kernel must convert engineering 2e23 to tensor e23");
+    check(
+        gpu_magnetoelastic.find("tensor_e13 = eps[4] * 0.5;") != std::string::npos,
+        "GPU magnetoelastic kernel must convert engineering 2e13 to tensor e13");
+    check(
+        gpu_magnetoelastic.find("tensor_e12 = eps[5] * 0.5;") != std::string::npos,
+        "GPU magnetoelastic kernel must convert engineering 2e12 to tensor e12");
+    check(
+        gpu_magnetoelastic.find("2.0 * b2 * (lmx * lmy * tensor_e12 + lmx * lmz * tensor_e13 + lmy * lmz * tensor_e23)") !=
+            std::string::npos,
+        "GPU magnetoelastic energy must use tensor shear after engineering-shear conversion");
+}
+
 void check_near(double actual, double expected, double tol, const char *msg) {
     if (std::fabs(actual - expected) > tol) {
         std::fprintf(
@@ -416,6 +459,7 @@ int main() {
     magnetoelastic_responsibilities_are_owned_by_separate_modules();
     magnetoelastic_source_files_document_module_boundaries();
     magnetoelastic_runtime_state_is_owned_by_prescribed_strain_module();
+    engineering_shear_voigt_convention_is_backend_neutral();
     uniform_strain_field_and_energy_follow_b1_b2_contract();
     per_node_strain_and_masking_are_respected();
     add_magnetoelastic_field_is_additive();

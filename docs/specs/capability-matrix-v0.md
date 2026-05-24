@@ -28,6 +28,8 @@ Every product-facing feature should be described with one of these statuses:
 
 | Status | Meaning |
 |--------|---------|
+| **`unsupported`** | Not executable on the current lane. |
+| **`source_visible`** | Source code or scaffolding exists, but the lane is not publishable as an executable production path. |
 | **`semantic_only`** | Legal in Python API and `ProblemIR`, but not executable on the current public path. |
 | **`reference_executable`** | Executable on the trusted reference lane used for correctness and validation. |
 | **`production_executable`** | Executable on the intended production lane. |
@@ -41,6 +43,13 @@ executor availability is not the same thing as solver qualification.
 For native FEM, `production_executable` means the public lane can execute the
 feature. It does **not** mean the feature is validated for production workloads
 unless the row or related note lists explicit validated workloads.
+
+Native FEM GPU runtime provenance uses `fem_gpu_qualification_status` with the
+ladder `unsupported`, `source_visible`, `production_executable`, `validated`.
+The current strict GPU path may publish `production_executable` only when the
+resolved device-resident operator modes and hot-loop synchronization audit are
+clean; it must not publish `validated` until the documented validation workload
+has passed.
 
 Canonical references:
 
@@ -71,6 +80,7 @@ Slonczewski STT
 Zhang-Li STT
 DMI interfacial/bulk
 thermal noise
+generalized/current-solution Oersted on FEM
 two-way magnetoelasticity
 high-order FEM
 general FEM GPU parity
