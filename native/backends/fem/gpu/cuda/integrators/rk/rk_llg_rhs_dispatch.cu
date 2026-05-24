@@ -11,7 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

@@ -15,7 +15,9 @@
 #include "gpu/cuda/demag_poisson/operators.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include <cuda_runtime.h>
 #endif
 
@@ -62,7 +64,7 @@ bool compute_device_demag_for_device_stage(
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
-    if (gpu.exchange_lumped_mass == nullptr || gpu.ms == nullptr) {
+    if (gpu.mesh_metrics.lumped_mass == nullptr || gpu.ms == nullptr) {
         reason = "strict FEM GPU demag energy requires uploaded Ms and lumped mass buffers";
         return false;
     }
@@ -171,7 +173,7 @@ bool compute_device_demag_for_device_stage(
         gpu.h_demag.y,
         gpu.h_demag.z,
         gpu.ms,
-        gpu.exchange_lumped_mass,
+        gpu.mesh_metrics.lumped_mass,
         gpu.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         n,

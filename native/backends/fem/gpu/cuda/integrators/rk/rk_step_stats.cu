@@ -10,9 +10,9 @@
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_observable_reductions.hpp"
+#include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats_publication.hpp"
 
 #include <cuda_runtime.h>

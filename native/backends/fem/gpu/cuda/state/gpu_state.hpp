@@ -8,6 +8,8 @@
  */
 
 #include "fullmag_fem.h"
+#include "gpu/cuda/exchange/exchange_state.hpp"
+#include "gpu/cuda/mesh/mesh_metrics_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <array>
@@ -107,16 +109,8 @@ struct FemGpuState {
     std::vector<double> hybrid_demag_xyz;
     double hybrid_demag_energy_joules = 0.0;
 
-    bool exchange_legacy_sparse_uploaded = false;
-    uint64_t exchange_legacy_sparse_rows = 0;
-    uint64_t exchange_legacy_sparse_cols = 0;
-    uint64_t exchange_legacy_sparse_nnz = 0;
-    uint64_t exchange_legacy_sparse_device_bytes = 0;
-    uint32_t *exchange_csr_row_offsets = nullptr;
-    uint32_t *exchange_csr_col_indices = nullptr;
-    double *exchange_csr_values = nullptr;
-    double *exchange_lumped_mass = nullptr;
-    double *exchange_inv_lumped_mass = nullptr;
+    LegacyGpuExchangeDeviceState legacy_exchange{};
+    FemGpuMeshMetricsDeviceState mesh_metrics{};
 };
 
 uint32_t gpu_state_stage_count(fullmag_fem_integrator integrator);

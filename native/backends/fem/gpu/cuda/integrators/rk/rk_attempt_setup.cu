@@ -12,9 +12,10 @@
 #include "gpu/cuda/integrators/rk/rk_attempt_setup.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

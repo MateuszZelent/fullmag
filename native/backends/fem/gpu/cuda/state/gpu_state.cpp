@@ -11,7 +11,8 @@
 #include "context.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
+#include "gpu/cuda/transfer/transfer_kernels.hpp"
 #endif
 
 #include <algorithm>
@@ -153,22 +154,26 @@ void free_component(FemGpuComponentField &field)
 
 void reset_exchange_legacy_sparse(FemGpuState &state)
 {
-    const uint64_t previous_device_bytes = state.exchange_legacy_sparse_device_bytes;
-    free_u32(state.exchange_csr_row_offsets);
-    free_u32(state.exchange_csr_col_indices);
-    free_double(state.exchange_csr_values);
-    free_double(state.exchange_lumped_mass);
-    free_double(state.exchange_inv_lumped_mass);
+    const uint64_t previous_device_bytes =
+        state.legacy_exchange.device_bytes + state.mesh_metrics.device_bytes;
+    free_u32(state.legacy_exchange.csr_row_offsets);
+    free_u32(state.legacy_exchange.csr_col_indices);
+    free_double(state.legacy_exchange.csr_values);
+    free_double(state.mesh_metrics.lumped_mass);
+    free_double(state.mesh_metrics.inv_lumped_mass);
     if (previous_device_bytes <= state.device_bytes) {
         state.device_bytes -= previous_device_bytes;
     } else {
         state.device_bytes = 0;
     }
-    state.exchange_legacy_sparse_uploaded = false;
-    state.exchange_legacy_sparse_rows = 0;
-    state.exchange_legacy_sparse_cols = 0;
-    state.exchange_legacy_sparse_nnz = 0;
-    state.exchange_legacy_sparse_device_bytes = 0;
+    state.legacy_exchange.uploaded = false;
+    state.legacy_exchange.rows = 0;
+    state.legacy_exchange.cols = 0;
+    state.legacy_exchange.nnz = 0;
+    state.legacy_exchange.device_bytes = 0;
+    state.mesh_metrics.uploaded = false;
+    state.mesh_metrics.node_count = 0;
+    state.mesh_metrics.device_bytes = 0;
 }
 #endif
 
@@ -187,11 +192,14 @@ void reset_metadata(FemGpuState &state)
     state.device_state = FemGpuSyncState::HostStale;
     state.runtime_coefficients_uploaded = false;
     state.fsal_valid = false;
-    state.exchange_legacy_sparse_uploaded = false;
-    state.exchange_legacy_sparse_rows = 0;
-    state.exchange_legacy_sparse_cols = 0;
-    state.exchange_legacy_sparse_nnz = 0;
-    state.exchange_legacy_sparse_device_bytes = 0;
+    state.legacy_exchange.uploaded = false;
+    state.legacy_exchange.rows = 0;
+    state.legacy_exchange.cols = 0;
+    state.legacy_exchange.nnz = 0;
+    state.legacy_exchange.device_bytes = 0;
+    state.mesh_metrics.uploaded = false;
+    state.mesh_metrics.node_count = 0;
+    state.mesh_metrics.device_bytes = 0;
     state.mel_strain_voigt_len = 0;
     state.mel_strain_uploaded = false;
     state.mesh_element_count = 0;
@@ -894,11 +902,12 @@ bool gpu_state_upload_exchange_legacy_sparse(
     reset_exchange_legacy_sparse(state);
 
     uint64_t exchange_device_bytes = 0;
-    if (!allocate_u32(state.exchange_csr_row_offsets, csr_row_offsets_len, exchange_device_bytes, error) ||
-        !allocate_u32(state.exchange_csr_col_indices, csr_col_indices_len, exchange_device_bytes, error) ||
-        !allocate_double(state.exchange_csr_values, nnz, exchange_device_bytes, error) ||
-        !allocate_double(state.exchange_lumped_mass, rows, exchange_device_bytes, error) ||
-        !allocate_double(state.exchange_inv_lumped_mass, rows, exchange_device_bytes, error)) {
+    uint64_t mesh_metric_device_bytes = 0;
+    if (!allocate_u32(state.legacy_exchange.csr_row_offsets, csr_row_offsets_len, exchange_device_bytes, error) ||
+        !allocate_u32(state.legacy_exchange.csr_col_indices, csr_col_indices_len, exchange_device_bytes, error) ||
+        !allocate_double(state.legacy_exchange.csr_values, nnz, exchange_device_bytes, error) ||
+        !allocate_double(state.mesh_metrics.lumped_mass, rows, mesh_metric_device_bytes, error) ||
+        !allocate_double(state.mesh_metrics.inv_lumped_mass, rows, mesh_metric_device_bytes, error)) {
         reset_exchange_legacy_sparse(state);
         return false;
     }
@@ -908,35 +917,35 @@ bool gpu_state_upload_exchange_legacy_sparse(
     const size_t values_bytes = static_cast<size_t>(nnz) * sizeof(double);
     const size_t mass_bytes = static_cast<size_t>(rows) * sizeof(double);
     if (!cuda_ok(cudaMemcpy(
-                state.exchange_csr_row_offsets,
+                state.legacy_exchange.csr_row_offsets,
                 csr_row_offsets,
                 row_offsets_bytes,
                 cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState exchange CSR row_offsets host->device",
             error) ||
         !cuda_ok(cudaMemcpy(
-                state.exchange_csr_col_indices,
+                state.legacy_exchange.csr_col_indices,
                 csr_col_indices,
                 col_indices_bytes,
                 cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState exchange CSR col_indices host->device",
             error) ||
         !cuda_ok(cudaMemcpy(
-                state.exchange_csr_values,
+                state.legacy_exchange.csr_values,
                 csr_values,
                 values_bytes,
                 cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState exchange CSR values host->device",
             error) ||
         !cuda_ok(cudaMemcpy(
-                state.exchange_lumped_mass,
+                state.mesh_metrics.lumped_mass,
                 lumped_mass,
                 mass_bytes,
                 cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState exchange lumped_mass host->device",
             error) ||
         !cuda_ok(cudaMemcpy(
-                state.exchange_inv_lumped_mass,
+                state.mesh_metrics.inv_lumped_mass,
                 inv_lumped_mass,
                 mass_bytes,
                 cudaMemcpyHostToDevice),
@@ -946,12 +955,15 @@ bool gpu_state_upload_exchange_legacy_sparse(
         return false;
     }
 
-    state.device_bytes += exchange_device_bytes;
-    state.exchange_legacy_sparse_uploaded = true;
-    state.exchange_legacy_sparse_rows = rows;
-    state.exchange_legacy_sparse_cols = cols;
-    state.exchange_legacy_sparse_nnz = nnz;
-    state.exchange_legacy_sparse_device_bytes = exchange_device_bytes;
+    state.device_bytes += exchange_device_bytes + mesh_metric_device_bytes;
+    state.legacy_exchange.uploaded = true;
+    state.legacy_exchange.rows = rows;
+    state.legacy_exchange.cols = cols;
+    state.legacy_exchange.nnz = nnz;
+    state.legacy_exchange.device_bytes = exchange_device_bytes;
+    state.mesh_metrics.uploaded = true;
+    state.mesh_metrics.node_count = rows;
+    state.mesh_metrics.device_bytes = mesh_metric_device_bytes;
     record_host_to_device(
         audit,
         static_cast<uint64_t>(row_offsets_bytes + col_indices_bytes + values_bytes) +

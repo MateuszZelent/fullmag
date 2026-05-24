@@ -51,12 +51,12 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
             "runtime coefficients";
         return plan;
     }
-    if (!ctx.gpu_state.device.exchange_legacy_sparse_uploaded) {
+    if (!ctx.gpu_state.device.legacy_exchange.uploaded) {
         reason = "stage H_ex device-resident exchange requires device-resident CSR/mass upload";
         return plan;
     }
-    if (ctx.gpu_state.device.exchange_legacy_sparse_rows != ctx.gpu_state.device.node_count ||
-        ctx.gpu_state.device.exchange_legacy_sparse_cols != ctx.gpu_state.device.node_count) {
+    if (ctx.gpu_state.device.legacy_exchange.rows != ctx.gpu_state.device.node_count ||
+        ctx.gpu_state.device.legacy_exchange.cols != ctx.gpu_state.device.node_count) {
         reason =
             "stage H_ex device-resident exchange requires legacy sparse CSR "
             "dimensions to match FemGpuState node_count";

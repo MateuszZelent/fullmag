@@ -142,7 +142,6 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_component_copy.cu
             gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_demag_dispatch.cu
-            gpu/cuda/integrators/rk/rk_device_io.cu
             gpu/cuda/integrators/rk/rk_direct_torques.cu
             gpu/cuda/integrators/rk/rk_dmi_fields.cu
             gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu
@@ -157,7 +156,6 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_heun_accept_kernel.cu
             gpu/cuda/integrators/rk/rk23_adaptive_k3.cu
             gpu/cuda/integrators/rk/rk23_stage_sequence.cu
-            gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.cu
             gpu/cuda/integrators/rk/rk4_stage_sequence.cu
             gpu/cuda/integrators/rk/rk45_stage_sequence.cu
             gpu/cuda/integrators/rk/rk_final_refresh.cu
@@ -173,8 +171,6 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_snapshot.cu
             gpu/cuda/integrators/rk/rk_slonczewski_torque.cu
             gpu/cuda/integrators/rk/rk_scalar_readback.cu
-            gpu/cuda/integrators/rk/rk_stage_accept_kernels.cu
-            gpu/cuda/integrators/rk/rk_stage_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
             gpu/cuda/integrators/rk/rk_step_preflight.cu

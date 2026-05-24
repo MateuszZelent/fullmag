@@ -2,8 +2,9 @@
  * GPU CUDA RK stage schedule module header.
  *
  * Declares one accepted/rejected RK attempt over device-resident stage buffers.
- * Adaptive accept/reject policy remains in rk_step.cu; low-level predictor and
- * accept kernels remain in rk_stage_kernels.
+ * Adaptive accept/reject policy remains outside this module; low-level
+ * predictor and accept kernels live in dedicated predictor and per-integrator
+ * accept modules.
  */
 #pragma once
 

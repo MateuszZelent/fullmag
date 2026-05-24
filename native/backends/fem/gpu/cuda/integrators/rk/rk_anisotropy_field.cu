@@ -46,7 +46,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
     auto &gpu = ctx.gpu_state.device;
     if (ctx.anisotropy.uniaxial_enabled) {
         if (gpu.ms == nullptr || gpu.ku == nullptr || gpu.ku2 == nullptr ||
-            gpu.exchange_lumped_mass == nullptr ||
+            gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.h_ani.x == nullptr || gpu.h_ani.y == nullptr || gpu.h_ani.z == nullptr) {
             reason = "GPU RK uniaxial anisotropy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
             return false;
@@ -58,7 +58,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             gpu.ms,
             gpu.ku,
             gpu.ku2,
-            gpu.exchange_lumped_mass,
+            gpu.mesh_metrics.lumped_mass,
             gpu.magnetic_node_mask,
             gpu.h_ani.x,
             gpu.h_ani.y,
@@ -79,7 +79,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
     }
     if (ctx.anisotropy.cubic_enabled) {
         if (gpu.ms == nullptr || gpu.kc1 == nullptr || gpu.kc2 == nullptr ||
-            gpu.kc3 == nullptr || gpu.exchange_lumped_mass == nullptr ||
+            gpu.kc3 == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.h_cubic_ani.x == nullptr || gpu.h_cubic_ani.y == nullptr ||
             gpu.h_cubic_ani.z == nullptr) {
             reason = "GPU RK cubic anisotropy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers";
@@ -93,7 +93,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             gpu.kc1,
             gpu.kc2,
             gpu.kc3,
-            gpu.exchange_lumped_mass,
+            gpu.mesh_metrics.lumped_mass,
             gpu.magnetic_node_mask,
             gpu.h_cubic_ani.x,
             gpu.h_cubic_ani.y,

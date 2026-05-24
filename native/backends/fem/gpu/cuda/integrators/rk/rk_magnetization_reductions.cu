@@ -11,7 +11,8 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/observables/observable_kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <cuda_runtime.h>
 

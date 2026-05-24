@@ -56,8 +56,6 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
     const std::string gpu_rk_llg_rhs_dispatch =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_llg_rhs_dispatch.cu");
-    const std::string kernels_header =
-        read_text_file(root / "gpu" / "cuda" / "kernels" / "kernels.hpp");
     const std::string llg_kernels =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "llg" / "llg_rhs_kernels.cu");
     const std::string llg_kernels_header =
@@ -73,6 +71,9 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
     const std::string effective =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
 
+    check(
+        !std::filesystem::exists(root / "gpu" / "cuda" / "kernels" / "kernels.hpp"),
+        "legacy CUDA kernels compatibility umbrella must stay removed");
     check(
         gpu_rk_plan.find("does not support demag yet") == std::string::npos,
         "GPU RK plan must not hard-block demag now that hybrid CPU-demag upload is supported");
@@ -118,8 +119,7 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
         "GPU RK must call the parallel DMI kernel wrapper, not the serial placeholder");
     check(
-        kernels_header.find("#include \"gpu/cuda/interactions/dmi/dmi_kernels.hpp\"") != std::string::npos &&
-            dmi_kernels_header.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
+        dmi_kernels_header.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             dmi_kernels_header.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,
         "CUDA DMI module headers must expose only the parallel DMI field/energy wrapper");
     check(
@@ -131,8 +131,7 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
             dmi_kernels.find("dmi_atomic_add_double(&residual_x") != std::string::npos,
         "CUDA DMI implementation must use per-element parallel residual accumulation with atomics");
     check(
-        kernels_header.find("#include \"gpu/cuda/integrators/llg/llg_rhs_kernels.hpp\"") != std::string::npos &&
-            llg_kernels_header.find("bool precession_enabled") != std::string::npos &&
+        llg_kernels_header.find("bool precession_enabled") != std::string::npos &&
             llg_kernels.find("bool precession_enabled") != std::string::npos,
         "CUDA LLG RHS wrapper and kernel must expose the native precession mode contract");
     check(
@@ -621,11 +620,11 @@ int main() {
         reason.find("device-resident CSR/mass upload") != std::string::npos,
         "MFEM+CUDA build must expose device-resident CSR/mass upload blocker");
 
-    ctx.gpu_state.device.exchange_legacy_sparse_uploaded = true;
+    ctx.gpu_state.device.legacy_exchange.uploaded = true;
     reason.clear();
-    ctx.gpu_state.device.exchange_legacy_sparse_rows = 8;
-    ctx.gpu_state.device.exchange_legacy_sparse_cols = 8;
-    ctx.gpu_state.device.exchange_legacy_sparse_nnz = 32;
+    ctx.gpu_state.device.legacy_exchange.rows = 8;
+    ctx.gpu_state.device.legacy_exchange.cols = 8;
+    ctx.gpu_state.device.legacy_exchange.nnz = 32;
     const auto spmv_ready_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(
         spmv_ready_plan.stage_exchange_device_resident,

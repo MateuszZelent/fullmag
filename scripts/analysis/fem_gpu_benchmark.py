@@ -957,11 +957,38 @@ def find_prebuilt_native_fem_library(env: Mapping[str, str]) -> Path | None:
     return None
 
 
+def resolve_cuda_compiler(env: Mapping[str, str]) -> tuple[str | None, str | None]:
+    for key in ("FULLMAG_CUDA_COMPILER", "CUDACXX"):
+        value = env_text(env, key)
+        if value is None:
+            continue
+        candidate = Path(value)
+        if candidate.is_file():
+            return str(candidate), key
+        resolved = shutil.which(value)
+        if resolved is not None:
+            return resolved, key
+
+    for key in ("CUDA_HOME", "CUDA_PATH"):
+        value = env_text(env, key)
+        if value is None:
+            continue
+        candidate = Path(value) / "bin" / "nvcc"
+        if candidate.is_file():
+            return str(candidate), key
+
+    resolved = shutil.which("nvcc")
+    if resolved is not None:
+        return resolved, "PATH"
+    return None, None
+
+
 def preflight_remediation() -> list[str]:
     return [
         "Set FULLMAG_FEM_LIB_DIR to a directory containing libfullmag_fem.so, libfullmag_fem.dylib, or fullmag_fem.dll.",
         "Or set MFEM_DIR or MFEM_PREFIX to an MFEM install prefix containing MFEMConfig.cmake or mfem-config.cmake.",
         "Or add the MFEM install prefix to CMAKE_PREFIX_PATH using the platform path separator.",
+        "For CUDA builds, expose nvcc through PATH, FULLMAG_CUDA_COMPILER, CUDACXX, CUDA_HOME, or CUDA_PATH.",
     ]
 
 
@@ -976,7 +1003,7 @@ def build_preflight_report(
     cmake_prefix_path = env_text(actual_env, "CMAKE_PREFIX_PATH")
     prebuilt_library = find_prebuilt_native_fem_library(actual_env)
     searched_prefixes = [str(path) for path in search_mfem_prefixes(actual_env)]
-    cuda_compiler_path = shutil.which("nvcc")
+    cuda_compiler_path, cuda_compiler_source = resolve_cuda_compiler(actual_env)
     try:
         fem_cmake_text = FEM_CMAKE.read_text(encoding="utf-8")
     except OSError:
@@ -1010,6 +1037,7 @@ def build_preflight_report(
         "mfem_config_path": None,
         "cuda_compiler_available": cuda_compiler_path is not None,
         "cuda_compiler_path": cuda_compiler_path,
+        "cuda_compiler_source": cuda_compiler_source,
         "assert_no_hot_loop_compute_sync": assert_no_hot_loop_compute_sync,
         "gpu_rk_cuda_source_path": str(GPU_RK_CUDA_SOURCE),
         "gpu_rk_cuda_source_present": GPU_RK_CUDA_SOURCE.is_file(),
@@ -1052,7 +1080,9 @@ def adaptive_gpu_rk_acceptance_blockers(report: Mapping[str, object]) -> list[st
     if not is_mfem_stack_ready(report):
         blockers.append("MFEM stack or prebuilt native FEM library is required")
     if not report.get("cuda_compiler_available"):
-        blockers.append("nvcc")
+        blockers.append(
+            "nvcc (set PATH, FULLMAG_CUDA_COMPILER, CUDACXX, CUDA_HOME, or CUDA_PATH)"
+        )
     if not report.get("gpu_rk_cuda_source_present"):
         blockers.append("native/backends/fem/gpu/cuda/integrators/rk/rk_step.cu is required")
     if not report.get("gpu_rk_cmake_wired"):

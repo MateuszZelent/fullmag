@@ -18,7 +18,7 @@
 #include "gpu/cuda/integrators/rk/rk4_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk45_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_setup.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

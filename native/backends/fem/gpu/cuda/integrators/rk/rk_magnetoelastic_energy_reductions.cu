@@ -11,7 +11,8 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <cuda_runtime.h>
 
@@ -68,7 +69,7 @@ bool gpu_rk_reduce_final_magnetoelastic_energy_terms(
         reason = "GPU RK magnetoelastic energy requires device-resident per-node strain";
         return false;
     }
-    if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
+    if (gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
         reason = "GPU RK magnetoelastic energy requires device-resident Ms, lumped mass, and H_mel buffers";
         return false;
@@ -79,7 +80,7 @@ bool gpu_rk_reduce_final_magnetoelastic_energy_terms(
         gpu.m.y,
         gpu.m.z,
         gpu.ms,
-        gpu.exchange_lumped_mass,
+        gpu.mesh_metrics.lumped_mass,
         gpu.magnetic_node_mask,
         use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
         gpu.h_mel.x,

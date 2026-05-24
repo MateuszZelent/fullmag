@@ -11,8 +11,10 @@
 #include "gpu/cuda/integrators/rk/rk45_stage_sequence.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_dp54_accept_kernel.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

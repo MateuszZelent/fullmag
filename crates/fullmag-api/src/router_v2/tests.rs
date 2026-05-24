@@ -7756,6 +7756,68 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
 }
 
 #[tokio::test]
+async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 42;
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-relax".into()),
+                kind: Some("relax".into()),
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-relax".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_010_000),
+                reason: Some(fullmag_ir::StageStopReason::Torque),
+                artifact_refs: vec!["runs/run-1/stages/stage-relax".into()],
+                checkpoint_ref: Some("cp-relaxed".into()),
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: Some("preserved".into()),
+                metric_name: Some("max_torque_apm".into()),
+                metric_value: Some(7.5e1),
+                threshold: Some(8.0e1),
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+
+    let app = test_router(state).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 42);
+    assert_eq!(json["runtime_state"], "completed");
+    assert_eq!(json["completed_stage_indexes"], serde_json::json!([0]));
+    assert_eq!(json["stages"][0]["status"], "completed");
+    assert_eq!(json["stages"][0]["command_id"], "cmd-relax");
+    assert_eq!(json["stages"][0]["reason"], "torque");
+    assert_eq!(json["stages"][0]["metric_name"], "max_torque_apm");
+    assert_eq!(json["stages"][0]["metric_value"], 75.0);
+    assert_eq!(json["stages"][0]["threshold"], 80.0);
+    assert_eq!(json["stages"][0]["completed_at_unix_ms"], 1_700_000_010_000u64);
+    assert_eq!(json["stages"][0]["artifact_refs"][0], "runs/run-1/stages/stage-relax");
+    assert_eq!(json["stages"][0]["checkpoint_ref"], "cp-relaxed");
+    assert_eq!(json["stages"][0]["stage_id"], "stage-relax");
+    assert_eq!(json["stages"][0]["kind"], "relax");
+}
+
+#[tokio::test]
 async fn solver_status_endpoint_returns_detailed_read_model() {
     let app = test_router_with_runtime_read_models().await;
     let response = app

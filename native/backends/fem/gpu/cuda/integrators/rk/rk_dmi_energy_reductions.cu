@@ -11,7 +11,8 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <cuda_runtime.h>
 
@@ -52,7 +53,7 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
             gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
             gpu.magnetic_element_mask == nullptr ||
-            gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
+            gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
             gpu.zhang_li_rhs.z == nullptr) {
             reason = "GPU RK DMI energy requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
@@ -68,7 +69,7 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             gpu.m.z,
             gpu.ms,
             bulk_mode ? gpu.dbulk : gpu.dind,
-            gpu.exchange_lumped_mass,
+            gpu.mesh_metrics.lumped_mass,
             gpu.magnetic_node_mask,
             gpu.zhang_li_rhs.x,
             gpu.zhang_li_rhs.y,

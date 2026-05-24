@@ -211,10 +211,15 @@ lands.
 GPU ownership migration has started with behavior-preserving source moves under
 `native/backends/fem/gpu/cuda/`. GPU exchange readiness planning is owned by
 `gpu/cuda/exchange/exchange_plan.hpp/.cpp`; legacy sparse exchange field and
-energy CUDA wrappers are owned by `gpu/cuda/exchange/exchange_kernels.hpp/.cu`.
-`FemGpuState` allocation/transfer/device
-metadata is owned by `gpu/cuda/state/gpu_state.hpp/.cpp`, and transfer-audit scope
-tracking is owned by `gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
+energy CUDA wrappers are owned by `gpu/cuda/exchange/exchange_kernels.hpp/.cu`;
+legacy sparse exchange device-side CSR, dimensions, readiness, and byte
+accounting are owned by `gpu/cuda/exchange/exchange_state.hpp` and embedded in
+`FemGpuState` as the `legacy_exchange` substate. Shared GPU integration metrics
+such as lumped mass and inverse lumped mass are owned by
+`gpu/cuda/mesh/mesh_metrics_state.hpp` and embedded in `FemGpuState` as the
+`mesh_metrics` substate. `FemGpuState` allocation/transfer/device metadata is
+owned by `gpu/cuda/state/gpu_state.hpp/.cpp`, and transfer-audit scope tracking
+is owned by `gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
 host-device CUDA transfer wrappers are owned by
 `gpu/cuda/transfer/transfer_kernels.hpp/.cu`. GPU-state
 runtime bootstrap and CUDA stream/snapshot metadata are owned by
@@ -247,8 +252,9 @@ midpoint/endpoint predictor and accept sequencing is owned by
 `gpu/cuda/integrators/rk/rk4_stage_sequence.hpp/.cu`.
 Bogacki-Shampine RK23 predictor and BS23 accept sequencing is owned by
 `gpu/cuda/integrators/rk/rk23_stage_sequence.hpp/.cu`; the old combined
-`rk4_rk23_stage_sequence.hpp/.cu` path is compatibility-only. Heun accept
-sequencing is owned by `gpu/cuda/integrators/rk/heun_stage_sequence.hpp/.cu`.
+`rk4_rk23_stage_sequence.hpp/.cu` compatibility path has been removed. Heun
+accept sequencing is owned by
+`gpu/cuda/integrators/rk/heun_stage_sequence.hpp/.cu`.
 The post-accept BS23 k3 RHS refresh needed for adaptive RK23 error estimation
 is owned by `gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp/.cu`.
 Device-resident fixed/adaptive RK accepted-attempt looping, including
@@ -264,7 +270,10 @@ GPU RK final scalar slots, no-CUDA stats fallback, batched readback, and final
 stats orchestration are owned by
 `gpu/cuda/integrators/rk/rk_step_stats.hpp/.cpp/.cu`; host-side publication of
 device-reduced scalar slots into `fullmag_fem_step_stats` is owned by
-`gpu/cuda/integrators/rk/rk_step_stats_publication.hpp/.cpp`.
+`gpu/cuda/integrators/rk/rk_step_stats_publication.hpp/.cpp`. Accepted-step
+final refresh, snapshot recomputation, field metrics, and average magnetization
+reductions include concrete `gpu/cuda/reductions` and `gpu/cuda/observables`
+kernel owners directly instead of the global CUDA kernel compatibility umbrella.
 Final accepted-step energy reductions for exchange, demag, Zeeman,
 anisotropy, DMI, and magnetoelastic terms are owned by
 `gpu/cuda/integrators/rk/rk_energy_reductions.hpp/.cu`; exchange final energy
@@ -303,17 +312,16 @@ acceptance as blocked until that decision is made without hot-loop compute host
 synchronization.
 GPU RK FSAL reuse policy for autonomous RHS gating is owned by
 `gpu/cuda/integrators/rk/rk_fsal_policy.hpp/.cpp`.
-RK predictor/accept CUDA stage kernel compatibility includes are owned by
-`gpu/cuda/integrators/rk/rk_stage_kernels.hpp/.cu`; low-level predictor kernels
-(`euler_stage`, `rk45_stage`) are owned by
-`gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp/.cu`. Accepted-state
-update kernel compatibility includes are owned by
-`gpu/cuda/integrators/rk/rk_stage_accept_kernels.hpp/.cu`; the concrete
+Low-level RK predictor kernels (`euler_stage`, `rk45_stage`) are owned by
+`gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp/.cu`. The old
+`rk_stage_kernels.hpp/.cu` and `rk_stage_accept_kernels.hpp/.cu`
+compatibility umbrellas have been removed; callers include the concrete
+predictor and per-integrator accept owners directly. Concrete
 accepted-state update kernels are owned by per-integrator modules:
 `rk_heun_accept_kernel.hpp/.cu`, `rk_rk4_accept_kernel.hpp/.cu`,
 `rk_bs23_accept_kernel.hpp/.cu`, and `rk_dp54_accept_kernel.hpp/.cu`.
-RK device-I/O compatibility includes are owned by
-`gpu/cuda/integrators/rk/rk_device_io.hpp/.cu`; audited scalar-result reads are
+The old `rk_device_io.hpp/.cu` compatibility umbrella has been removed;
+callers include concrete I/O owners directly. Audited scalar-result reads are
 owned by `gpu/cuda/integrators/rk/rk_scalar_readback.hpp/.cu`, and component
 device-copy plus device-to-host AoS download helpers are owned by
 `gpu/cuda/integrators/rk/rk_component_copy.hpp/.cu`.
@@ -349,7 +357,9 @@ and launch are owned by
 `gpu/cuda/integrators/rk/rk_slonczewski_torque.hpp/.cu`; Zhang-Li STT validation
 and launch are owned by
 `gpu/cuda/integrators/rk/rk_zhang_li_torque.hpp/.cu`.
-The compatibility umbrella header is owned by `gpu/cuda/kernels/kernels.hpp`;
+The old external CUDA kernel compatibility umbrella
+`gpu/cuda/kernels/kernels.hpp` has been removed. Owner modules under
+`gpu/cuda/` include each other only through concrete subsystem headers.
 uniaxial/cubic anisotropy CUDA field/energy wrappers are owned by
 `gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp/.cu`;
 external-field Zeeman CUDA energy wrappers are owned by

@@ -11,10 +11,10 @@
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

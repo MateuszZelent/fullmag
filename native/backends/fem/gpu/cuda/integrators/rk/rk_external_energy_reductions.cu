@@ -11,7 +11,8 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/interactions/zeeman/zeeman_kernels.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <cuda_runtime.h>
 
@@ -50,7 +51,7 @@ bool gpu_rk_reduce_final_external_energy_terms(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
+    if (gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.h_ext.x == nullptr || gpu.h_ext.y == nullptr || gpu.h_ext.z == nullptr) {
         reason = "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext";
         return false;
@@ -63,7 +64,7 @@ bool gpu_rk_reduce_final_external_energy_terms(
         gpu.h_ext.y,
         gpu.h_ext.z,
         gpu.ms,
-        gpu.exchange_lumped_mass,
+        gpu.mesh_metrics.lumped_mass,
         gpu.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         n,

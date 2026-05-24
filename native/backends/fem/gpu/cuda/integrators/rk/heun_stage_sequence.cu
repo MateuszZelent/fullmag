@@ -11,7 +11,7 @@
 #include "gpu/cuda/integrators/rk/heun_stage_sequence.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_heun_accept_kernel.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

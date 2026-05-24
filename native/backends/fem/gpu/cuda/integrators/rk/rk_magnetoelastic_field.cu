@@ -66,7 +66,7 @@ bool gpu_rk_compute_magnetoelastic_field_contribution(
         reason = "GPU RK magnetoelastic field requires device-resident per-node strain";
         return false;
     }
-    if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
+    if (gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
         reason = "GPU RK magnetoelastic field requires device-resident Ms, lumped mass, and H_mel buffers";
         return false;
@@ -77,7 +77,7 @@ bool gpu_rk_compute_magnetoelastic_field_contribution(
         m.y,
         m.z,
         gpu.ms,
-        gpu.exchange_lumped_mass,
+        gpu.mesh_metrics.lumped_mass,
         gpu.magnetic_node_mask,
         use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
         gpu.h_mel.x,

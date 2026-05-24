@@ -6,6 +6,7 @@ import {
   useEffect,
   useRef,
   useState,
+  memo,
   type ComponentProps,
   type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
@@ -298,7 +299,7 @@ function useViewport3DSelectionHandlers({
   return { onSelectDomain, onSelectObject, onSelectPart };
 }
 
-function Viewport3DFrame({
+const Viewport3DFrame = memo(function Viewport3DFrame({
   captureRevision,
   cameraDialogOpen,
   cameraDialogState,
@@ -505,7 +506,7 @@ function Viewport3DFrame({
       <Viewport3DSettingsDialog />
     </section>
   );
-}
+});
 
 function Viewport3DOrbitDebugPanel({
   angles,

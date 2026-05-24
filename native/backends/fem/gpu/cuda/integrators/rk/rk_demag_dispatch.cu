@@ -13,7 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
 #include <cuda_runtime.h>

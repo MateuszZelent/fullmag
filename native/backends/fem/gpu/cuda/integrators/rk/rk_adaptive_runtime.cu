@@ -6,7 +6,7 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 
 #include "context.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 
 #include <algorithm>
 #include <cmath>
