@@ -1,6 +1,6 @@
 // ── GPU CUDA RK attempt loop source contract ───────────────────────────
 // This source owns the fixed/adaptive accepted-attempt loop for device RK,
-// including stage-attempt dispatch, embedded error-norm evaluation, PI
+// including stage-attempt dispatch, embedded error-norm evaluation, delegated
 // accept/reject decisions, rejected-attempt restore, and accepted-attempt
 // result publication. It does not own step preflight, RK planning, RHS
 // assembly internals, per-integrator stage sequences, accepted-step
@@ -9,6 +9,7 @@
 #include "gpu/cuda/integrators/rk/rk_attempt_loop.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
@@ -76,19 +77,28 @@ bool gpu_rk_run_accepted_attempt_loop(
         fsal_reused = stage_attempt.fsal_reused;
 
         if (adaptive) {
-            if (!gpu_rk_compute_adaptive_error_norm_device(
+            if (!gpu_rk_reduce_adaptive_error_norm_device(
                     ctx,
                     tableau,
                     active_dt,
                     stream,
                     n,
                     blocks,
-                    error_estimate,
                     reason)) {
                 gpu.fsal_valid = false;
                 return false;
             }
-            const auto adaptive_result = gpu_rk_adaptive_pi_step(ctx, error_estimate);
+            GpuAdaptiveDecisionReadback adaptive_decision{};
+            if (!gpu_rk_read_adaptive_error_norm_decision_host(
+                    ctx,
+                    stream,
+                    adaptive_decision,
+                    reason)) {
+                gpu.fsal_valid = false;
+                return false;
+            }
+            error_estimate = adaptive_decision.error_norm;
+            const auto adaptive_result = adaptive_decision.adaptive_result;
             suggested_dt = adaptive_result.dt_next;
             if (!adaptive_result.accepted) {
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {

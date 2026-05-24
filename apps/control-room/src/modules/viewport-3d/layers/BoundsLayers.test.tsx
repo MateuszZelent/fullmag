@@ -24,6 +24,8 @@ import {
   resolveAirboxWireframeEdgeIndices,
   resolveAirboxWireframePrimitive,
   resolveAirboxWireframeSemantic,
+  resolvePartNodeIndices,
+  getUniqueSortedIndices,
 } from "./BoundsLayers";
 import { VERTEX_COLOR_MATERIAL_COLOR } from "./viewport3DLayerSettings";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -179,17 +181,17 @@ describe("AirboxLayer", () => {
     expect(resolveAirboxWireframePrimitive(false, true)).toBeNull();
   });
 
-  it("uses procedural bounds volume as the primary full airbox wireframe", () => {
-    expect(resolveAirboxWireframePrimitive(true, true, "full")).toBe("bounds");
+  it("keeps full volume airbox wireframe on line segments when edge geometry exists", () => {
+    expect(resolveAirboxWireframePrimitive(true, true, "full")).toBe("lines");
     expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
   });
 
-  it("routes the airbox render branch through the wireframe primitive decision", () => {
+  it("routes the airbox render branch through the parallel wireframe layers", () => {
     expect(boundsLayersSource).toContain(
-      'wireframePrimitive === "lines" && edgeGeometry',
+      'resolvedSettings.wireframeVisible && (',
     );
     expect(boundsLayersSource).toContain(
-      'wireframePrimitive === "bounds"',
+      'geometryScope === "full" || !edgeGeometry',
     );
     expect(boundsLayersSource).not.toContain(
       "shouldRenderAirboxFullBoundsOverlay",
@@ -338,5 +340,31 @@ describe("SelectionHighlightLayer", () => {
     const boundsBox = element as ReactElement<{ bounds: null }>;
 
     expect(boundsBox.props.bounds).toBeNull();
+  });
+});
+
+describe("resolvePartNodeIndices and getUniqueSortedIndices", () => {
+  it("resolves node indices from node_indices array if present", () => {
+    const part = { node_indices: [2, 4, 6] };
+    const result = resolvePartNodeIndices(part, 10);
+    expect(Array.from(result)).toEqual([2, 4, 6]);
+  });
+
+  it("resolves node indices from nodeStart and nodeCount range", () => {
+    const part = { nodeStart: 2, nodeCount: 4 };
+    const result = resolvePartNodeIndices(part, 10);
+    expect(Array.from(result)).toEqual([2, 3, 4, 5]);
+  });
+
+  it("handles out of bounds cleanly during range resolution", () => {
+    const part = { nodeStart: 8, nodeCount: 5 };
+    const result = resolvePartNodeIndices(part, 10);
+    expect(Array.from(result)).toEqual([8, 9]);
+  });
+
+  it("returns unique sorted indices for point sets", () => {
+    const indices = new Uint32Array([5, 1, 5, 3, 1]);
+    const result = getUniqueSortedIndices(indices);
+    expect(Array.from(result)).toEqual([1, 3, 5]);
   });
 });

@@ -1,14 +1,13 @@
 // ── GPU CUDA RK adaptive error-norm runtime source contract ─────────────
 // This source owns device error-norm reduction helpers for embedded adaptive
 // RK methods. It does not own RK step orchestration, adaptive PI policy,
-// reject restore, RHS assembly, stage kernels, interaction kernels, or C ABI
-// entrypoints.
+// transitional host decision readback, reject restore, RHS assembly, stage
+// kernels, interaction kernels, or C ABI entrypoints.
 
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/adaptive_error_kernels.hpp"
-#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <algorithm>
@@ -35,14 +34,13 @@ bool cuda_launch_ok(const char *operation, std::string &reason)
 
 } // namespace
 
-bool gpu_rk_compute_adaptive_error_norm_device(
+bool gpu_rk_reduce_adaptive_error_norm_device(
     Context &ctx,
     const ExplicitTableau &tableau,
     double dt_seconds,
     cudaStream_t stream,
     int n,
     int blocks,
-    double &error_norm,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -89,12 +87,7 @@ bool gpu_rk_compute_adaptive_error_norm_device(
         return false;
     }
 
-    return gpu_rk_read_scalar_result(
-        ctx,
-        stream,
-        "cudaMemcpyAsync GPU RK adaptive error norm scalar device->host",
-        error_norm,
-        reason);
+    return true;
 }
 
 } // namespace fullmag::fem

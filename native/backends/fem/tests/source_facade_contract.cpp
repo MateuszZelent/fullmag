@@ -2659,6 +2659,10 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_error_norm_runtime.hpp");
     const std::string error_norm_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_error_norm_runtime.cu");
+    const std::string decision_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_adaptive_decision_readback.hpp");
+    const std::string decision_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_adaptive_decision_readback.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_adaptive_runtime.cu") !=
@@ -2668,6 +2672,10 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
         cmake.find("gpu/cuda/integrators/rk/rk_error_norm_runtime.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK adaptive error-norm runtime helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK adaptive decision readback helpers from gpu/cuda/integrators/rk");
     check(
         attempt_loop.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp\"") !=
                 std::string::npos &&
@@ -2680,6 +2688,12 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
             rk_step.find("#include \"gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp\"") ==
                 std::string::npos,
         "GPU CUDA RK attempt loop source must include the RK adaptive error-norm runtime module");
+    check(
+        attempt_loop.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp\"") !=
+                std::string::npos &&
+            rk_step.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp\"") ==
+                std::string::npos,
+        "GPU CUDA RK attempt loop source must include the RK adaptive decision readback module");
     check(
         adaptive_header.find("GPU CUDA RK adaptive runtime module header") !=
                 std::string::npos &&
@@ -2713,11 +2727,11 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             adaptive_source.find("gpu_rk_read_scalar_result(") ==
                 std::string::npos,
-        "GPU CUDA RK adaptive runtime module must not own adaptive error-norm reductions");
+        "GPU CUDA RK adaptive runtime module must not own adaptive error-norm reductions or readback");
     check(
         error_norm_header.find("GPU CUDA RK adaptive error-norm runtime module header") !=
                 std::string::npos &&
-            error_norm_header.find("gpu_rk_compute_adaptive_error_norm_device(") !=
+            error_norm_header.find("gpu_rk_reduce_adaptive_error_norm_device(") !=
                 std::string::npos,
         "GPU CUDA RK adaptive error-norm runtime header must own device error norm declarations");
     check(
@@ -2727,7 +2741,7 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK adaptive error-norm runtime source must document and include its module header");
     check(
-        error_norm_source.find("gpu_rk_compute_adaptive_error_norm_device(") !=
+        error_norm_source.find("gpu_rk_reduce_adaptive_error_norm_device(") !=
                 std::string::npos &&
             error_norm_source.find("fullmag_cuda_adaptive_error_norm_blocks(") !=
                 std::string::npos &&
@@ -2736,16 +2750,50 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
             error_norm_source.find("gpu.scalar_reduce_workspace") !=
                 std::string::npos &&
             error_norm_source.find("gpu.scalar_reduce_temp_storage") !=
-                std::string::npos &&
-            error_norm_source.find("gpu_rk_read_scalar_result(") !=
                 std::string::npos,
         "GPU CUDA RK adaptive error-norm runtime source must own device error norm reduction helpers");
     check(
         error_norm_source.find("gpu_rk_copy_component_device(") ==
                 std::string::npos &&
             error_norm_source.find("gpu_rk_adaptive_pi_step(") ==
+                std::string::npos &&
+            error_norm_source.find("gpu_rk_read_scalar_result(") ==
                 std::string::npos,
-        "GPU CUDA RK adaptive error-norm runtime source must not own adaptive policy or reject restore helpers");
+        "GPU CUDA RK adaptive error-norm runtime source must not own adaptive policy, readback, or reject restore helpers");
+    check(
+        decision_header.find("GPU CUDA RK adaptive decision readback module header") !=
+                std::string::npos &&
+            decision_header.find("struct GpuAdaptiveDecisionReadback") !=
+                std::string::npos &&
+            decision_header.find("gpu_rk_read_adaptive_error_norm_decision_host(") !=
+                std::string::npos,
+        "GPU CUDA RK adaptive decision readback header must document and declare the transitional host boundary");
+    check(
+        decision_source.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp\"") !=
+                std::string::npos &&
+            decision_source.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp\"") !=
+                std::string::npos &&
+            decision_source.find("#include \"gpu/cuda/integrators/rk/rk_scalar_readback.hpp\"") !=
+                std::string::npos &&
+            decision_source.find("GPU CUDA RK adaptive decision readback source contract") !=
+                std::string::npos,
+        "GPU CUDA RK adaptive decision readback source must document and include its module dependencies");
+    check(
+        decision_source.find("gpu_rk_read_scalar_result(") !=
+                std::string::npos &&
+            decision_source.find("gpu_rk_adaptive_pi_step(ctx, error_norm)") !=
+                std::string::npos &&
+            decision_source.find("cudaMemcpyAsync GPU RK adaptive decision scalar device->host") !=
+                std::string::npos,
+        "GPU CUDA RK adaptive decision readback source must own the transitional scalar readback and host PI handoff");
+    check(
+        decision_source.find("fullmag_cuda_adaptive_error_norm_blocks(") ==
+                std::string::npos &&
+            decision_source.find("fullmag_cuda_device_max(") ==
+                std::string::npos &&
+            decision_source.find("gpu_rk_copy_component_device(") ==
+                std::string::npos,
+        "GPU CUDA RK adaptive decision readback source must not own error-norm reductions or reject restore");
     check(
         adaptive_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
             adaptive_source.find("compute_rhs_for_magnetization(") ==
@@ -2756,6 +2804,11 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
             error_norm_source.find("compute_rhs_for_magnetization(") ==
                 std::string::npos,
         "GPU CUDA RK adaptive error-norm runtime source must not own RK step orchestration or RHS assembly");
+    check(
+        decision_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            decision_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos,
+        "GPU CUDA RK adaptive decision readback source must not own RK step orchestration or RHS assembly");
     check(
         rk_step.find("GpuAdaptiveResult gpu_adaptive_pi_step(") == std::string::npos &&
             rk_step.find("bool restore_adaptive_reject_magnetization_device(") ==
@@ -2800,17 +2853,19 @@ void gpu_rk_attempt_loop_is_owned_by_cuda_rk_module() {
     check(
         attempt_loop_source.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp\"") !=
                 std::string::npos &&
+            attempt_loop_source.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp\"") !=
+                std::string::npos &&
             attempt_loop_source.find("#include \"gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp\"") !=
                 std::string::npos &&
             attempt_loop_source.find("#include \"gpu/cuda/integrators/rk/rk_stage_schedule.hpp\"") !=
                 std::string::npos,
-        "GPU CUDA RK attempt loop source must include adaptive policy, error norm, and stage schedule modules");
+        "GPU CUDA RK attempt loop source must include adaptive policy, decision readback, error norm, and stage schedule modules");
     check(
         attempt_loop_source.find("gpu_rk_run_stage_attempt(") !=
                 std::string::npos &&
-            attempt_loop_source.find("gpu_rk_compute_adaptive_error_norm_device(") !=
+            attempt_loop_source.find("gpu_rk_reduce_adaptive_error_norm_device(") !=
                 std::string::npos &&
-            attempt_loop_source.find("gpu_rk_adaptive_pi_step(ctx, error_estimate)") !=
+            attempt_loop_source.find("gpu_rk_read_adaptive_error_norm_decision_host(") !=
                 std::string::npos &&
             attempt_loop_source.find("gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)") !=
                 std::string::npos &&
@@ -2826,6 +2881,10 @@ void gpu_rk_attempt_loop_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK attempt loop source must own fixed/adaptive stage attempts and accept/reject retry handling");
     check(
+        attempt_loop_source.find("gpu_rk_adaptive_pi_step(ctx, error_estimate)") ==
+            std::string::npos,
+        "GPU CUDA RK attempt loop source must delegate host PI handoff through adaptive decision readback");
+    check(
         attempt_loop_source.find("result.active_dt = active_dt") !=
                 std::string::npos &&
             attempt_loop_source.find("result.total_stage_rhs_evaluations = total_stage_rhs_evaluations") !=
@@ -2837,7 +2896,9 @@ void gpu_rk_attempt_loop_is_owned_by_cuda_rk_module() {
         rk_step.find("gpu_rk_run_accepted_attempt_loop(") !=
                 std::string::npos &&
             rk_step.find("for (;;) {") == std::string::npos &&
-            rk_step.find("gpu_rk_compute_adaptive_error_norm_device(") ==
+            rk_step.find("gpu_rk_reduce_adaptive_error_norm_device(") ==
+                std::string::npos &&
+            rk_step.find("gpu_rk_read_adaptive_error_norm_decision_host(") ==
                 std::string::npos &&
             rk_step.find("gpu_rk_restore_adaptive_reject_magnetization_device(") ==
                 std::string::npos &&

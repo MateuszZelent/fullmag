@@ -531,6 +531,28 @@ GPU_RK_ERROR_NORM_RUNTIME_HPP_PATH = (
     / "rk"
     / "rk_error_norm_runtime.hpp"
 )
+GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_adaptive_decision_readback.cu"
+)
+GPU_RK_ADAPTIVE_DECISION_READBACK_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_adaptive_decision_readback.hpp"
+)
 GPU_RK_ATTEMPT_LOOP_CU_PATH = (
     REPO_ROOT
     / "native"
@@ -5154,7 +5176,7 @@ def test_run_backend_serializes_adaptive_gpu_rk_acceptance_gate(monkeypatch, tmp
     assert "nvcc" in row["adaptive_gpu_rk_acceptance_blockers"]
     assert row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
     assert row["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
-        "native/backends/fem/gpu/cuda/integrators/rk/rk_error_norm_runtime.cu"
+        "native/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
 
 
@@ -6466,14 +6488,29 @@ def test_gpu_rk_adaptive_runtime_helpers_are_owned_by_rk_module():
     adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     error_norm_header = GPU_RK_ERROR_NORM_RUNTIME_HPP_PATH.read_text(encoding="utf-8")
     error_norm_source = GPU_RK_ERROR_NORM_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    decision_header = GPU_RK_ADAPTIVE_DECISION_READBACK_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    decision_source = GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH.read_text(
+        encoding="utf-8"
+    )
     cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
 
     assert "gpu/cuda/integrators/rk/rk_adaptive_runtime.cu" in cmake
     assert "gpu/cuda/integrators/rk/rk_error_norm_runtime.cu" in cmake
+    assert "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu" in cmake
     assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in attempt_loop_source
     assert '#include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"' in attempt_loop_source
+    assert (
+        '#include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"'
+        in attempt_loop_source
+    )
     assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' not in rk_step_source
     assert '#include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"' not in rk_step_source
+    assert (
+        '#include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"'
+        not in rk_step_source
+    )
     assert "GPU CUDA RK adaptive runtime module header" in adaptive_header
     for helper in (
         "GpuAdaptiveResult",
@@ -6492,16 +6529,30 @@ def test_gpu_rk_adaptive_runtime_helpers_are_owned_by_rk_module():
     assert "fullmag_cuda_device_max(" not in adaptive_source
     assert "gpu_rk_read_scalar_result(" not in adaptive_source
     assert "GPU CUDA RK adaptive error-norm runtime module header" in error_norm_header
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in error_norm_header
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in error_norm_header
     assert "GPU CUDA RK adaptive error-norm runtime source contract" in error_norm_source
     assert '#include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"' in error_norm_source
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in error_norm_source
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in error_norm_source
     assert "fullmag_cuda_adaptive_error_norm_blocks(" in error_norm_source
     assert "fullmag_cuda_device_max(" in error_norm_source
     assert "gpu.scalar_reduce_workspace" in error_norm_source
     assert "gpu.scalar_reduce_temp_storage" in error_norm_source
-    assert "gpu_rk_read_scalar_result(" in error_norm_source
     assert "GPU RK adaptive error norm" in error_norm_source
+    assert "gpu_rk_read_scalar_result(" not in error_norm_source
+    assert "cudaMemcpyAsync GPU RK adaptive error norm scalar device->host" not in error_norm_source
+    assert "GPU CUDA RK adaptive decision readback module header" in decision_header
+    assert "struct GpuAdaptiveDecisionReadback" in decision_header
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in decision_header
+    assert "GPU CUDA RK adaptive decision readback source contract" in decision_source
+    assert (
+        '#include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"'
+        in decision_source
+    )
+    assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in decision_source
+    assert '#include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"' in decision_source
+    assert "gpu_rk_read_scalar_result(" in decision_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_norm)" in decision_source
+    assert "cudaMemcpyAsync GPU RK adaptive decision scalar device->host" in decision_source
     assert "gpu_rk_copy_component_device(" not in error_norm_source
     assert "gpu_rk_adaptive_pi_step(" not in error_norm_source
     assert "GpuAdaptiveResult gpu_adaptive_pi_step(" not in rk_step_source
@@ -6511,6 +6562,8 @@ def test_gpu_rk_adaptive_runtime_helpers_are_owned_by_rk_module():
     assert "compute_rhs_for_magnetization(" not in adaptive_source
     assert "gpu_rk_device_resident_step(" not in error_norm_source
     assert "compute_rhs_for_magnetization(" not in error_norm_source
+    assert "gpu_rk_device_resident_step(" not in decision_source
+    assert "compute_rhs_for_magnetization(" not in decision_source
 
 
 def test_gpu_rk_rhs_runtime_helpers_are_owned_by_rk_module():
@@ -7219,7 +7272,8 @@ def test_gpu_rk_plan_supports_rk23_adaptive_retry_scaffold():
     assert "launch GPU RK23 BS23 k3 for adaptive error estimate" in rk23_adaptive_source
     assert "bs23_accept_kernel" in bs23_accept_source
     assert "is_rk23" in cuda_source
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
     assert "gpu_rk_restore_adaptive_reject_magnetization_device(" in attempt_loop_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in refresh_source
 
@@ -7239,7 +7293,8 @@ def test_gpu_rk_plan_supports_rk45_adaptive_retry_scaffold():
     assert "fullmag_cuda_dp54_accept(" in rk45_source
     assert "dp54_accept_kernel" in dp54_accept_source
     assert "is_rk45" in cuda_source
-    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" not in attempt_loop_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in refresh_source
 
     function_start = step_source.index("bool context_step_explicit_rk_mfem(")
@@ -7473,10 +7528,15 @@ def test_gpu_rk_has_adaptive_pi_decision_helper():
     attempt_loop_source = GPU_RK_ATTEMPT_LOOP_CU_PATH.read_text(encoding="utf-8")
     adaptive_header = GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH.read_text(encoding="utf-8")
     adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    decision_source = GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH.read_text(
+        encoding="utf-8"
+    )
 
-    assert "gpu_rk_adaptive_pi_step(" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" not in attempt_loop_source
     assert "struct GpuAdaptiveResult" in adaptive_header
     assert "gpu_rk_adaptive_pi_step(" in adaptive_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_norm)" in decision_source
     helper_source = adaptive_source[
         adaptive_source.index("gpu_rk_adaptive_pi_step(") :
         adaptive_source.index("bool gpu_rk_restore_adaptive_reject_magnetization_device(")
@@ -7536,10 +7596,14 @@ def test_gpu_kernels_use_double_atomic_add_compatibility_helper():
 def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
     attempt_loop_source = GPU_RK_ATTEMPT_LOOP_CU_PATH.read_text(encoding="utf-8")
     error_norm_source = GPU_RK_ERROR_NORM_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    decision_source = GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH.read_text(
+        encoding="utf-8"
+    )
 
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
     helper_source = error_norm_source[
-        error_norm_source.index("gpu_rk_compute_adaptive_error_norm_device(") :
+        error_norm_source.index("gpu_rk_reduce_adaptive_error_norm_device(") :
         error_norm_source.index("\n} // namespace fullmag::fem")
     ]
     assert "fullmag_cuda_adaptive_error_norm_blocks(" in helper_source
@@ -7549,8 +7613,10 @@ def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
     assert "temp_storage=nullptr" not in helper_source
     assert "ctx.adaptive_dt.atol" in helper_source
     assert "ctx.adaptive_dt.rtol" in helper_source
-    assert "gpu_rk_read_scalar_result(" in helper_source
     assert "GPU RK adaptive error norm" in helper_source
+    assert "gpu_rk_read_scalar_result(" not in helper_source
+    assert "gpu_rk_read_scalar_result(" in decision_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_norm)" in decision_source
 
 
 def test_gpu_rk_attempt_loop_is_owned_by_rk_module():
@@ -7567,11 +7633,16 @@ def test_gpu_rk_attempt_loop_is_owned_by_rk_module():
     assert "GPU CUDA RK attempt loop source contract" in attempt_loop_source
     assert '#include "gpu/cuda/integrators/rk/rk_attempt_loop.hpp"' in attempt_loop_source
     assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in attempt_loop_source
+    assert (
+        '#include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"'
+        in attempt_loop_source
+    )
     assert '#include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"' in attempt_loop_source
     assert '#include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"' in attempt_loop_source
     assert "gpu_rk_run_stage_attempt(" in attempt_loop_source
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in attempt_loop_source
-    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" in attempt_loop_source
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" not in attempt_loop_source
     assert "gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)" in attempt_loop_source
     assert "for (;;) {" in attempt_loop_source
     assert "rejected_attempts += 1" in attempt_loop_source
@@ -7611,8 +7682,9 @@ def test_gpu_rk_step_contains_adaptive_retry_loop_scaffold():
     assert "accepted_attempt.fsal_reused" in function_source
     assert "for (;;) {" in attempt_loop_source
     assert "ctx.adaptive_dt.current_dt = active_dt" in attempt_loop_source
-    assert "gpu_rk_compute_adaptive_error_norm_device(" in attempt_loop_source
-    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" in attempt_loop_source
+    assert "gpu_rk_reduce_adaptive_error_norm_device(" in attempt_loop_source
+    assert "gpu_rk_read_adaptive_error_norm_decision_host(" in attempt_loop_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" not in attempt_loop_source
     assert "gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)" in attempt_loop_source
     assert "rejected_attempts += 1" in attempt_loop_source
     assert "ctx.adaptive_dt.max_reject" in attempt_loop_source
@@ -8577,7 +8649,7 @@ def test_preflight_requires_cuda_mfem_and_compute_gate_for_adaptive_gpu_rk(tmp_p
     assert gated_with_cuda["adaptive_gpu_rk_acceptance_ready"] is False
     assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
     assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
-        "native/backends/fem/gpu/cuda/integrators/rk/rk_error_norm_runtime.cu"
+        "native/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
     assert gated_with_cuda["adaptive_gpu_rk_acceptance_blockers"] == [
         "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"

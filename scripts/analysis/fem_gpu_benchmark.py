@@ -48,6 +48,17 @@ GPU_RK_ERROR_NORM_RUNTIME_SOURCE = (
     / "rk"
     / "rk_error_norm_runtime.cu"
 )
+GPU_RK_ADAPTIVE_DECISION_READBACK_SOURCE = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_adaptive_decision_readback.cu"
+)
 
 PRESET_MESHES = {
     "coarse": REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json",
@@ -971,20 +982,20 @@ def build_preflight_report(
     except OSError:
         fem_cmake_text = ""
     try:
-        adaptive_error_norm_runtime_text = GPU_RK_ERROR_NORM_RUNTIME_SOURCE.read_text(
+        adaptive_decision_readback_text = GPU_RK_ADAPTIVE_DECISION_READBACK_SOURCE.read_text(
             encoding="utf-8"
         )
     except OSError:
-        adaptive_error_norm_runtime_text = ""
+        adaptive_decision_readback_text = ""
 
     assert_no_hot_loop_compute_sync = env_flag_enabled(
         env_text(actual_env, "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC")
     )
     adaptive_hot_loop_scalar_readback_free = (
-        adaptive_error_norm_runtime_text != ""
-        and "gpu_rk_read_scalar_result(" not in adaptive_error_norm_runtime_text
-        and "cudaMemcpyAsync GPU RK adaptive error norm scalar device->host"
-        not in adaptive_error_norm_runtime_text
+        adaptive_decision_readback_text != ""
+        and "gpu_rk_read_scalar_result(" not in adaptive_decision_readback_text
+        and "cudaMemcpyAsync GPU RK adaptive decision scalar device->host"
+        not in adaptive_decision_readback_text
     )
     report: dict[str, object] = {
         "status": "missing",
@@ -1005,7 +1016,7 @@ def build_preflight_report(
         "gpu_rk_cmake_wired": GPU_RK_CMAKE_SOURCE in fem_cmake_text,
         "adaptive_gpu_rk_hot_loop_scalar_readback_free": adaptive_hot_loop_scalar_readback_free,
         "adaptive_gpu_rk_hot_loop_scalar_readback_path": str(
-            GPU_RK_ERROR_NORM_RUNTIME_SOURCE
+            GPU_RK_ADAPTIVE_DECISION_READBACK_SOURCE
         ),
         "remediation": preflight_remediation(),
     }

@@ -252,9 +252,9 @@ sequencing is owned by `gpu/cuda/integrators/rk/heun_stage_sequence.hpp/.cu`.
 The post-accept BS23 k3 RHS refresh needed for adaptive RK23 error estimation
 is owned by `gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp/.cu`.
 Device-resident fixed/adaptive RK accepted-attempt looping, including
-stage-attempt dispatch, embedded error-norm evaluation, PI accept/reject
-decisions, rejected-attempt restore, and accepted-attempt result publication,
-is owned by `gpu/cuda/integrators/rk/rk_attempt_loop.hpp/.cu`.
+stage-attempt dispatch, embedded error-norm evaluation, delegated
+accept/reject decisions, rejected-attempt restore, and accepted-attempt result
+publication, is owned by `gpu/cuda/integrators/rk/rk_attempt_loop.hpp/.cu`.
 Accepted-step final RHS/H_eff refresh, FSAL k0 propagation, max-RHS reduction,
 base step-stat publication, and device/host residency marking are owned by
 `gpu/cuda/integrators/rk/rk_final_refresh.hpp/.cu`. Strict GPU RK snapshot
@@ -293,11 +293,14 @@ reducers are owned by `gpu/cuda/integrators/rk/adaptive_error_kernels.hpp/.cu`.
 Adaptive RK PI-step policy and reject restore helpers are owned by
 `gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp/.cu`. Device adaptive
 error-norm runtime reductions are owned by
-`gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp/.cu`. The current adaptive
-RK23/RK45 GPU path still performs a scalar device-to-host readback for the
-accept/reject decision inside the RK attempt loop; benchmark preflight must
-therefore report adaptive GPU RK acceptance as blocked until that decision is
-made without hot-loop compute host synchronization.
+`gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp/.cu`. The transitional
+scalar device-to-host readback and host PI-step handoff for adaptive RK
+accept/reject are explicitly owned by
+`gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp/.cu`. The current
+adaptive RK23/RK45 GPU path still performs that scalar readback in the hot RK
+attempt loop; benchmark preflight must therefore report adaptive GPU RK
+acceptance as blocked until that decision is made without hot-loop compute host
+synchronization.
 GPU RK FSAL reuse policy for autonomous RHS gating is owned by
 `gpu/cuda/integrators/rk/rk_fsal_policy.hpp/.cpp`.
 RK predictor/accept CUDA stage kernel compatibility includes are owned by

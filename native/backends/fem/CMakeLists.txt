@@ -132,6 +132,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
+            gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu
             gpu/cuda/integrators/rk/rk_adaptive_runtime.cu
             gpu/cuda/integrators/rk/rk_anisotropy_field.cu
             gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu
