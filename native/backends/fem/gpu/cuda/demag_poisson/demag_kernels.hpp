@@ -53,5 +53,17 @@ void fullmag_cuda_demag_energy_blocks(
     int N,
     cudaStream_t stream = nullptr);
 
+/// Per-block Poisson-Robin boundary energy partials:
+/// coefficient * u_i * sum_j M_ij u_j.
+void fullmag_cuda_demag_robin_boundary_energy_blocks(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *u,
+    double coefficient,
+    double *block_sums,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

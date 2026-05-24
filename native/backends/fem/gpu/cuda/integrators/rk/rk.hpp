@@ -3,12 +3,13 @@
 /*
  * GPU CUDA RK module header.
  *
- * Declares device-resident GPU RK readiness planning, step orchestration,
- * final statistics, and strict GPU snapshot entrypoints.
+ * Declares device-resident GPU RK readiness planning, step orchestration, and
+ * strict GPU snapshot entrypoints.
  */
 
 #include "cpu/mfem/integrators/rk_tableau.hpp"
 #include "fullmag_fem.h"
+#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 
 #include <cstdint>
 #include <string>
@@ -40,11 +41,6 @@ bool gpu_rk_device_resident_step(
     Context &ctx,
     const ExplicitTableau &tableau,
     double dt_seconds,
-    fullmag_fem_step_stats &stats,
-    std::string &reason);
-
-bool gpu_rk_finalize_step_stats(
-    Context &ctx,
     fullmag_fem_step_stats &stats,
     std::string &reason);
 

@@ -19,6 +19,7 @@ set(FEM_SOURCES
     core/fem_state.cpp
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
+    gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/state/gpu_state.cpp
     gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
@@ -124,8 +125,14 @@ if(FULLMAG_USE_MFEM_STACK)
         enable_language(CUDA)
         list(APPEND FEM_SOURCES
             gpu/cuda/exchange/exchange_kernels.cu
+            gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
+            gpu/cuda/integrators/rk/rk_adaptive_runtime.cu
+            gpu/cuda/integrators/rk/rk_device_io.cu
+            gpu/cuda/integrators/rk/rk_rhs_runtime.cu
+            gpu/cuda/integrators/rk/rk_stage_kernels.cu
+            gpu/cuda/integrators/rk/rk_step_stats.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
@@ -133,8 +140,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/stt/stt_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
-            gpu/cuda/kernels/kernels.cu
-            gpu/cuda/kernels/demag_kernels.cu
+            gpu/cuda/demag_poisson/demag_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
@@ -194,6 +200,12 @@ add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
 
 add_executable(fem_cuda_tetra_gradient_contract tests/cuda_tetra_gradient_contract.cpp)
 add_test(NAME fem_cuda_tetra_gradient_contract COMMAND fem_cuda_tetra_gradient_contract)
+
+add_executable(fem_cuda_demag_robin_energy_contract tests/cuda_demag_robin_energy_contract.cpp)
+add_test(NAME fem_cuda_demag_robin_energy_contract COMMAND fem_cuda_demag_robin_energy_contract)
+
+add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.cpp)
+add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)

@@ -1,3 +1,4 @@
+import io
 import importlib.util
 import inspect
 import json
@@ -5,6 +6,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -66,6 +69,138 @@ GPU_RK_ADAPTIVE_KERNELS_HPP_PATH = (
     / "rk"
     / "adaptive_error_kernels.hpp"
 )
+GPU_RK_STAGE_KERNELS_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_stage_kernels.cu"
+)
+GPU_RK_STAGE_KERNELS_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_stage_kernels.hpp"
+)
+GPU_RK_DEVICE_IO_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_device_io.cu"
+)
+GPU_RK_DEVICE_IO_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_device_io.hpp"
+)
+GPU_RK_ADAPTIVE_RUNTIME_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_adaptive_runtime.cu"
+)
+GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_adaptive_runtime.hpp"
+)
+GPU_RK_RHS_RUNTIME_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_rhs_runtime.cu"
+)
+GPU_RK_RHS_RUNTIME_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_rhs_runtime.hpp"
+)
+GPU_RK_STEP_STATS_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_step_stats.cu"
+)
+GPU_RK_STEP_STATS_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_step_stats.hpp"
+)
+GPU_RK_SNAPSHOT_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_snapshot.cu"
+)
+GPU_RK_SNAPSHOT_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_snapshot.hpp"
+)
 KERNELS_CU_PATH = (
     REPO_ROOT / "native" / "backends" / "fem" / "gpu" / "cuda" / "kernels" / "kernels.cu"
 )
@@ -78,6 +213,52 @@ KERNELS_HPP_PATH = (
     / "cuda"
     / "kernels"
     / "kernels.hpp"
+)
+
+
+def read_optional_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+GPU_VECTOR_FIELD_KERNELS_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "vector_field_kernels.cu"
+)
+GPU_VECTOR_FIELD_KERNELS_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "vector_field_kernels.hpp"
+)
+GPU_DEMAG_KERNELS_CU_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "demag_poisson"
+    / "demag_kernels.cu"
+)
+GPU_DEMAG_KERNELS_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "demag_poisson"
+    / "demag_kernels.hpp"
 )
 GPU_LLG_KERNELS_CU_PATH = (
     REPO_ROOT
@@ -4300,9 +4481,10 @@ def test_run_backend_phase2_compute_sync_assertion_overrides_inherited_env(
 def test_gpu_rk_cuda_source_contains_kernel_call_sites():
     assert GPU_RK_CU_PATH.is_file()
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
-    assert "fullmag_cuda_llg_rhs_fused(" in source
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    assert "fullmag_cuda_llg_rhs_fused(" in rhs_source
     assert "fullmag_cuda_normalize_vectors(" in source
-    assert "fullmag_cuda_accumulate_heff(" in source
+    assert "fullmag_cuda_accumulate_heff(" in rhs_source
     assert "fullmag_cuda_device_max(" in source
     cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     assert "gpu/cuda/integrators/rk/rk_step.cu" in cmake
@@ -4311,7 +4493,7 @@ def test_gpu_rk_cuda_source_contains_kernel_call_sites():
 def test_gpu_rk_step_surface_has_no_hot_loop_aos_transfer_calls():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     assert "upload_aos_to_soa(" not in function_source
@@ -4323,7 +4505,7 @@ def test_gpu_rk_step_surface_has_no_hot_loop_aos_transfer_calls():
 def test_gpu_rk_step_surface_has_no_compute_side_stream_synchronization():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     assert "cudaStreamSynchronize" not in function_source
@@ -4334,7 +4516,7 @@ def test_gpu_rk_step_surface_has_no_compute_side_stream_synchronization():
 def test_gpu_rk_step_promotes_clean_device_copy_without_hot_loop_transfer():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     assert "FemGpuSyncState::DeviceClean" in function_source
@@ -4544,7 +4726,7 @@ def test_gpu_exchange_plan_enables_only_after_device_sparse_exchange_is_ready():
 
 def test_gpu_rk_plan_supports_per_node_damping_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     llg_kernel_header = GPU_LLG_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     llg_kernel_source = GPU_LLG_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -4552,9 +4734,9 @@ def test_gpu_rk_plan_supports_per_node_damping_on_device():
 
     assert "gpu/cuda/integrators/llg/llg_rhs_kernels.cu" in cmake
     assert "per-node damping yet" not in rk_source
-    assert "ctx.material_fields.material.damping" in cuda_source
-    assert "gpu.alpha" in cuda_source
-    assert "!ctx.material_fields.alpha_field.empty()" in cuda_source
+    assert "ctx.material_fields.material.damping" in rhs_source
+    assert "gpu.alpha" in rhs_source
+    assert "!ctx.material_fields.alpha_field.empty()" in rhs_source
     assert '#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"' in kernel_header
     assert "const double *alpha_field" in llg_kernel_header
     assert "bool use_alpha_field" in llg_kernel_header
@@ -4563,7 +4745,7 @@ def test_gpu_rk_plan_supports_per_node_damping_on_device():
 
 def test_gpu_cuda_transfer_kernels_are_owned_by_transfer_module():
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
-    kernel_source = KERNELS_CU_PATH.read_text(encoding="utf-8")
+    kernel_source = read_optional_text(KERNELS_CU_PATH)
     transfer_header = GPU_TRANSFER_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     transfer_source = GPU_TRANSFER_KERNELS_CU_PATH.read_text(encoding="utf-8")
     cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
@@ -4582,20 +4764,207 @@ def test_gpu_cuda_transfer_kernels_are_owned_by_transfer_module():
     assert "fullmag_cuda_download_soa_to_aos(" not in kernel_source
 
 
+def test_gpu_cuda_vector_field_kernels_are_owned_by_fields_module():
+    kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    kernel_source = read_optional_text(KERNELS_CU_PATH)
+    vector_header = GPU_VECTOR_FIELD_KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    vector_source = GPU_VECTOR_FIELD_KERNELS_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/fields/vector_field_kernels.cu" in cmake
+    assert "gpu/cuda/kernels/kernels.cu" not in cmake
+    assert not KERNELS_CU_PATH.exists()
+    assert '#include "gpu/cuda/fields/vector_field_kernels.hpp"' in kernel_header
+    assert "GPU CUDA vector field kernels module header" in vector_header
+    assert "fullmag_cuda_normalize_vectors(" in vector_header
+    assert "fullmag_cuda_accumulate_heff(" in vector_header
+    assert "fullmag_cuda_zero_indexed_values(" in vector_header
+    assert "fullmag_cuda_add_field_inplace(" in vector_header
+    assert "GPU CUDA vector field kernels source contract" in vector_source
+    assert "normalize_unit_vectors_kernel" in vector_source
+    assert "accumulate_heff_kernel" in vector_source
+    assert "zero_indexed_values_kernel" in vector_source
+    assert "add_field_inplace_kernel" in vector_source
+    assert "fullmag_cuda_normalize_vectors(" not in kernel_source
+    assert "fullmag_cuda_accumulate_heff(" not in kernel_source
+    assert "fullmag_cuda_zero_indexed_values(" not in kernel_source
+    assert "fullmag_cuda_add_field_inplace(" not in kernel_source
+
+
+def test_gpu_cuda_demag_kernels_are_owned_by_demag_poisson_module():
+    kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    kernel_source = read_optional_text(KERNELS_CU_PATH)
+    demag_header = GPU_DEMAG_KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    demag_source = GPU_DEMAG_KERNELS_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/demag_poisson/demag_kernels.cu" in cmake
+    assert "gpu/cuda/kernels/demag_kernels.cu" not in cmake
+    assert '#include "gpu/cuda/demag_poisson/demag_kernels.hpp"' in kernel_header
+    assert "GPU CUDA demag kernels module header" in demag_header
+    assert "fullmag_cuda_demag_rhs_csr(" in demag_header
+    assert "fullmag_cuda_demag_recovery_csr(" in demag_header
+    assert "fullmag_cuda_demag_energy_blocks(" in demag_header
+    assert "fullmag_cuda_demag_robin_boundary_energy_blocks(" in demag_header
+    assert "GPU CUDA demag kernels source contract" in demag_source
+    assert '#include "gpu/cuda/demag_poisson/demag_kernels.hpp"' in demag_source
+    assert "demag_rhs_csr_kernel" in demag_source
+    assert "demag_recovery_csr_kernel" in demag_source
+    assert "demag_energy_blocks_kernel" in demag_source
+    assert "demag_robin_boundary_energy_blocks_kernel" in demag_source
+    assert "fullmag_cuda_demag_rhs_csr(" not in kernel_source
+    assert "fullmag_cuda_demag_recovery_csr(" not in kernel_source
+    assert "fullmag_cuda_demag_energy_blocks(" not in kernel_source
+    assert "fullmag_cuda_demag_robin_boundary_energy_blocks(" not in kernel_source
+
+
+def test_gpu_rk_stage_kernels_are_owned_by_rk_module():
+    kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    rk_step_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    stage_header = GPU_RK_STAGE_KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    stage_source = GPU_RK_STAGE_KERNELS_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/integrators/rk/rk_stage_kernels.cu" in cmake
+    assert '#include "gpu/cuda/integrators/rk/rk_stage_kernels.hpp"' in kernel_header
+    assert "GPU CUDA RK stage kernels module header" in stage_header
+    for wrapper in (
+        "fullmag_cuda_euler_stage(",
+        "fullmag_cuda_rk45_stage(",
+        "fullmag_cuda_heun_accept(",
+        "fullmag_cuda_rk4_accept(",
+        "fullmag_cuda_bs23_accept(",
+        "fullmag_cuda_dp54_accept(",
+    ):
+        assert wrapper in stage_header
+        assert wrapper in stage_source
+    assert "GPU CUDA RK stage kernels source contract" in stage_source
+    assert '#include "gpu/cuda/integrators/rk/rk_stage_kernels.hpp"' in stage_source
+    for kernel in (
+        "euler_stage_kernel",
+        "rk45_stage_kernel",
+        "heun_accept_kernel",
+        "rk4_accept_kernel",
+        "bs23_accept_kernel",
+        "dp54_accept_kernel",
+    ):
+        assert kernel in stage_source
+        assert f"__global__ void {kernel}" not in rk_step_source
+    assert "gpu_rk_device_resident_step(" not in stage_source
+    assert "compute_rhs_for_magnetization(" not in stage_source
+
+
+def test_gpu_rk_device_io_helpers_are_owned_by_rk_module():
+    rk_step_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    io_header = GPU_RK_DEVICE_IO_HPP_PATH.read_text(encoding="utf-8")
+    io_source = GPU_RK_DEVICE_IO_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/integrators/rk/rk_device_io.cu" in cmake
+    assert '#include "gpu/cuda/integrators/rk/rk_device_io.hpp"' in rk_step_source
+    assert "GPU CUDA RK device I/O module header" in io_header
+    for helper in (
+        "gpu_rk_read_scalar_result(",
+        "gpu_rk_read_scalar_results(",
+        "gpu_rk_copy_component_device(",
+        "gpu_rk_download_component_device_to_aos(",
+    ):
+        assert helper in io_header
+        assert helper in io_source
+    assert "GPU CUDA RK device I/O source contract" in io_source
+    assert '#include "gpu/cuda/integrators/rk/rk_device_io.hpp"' in io_source
+    assert "cudaMemcpyAsync" in io_source
+    assert "cudaMemcpy2DAsync" in io_source
+    assert "cudaStreamSynchronize" in io_source
+    assert "record_device_to_host" in io_source
+    for old_definition in (
+        "bool read_scalar_result(",
+        "bool read_scalar_results(",
+        "bool copy_component_device(",
+        "bool download_component_device_to_aos(",
+    ):
+        assert old_definition not in rk_step_source
+    assert "cudaMemcpy2DAsync(" not in rk_step_source
+    assert "gpu_rk_device_resident_step(" not in io_source
+    assert "compute_rhs_for_magnetization(" not in io_source
+
+
+def test_gpu_rk_adaptive_runtime_helpers_are_owned_by_rk_module():
+    rk_step_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    adaptive_header = GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH.read_text(encoding="utf-8")
+    adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/integrators/rk/rk_adaptive_runtime.cu" in cmake
+    assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in rk_step_source
+    assert "GPU CUDA RK adaptive runtime module header" in adaptive_header
+    for helper in (
+        "GpuAdaptiveResult",
+        "gpu_rk_adaptive_pi_step(",
+        "gpu_rk_restore_adaptive_reject_magnetization_device(",
+        "gpu_rk_compute_adaptive_error_norm_device(",
+    ):
+        assert helper in adaptive_header
+        assert helper in adaptive_source
+    assert "GPU CUDA RK adaptive runtime source contract" in adaptive_source
+    assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in adaptive_source
+    assert "fullmag_cuda_adaptive_error_norm_blocks(" in adaptive_source
+    assert "gpu_rk_read_scalar_result(" in adaptive_source
+    assert "gpu_rk_copy_component_device(" in adaptive_source
+    assert "ctx.adaptive_dt.prev_error_norm" in adaptive_source
+    assert "GpuAdaptiveResult gpu_adaptive_pi_step(" not in rk_step_source
+    assert "bool restore_adaptive_reject_magnetization_device(" not in rk_step_source
+    assert "bool compute_adaptive_error_norm_device(" not in rk_step_source
+    assert "gpu_rk_device_resident_step(" not in adaptive_source
+    assert "compute_rhs_for_magnetization(" not in adaptive_source
+
+
+def test_gpu_rk_rhs_runtime_helpers_are_owned_by_rk_module():
+    rk_step_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_header = GPU_RK_RHS_RUNTIME_HPP_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/integrators/rk/rk_rhs_runtime.cu" in cmake
+    assert '#include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"' in rk_step_source
+    assert "GPU CUDA RK RHS runtime module header" in rhs_header
+    for helper in (
+        "gpu_rk_rhs_allows_fsal_reuse(",
+        "gpu_rk_compute_rhs_for_magnetization(",
+    ):
+        assert helper in rhs_header
+        assert helper in rhs_source
+    assert "GPU CUDA RK RHS runtime source contract" in rhs_source
+    assert '#include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"' in rhs_source
+    assert "gpu_rk_compute_legacy_sparse_exchange(" in rhs_source
+    assert "gpu_rk_compute_hybrid_cpu_demag_for_device_stage(" in rhs_source
+    assert "fullmag_cuda_llg_rhs_fused(" in rhs_source
+    assert "gpu_rk_device_resident_step(" not in rhs_source
+    assert "gpu_rk_finalize_step_stats(" not in rhs_source
+    for old_definition in (
+        "bool compute_rhs_for_magnetization(",
+        "bool compute_legacy_sparse_exchange(",
+        "bool compute_hybrid_cpu_demag_for_device_stage(",
+    ):
+        assert old_definition not in rk_step_source
+
+
 def test_gpu_rk_plan_supports_heun_and_rk4_fixed_step_integrators():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    stage_source = GPU_RK_STAGE_KERNELS_CU_PATH.read_text(encoding="utf-8")
 
     assert "ctx.integrator != FULLMAG_FEM_INTEGRATOR_HEUN" not in rk_source
     assert "FULLMAG_FEM_INTEGRATOR_RK4" in rk_source
     assert "GPU RK device-resident path currently supports Heun, RK4, RK23, and RK45 only" in rk_source
-    assert "rk4_accept_kernel" in cuda_source
+    assert "fullmag_cuda_rk4_accept(" in cuda_source
+    assert "rk4_accept_kernel" in stage_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in cuda_source
 
 
 def test_gpu_rk_plan_supports_uniform_external_field_energy_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    cuda_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
     compact_cuda_source = " ".join(cuda_source.split())
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     zeeman_kernel_header = GPU_ZEEMAN_KERNELS_HPP_PATH.read_text(encoding="utf-8")
@@ -4615,9 +4984,11 @@ def test_gpu_rk_plan_supports_uniform_external_field_energy_on_device():
 
 def test_gpu_rk_plan_supports_uniaxial_anisotropy_field_and_energy_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    cuda_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     compact_cuda_source = " ".join(cuda_source.split())
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
+    vector_kernel_header = GPU_VECTOR_FIELD_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     anis_kernel_header = GPU_ANISOTROPY_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     anis_kernel_source = GPU_ANISOTROPY_KERNELS_CU_PATH.read_text(encoding="utf-8")
 
@@ -4631,9 +5002,9 @@ def test_gpu_rk_plan_supports_uniaxial_anisotropy_field_and_energy_on_device():
     assert "uniaxial_anisotropy_field_energy_blocks_kernel" in anis_kernel_source
     assert "2.0 * ku_i / (kMu0 * ms_i)" in anis_kernel_source
     assert "4.0 * ku2_i / (kMu0 * ms_i)" in anis_kernel_source
-    assert "fullmag_cuda_add_field_inplace" in kernel_header
+    assert "fullmag_cuda_add_field_inplace" in vector_kernel_header
     assert "fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(" in cuda_source
-    assert "launch GPU RK uniaxial anisotropy h_eff accumulation" in cuda_source
+    assert "launch GPU RK uniaxial anisotropy h_eff accumulation" in rhs_source
     assert "launch GPU RK uniaxial anisotropy energy reduction" in cuda_source
     assert "stats.anisotropy_energy_joules = anisotropy_energy + cubic_anisotropy_energy" in cuda_source
     assert (
@@ -4644,7 +5015,8 @@ def test_gpu_rk_plan_supports_uniaxial_anisotropy_field_and_energy_on_device():
 
 def test_gpu_rk_plan_supports_cubic_anisotropy_field_and_energy_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    cuda_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     anis_kernel_header = GPU_ANISOTROPY_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     anis_kernel_source = GPU_ANISOTROPY_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -4662,7 +5034,7 @@ def test_gpu_rk_plan_supports_cubic_anisotropy_field_and_energy_on_device():
     assert "const double pf3 = -4.0 * kc3_i * inv_mu0_ms" in anis_kernel_source
     assert "kc1_i * sigma + kc2_i * m1sq * m2sq * m3sq + kc3_i * sigma * sigma" in anis_kernel_source
     assert "fullmag_cuda_cubic_anisotropy_field_energy_blocks(" in cuda_source
-    assert "launch GPU RK cubic anisotropy h_eff accumulation" in cuda_source
+    assert "launch GPU RK cubic anisotropy h_eff accumulation" in rhs_source
     assert "launch GPU RK cubic anisotropy energy reduction" in cuda_source
     assert "cubic_anisotropy_energy" in cuda_source
     assert "anisotropy_energy + cubic_anisotropy_energy" in cuda_source
@@ -4670,7 +5042,7 @@ def test_gpu_rk_plan_supports_cubic_anisotropy_field_and_energy_on_device():
 
 def test_gpu_rk_plan_supports_precomputed_oersted_field_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     oersted_kernel_header = GPU_OERSTED_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     oersted_kernel_source = GPU_OERSTED_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -4681,15 +5053,16 @@ def test_gpu_rk_plan_supports_precomputed_oersted_field_on_device():
     assert "fullmag_cuda_add_scaled_field_inplace" in oersted_kernel_header
     assert "add_scaled_field_inplace_kernel" in oersted_kernel_source
     assert "scale * h_add[i]" in oersted_kernel_source
-    assert "double oersted_scale(const Context &ctx)" in cuda_source
-    assert "ctx.oersted.time_dep_kind" in cuda_source
-    assert "fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.x" in cuda_source
-    assert "launch GPU RK Oersted h_eff accumulation" in cuda_source
+    assert "double gpu_rk_oersted_scale(const Context &ctx)" in rhs_source
+    assert "ctx.oersted.time_dep_kind" in rhs_source
+    assert "fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.x" in rhs_source
+    assert "launch GPU RK Oersted h_eff accumulation" in rhs_source
 
 
 def test_gpu_rk_plan_supports_magnetoelastic_field_and_energy_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    cuda_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
     state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
@@ -4711,8 +5084,8 @@ def test_gpu_rk_plan_supports_magnetoelastic_field_and_energy_on_device():
     assert "2.0 * b1 * lmx * e11" in mel_kernel_source
     assert "energy_density * lumped_mass[i]" in mel_kernel_source
     assert "fullmag_cuda_magnetoelastic_field_energy_blocks(" in cuda_source
-    assert "use_per_node_strain ? gpu.mel_strain_voigt : nullptr" in cuda_source
-    assert "launch GPU RK magnetoelastic h_eff accumulation" in cuda_source
+    assert "use_per_node_strain ? gpu.mel_strain_voigt : nullptr" in rhs_source
+    assert "launch GPU RK magnetoelastic h_eff accumulation" in rhs_source
     assert "launch GPU RK magnetoelastic energy reduction" in cuda_source
     assert "stats.magnetoelastic_energy_joules = magnetoelastic_energy" in cuda_source
     assert "magnetoelastic_energy" in cuda_source
@@ -4720,7 +5093,7 @@ def test_gpu_rk_plan_supports_magnetoelastic_field_and_energy_on_device():
 
 def test_gpu_rk_plan_supports_slonczewski_stt_rhs_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     stt_kernel_header = GPU_STT_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     stt_kernel_source = GPU_STT_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -4733,37 +5106,41 @@ def test_gpu_rk_plan_supports_slonczewski_stt_rhs_on_device():
     assert "slonczewski_stt_rhs_kernel" in stt_kernel_source
     assert "kHbar = 1.054571817e-34" in stt_kernel_source
     assert "kElectronCharge = 1.60217662e-19" in stt_kernel_source
-    assert "current_density_magnitude(ctx)" in cuda_source
-    assert "slonczewski_thickness" in cuda_source
-    assert "ctx.stt.spin_polarization[0]" in cuda_source
-    assert "launch GPU RK Slonczewski STT RHS" in cuda_source
+    assert "gpu_rk_current_density_magnitude(ctx)" in rhs_source
+    assert "slonczewski_thickness" in rhs_source
+    assert "ctx.stt.spin_polarization[0]" in rhs_source
+    assert "launch GPU RK Slonczewski STT RHS" in rhs_source
 
 
 def test_gpu_rk_plan_supports_rk23_adaptive_retry_scaffold():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    stage_source = GPU_RK_STAGE_KERNELS_CU_PATH.read_text(encoding="utf-8")
 
     assert "FULLMAG_FEM_INTEGRATOR_RK23_BS" in rk_source
     assert "adaptive RK23/RK45" not in rk_source
     assert "GPU RK device-resident path currently supports Heun, RK4, RK23, and RK45 only" in rk_source
-    assert "bs23_accept_kernel" in cuda_source
+    assert "fullmag_cuda_bs23_accept(" in cuda_source
+    assert "bs23_accept_kernel" in stage_source
     assert "is_rk23" in cuda_source
-    assert "compute_adaptive_error_norm_device(" in cuda_source
-    assert "restore_adaptive_reject_magnetization_device(" in cuda_source
+    assert "gpu_rk_compute_adaptive_error_norm_device(" in cuda_source
+    assert "gpu_rk_restore_adaptive_reject_magnetization_device(" in cuda_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in cuda_source
 
 
 def test_gpu_rk_plan_supports_rk45_adaptive_retry_scaffold():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    stage_source = GPU_RK_STAGE_KERNELS_CU_PATH.read_text(encoding="utf-8")
     step_source = RK_EXPLICIT_STEP_CPP_PATH.read_text(encoding="utf-8")
 
     assert "FULLMAG_FEM_INTEGRATOR_RK45_DP54" in rk_source
     assert "GPU RK device-resident path currently supports Heun, RK4, RK23, and RK45 only" in rk_source
     assert "adaptive RK23/RK45" not in rk_source
-    assert "dp54_accept_kernel" in cuda_source
+    assert "fullmag_cuda_dp54_accept(" in cuda_source
+    assert "dp54_accept_kernel" in stage_source
     assert "is_rk45" in cuda_source
-    assert "gpu_adaptive_pi_step(ctx, error_estimate)" in cuda_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" in cuda_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in cuda_source
 
     function_start = step_source.index("bool context_step_explicit_rk_mfem(")
@@ -4818,15 +5195,16 @@ def test_mfem_exchange_stage_path_still_has_explicit_host_roundtrip_blocker():
 
 def test_gpu_rk_cuda_step_recomputes_exchange_for_each_heun_stage():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
     function_source = source[function_start:]
-    helper_start = source.index("bool compute_rhs_for_magnetization(")
-    helper_end = source.index("} // namespace", helper_start)
-    helper_source = source[helper_start:helper_end]
+    helper_start = rhs_source.index("bool gpu_rk_compute_rhs_for_magnetization(")
+    helper_end = rhs_source.index("} // namespace", helper_start)
+    helper_source = rhs_source[helper_start:helper_end]
 
-    assert "fullmag_cuda_legacy_sparse_exchange(" in source
-    assert "compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)" in helper_source
-    assert function_source.count("compute_rhs_for_magnetization(") >= 2
+    assert "fullmag_cuda_legacy_sparse_exchange(" in rhs_source
+    assert "gpu_rk_compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)" in helper_source
+    assert function_source.count("gpu_rk_compute_rhs_for_magnetization(") >= 2
     assert 'gpu.m,\n            gpu.error' in function_source
     assert "gpu.m_stage" in function_source
     assert "legacy_sparse_gpu" in function_source
@@ -4835,12 +5213,12 @@ def test_gpu_rk_cuda_step_recomputes_exchange_for_each_heun_stage():
 def test_gpu_rk_cuda_step_refreshes_final_heff_after_accept():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     accept_index = function_source.index("launch GPU RK accept/normalize")
     final_rhs_call_index = function_source.index(
-        "compute_rhs_for_magnetization(\n            ctx,\n            gpu.m",
+        "gpu_rk_compute_rhs_for_magnetization(\n            ctx,\n            gpu.m",
         accept_index,
     )
     final_heff_label_index = function_source.index(
@@ -4855,12 +5233,12 @@ def test_gpu_rk_cuda_step_refreshes_final_heff_after_accept():
 def test_gpu_rk_cuda_step_recomputes_final_rhs_metric_after_final_heff_refresh():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     accept_index = function_source.index("launch GPU RK accept/normalize")
     final_rhs_call_index = function_source.index(
-        "compute_rhs_for_magnetization(\n            ctx,\n            gpu.m",
+        "gpu_rk_compute_rhs_for_magnetization(\n            ctx,\n            gpu.m",
         accept_index,
     )
     final_heff_label_index = function_source.index(
@@ -4876,7 +5254,7 @@ def test_gpu_rk_cuda_step_recomputes_final_rhs_metric_after_final_heff_refresh()
 def test_gpu_rk_rhs_evaluation_count_includes_final_rhs_metric():
     source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
-    function_end = source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = source.index("\n} // namespace fullmag::fem", function_start)
     function_source = source[function_start:function_end]
 
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in function_source
@@ -4886,18 +5264,19 @@ def test_gpu_rk_reuses_fsal_stage_zero_without_host_sync():
     header_source = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    io_source = GPU_RK_DEVICE_IO_CU_PATH.read_text(encoding="utf-8")
     function_start = cuda_source.index("bool gpu_rk_device_resident_step(")
-    function_end = cuda_source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = cuda_source.index("\n} // namespace fullmag::fem", function_start)
     function_source = cuda_source[function_start:function_end]
 
     assert "bool fsal_valid = false" in header_source
     assert "state.fsal_valid = false" in state_source
     assert "fsal_reused = fsal_method && gpu.fsal_valid" in function_source
     assert "if (!fsal_reused)" in function_source
-    assert "copy_component_device(" in function_source
+    assert "gpu_rk_copy_component_device(" in function_source
     assert "gpu.error" in function_source
     assert "gpu.k[0]" in function_source
-    assert "cudaMemcpyDeviceToDevice" in cuda_source
+    assert "cudaMemcpyDeviceToDevice" in io_source
     assert "stats.fsal_reused = fsal_reused ? 1 : 0" in function_source
     assert "stats.rhs_evaluations = total_stage_rhs_evaluations + 1" in function_source
     assert "cudaStreamSynchronize" not in function_source
@@ -4905,12 +5284,13 @@ def test_gpu_rk_reuses_fsal_stage_zero_without_host_sync():
 
 def test_gpu_rk_disables_fsal_reuse_for_stochastic_or_time_dependent_rhs():
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
-    assert "bool gpu_rk_rhs_allows_fsal_reuse(" in cuda_source
-    function_start = cuda_source.index("bool gpu_rk_rhs_allows_fsal_reuse(")
-    function_end = cuda_source.index("struct GpuAdaptiveResult", function_start)
-    helper_source = cuda_source[function_start:function_end]
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
+    assert "bool gpu_rk_rhs_allows_fsal_reuse(" in rhs_source
+    function_start = rhs_source.index("bool gpu_rk_rhs_allows_fsal_reuse(")
+    function_end = rhs_source.index("\nbool gpu_rk_compute_rhs_for_magnetization", function_start)
+    helper_source = rhs_source[function_start:function_end]
     step_start = cuda_source.index("bool gpu_rk_device_resident_step(")
-    step_end = cuda_source.index("bool gpu_rk_finalize_step_stats(", step_start)
+    step_end = cuda_source.index("\n} // namespace fullmag::fem", step_start)
     step_source = cuda_source[step_start:step_end]
 
     assert "ctx.thermal_brown.temperature > 0.0" in helper_source
@@ -4925,31 +5305,33 @@ def test_gpu_rk_keeps_device_backup_for_future_adaptive_reject_retry():
     header_source = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    io_source = GPU_RK_DEVICE_IO_CU_PATH.read_text(encoding="utf-8")
     function_start = cuda_source.index("bool gpu_rk_device_resident_step(")
-    function_end = cuda_source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = cuda_source.index("\n} // namespace fullmag::fem", function_start)
     function_source = cuda_source[function_start:function_end]
 
     assert "FemGpuComponentField m_backup" in header_source
     assert "allocate_component(state.m_backup" in state_source
     assert "free_component(state.m_backup)" in state_source
-    assert "copy_component_device(" in function_source
+    assert "gpu_rk_copy_component_device(" in function_source
     assert "gpu.m" in function_source
     assert "gpu.m_backup" in function_source
     assert "GPU RK backup magnetization device copy" in function_source
-    assert "cudaMemcpyDeviceToDevice" in cuda_source
+    assert "cudaMemcpyDeviceToDevice" in io_source
     assert "cudaStreamSynchronize" not in function_source
 
 
 def test_gpu_rk_has_device_restore_for_adaptive_reject_retry():
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
 
-    assert "restore_adaptive_reject_magnetization_device(" in cuda_source
-    helper_source = cuda_source[
-        cuda_source.index("restore_adaptive_reject_magnetization_device(") :
-        cuda_source.index("bool compute_adaptive_error_norm_device(")
+    assert "gpu_rk_restore_adaptive_reject_magnetization_device(" in cuda_source
+    helper_source = adaptive_source[
+        adaptive_source.index("gpu_rk_restore_adaptive_reject_magnetization_device(") :
+        adaptive_source.index("bool gpu_rk_compute_adaptive_error_norm_device(")
     ]
 
-    assert "copy_component_device(" in helper_source
+    assert "gpu_rk_copy_component_device(" in helper_source
     assert "gpu.m_backup" in helper_source
     assert "gpu.m" in helper_source
     assert "GPU RK restore rejected adaptive magnetization device copy" in helper_source
@@ -4959,12 +5341,15 @@ def test_gpu_rk_has_device_restore_for_adaptive_reject_retry():
 
 def test_gpu_rk_has_adaptive_pi_decision_helper():
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    adaptive_header = GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH.read_text(encoding="utf-8")
+    adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
 
-    assert "struct GpuAdaptiveResult" in cuda_source
-    assert "gpu_adaptive_pi_step(" in cuda_source
-    helper_source = cuda_source[
-        cuda_source.index("gpu_adaptive_pi_step(") :
-        cuda_source.index("bool restore_adaptive_reject_magnetization_device(")
+    assert "gpu_rk_adaptive_pi_step(" in cuda_source
+    assert "struct GpuAdaptiveResult" in adaptive_header
+    assert "gpu_rk_adaptive_pi_step(" in adaptive_source
+    helper_source = adaptive_source[
+        adaptive_source.index("gpu_rk_adaptive_pi_step(") :
+        adaptive_source.index("bool gpu_rk_restore_adaptive_reject_magnetization_device(")
     ]
 
     assert "ctx.adaptive_dt.enabled" in helper_source
@@ -5020,11 +5405,12 @@ def test_gpu_kernels_use_double_atomic_add_compatibility_helper():
 
 def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
     gpu_rk_cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
 
-    assert "compute_adaptive_error_norm_device(" in gpu_rk_cuda_source
-    helper_source = gpu_rk_cuda_source[
-        gpu_rk_cuda_source.index("compute_adaptive_error_norm_device(") :
-        gpu_rk_cuda_source.index("__global__ void euler_stage_kernel")
+    assert "gpu_rk_compute_adaptive_error_norm_device(" in gpu_rk_cuda_source
+    helper_source = adaptive_source[
+        adaptive_source.index("gpu_rk_compute_adaptive_error_norm_device(") :
+        adaptive_source.index("\n} // namespace fullmag::fem")
     ]
     assert "fullmag_cuda_adaptive_error_norm_blocks(" in helper_source
     assert "fullmag_cuda_device_max(" in helper_source
@@ -5033,22 +5419,22 @@ def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
     assert "temp_storage=nullptr" not in helper_source
     assert "ctx.adaptive_dt.atol" in helper_source
     assert "ctx.adaptive_dt.rtol" in helper_source
-    assert "read_scalar_result(" in helper_source
+    assert "gpu_rk_read_scalar_result(" in helper_source
     assert "GPU RK adaptive error norm" in helper_source
 
 
 def test_gpu_rk_step_contains_adaptive_retry_loop_scaffold():
     gpu_rk_cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     function_start = gpu_rk_cuda_source.index("bool gpu_rk_device_resident_step(")
-    function_end = gpu_rk_cuda_source.index("bool gpu_rk_finalize_step_stats(", function_start)
+    function_end = gpu_rk_cuda_source.index("\n} // namespace fullmag::fem", function_start)
     function_source = gpu_rk_cuda_source[function_start:function_end]
 
     assert "const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled" in function_source
     assert "for (;;) {" in function_source
     assert "ctx.adaptive_dt.current_dt = active_dt" in function_source
-    assert "compute_adaptive_error_norm_device(" in function_source
-    assert "gpu_adaptive_pi_step(ctx, error_estimate)" in function_source
-    assert "restore_adaptive_reject_magnetization_device(gpu, stream, reason)" in function_source
+    assert "gpu_rk_compute_adaptive_error_norm_device(" in function_source
+    assert "gpu_rk_adaptive_pi_step(ctx, error_estimate)" in function_source
+    assert "gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)" in function_source
     assert "rejected_attempts += 1" in function_source
     assert "ctx.adaptive_dt.max_reject" in function_source
     assert "adaptive_config.max_reject" in function_source
@@ -5069,7 +5455,8 @@ def test_gpu_rk_scalar_stats_are_read_outside_hot_loop_scope():
         / "runtime"
         / "backend_step.cpp"
     ).read_text(encoding="utf-8")
-    gpu_rk_cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    gpu_rk_stats_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    io_source = GPU_RK_DEVICE_IO_CU_PATH.read_text(encoding="utf-8")
 
     step_start = backend_step_source.index("int run_backend_step(")
     step_source = backend_step_source[step_start:]
@@ -5078,36 +5465,63 @@ def test_gpu_rk_scalar_stats_are_read_outside_hot_loop_scope():
     finalize = step_source.index("gpu_rk_finalize_step_stats(")
 
     assert hot_loop_start < hot_loop_end < finalize
-    assert "stats.max_rhs_amplitude = 0.0" not in gpu_rk_cuda_source
-    assert "cudaMemcpyAsync(" in gpu_rk_cuda_source
-    assert "record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double))" in gpu_rk_cuda_source
+    assert "stats.max_rhs_amplitude = 0.0" not in gpu_rk_stats_source
+    assert "gpu_rk_read_scalar_results(" in gpu_rk_stats_source
+    assert "cudaMemcpyAsync(" in io_source
+    assert "record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double))" in io_source
+
+
+def test_gpu_rk_step_stats_are_owned_by_rk_module():
+    cmake_source = FEM_CMAKE_PATH.read_text(encoding="utf-8")
+    plan_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
+    rk_step_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    stats_header = GPU_RK_STEP_STATS_HPP_PATH.read_text(encoding="utf-8")
+    stats_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+
+    assert "gpu/cuda/integrators/rk/rk_step_stats.cpp" in cmake_source
+    assert "gpu/cuda/integrators/rk/rk_step_stats.cu" in cmake_source
+    assert "bool gpu_rk_finalize_step_stats(" not in plan_source
+    assert '#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"' in rk_step_source
+    assert "GPU CUDA RK final step stats module header" in stats_header
+    assert "enum class GpuFinalScalarSlot" in stats_header
+    assert "gpu_rk_final_scalar_result(" in stats_header
+    assert "gpu_rk_finalize_step_stats(" in stats_header
+    assert "GPU CUDA RK final step stats source contract" in stats_source
+    assert '#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"' in stats_source
+    assert "bool gpu_rk_finalize_step_stats(" in stats_source
+    assert "fullmag_cuda_legacy_sparse_exchange_energy_blocks(" in stats_source
+    assert "fullmag_cuda_magnetization_sum_blocks(" in stats_source
+    assert "gpu_rk_read_scalar_results(" in stats_source
+    assert "context_update_stage_completion_from_stats(ctx, stats)" in stats_source
+    assert "bool gpu_rk_finalize_step_stats(" not in rk_step_source
+    assert "enum class GpuFinalScalarSlot" not in rk_step_source
 
 
 def test_gpu_rk_finalize_batches_scalar_device_to_host_readback():
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
-    function_start = cuda_source.index("bool gpu_rk_finalize_step_stats(")
-    function_end = cuda_source.index("bool gpu_rk_snapshot_current_state(", function_start)
-    function_source = cuda_source[function_start:function_end]
+    stats_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    function_start = stats_source.index("bool gpu_rk_finalize_step_stats(")
+    function_end = stats_source.index("\n} // namespace fullmag::fem", function_start)
+    function_source = stats_source[function_start:function_end]
 
-    assert "enum class GpuFinalScalarSlot" in cuda_source
-    assert "read_scalar_results(" in cuda_source
+    assert "enum class GpuFinalScalarSlot" in GPU_RK_STEP_STATS_HPP_PATH.read_text(encoding="utf-8")
+    assert "read_scalar_results(" in stats_source
     assert "std::array<double, kGpuFinalScalarSlots>" in function_source
     assert "read_scalar_results(\n        ctx," in function_source
     assert "read_scalar_result(" not in function_source
-    assert "final_scalar_result(gpu, GpuFinalScalarSlot::ExchangeEnergy)" in function_source
-    assert "final_scalar_result(gpu, GpuFinalScalarSlot::MagneticCount)" in function_source
+    assert "gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::ExchangeEnergy)" in function_source
+    assert "gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MagneticCount)" in function_source
 
 
 def test_gpu_rk_final_max_rhs_uses_named_scalar_result_slot():
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     step_start = cuda_source.index("bool gpu_rk_device_resident_step(")
-    step_end = cuda_source.index("bool gpu_rk_finalize_step_stats(", step_start)
+    step_end = cuda_source.index("\n} // namespace fullmag::fem", step_start)
     step_source = cuda_source[step_start:step_end]
     snapshot_start = cuda_source.index("bool gpu_rk_snapshot_current_state(")
     snapshot_source = cuda_source[snapshot_start:]
 
-    assert "final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs)" in step_source
-    assert "final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs)" in snapshot_source
+    assert "gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs)" in step_source
+    assert "gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs)" in snapshot_source
 
 
 def test_gpu_rk_finalize_step_stats_fills_exchange_only_device_metrics():
@@ -5118,7 +5532,7 @@ def test_gpu_rk_finalize_step_stats_fills_exchange_only_device_metrics():
     reduction_kernel_source = GPU_REDUCTION_KERNELS_CU_PATH.read_text(encoding="utf-8")
     exchange_kernel_header = GPU_EXCHANGE_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     exchange_kernel_source = GPU_EXCHANGE_KERNELS_CU_PATH.read_text(encoding="utf-8")
-    gpu_rk_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    gpu_rk_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
     compact_gpu_rk_source = " ".join(gpu_rk_source.split())
 
     assert '#include "gpu/cuda/exchange/exchange_kernels.hpp"' in kernel_header
@@ -5168,7 +5582,7 @@ def test_gpu_rk_finalize_step_stats_fills_average_magnetization_without_field_re
     observable_kernel_header = GPU_OBSERVABLE_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     observable_kernel_source = GPU_OBSERVABLE_KERNELS_CU_PATH.read_text(encoding="utf-8")
     step_metrics_source = STEP_METRICS_CPP_PATH.read_text(encoding="utf-8")
-    gpu_rk_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    gpu_rk_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
 
     for source in (c_header, rust_ffi):
         assert "double mx;" in source or "pub mx: f64" in source
@@ -5206,7 +5620,7 @@ def test_gpu_average_magnetization_counts_magnetic_mask_not_nonzero_vectors():
 def test_gpu_rk_finalize_updates_stage_completion_from_device_metrics():
     stage_completion_header = STAGE_COMPLETION_HPP_PATH.read_text(encoding="utf-8")
     stage_completion_source = STAGE_COMPLETION_CPP_PATH.read_text(encoding="utf-8")
-    gpu_rk_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    gpu_rk_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
 
     assert "context_update_stage_completion_from_stats" in stage_completion_header
     assert "void context_update_stage_completion_from_stats(" in stage_completion_source
@@ -5227,7 +5641,7 @@ def test_gpu_rk_step_records_nonzero_wall_time_before_early_return():
 
 def test_gpu_rk_plan_does_not_reject_external_field_after_gpu_energy_metric_support():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    gpu_rk_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    gpu_rk_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
 
     assert "ctx.has_external_field" not in rk_source
     assert "external field energy" not in rk_source
@@ -5247,7 +5661,8 @@ def test_gpu_rk_plan_reports_specific_unsupported_term_reasons():
 
 
 def test_gpu_rk_plan_supports_dmi_with_device_mesh_geometry():
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    cuda_source = GPU_RK_STEP_STATS_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     dmi_kernel_header = GPU_DMI_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     dmi_kernel_source = GPU_DMI_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -5259,16 +5674,16 @@ def test_gpu_rk_plan_supports_dmi_with_device_mesh_geometry():
     assert "dmi_tetra_gradients_device" in dmi_kernel_source
     assert "bulk_mode" in dmi_kernel_source
     assert "inv_projection_mass = -1.0 / (kMu0 * ms_i * mass" in dmi_kernel_source
-    assert "launch GPU RK interfacial DMI field" in cuda_source
-    assert "launch GPU RK bulk DMI field" in cuda_source
-    assert "launch GPU RK interfacial DMI h_eff accumulation" in cuda_source
-    assert "launch GPU RK bulk DMI h_eff accumulation" in cuda_source
+    assert "launch GPU RK interfacial DMI field" in rhs_source
+    assert "launch GPU RK bulk DMI field" in rhs_source
+    assert "launch GPU RK interfacial DMI h_eff accumulation" in rhs_source
+    assert "launch GPU RK bulk DMI h_eff accumulation" in rhs_source
     assert "stats.dmi_energy_joules = dmi_energy + bulk_dmi_energy" in cuda_source
 
 
 def test_gpu_rk_plan_supports_zhang_li_stt_with_device_mesh_geometry():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
@@ -5287,12 +5702,12 @@ def test_gpu_rk_plan_supports_zhang_li_stt_with_device_mesh_geometry():
     assert "zhang_li_normalize_add_rhs_kernel" in stt_kernel_source
     assert "stt_atomic_add_double(&work_x[node]" in stt_kernel_source
     assert "atomicAdd(&work_x[node]" not in stt_kernel_source
-    assert "launch GPU RK Zhang-Li STT RHS" in cuda_source
+    assert "launch GPU RK Zhang-Li STT RHS" in rhs_source
 
 
 def test_gpu_rk_plan_supports_deterministic_thermal_field_on_device():
     rk_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
-    cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
+    rhs_source = GPU_RK_RHS_RUNTIME_CU_PATH.read_text(encoding="utf-8")
     kernel_header = KERNELS_HPP_PATH.read_text(encoding="utf-8")
     thermal_kernel_header = GPU_THERMAL_KERNELS_HPP_PATH.read_text(encoding="utf-8")
     thermal_kernel_source = GPU_THERMAL_KERNELS_CU_PATH.read_text(encoding="utf-8")
@@ -5304,10 +5719,10 @@ def test_gpu_rk_plan_supports_deterministic_thermal_field_on_device():
     assert "thermal_field_blocks_kernel" in thermal_kernel_source
     assert "splitmix64_next" in thermal_kernel_source
     assert "deterministic_normal" in thermal_kernel_source
-    assert "ctx.thermal_brown.seed" in cuda_source
-    assert "ctx.state.step_count" in cuda_source
-    assert "launch GPU RK deterministic thermal field" in cuda_source
-    assert "launch GPU RK thermal h_eff accumulation" in cuda_source
+    assert "ctx.thermal_brown.seed" in rhs_source
+    assert "ctx.state.step_count" in rhs_source
+    assert "launch GPU RK deterministic thermal field" in rhs_source
+    assert "launch GPU RK thermal h_eff accumulation" in rhs_source
 
 
 def test_snapshot_stats_syncs_device_source_magnetization_before_cpu_field_recompute():
@@ -5512,6 +5927,201 @@ def test_benchmark_cli_accepts_cpu_gpu_summary_output(monkeypatch):
     args = bench.parse_args()
 
     assert args.cpu_gpu_summary_output == "summary.json"
+
+
+def test_benchmark_cli_accepts_human_and_pdf_report_outputs(monkeypatch):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setattr(
+        bench.sys,
+        "argv",
+        [
+            "fem_gpu_benchmark.py",
+            "--human-report-output",
+            "report.md",
+            "--pdf-report-output",
+            "report.pdf",
+            "--quiet-json-summary",
+        ],
+    )
+
+    args = bench.parse_args()
+
+    assert args.human_report_output == "report.md"
+    assert args.pdf_report_output == "report.pdf"
+    assert args.quiet_json_summary is True
+
+
+def test_cpu_gpu_human_report_summarizes_case_matrix():
+    bench = load_analysis_benchmark_module()
+    cpu_gpu_summary = {
+        "status": "pass",
+        "row_count": 2,
+        "ok_count": 2,
+        "failed_count": 0,
+        "pair_count": 1,
+        "completed_pair_case_count": 1,
+        "covered_case_count": 1,
+        "required_case_count": 1,
+        "failure_count": 0,
+        "failures": [],
+        "case_coverage": [
+            {
+                "case_id": "box500_airbox_exchange_demag",
+                "status": "pass",
+                "cpu_average_timing_ms": {
+                    "wall_time_ms": 10.0,
+                    "demag_solver_apply_wall_time_ms": 4.0,
+                },
+                "gpu_average_timing_ms": {
+                    "wall_time_ms": 5.0,
+                    "demag_solver_apply_wall_time_ms": 2.0,
+                },
+                "cpu_observable_summary": {
+                    "executed_steps": 2.0,
+                    "final_e_demag_j": 3.0e-19,
+                    "final_torque_t": 0.05,
+                },
+                "gpu_observable_summary": {
+                    "executed_steps": 1.0,
+                    "final_e_demag_j": 3.0e-19,
+                    "final_torque_t": 0.05,
+                },
+            }
+        ],
+        "pairs": [
+            {
+                "scenario": "box500_airbox_exchange_demag",
+                "executed_step_delta": 1,
+                "wall_time_speedup_cpu_over_gpu": 2.0,
+                "demag_solver_apply_wall_time_speedup_cpu_over_gpu": 2.0,
+                "final_e_demag_j_abs_diff": 0.0,
+                "final_torque_t_abs_diff": 0.0,
+            }
+        ],
+    }
+    pass_fail_summary = {
+        "status": "pass",
+        "solver_mesh_groups": [
+            {
+                "solver_mesh_signature": "mesh-a",
+                "status": "pass",
+                "row_count": 2,
+                "ok_count": 2,
+                "max_demag_final_residual_norm": 5e-9,
+                "max_demag_actual_iterations": 8,
+            }
+        ],
+    }
+
+    report = bench.render_cpu_gpu_benchmark_report(
+        cpu_gpu_summary,
+        pass_fail_summary,
+        csv_path="/tmp/results.csv",
+        summary_path="/tmp/summary.json",
+    )
+
+    assert "Fullmag FEM CPU/GPU Benchmark Report" in report
+    assert "status: pass" in report
+    assert "box500_airbox_exchange_demag" in report
+    assert "2.000x" in report
+    assert "CPU steps" in report
+    assert "GPU steps" in report
+    assert "Step delta" in report
+    assert "CPU steps/min" in report
+    assert "GPU steps/min" in report
+    assert "12000.000" in report
+    assert "/tmp/results.csv" in report
+
+
+def test_cpu_gpu_rich_report_prints_bordered_color_table():
+    bench = load_analysis_benchmark_module()
+    rich_console = pytest.importorskip("rich.console")
+
+    cpu_gpu_summary = {
+        "status": "pass",
+        "row_count": 2,
+        "ok_count": 2,
+        "failed_count": 0,
+        "pair_count": 1,
+        "completed_pair_case_count": 1,
+        "required_case_count": 1,
+        "failure_count": 0,
+        "case_coverage": [
+            {
+                "case_id": "box500_airbox_exchange_demag",
+                "status": "pass",
+                "cpu_average_timing_ms": {
+                    "wall_time_ms": 10.0,
+                    "demag_solver_apply_wall_time_ms": 4.0,
+                },
+                "gpu_average_timing_ms": {
+                    "wall_time_ms": 5.0,
+                    "demag_solver_apply_wall_time_ms": 2.0,
+                },
+                "cpu_observable_summary": {"executed_steps": 2.0},
+                "gpu_observable_summary": {"executed_steps": 1.0},
+            }
+        ],
+        "pairs": [
+            {
+                "scenario": "box500_airbox_exchange_demag",
+                "executed_step_delta": 1,
+                "wall_time_speedup_cpu_over_gpu": 2.0,
+                "demag_solver_apply_wall_time_speedup_cpu_over_gpu": 2.0,
+                "final_e_demag_j_abs_diff": 0.0,
+                "final_torque_t_abs_diff": 0.0,
+            }
+        ],
+    }
+    pass_fail_summary = {
+        "status": "pass",
+        "gate_failure_count": 0,
+        "group_failure_count": 0,
+        "solver_mesh_groups": [],
+    }
+    output = io.StringIO()
+    console = rich_console.Console(
+        file=output,
+        force_terminal=True,
+        color_system="standard",
+        width=180,
+    )
+
+    rendered = bench.print_cpu_gpu_benchmark_rich_report(
+        cpu_gpu_summary,
+        pass_fail_summary,
+        csv_path="/tmp/results.csv",
+        summary_path="/tmp/summary.json",
+        console=console,
+    )
+
+    text = output.getvalue()
+    assert rendered is True
+    assert "\x1b[" in text
+    assert "┏" in text
+    assert "CPU steps/min" in text
+    assert "GPU steps/min" in text
+    assert "box500_airbox_exchange_demag" in text
+
+
+def test_ensure_python_installs_rich_for_benchmark_reports():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert "'rich>=13.7'" in justfile_text
+
+
+def test_write_benchmark_pdf_report_creates_pdf(tmp_path):
+    bench = load_analysis_benchmark_module()
+    pdf_path = tmp_path / "report.pdf"
+
+    bench.write_benchmark_pdf_report(
+        pdf_path,
+        "Fullmag FEM CPU/GPU Benchmark Report\nstatus: pass\n",
+    )
+
+    data = pdf_path.read_bytes()
+    assert data.startswith(b"%PDF-1.4")
+    assert b"Fullmag FEM CPU/GPU Benchmark Report" in data
 
 
 def test_benchmark_cli_rejects_implicit_preflight_abbreviation(monkeypatch):

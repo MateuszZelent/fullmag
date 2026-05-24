@@ -65,6 +65,7 @@ struct GpuDemagPoissonWorkspace {
     DeviceCsrScalar recovery_x;
     DeviceCsrScalar recovery_y;
     DeviceCsrScalar recovery_z;
+    DeviceCsrScalar robin_boundary_mass;
     std::vector<uint32_t> ess_tdofs;
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_ess_tdofs = nullptr;

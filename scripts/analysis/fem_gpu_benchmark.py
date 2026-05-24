@@ -481,6 +481,23 @@ def parse_args() -> argparse.Namespace:
         help="Optional JSON output path for paired FEM CPU/GPU consistency and timing summary",
     )
     parser.add_argument(
+        "--human-report-output",
+        type=str,
+        default=None,
+        help="Optional Markdown report path for a human-readable FEM CPU/GPU benchmark summary",
+    )
+    parser.add_argument(
+        "--pdf-report-output",
+        type=str,
+        default=None,
+        help="Optional PDF report path for a human-readable FEM CPU/GPU benchmark summary",
+    )
+    parser.add_argument(
+        "--quiet-json-summary",
+        action="store_true",
+        help="Suppress large machine-readable JSON summary lines on stdout",
+    )
+    parser.add_argument(
         "--fem-cpu-no-pbc-adaptive-ready-preset",
         action="store_true",
         help="Preset the sweep and gates for FEM CPU no-PBC exchange+demag+anisotropy adaptive readiness",
@@ -2395,6 +2412,451 @@ def write_cpu_gpu_consistency_summary(
     return summary
 
 
+def report_value(value: object, *, precision: int = 3, suffix: str = "") -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return f"{value}{suffix}"
+    if isinstance(value, float):
+        if suffix == "x":
+            return f"{value:.3f}{suffix}"
+        return f"{value:.{precision}g}{suffix}"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if suffix == "x":
+        return f"{numeric:.3f}{suffix}"
+    return f"{numeric:.{precision}g}{suffix}"
+
+
+def report_ms(value: object) -> str:
+    if value is None or value == "":
+        return "-"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if numeric >= 100.0:
+        return f"{numeric:.1f}"
+    if numeric >= 10.0:
+        return f"{numeric:.2f}"
+    return f"{numeric:.3f}"
+
+
+def _numeric_report_value(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric != numeric:
+        return None
+    return numeric
+
+
+def report_steps(value: object) -> str:
+    numeric = _numeric_report_value(value)
+    if numeric is None:
+        return "-"
+    if numeric.is_integer():
+        return str(int(numeric))
+    return report_value(numeric, precision=3)
+
+
+def report_rate(value: object) -> str:
+    numeric = _numeric_report_value(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:.3f}"
+
+
+def steps_per_minute(steps: object, wall_time_ms: object) -> float | None:
+    step_count = _numeric_report_value(steps)
+    wall_ms = _numeric_report_value(wall_time_ms)
+    if step_count is None or wall_ms is None or wall_ms <= 0.0:
+        return None
+    return step_count * 60000.0 / wall_ms
+
+
+def _case_pairs_by_scenario(cpu_gpu_summary: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
+    pairs_by_scenario: dict[str, Mapping[str, object]] = {}
+    for pair in cpu_gpu_summary.get("pairs", []):
+        if isinstance(pair, Mapping):
+            scenario = pair.get("scenario")
+            if scenario is not None:
+                pairs_by_scenario[str(scenario)] = pair
+    return pairs_by_scenario
+
+
+def _mapping_value(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _sum_case_wall_time_ms(cpu_gpu_summary: Mapping[str, object], timing_key: str) -> float | None:
+    total = 0.0
+    found = False
+    for case in cpu_gpu_summary.get("case_coverage", []):
+        if not isinstance(case, Mapping):
+            continue
+        timing = _mapping_value(case.get(timing_key))
+        value = _numeric_report_value(timing.get("wall_time_ms"))
+        if value is None:
+            continue
+        total += value
+        found = True
+    return total if found else None
+
+
+def markdown_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def render_cpu_gpu_benchmark_report(
+    cpu_gpu_summary: Mapping[str, object],
+    pass_fail_summary: Mapping[str, object],
+    *,
+    csv_path: str | Path | None = None,
+    summary_path: str | Path | None = None,
+) -> str:
+    pairs_by_scenario = _case_pairs_by_scenario(cpu_gpu_summary)
+    cpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "cpu_average_timing_ms")
+    gpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "gpu_average_timing_ms")
+
+    lines = [
+        "# Fullmag FEM CPU/GPU Benchmark Report",
+        "",
+        f"- status: {cpu_gpu_summary.get('status', '-')}",
+        f"- rows: {cpu_gpu_summary.get('row_count', 0)} total, {cpu_gpu_summary.get('ok_count', 0)} ok, {cpu_gpu_summary.get('failed_count', 0)} failed",
+        f"- pairs: {cpu_gpu_summary.get('completed_pair_case_count', cpu_gpu_summary.get('pair_count', 0))}/{cpu_gpu_summary.get('required_case_count', cpu_gpu_summary.get('pair_count', 0))} completed",
+        f"- failures: {cpu_gpu_summary.get('failure_count', 0)} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
+        f"- CPU compute total ms: {report_ms(cpu_total_ms)}",
+        f"- GPU compute total ms: {report_ms(gpu_total_ms)}",
+    ]
+    if csv_path is not None:
+        lines.append(f"- csv: {csv_path}")
+    if summary_path is not None:
+        lines.append(f"- json: {summary_path}")
+    lines.extend(["", "## Case Matrix", ""])
+    lines.append(
+        "| Case | Status | CPU compute ms | GPU compute ms | Wall speedup | CPU steps | GPU steps | Step delta | CPU steps/min | GPU steps/min | CPU demag apply ms | GPU demag apply ms | Demag apply speedup | Demag energy diff J | Torque diff T |"
+    )
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+
+    for case in cpu_gpu_summary.get("case_coverage", []):
+        if not isinstance(case, Mapping):
+            continue
+        case_id = str(case.get("case_id", "-"))
+        pair = pairs_by_scenario.get(case_id, {})
+        cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
+        gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
+        cpu_observables = _mapping_value(case.get("cpu_observable_summary"))
+        gpu_observables = _mapping_value(case.get("gpu_observable_summary"))
+        cpu_steps = cpu_observables.get("executed_steps")
+        gpu_steps = gpu_observables.get("executed_steps")
+        cpu_wall_ms = cpu_timing.get("wall_time_ms")
+        gpu_wall_ms = gpu_timing.get("wall_time_ms")
+        lines.append(
+            "| "
+            + " | ".join(
+                markdown_cell(value)
+                for value in [
+                    case_id,
+                    case.get("status", "-"),
+                    report_ms(cpu_wall_ms),
+                    report_ms(gpu_wall_ms),
+                    report_value(pair.get("wall_time_speedup_cpu_over_gpu"), suffix="x"),
+                    report_steps(cpu_steps),
+                    report_steps(gpu_steps),
+                    report_steps(pair.get("executed_step_delta")),
+                    report_rate(steps_per_minute(cpu_steps, cpu_wall_ms)),
+                    report_rate(steps_per_minute(gpu_steps, gpu_wall_ms)),
+                    report_ms(cpu_timing.get("demag_solver_apply_wall_time_ms")),
+                    report_ms(gpu_timing.get("demag_solver_apply_wall_time_ms")),
+                    report_value(pair.get("demag_solver_apply_wall_time_speedup_cpu_over_gpu"), suffix="x"),
+                    report_value(pair.get("final_e_demag_j_abs_diff"), precision=4),
+                    report_value(pair.get("final_torque_t_abs_diff"), precision=4),
+                ]
+            )
+            + " |"
+        )
+
+    groups = pass_fail_summary.get("solver_mesh_groups", [])
+    if groups:
+        lines.extend(["", "## Solver Mesh Groups", ""])
+        lines.append(
+            "| Solver mesh signature | Status | Rows | OK | Max demag residual | Max demag iterations |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|")
+        for group in groups:
+            if not isinstance(group, Mapping):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    markdown_cell(value)
+                    for value in [
+                        group.get("solver_mesh_signature", "-"),
+                        group.get("status", "-"),
+                        group.get("row_count", "-"),
+                        group.get("ok_count", "-"),
+                        report_value(group.get("max_demag_final_residual_norm"), precision=4),
+                        report_value(group.get("max_demag_actual_iterations")),
+                    ]
+                )
+                + " |"
+            )
+
+    failures = list(cpu_gpu_summary.get("failures", [])) + list(pass_fail_summary.get("failures", []))
+    if failures:
+        lines.extend(["", "## Failures", ""])
+        for failure in failures:
+            lines.append(f"- {failure}")
+
+    return "\n".join(lines) + "\n"
+
+
+def print_cpu_gpu_benchmark_rich_report(
+    cpu_gpu_summary: Mapping[str, object],
+    pass_fail_summary: Mapping[str, object],
+    *,
+    csv_path: str | Path | None = None,
+    summary_path: str | Path | None = None,
+    human_report_path: str | Path | None = None,
+    pdf_report_path: str | Path | None = None,
+    console: object | None = None,
+) -> bool:
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.table import Table
+    except ModuleNotFoundError:
+        return False
+
+    rich_console = console if console is not None else Console(
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+        width=180,
+    )
+    status = str(cpu_gpu_summary.get("status", "-"))
+    status_style = "bold green" if status == "pass" else "bold red"
+    rich_console.print(
+        f"[bold]Fullmag FEM CPU/GPU Benchmark Report[/bold] "
+        f"[{status_style}]status: {status}[/{status_style}]"
+    )
+    rich_console.print(
+        "rows: "
+        f"{cpu_gpu_summary.get('row_count', 0)} total, "
+        f"{cpu_gpu_summary.get('ok_count', 0)} ok, "
+        f"{cpu_gpu_summary.get('failed_count', 0)} failed | "
+        "pairs: "
+        f"{cpu_gpu_summary.get('completed_pair_case_count', cpu_gpu_summary.get('pair_count', 0))}/"
+        f"{cpu_gpu_summary.get('required_case_count', cpu_gpu_summary.get('pair_count', 0))} completed | "
+        "failures: "
+        f"{cpu_gpu_summary.get('failure_count', 0)} consistency, "
+        f"{pass_fail_summary.get('gate_failure_count', 0)} gate, "
+        f"{pass_fail_summary.get('group_failure_count', 0)} group"
+    )
+
+    cpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "cpu_average_timing_ms")
+    gpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "gpu_average_timing_ms")
+    rich_console.print(
+        f"CPU compute total: [cyan]{report_ms(cpu_total_ms)} ms[/cyan] | "
+        f"GPU compute total: [cyan]{report_ms(gpu_total_ms)} ms[/cyan]"
+    )
+    if csv_path is not None:
+        rich_console.print(f"CSV: [blue]{csv_path}[/blue]")
+    if summary_path is not None:
+        rich_console.print(f"JSON: [blue]{summary_path}[/blue]")
+    if human_report_path is not None:
+        rich_console.print(f"Markdown: [blue]{human_report_path}[/blue]")
+    if pdf_report_path is not None:
+        rich_console.print(f"PDF: [blue]{pdf_report_path}[/blue]")
+
+    pairs_by_scenario = _case_pairs_by_scenario(cpu_gpu_summary)
+    table = Table(
+        title="Case Runtime And Step Rate",
+        box=box.HEAVY_HEAD,
+        show_lines=True,
+        header_style="bold magenta",
+    )
+    table.add_column("Case", overflow="fold", style="white", max_width=48)
+    table.add_column("Status", justify="center", no_wrap=True)
+    table.add_column("CPU ms", justify="right", style="cyan", no_wrap=True)
+    table.add_column("GPU ms", justify="right", style="cyan", no_wrap=True)
+    table.add_column("Speedup", justify="right", style="green", no_wrap=True)
+    table.add_column("CPU steps", justify="right", no_wrap=True)
+    table.add_column("GPU steps", justify="right", no_wrap=True)
+    table.add_column("Step delta", justify="right", no_wrap=True)
+    table.add_column("CPU steps/min", justify="right", style="bright_cyan", no_wrap=True)
+    table.add_column("GPU steps/min", justify="right", style="bright_cyan", no_wrap=True)
+
+    detail_table = Table(
+        title="Demag And Numerical Parity",
+        box=box.HEAVY_HEAD,
+        show_lines=True,
+        header_style="bold magenta",
+    )
+    detail_table.add_column("Case", overflow="fold", style="white", max_width=48)
+    detail_table.add_column("CPU demag ms", justify="right", no_wrap=True)
+    detail_table.add_column("GPU demag ms", justify="right", no_wrap=True)
+    detail_table.add_column("Demag speedup", justify="right", style="green", no_wrap=True)
+    detail_table.add_column("Demag energy diff J", justify="right", no_wrap=True)
+    detail_table.add_column("Torque diff T", justify="right", no_wrap=True)
+
+    for case in cpu_gpu_summary.get("case_coverage", []):
+        if not isinstance(case, Mapping):
+            continue
+        case_id = str(case.get("case_id", "-"))
+        pair = pairs_by_scenario.get(case_id, {})
+        cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
+        gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
+        cpu_observables = _mapping_value(case.get("cpu_observable_summary"))
+        gpu_observables = _mapping_value(case.get("gpu_observable_summary"))
+        cpu_steps = cpu_observables.get("executed_steps")
+        gpu_steps = gpu_observables.get("executed_steps")
+        cpu_wall_ms = cpu_timing.get("wall_time_ms")
+        gpu_wall_ms = gpu_timing.get("wall_time_ms")
+        case_status = str(case.get("status", "-"))
+        table.add_row(
+            case_id,
+            f"[green]{case_status}[/green]" if case_status == "pass" else f"[red]{case_status}[/red]",
+            report_ms(cpu_wall_ms),
+            report_ms(gpu_wall_ms),
+            report_value(pair.get("wall_time_speedup_cpu_over_gpu"), suffix="x"),
+            report_steps(cpu_steps),
+            report_steps(gpu_steps),
+            report_steps(pair.get("executed_step_delta")),
+            report_rate(steps_per_minute(cpu_steps, cpu_wall_ms)),
+            report_rate(steps_per_minute(gpu_steps, gpu_wall_ms)),
+        )
+        detail_table.add_row(
+            case_id,
+            report_ms(cpu_timing.get("demag_solver_apply_wall_time_ms")),
+            report_ms(gpu_timing.get("demag_solver_apply_wall_time_ms")),
+            report_value(pair.get("demag_solver_apply_wall_time_speedup_cpu_over_gpu"), suffix="x"),
+            report_value(pair.get("final_e_demag_j_abs_diff"), precision=4),
+            report_value(pair.get("final_torque_t_abs_diff"), precision=4),
+        )
+
+    rich_console.print(table)
+    rich_console.print(detail_table)
+
+    groups = pass_fail_summary.get("solver_mesh_groups", [])
+    if groups:
+        group_table = Table(
+            title="Solver Mesh Groups",
+            box=box.HEAVY_HEAD,
+            show_lines=True,
+            header_style="bold magenta",
+        )
+        group_table.add_column("Solver mesh signature", overflow="fold")
+        group_table.add_column("Status", justify="center")
+        group_table.add_column("Rows", justify="right")
+        group_table.add_column("OK", justify="right")
+        group_table.add_column("Max demag residual", justify="right")
+        group_table.add_column("Max demag iterations", justify="right")
+        for group in groups:
+            if not isinstance(group, Mapping):
+                continue
+            group_status = str(group.get("status", "-"))
+            group_table.add_row(
+                str(group.get("solver_mesh_signature", "-")),
+                f"[green]{group_status}[/green]" if group_status == "pass" else f"[red]{group_status}[/red]",
+                str(group.get("row_count", "-")),
+                str(group.get("ok_count", "-")),
+                report_value(group.get("max_demag_final_residual_norm"), precision=4),
+                report_value(group.get("max_demag_actual_iterations")),
+            )
+        rich_console.print(group_table)
+
+    return True
+
+
+def _pdf_text_literal(text: str) -> str:
+    safe = text.encode("latin-1", "replace").decode("latin-1")
+    return "(" + safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
+
+
+def _wrap_report_lines(report_text: str, width: int = 110) -> list[str]:
+    wrapped: list[str] = []
+    for raw_line in report_text.splitlines():
+        line = raw_line.replace("\t", "    ")
+        if not line:
+            wrapped.append("")
+            continue
+        while len(line) > width:
+            split_at = line.rfind(" ", 0, width)
+            if split_at <= 0:
+                split_at = width
+            wrapped.append(line[:split_at])
+            line = line[split_at:].lstrip()
+        wrapped.append(line)
+    return wrapped
+
+
+def write_benchmark_pdf_report(output_path: str | Path, report_text: str) -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = _wrap_report_lines(report_text)
+    lines_per_page = 58
+    pages = [lines[i:i + lines_per_page] for i in range(0, len(lines), lines_per_page)] or [[]]
+
+    objects: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        3: b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    }
+    page_ids: list[int] = []
+    next_id = 4
+    for page_lines in pages:
+        content_id = next_id
+        page_id = next_id + 1
+        next_id += 2
+        page_ids.append(page_id)
+        content_lines = ["BT", "/F1 9 Tf", "40 800 Td", "12 TL"]
+        for line in page_lines:
+            content_lines.append(f"{_pdf_text_literal(line)} Tj")
+            content_lines.append("T*")
+        content_lines.append("ET")
+        content = "\n".join(content_lines).encode("latin-1", "replace")
+        objects[content_id] = (
+            f"<< /Length {len(content)} >>\nstream\n".encode("ascii")
+            + content
+            + b"\nendstream"
+        )
+        objects[page_id] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>"
+        ).encode("ascii")
+
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects[2] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = {0: 0}
+    for object_id in sorted(objects):
+        offsets[object_id] = len(pdf)
+        pdf.extend(f"{object_id} 0 obj\n".encode("ascii"))
+        pdf.extend(objects[object_id])
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    max_id = max(objects)
+    pdf.extend(f"xref\n0 {max_id + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for object_id in range(1, max_id + 1):
+        pdf.extend(f"{offsets[object_id]:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        f"trailer\n<< /Size {max_id + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    path.write_bytes(bytes(pdf))
+
+
 def cpu_gpu_consistency_failures(
     results: list[dict[str, object]],
     *,
@@ -3172,8 +3634,9 @@ def main() -> None:
                                     results.append(row)
 
     write_csv(results, args.output)
+    cpu_gpu_summary_for_report: dict[str, object] | None = None
     if args.cpu_gpu_summary_output:
-        write_cpu_gpu_consistency_summary(
+        cpu_gpu_summary_for_report = write_cpu_gpu_consistency_summary(
             results,
             args.cpu_gpu_summary_output,
             case_manifests=cpu_gpu_manifests,
@@ -3216,26 +3679,23 @@ def main() -> None:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 5
     if args.require_cpu_gpu_consistency:
-        emit_cpu_gpu_consistency_summary(
-            results,
-            case_manifests=cpu_gpu_manifests,
-            energy_rtol=args.cpu_gpu_energy_rtol,
-            energy_atol=args.cpu_gpu_energy_atol,
-            torque_rtol=args.cpu_gpu_torque_rtol,
-            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
-            torque_atol_t=args.cpu_gpu_torque_atol_t,
-            max_step_delta=args.cpu_gpu_max_step_delta,
-        )
-        failures = cpu_gpu_consistency_failures(
-            results,
-            case_manifests=cpu_gpu_manifests,
-            energy_rtol=args.cpu_gpu_energy_rtol,
-            energy_atol=args.cpu_gpu_energy_atol,
-            torque_rtol=args.cpu_gpu_torque_rtol,
-            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
-            torque_atol_t=args.cpu_gpu_torque_atol_t,
-            max_step_delta=args.cpu_gpu_max_step_delta,
-        )
+        if cpu_gpu_summary_for_report is None:
+            cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
+                results,
+                case_manifests=cpu_gpu_manifests,
+                energy_rtol=args.cpu_gpu_energy_rtol,
+                energy_atol=args.cpu_gpu_energy_atol,
+                torque_rtol=args.cpu_gpu_torque_rtol,
+                torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+                torque_atol_t=args.cpu_gpu_torque_atol_t,
+                max_step_delta=args.cpu_gpu_max_step_delta,
+            )
+        if not args.quiet_json_summary:
+            print(
+                "FEM_CPU_GPU_CONSISTENCY_SUMMARY="
+                + json.dumps(cpu_gpu_summary_for_report, sort_keys=True)
+            )
+        failures = list(cpu_gpu_summary_for_report.get("failures", []))
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 8
@@ -3292,12 +3752,55 @@ def main() -> None:
     elif args.require_accepted_baseline:
         gate_failures.append("--require-accepted-baseline needs --accepted-baseline")
         gate_exit_code = gate_exit_code or 7
-    emit_pass_fail_summary(
+    pass_fail_summary = benchmark_pass_fail_summary(
         results,
         gate_failures=gate_failures,
         max_residual=demag_residual_threshold,
         max_iterations=args.demag_convergence_max_iterations,
     )
+    if not args.quiet_json_summary:
+        print(f"FEM_PASS_FAIL_SUMMARY={json.dumps(pass_fail_summary, sort_keys=True)}")
+    if (
+        args.human_report_output
+        or args.pdf_report_output
+        or args.quiet_json_summary
+    ):
+        if cpu_gpu_summary_for_report is None:
+            cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
+                results,
+                case_manifests=cpu_gpu_manifests,
+                energy_rtol=args.cpu_gpu_energy_rtol,
+                energy_atol=args.cpu_gpu_energy_atol,
+                torque_rtol=args.cpu_gpu_torque_rtol,
+                torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+                torque_atol_t=args.cpu_gpu_torque_atol_t,
+                max_step_delta=args.cpu_gpu_max_step_delta,
+            )
+        report_text = render_cpu_gpu_benchmark_report(
+            cpu_gpu_summary_for_report,
+            pass_fail_summary,
+            csv_path=args.output,
+            summary_path=args.cpu_gpu_summary_output,
+        )
+        if args.human_report_output:
+            human_report_path = Path(args.human_report_output)
+            human_report_path.parent.mkdir(parents=True, exist_ok=True)
+            human_report_path.write_text(report_text, encoding="utf-8")
+            print(f"Human report written to {human_report_path}")
+        if args.pdf_report_output:
+            write_benchmark_pdf_report(args.pdf_report_output, report_text)
+            print(f"PDF report written to {args.pdf_report_output}")
+        if args.quiet_json_summary:
+            rich_rendered = print_cpu_gpu_benchmark_rich_report(
+                cpu_gpu_summary_for_report,
+                pass_fail_summary,
+                csv_path=args.output,
+                summary_path=args.cpu_gpu_summary_output,
+                human_report_path=args.human_report_output,
+                pdf_report_path=args.pdf_report_output,
+            )
+            if not rich_rendered:
+                print(report_text.rstrip())
     if gate_failures:
         for failure in gate_failures:
             print(f"FEM_BENCHMARK_ERROR={failure}", file=sys.stderr)

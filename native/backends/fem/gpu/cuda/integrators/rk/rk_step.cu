@@ -1,17 +1,17 @@
 /*
  * GPU CUDA RK step source contract.
  *
- * This source owns device-resident GPU RK step orchestration, final scalar
- * statistics, and strict GPU snapshot recomputation. It does not own Context construction, GPU RK planning, CPU explicit RK stages, MFEM runtime lifecycle, interaction physics, or C ABI entrypoints.
+ * This source owns device-resident GPU RK step orchestration and strict GPU
+ * snapshot recomputation. It does not own Context construction, GPU RK planning, CPU explicit RK stages, MFEM runtime lifecycle, RHS assembly, final statistics, interaction physics, or C ABI entrypoints.
  */
 
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
 #include "context.hpp"
-#include "cpu/mfem/interactions/demag.hpp"
-#include "cpu/mfem/runtime/stage_completion.hpp"
-#include "cpu/mfem/runtime/step_metrics.hpp"
-#include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
+#include "gpu/cuda/integrators/rk/rk_device_io.hpp"
+#include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/kernels/kernels.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -31,87 +31,6 @@ namespace fullmag::fem {
 namespace {
 
 constexpr int kBlockSize = 256;
-constexpr double kPi = 3.141592653589793238462643383279502884;
-
-enum class GpuFinalScalarSlot : int {
-    MaxRhs = 0,
-    ExchangeEnergy,
-    DemagEnergy,
-    ExternalEnergy,
-    DmiEnergy,
-    BulkDmiEnergy,
-    AnisotropyEnergy,
-    CubicAnisotropyEnergy,
-    MagnetoelasticEnergy,
-    MaxHEff,
-    MaxHDemag,
-    MaxTorque,
-    MxSum,
-    MySum,
-    MzSum,
-    MagneticCount,
-    Count,
-};
-
-static constexpr size_t kGpuFinalScalarSlots =
-    static_cast<size_t>(GpuFinalScalarSlot::Count);
-static_assert(
-    kGpuFinalScalarSlots <= FEM_GPU_SCALAR_RESULT_SLOTS,
-    "FemGpuState scalar result allocation must cover GPU RK final stats slots");
-
-double *final_scalar_result(FemGpuState &gpu, GpuFinalScalarSlot slot)
-{
-    return gpu.scalar_reduce_result + static_cast<int>(slot);
-}
-
-bool gpu_rk_rhs_allows_fsal_reuse(const Context &ctx)
-{
-    if (ctx.thermal_brown.temperature > 0.0) {
-        return false;
-    }
-    if (ctx.oersted.time_dep_kind != 0u) {
-        return false;
-    }
-    return true;
-}
-
-struct GpuAdaptiveResult {
-    bool accepted;
-    double dt_next;
-};
-
-double oersted_scale(const Context &ctx)
-{
-    if (!ctx.oersted.has_cylinder) {
-        return 1.0;
-    }
-    double scale = ctx.oersted.current;
-    switch (ctx.oersted.time_dep_kind) {
-        case 1:
-            scale *= std::sin(
-                         2.0 * kPi * ctx.oersted.time_dep_freq * ctx.state.current_time +
-                         ctx.oersted.time_dep_phase) +
-                     ctx.oersted.time_dep_offset;
-            break;
-        case 2:
-            scale *= (ctx.state.current_time >= ctx.oersted.time_dep_t_on &&
-                      ctx.state.current_time < ctx.oersted.time_dep_t_off)
-                         ? 1.0
-                         : 0.0;
-            break;
-        default:
-            break;
-    }
-    return scale;
-}
-
-double current_density_magnitude(const Context &ctx)
-{
-    const double jx = ctx.stt.current_density_am2[0];
-    const double jy = ctx.stt.current_density_am2[1];
-    const double jz = ctx.stt.current_density_am2[2];
-    return std::sqrt(jx * jx + jy * jy + jz * jz);
-}
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 {
@@ -132,953 +51,6 @@ std::string format_scientific(double value)
     char buffer[64];
     std::snprintf(buffer, sizeof(buffer), "%.6e", value);
     return std::string(buffer);
-}
-
-bool read_scalar_result(
-    Context &ctx,
-    cudaStream_t stream,
-    const char *label,
-    double &value,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (!cuda_ok(
-            cudaMemcpyAsync(
-                &value,
-                gpu.scalar_reduce_result,
-                sizeof(double),
-                cudaMemcpyDeviceToHost,
-                stream),
-            label,
-            reason)) {
-        return false;
-    }
-    if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
-        return false;
-    }
-    record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
-    return true;
-}
-
-bool read_scalar_results(
-    Context &ctx,
-    cudaStream_t stream,
-    const char *label,
-    double *values,
-    size_t count,
-    std::string &reason)
-{
-    if (count == 0) {
-        return true;
-    }
-    auto &gpu = ctx.gpu_state.device;
-    if (!cuda_ok(
-            cudaMemcpyAsync(
-                values,
-                gpu.scalar_reduce_result,
-                count * sizeof(double),
-                cudaMemcpyDeviceToHost,
-                stream),
-            label,
-            reason)) {
-        return false;
-    }
-    if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
-        return false;
-    }
-    record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double));
-    return true;
-}
-
-bool copy_component_device(
-    const FemGpuComponentField &src,
-    FemGpuComponentField &dst,
-    uint64_t node_count,
-    cudaStream_t stream,
-    const char *operation,
-    std::string &reason)
-{
-    const size_t bytes = static_cast<size_t>(node_count) * sizeof(double);
-    if (!cuda_ok(
-            cudaMemcpyAsync(dst.x, src.x, bytes, cudaMemcpyDeviceToDevice, stream),
-            operation,
-            reason) ||
-        !cuda_ok(
-            cudaMemcpyAsync(dst.y, src.y, bytes, cudaMemcpyDeviceToDevice, stream),
-            operation,
-            reason) ||
-        !cuda_ok(
-            cudaMemcpyAsync(dst.z, src.z, bytes, cudaMemcpyDeviceToDevice, stream),
-            operation,
-            reason)) {
-        return false;
-    }
-    return true;
-}
-
-bool download_component_device_to_aos(
-    Context &ctx,
-    const FemGpuComponentField &src,
-    std::vector<double> &out_xyz,
-    cudaStream_t stream,
-    const char *operation,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (src.x == nullptr || src.y == nullptr || src.z == nullptr) {
-        reason = std::string(operation) + " requires allocated source component buffers";
-        return false;
-    }
-    out_xyz.resize(static_cast<size_t>(gpu.dof_len));
-    const size_t node_count = static_cast<size_t>(gpu.node_count);
-    const size_t host_pitch = 3u * sizeof(double);
-    const size_t component_bytes = node_count * sizeof(double);
-    if (!cuda_ok(cudaMemcpy2DAsync(
-                out_xyz.data() + 0u,
-                host_pitch,
-                src.x,
-                sizeof(double),
-                sizeof(double),
-                node_count,
-                cudaMemcpyDeviceToHost,
-                stream),
-            operation,
-            reason) ||
-        !cuda_ok(cudaMemcpy2DAsync(
-                out_xyz.data() + 1u,
-                host_pitch,
-                src.y,
-                sizeof(double),
-                sizeof(double),
-                node_count,
-                cudaMemcpyDeviceToHost,
-                stream),
-            operation,
-            reason) ||
-        !cuda_ok(cudaMemcpy2DAsync(
-                out_xyz.data() + 2u,
-                host_pitch,
-                src.z,
-                sizeof(double),
-                sizeof(double),
-                node_count,
-                cudaMemcpyDeviceToHost,
-                stream),
-            operation,
-            reason)) {
-        return false;
-    }
-    if (!cuda_ok(cudaStreamSynchronize(stream), operation, reason)) {
-        return false;
-    }
-    record_device_to_host(ctx.transfer_audit.audit, static_cast<uint64_t>(component_bytes) * 3ull);
-    return true;
-}
-
-bool compute_hybrid_cpu_demag_for_device_stage(
-    Context &ctx,
-    const FemGpuComponentField &m,
-    cudaStream_t stream,
-    std::string &reason)
-{
-    if (!ctx.demag.enabled) {
-        return true;
-    }
-#if FULLMAG_HAS_MFEM_STACK
-    auto &gpu = ctx.gpu_state.device;
-    if (gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
-        reason = "GPU RK hybrid CPU demag requires allocated device H_demag buffers";
-        return false;
-    }
-    if (!download_component_device_to_aos(
-            ctx,
-            m,
-            gpu.hybrid_stage_m_xyz,
-            stream,
-            "cudaMemcpy2DAsync GPU RK hybrid demag stage magnetization device->host",
-            reason)) {
-        return false;
-    }
-    double demag_energy = 0.0;
-    if (!compute_demag_field_for_magnetization(
-            ctx,
-            gpu.hybrid_stage_m_xyz,
-            gpu.hybrid_demag_xyz,
-            demag_energy,
-            true,
-            nullptr,
-            reason)) {
-        return false;
-    }
-    ctx.demag.h_xyz = gpu.hybrid_demag_xyz;
-    gpu.hybrid_demag_energy_joules = demag_energy;
-    return gpu_state_upload_demag_field_aos(
-        gpu,
-        gpu.hybrid_demag_xyz.data(),
-        static_cast<uint64_t>(gpu.hybrid_demag_xyz.size()),
-        ctx.transfer_audit.audit,
-        reason);
-#else
-    reason = "GPU RK hybrid CPU demag requires MFEM stack";
-    return false;
-#endif
-}
-
-bool compute_legacy_sparse_exchange(
-    FemGpuState &gpu,
-    const FemGpuComponentField &m,
-    cudaStream_t stream,
-    std::string &reason)
-{
-    if (!gpu.exchange_legacy_sparse_uploaded ||
-        gpu.exchange_csr_row_offsets == nullptr ||
-        gpu.exchange_csr_col_indices == nullptr ||
-        gpu.exchange_csr_values == nullptr ||
-        gpu.ms == nullptr ||
-        gpu.exchange_inv_lumped_mass == nullptr) {
-        reason = "GPU legacy sparse exchange requires uploaded CSR/mass device buffers";
-        return false;
-    }
-    if (gpu.exchange_legacy_sparse_rows != gpu.node_count ||
-        gpu.exchange_legacy_sparse_cols != gpu.node_count ||
-        gpu.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-        reason = "GPU legacy sparse exchange dimensions do not match RK node_count";
-        return false;
-    }
-
-    const int rows = static_cast<int>(gpu.node_count);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.exchange_csr_row_offsets,
-        gpu.exchange_csr_col_indices,
-        gpu.exchange_csr_values,
-        m.x,
-        gpu.ms,
-        gpu.exchange_inv_lumped_mass,
-        gpu.magnetic_node_mask,
-        gpu.h_ex.x,
-        rows,
-        stream);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.exchange_csr_row_offsets,
-        gpu.exchange_csr_col_indices,
-        gpu.exchange_csr_values,
-        m.y,
-        gpu.ms,
-        gpu.exchange_inv_lumped_mass,
-        gpu.magnetic_node_mask,
-        gpu.h_ex.y,
-        rows,
-        stream);
-    fullmag_cuda_legacy_sparse_exchange(
-        gpu.exchange_csr_row_offsets,
-        gpu.exchange_csr_col_indices,
-        gpu.exchange_csr_values,
-        m.z,
-        gpu.ms,
-        gpu.exchange_inv_lumped_mass,
-        gpu.magnetic_node_mask,
-        gpu.h_ex.z,
-        rows,
-        stream);
-    return cuda_launch_ok("launch GPU legacy sparse exchange", reason);
-}
-
-GpuAdaptiveResult gpu_adaptive_pi_step(Context &ctx, double error_norm)
-{
-    if (!ctx.adaptive_dt.enabled || error_norm <= 0.0) {
-        return {true, ctx.base_plan.dt_seconds};
-    }
-
-    const double clamped_error = std::max(error_norm, 1e-15);
-    if (clamped_error <= 1.0) {
-        double ratio = ctx.adaptive_dt.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha) *
-                       std::pow(ctx.adaptive_dt.prev_error_norm / clamped_error, ctx.adaptive_dt.pi_beta);
-        ratio = std::min(ratio, ctx.adaptive_dt.dt_grow_max);
-        ratio = std::max(ratio, 1.0);
-
-        const double dt_new = std::min(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
-        ctx.adaptive_dt.prev_error_norm = clamped_error;
-        return {true, dt_new};
-    }
-
-    double ratio = ctx.adaptive_dt.safety_factor * std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha);
-    ratio = std::max(ratio, ctx.adaptive_dt.dt_shrink_min);
-
-    const double dt_new = std::max(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
-    ctx.adaptive_dt.rejected_steps += 1;
-    return {false, dt_new};
-}
-
-bool restore_adaptive_reject_magnetization_device(
-    FemGpuState &gpu,
-    cudaStream_t stream,
-    std::string &reason)
-{
-    gpu.fsal_valid = false;
-    return copy_component_device(
-        gpu.m_backup,
-        gpu.m,
-        gpu.node_count,
-        stream,
-        "cudaMemcpyAsync GPU RK restore rejected adaptive magnetization device copy",
-        reason);
-}
-
-bool compute_adaptive_error_norm_device(
-    Context &ctx,
-    const ExplicitTableau &tableau,
-    double dt_seconds,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    double &error_norm,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (gpu.scalar_reduce_temp_storage == nullptr ||
-        gpu.scalar_reduce_temp_storage_bytes == 0) {
-        reason = "GPU RK adaptive error norm requires preallocated CUB reduction temp storage";
-        return false;
-    }
-
-    fullmag_cuda_adaptive_error_norm_blocks(
-        gpu.m_backup.x, gpu.m_backup.y, gpu.m_backup.z,
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.k[6].x, gpu.k[6].y, gpu.k[6].z,
-        tableau.b_hi[0], tableau.b_hi[1], tableau.b_hi[2], tableau.b_hi[3],
-        tableau.b_hi[4], tableau.b_hi[5], tableau.b_hi[6],
-        tableau.b_lo[0], tableau.b_lo[1], tableau.b_lo[2], tableau.b_lo[3],
-        tableau.b_lo[4], tableau.b_lo[5], tableau.b_lo[6],
-        dt_seconds,
-        ctx.adaptive_dt.atol,
-        ctx.adaptive_dt.rtol,
-        gpu.scalar_reduce_workspace,
-        tableau.stages,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK adaptive error norm blocks", reason)) {
-        return false;
-    }
-
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_max(
-        gpu.scalar_reduce_workspace,
-        std::max(1, blocks),
-        gpu.scalar_reduce_result,
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK adaptive error norm reduction", reason)) {
-        return false;
-    }
-
-    return read_scalar_result(
-        ctx,
-        stream,
-        "cudaMemcpyAsync GPU RK adaptive error norm scalar device->host",
-        error_norm,
-        reason);
-}
-
-__global__ void euler_stage_kernel(
-    const double *__restrict__ mx,
-    const double *__restrict__ my,
-    const double *__restrict__ mz,
-    const double *__restrict__ kx,
-    const double *__restrict__ ky,
-    const double *__restrict__ kz,
-    double *__restrict__ out_x,
-    double *__restrict__ out_y,
-    double *__restrict__ out_z,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    out_x[i] = mx[i] + dt * kx[i];
-    out_y[i] = my[i] + dt * ky[i];
-    out_z[i] = mz[i] + dt * kz[i];
-}
-
-__global__ void rk45_stage_kernel(
-    const double *__restrict__ mx,
-    const double *__restrict__ my,
-    const double *__restrict__ mz,
-    const double *__restrict__ k0x,
-    const double *__restrict__ k0y,
-    const double *__restrict__ k0z,
-    const double *__restrict__ k1x,
-    const double *__restrict__ k1y,
-    const double *__restrict__ k1z,
-    const double *__restrict__ k2x,
-    const double *__restrict__ k2y,
-    const double *__restrict__ k2z,
-    const double *__restrict__ k3x,
-    const double *__restrict__ k3y,
-    const double *__restrict__ k3z,
-    const double *__restrict__ k4x,
-    const double *__restrict__ k4y,
-    const double *__restrict__ k4z,
-    const double *__restrict__ k5x,
-    const double *__restrict__ k5y,
-    const double *__restrict__ k5z,
-    double *__restrict__ out_x,
-    double *__restrict__ out_y,
-    double *__restrict__ out_z,
-    double c0,
-    double c1,
-    double c2,
-    double c3,
-    double c4,
-    double c5,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    out_x[i] = mx[i] + dt * (
-        c0 * k0x[i] + c1 * k1x[i] + c2 * k2x[i] +
-        c3 * k3x[i] + c4 * k4x[i] + c5 * k5x[i]);
-    out_y[i] = my[i] + dt * (
-        c0 * k0y[i] + c1 * k1y[i] + c2 * k2y[i] +
-        c3 * k3y[i] + c4 * k4y[i] + c5 * k5y[i]);
-    out_z[i] = mz[i] + dt * (
-        c0 * k0z[i] + c1 * k1z[i] + c2 * k2z[i] +
-        c3 * k3z[i] + c4 * k4z[i] + c5 * k5z[i]);
-}
-
-__global__ void heun_accept_kernel(
-    double *__restrict__ mx,
-    double *__restrict__ my,
-    double *__restrict__ mz,
-    const double *__restrict__ k0x,
-    const double *__restrict__ k0y,
-    const double *__restrict__ k0z,
-    const double *__restrict__ k1x,
-    const double *__restrict__ k1y,
-    const double *__restrict__ k1z,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    mx[i] += 0.5 * dt * (k0x[i] + k1x[i]);
-    my[i] += 0.5 * dt * (k0y[i] + k1y[i]);
-    mz[i] += 0.5 * dt * (k0z[i] + k1z[i]);
-}
-
-__global__ void rk4_accept_kernel(
-    double *__restrict__ mx,
-    double *__restrict__ my,
-    double *__restrict__ mz,
-    const double *__restrict__ k0x,
-    const double *__restrict__ k0y,
-    const double *__restrict__ k0z,
-    const double *__restrict__ k1x,
-    const double *__restrict__ k1y,
-    const double *__restrict__ k1z,
-    const double *__restrict__ k2x,
-    const double *__restrict__ k2y,
-    const double *__restrict__ k2z,
-    const double *__restrict__ k3x,
-    const double *__restrict__ k3y,
-    const double *__restrict__ k3z,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    const double scale = dt / 6.0;
-    mx[i] += scale * (k0x[i] + 2.0 * k1x[i] + 2.0 * k2x[i] + k3x[i]);
-    my[i] += scale * (k0y[i] + 2.0 * k1y[i] + 2.0 * k2y[i] + k3y[i]);
-    mz[i] += scale * (k0z[i] + 2.0 * k1z[i] + 2.0 * k2z[i] + k3z[i]);
-}
-
-__global__ void bs23_accept_kernel(
-    double *__restrict__ mx,
-    double *__restrict__ my,
-    double *__restrict__ mz,
-    const double *__restrict__ k0x,
-    const double *__restrict__ k0y,
-    const double *__restrict__ k0z,
-    const double *__restrict__ k1x,
-    const double *__restrict__ k1y,
-    const double *__restrict__ k1z,
-    const double *__restrict__ k2x,
-    const double *__restrict__ k2y,
-    const double *__restrict__ k2z,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    mx[i] += dt * ((2.0 / 9.0) * k0x[i] + (1.0 / 3.0) * k1x[i] + (4.0 / 9.0) * k2x[i]);
-    my[i] += dt * ((2.0 / 9.0) * k0y[i] + (1.0 / 3.0) * k1y[i] + (4.0 / 9.0) * k2y[i]);
-    mz[i] += dt * ((2.0 / 9.0) * k0z[i] + (1.0 / 3.0) * k1z[i] + (4.0 / 9.0) * k2z[i]);
-}
-
-__global__ void dp54_accept_kernel(
-    double *__restrict__ mx,
-    double *__restrict__ my,
-    double *__restrict__ mz,
-    const double *__restrict__ k0x,
-    const double *__restrict__ k0y,
-    const double *__restrict__ k0z,
-    const double *__restrict__ k2x,
-    const double *__restrict__ k2y,
-    const double *__restrict__ k2z,
-    const double *__restrict__ k3x,
-    const double *__restrict__ k3y,
-    const double *__restrict__ k3z,
-    const double *__restrict__ k4x,
-    const double *__restrict__ k4y,
-    const double *__restrict__ k4z,
-    const double *__restrict__ k5x,
-    const double *__restrict__ k5y,
-    const double *__restrict__ k5z,
-    double dt,
-    int n)
-{
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    mx[i] += dt * (
-        (35.0 / 384.0) * k0x[i] +
-        (500.0 / 1113.0) * k2x[i] +
-        (125.0 / 192.0) * k3x[i] -
-        (2187.0 / 6784.0) * k4x[i] +
-        (11.0 / 84.0) * k5x[i]);
-    my[i] += dt * (
-        (35.0 / 384.0) * k0y[i] +
-        (500.0 / 1113.0) * k2y[i] +
-        (125.0 / 192.0) * k3y[i] -
-        (2187.0 / 6784.0) * k4y[i] +
-        (11.0 / 84.0) * k5y[i]);
-    mz[i] += dt * (
-        (35.0 / 384.0) * k0z[i] +
-        (500.0 / 1113.0) * k2z[i] +
-        (125.0 / 192.0) * k3z[i] -
-        (2187.0 / 6784.0) * k4z[i] +
-        (11.0 / 84.0) * k5z[i]);
-}
-
-bool compute_rhs_for_magnetization(
-    Context &ctx,
-    const FemGpuComponentField &m,
-    FemGpuComponentField &rhs,
-    cudaStream_t stream,
-    int n,
-    const char *label,
-    std::string &reason)
-{
-    if (!compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)) {
-        return false;
-    }
-    auto &gpu = ctx.gpu_state.device;
-    auto compute_dmi_field = [&](bool bulk_mode) -> bool {
-        if (!gpu.mesh_geometry_uploaded ||
-            gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
-            gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
-            gpu.magnetic_element_mask == nullptr ||
-            gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
-            gpu.zhang_li_rhs.z == nullptr) {
-            reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
-            return false;
-        }
-        FemGpuComponentField &field = bulk_mode ? gpu.h_bulk_dmi : gpu.h_dmi;
-        if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
-            reason = "GPU RK DMI requires device-resident H_dmi buffers";
-            return false;
-        }
-        fullmag_cuda_dmi_field_energy(
-            gpu.nodes_xyz,
-            gpu.elements,
-            gpu.magnetic_element_mask,
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            bulk_mode ? gpu.dbulk : gpu.dind,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.zhang_li_rhs.x,
-            gpu.zhang_li_rhs.y,
-            gpu.zhang_li_rhs.z,
-            field.x,
-            field.y,
-            field.z,
-            gpu.scalar_reduce_workspace,
-            ctx.material_fields.material.saturation_magnetisation,
-            bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
-            ctx.dmi.interface_normal[0],
-            ctx.dmi.interface_normal[1],
-            ctx.dmi.interface_normal[2],
-            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
-            bulk_mode,
-            static_cast<int>(ctx.mesh.n_elements),
-            n,
-            stream);
-        if (!cuda_launch_ok(bulk_mode ? "launch GPU RK bulk DMI field" : "launch GPU RK interfacial DMI field", reason)) {
-            return false;
-        }
-        return true;
-    };
-    if (ctx.dmi.interfacial_enabled && !compute_dmi_field(false)) {
-        return false;
-    }
-    if (ctx.dmi.bulk_enabled && !compute_dmi_field(true)) {
-        return false;
-    }
-    if (ctx.demag.enabled) {
-        if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
-            if (!compute_hybrid_cpu_demag_for_device_stage(ctx, m, stream, reason)) {
-                return false;
-            }
-        } else if (!compute_device_demag_for_device_stage(ctx, m, stream, reason)) {
-            return false;
-        }
-    }
-    if (ctx.anisotropy.uniaxial_enabled) {
-        if (gpu.ms == nullptr || gpu.ku == nullptr || gpu.ku2 == nullptr ||
-            gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_ani.x == nullptr || gpu.h_ani.y == nullptr || gpu.h_ani.z == nullptr) {
-            reason = "GPU RK uniaxial anisotropy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
-            return false;
-        }
-        fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            gpu.ku,
-            gpu.ku2,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.h_ani.x,
-            gpu.h_ani.y,
-            gpu.h_ani.z,
-            gpu.scalar_reduce_workspace,
-            ctx.anisotropy.uniaxial_Ku,
-            ctx.anisotropy.uniaxial_Ku2,
-            ctx.anisotropy.uniaxial_axis[0],
-            ctx.anisotropy.uniaxial_axis[1],
-            ctx.anisotropy.uniaxial_axis[2],
-            !ctx.material_fields.Ku_field.empty(),
-            !ctx.material_fields.Ku2_field.empty(),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy field", reason)) {
-            return false;
-        }
-    }
-    if (ctx.anisotropy.cubic_enabled) {
-        if (gpu.ms == nullptr || gpu.kc1 == nullptr || gpu.kc2 == nullptr ||
-            gpu.kc3 == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_cubic_ani.x == nullptr || gpu.h_cubic_ani.y == nullptr ||
-            gpu.h_cubic_ani.z == nullptr) {
-            reason = "GPU RK cubic anisotropy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers";
-            return false;
-        }
-        fullmag_cuda_cubic_anisotropy_field_energy_blocks(
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            gpu.kc1,
-            gpu.kc2,
-            gpu.kc3,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.h_cubic_ani.x,
-            gpu.h_cubic_ani.y,
-            gpu.h_cubic_ani.z,
-            gpu.scalar_reduce_workspace,
-            ctx.anisotropy.cubic_Kc1,
-            ctx.anisotropy.cubic_Kc2,
-            ctx.anisotropy.cubic_Kc3,
-            ctx.anisotropy.cubic_axis1[0],
-            ctx.anisotropy.cubic_axis1[1],
-            ctx.anisotropy.cubic_axis1[2],
-            ctx.anisotropy.cubic_axis2[0],
-            ctx.anisotropy.cubic_axis2[1],
-            ctx.anisotropy.cubic_axis2[2],
-            !ctx.material_fields.Kc1_field.empty(),
-            !ctx.material_fields.Kc2_field.empty(),
-            !ctx.material_fields.Kc3_field.empty(),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK cubic anisotropy field", reason)) {
-            return false;
-        }
-    }
-    if (ctx.magnetoelastic.enabled) {
-        const uint64_t per_node_strain_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
-        const bool use_per_node_strain = !ctx.magnetoelastic.uniform_strain;
-        if (!use_per_node_strain && ctx.magnetoelastic.strain_voigt.size() < 6u) {
-            reason = "GPU RK magnetoelastic field requires prescribed strain data";
-            return false;
-        }
-        if (use_per_node_strain &&
-            static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()) != per_node_strain_len) {
-            reason = "GPU RK magnetoelastic field requires 6 prescribed strain Voigt values per node";
-            return false;
-        }
-        if (use_per_node_strain &&
-            (gpu.mel_strain_voigt == nullptr || !gpu.mel_strain_uploaded ||
-                gpu.mel_strain_voigt_len != per_node_strain_len)) {
-            reason = "GPU RK magnetoelastic field requires device-resident per-node strain";
-            return false;
-        }
-        if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
-            reason = "GPU RK magnetoelastic field requires device-resident Ms, lumped mass, and H_mel buffers";
-            return false;
-        }
-        const double *eps = ctx.magnetoelastic.strain_voigt.data();
-        fullmag_cuda_magnetoelastic_field_energy_blocks(
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
-            gpu.h_mel.x,
-            gpu.h_mel.y,
-            gpu.h_mel.z,
-            gpu.scalar_reduce_workspace,
-            ctx.magnetoelastic.b1,
-            ctx.magnetoelastic.b2,
-            eps[0],
-            eps[1],
-            eps[2],
-            eps[3] * 0.5,
-            eps[4] * 0.5,
-            eps[5] * 0.5,
-            use_per_node_strain,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK magnetoelastic field", reason)) {
-            return false;
-        }
-    }
-    if (ctx.thermal_brown.temperature > 0.0) {
-        if (ctx.thermal_brown.seed == 0) {
-            reason = "GPU RK thermal field requires deterministic thermal seed";
-            return false;
-        }
-        if (ctx.adaptive_dt.current_dt <= 0.0) {
-            reason = "GPU RK thermal field requires positive timestep";
-            return false;
-        }
-        if (gpu.ms == nullptr || gpu.alpha == nullptr || gpu.node_volumes == nullptr ||
-            gpu.h_therm.x == nullptr || gpu.h_therm.y == nullptr || gpu.h_therm.z == nullptr) {
-            reason = "GPU RK thermal field requires device-resident Ms, alpha, node volumes, and H_therm buffers";
-            return false;
-        }
-        fullmag_cuda_thermal_field_blocks(
-            gpu.ms,
-            gpu.alpha,
-            gpu.node_volumes,
-            gpu.magnetic_node_mask,
-            gpu.h_therm.x,
-            gpu.h_therm.y,
-            gpu.h_therm.z,
-            gpu.scalar_reduce_workspace,
-            ctx.material_fields.material.gyromagnetic_ratio,
-            ctx.material_fields.material.damping,
-            ctx.thermal_brown.temperature,
-            ctx.adaptive_dt.current_dt,
-            ctx.thermal_brown.seed,
-            ctx.state.step_count,
-            !ctx.material_fields.alpha_field.empty(),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK deterministic thermal field", reason)) {
-            return false;
-        }
-    }
-    fullmag_cuda_accumulate_heff(gpu.h_ex.x, gpu.h_demag.x, gpu.h_ext.x, gpu.h_eff.x, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.h_ex.y, gpu.h_demag.y, gpu.h_ext.y, gpu.h_eff.y, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.h_ex.z, gpu.h_demag.z, gpu.h_ext.z, gpu.h_eff.z, n, true, stream);
-    if (!cuda_launch_ok(label, reason)) {
-        return false;
-    }
-    if (ctx.anisotropy.uniaxial_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_ani.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_ani.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_ani.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.anisotropy.cubic_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK cubic anisotropy h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.dmi.interfacial_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK interfacial DMI h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.dmi.bulk_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK bulk DMI h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field) {
-        if (gpu.h_oe.x == nullptr || gpu.h_oe.y == nullptr || gpu.h_oe.z == nullptr) {
-            reason = "GPU RK Oersted field requires device-resident H_oe buffers";
-            return false;
-        }
-        const double scale = oersted_scale(ctx);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.x, gpu.h_eff.x, scale, n, stream);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.y, gpu.h_eff.y, scale, n, stream);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.z, gpu.h_eff.z, scale, n, stream);
-        if (!cuda_launch_ok("launch GPU RK Oersted h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.magnetoelastic.enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_mel.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_mel.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_mel.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK magnetoelastic h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-    if (ctx.thermal_brown.temperature > 0.0) {
-        fullmag_cuda_add_field_inplace(gpu.h_therm.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_therm.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_therm.z, gpu.h_eff.z, n, stream);
-        if (!cuda_launch_ok("launch GPU RK thermal h_eff accumulation", reason)) {
-            return false;
-        }
-    }
-
-    fullmag_cuda_llg_rhs_fused(
-        m.x, m.y, m.z,
-        gpu.h_eff.x, gpu.h_eff.y, gpu.h_eff.z,
-        rhs.x, rhs.y, rhs.z,
-        gpu.scalar_reduce_workspace,
-        gpu.alpha,
-        ctx.material_fields.material.gyromagnetic_ratio,
-        ctx.material_fields.material.damping,
-        !ctx.material_fields.alpha_field.empty(),
-        ctx.base_plan.precession_enabled,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK RHS", reason)) {
-        return false;
-    }
-    if (ctx.stt.slonczewski_enabled) {
-        const double slonczewski_thickness = gpu_rk_resolve_slonczewski_thickness(ctx);
-        if (slonczewski_thickness <= 0.0) {
-            reason = "GPU RK Slonczewski STT requires explicit or geometry-derived free-layer thickness";
-            return false;
-        }
-        if (gpu.ms == nullptr) {
-            reason = "GPU RK Slonczewski STT requires device-resident Ms";
-            return false;
-        }
-        fullmag_cuda_add_slonczewski_stt_rhs(
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            gpu.magnetic_node_mask,
-            rhs.x,
-            rhs.y,
-            rhs.z,
-            gpu.scalar_reduce_workspace,
-            current_density_magnitude(ctx),
-            ctx.stt.current_sign,
-            slonczewski_thickness,
-            ctx.stt.degree > 0.0 ? ctx.stt.degree : 1.0,
-            ctx.stt.lambda,
-            ctx.stt.epsilon_prime,
-            ctx.stt.spin_polarization[0],
-            ctx.stt.spin_polarization[1],
-            ctx.stt.spin_polarization[2],
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK Slonczewski STT RHS", reason)) {
-            return false;
-        }
-    }
-    if (ctx.stt.zhang_li_enabled) {
-        if (!gpu.mesh_geometry_uploaded ||
-            gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
-            gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
-            gpu.magnetic_element_mask == nullptr) {
-            reason = "GPU RK Zhang-Li STT requires device-resident mesh geometry";
-            return false;
-        }
-        if (gpu.ms == nullptr || gpu.zhang_li_rhs.x == nullptr ||
-            gpu.zhang_li_rhs.y == nullptr || gpu.zhang_li_rhs.z == nullptr ||
-            gpu.zhang_li_node_weight == nullptr) {
-            reason = "GPU RK Zhang-Li STT requires device-resident Ms and Zhang-Li work buffers";
-            return false;
-        }
-        fullmag_cuda_add_zhang_li_stt_rhs(
-            gpu.nodes_xyz,
-            gpu.elements,
-            gpu.magnetic_element_mask,
-            m.x,
-            m.y,
-            m.z,
-            gpu.ms,
-            gpu.magnetic_node_mask,
-            gpu.zhang_li_rhs.x,
-            gpu.zhang_li_rhs.y,
-            gpu.zhang_li_rhs.z,
-            gpu.zhang_li_node_weight,
-            rhs.x,
-            rhs.y,
-            rhs.z,
-            gpu.scalar_reduce_workspace,
-            ctx.stt.current_density_am2[0],
-            ctx.stt.current_density_am2[1],
-            ctx.stt.current_density_am2[2],
-            ctx.stt.degree,
-            ctx.stt.beta,
-            static_cast<int>(ctx.mesh.n_elements),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK Zhang-Li STT RHS", reason)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace
@@ -1146,7 +118,7 @@ bool gpu_rk_device_resident_step(
     ctx.adaptive_dt.current_dt = active_dt;
     stage_rhs_evaluations = 0;
     fsal_reused = fsal_method && gpu.fsal_valid;
-    if (!copy_component_device(
+    if (!gpu_rk_copy_component_device(
             gpu.m,
             gpu.m_backup,
             gpu.node_count,
@@ -1157,7 +129,7 @@ bool gpu_rk_device_resident_step(
         return false;
     }
     if (!fsal_reused) {
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx,
                 gpu.m,
                 gpu.k[0],
@@ -1171,18 +143,19 @@ bool gpu_rk_device_resident_step(
         stage_rhs_evaluations += 1;
     }
 
-    euler_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+    fullmag_cuda_euler_stage(
         gpu.m.x, gpu.m.y, gpu.m.z,
         gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
         gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
         is_heun ? active_dt : (is_rk45 ? 0.2 * active_dt : 0.5 * active_dt),
-        n);
+        n,
+        stream);
     fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK predictor/normalize", reason)) {
         return false;
     }
 
-    if (!compute_rhs_for_magnetization(
+    if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
             gpu.m_stage,
             gpu.k[1],
@@ -1196,7 +169,7 @@ bool gpu_rk_device_resident_step(
     stage_rhs_evaluations += 1;
 
     if (is_rk45) {
-        rk45_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_rk45_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
@@ -1207,12 +180,13 @@ bool gpu_rk_device_resident_step(
             gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
             3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0,
             active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK45 stage-2/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx, gpu.m_stage, gpu.k[2], stream, n,
                 "launch GPU RK45 stage-2 h_eff accumulation", reason)) {
             gpu.fsal_valid = false;
@@ -1220,7 +194,7 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
 
-        rk45_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_rk45_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
@@ -1231,12 +205,13 @@ bool gpu_rk_device_resident_step(
             gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
             44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0,
             active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK45 stage-3/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx, gpu.m_stage, gpu.k[3], stream, n,
                 "launch GPU RK45 stage-3 h_eff accumulation", reason)) {
             gpu.fsal_valid = false;
@@ -1244,7 +219,7 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
 
-        rk45_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_rk45_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
@@ -1256,12 +231,13 @@ bool gpu_rk_device_resident_step(
             19372.0 / 6561.0, -25360.0 / 2187.0, 64448.0 / 6561.0,
             -212.0 / 729.0, 0.0, 0.0,
             active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK45 stage-4/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx, gpu.m_stage, gpu.k[4], stream, n,
                 "launch GPU RK45 stage-4 h_eff accumulation", reason)) {
             gpu.fsal_valid = false;
@@ -1269,7 +245,7 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
 
-        rk45_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_rk45_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
@@ -1281,12 +257,13 @@ bool gpu_rk_device_resident_step(
             9017.0 / 3168.0, -355.0 / 33.0, 46732.0 / 5247.0,
             49.0 / 176.0, -5103.0 / 18656.0, 0.0,
             active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK45 stage-5/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx, gpu.m_stage, gpu.k[5], stream, n,
                 "launch GPU RK45 stage-5 h_eff accumulation", reason)) {
             gpu.fsal_valid = false;
@@ -1294,7 +271,7 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
 
-        rk45_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_rk45_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
@@ -1306,12 +283,13 @@ bool gpu_rk_device_resident_step(
             35.0 / 384.0, 0.0, 500.0 / 1113.0,
             125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0,
             active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK45 stage-6/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx, gpu.m_stage, gpu.k[6], stream, n,
                 "launch GPU RK45 stage-6 h_eff accumulation", reason)) {
             gpu.fsal_valid = false;
@@ -1319,7 +297,7 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
 
-        dp54_accept_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_dp54_accept(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
@@ -1327,19 +305,21 @@ bool gpu_rk_device_resident_step(
             gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
             gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
             active_dt,
-            n);
+            n,
+            stream);
     } else if (is_rk4 || is_rk23) {
-        euler_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_euler_stage(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
             gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
             is_rk23 ? 0.75 * active_dt : 0.5 * active_dt,
-            n);
+            n,
+            stream);
         fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK4 midpoint-2/normalize", reason)) {
             return false;
         }
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx,
                 gpu.m_stage,
                 gpu.k[2],
@@ -1352,25 +332,27 @@ bool gpu_rk_device_resident_step(
         }
         stage_rhs_evaluations += 1;
         if (is_rk23) {
-            bs23_accept_kernel<<<blocks, kBlockSize, 0, stream>>>(
+            fullmag_cuda_bs23_accept(
                 gpu.m.x, gpu.m.y, gpu.m.z,
                 gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
                 gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
                 gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
                 active_dt,
-                n);
+                n,
+                stream);
         } else {
-            euler_stage_kernel<<<blocks, kBlockSize, 0, stream>>>(
+            fullmag_cuda_euler_stage(
                 gpu.m.x, gpu.m.y, gpu.m.z,
                 gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
                 gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
                 active_dt,
-                n);
+                n,
+                stream);
             fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
             if (!cuda_launch_ok("launch GPU RK4 endpoint/normalize", reason)) {
                 return false;
             }
-            if (!compute_rhs_for_magnetization(
+            if (!gpu_rk_compute_rhs_for_magnetization(
                     ctx,
                     gpu.m_stage,
                     gpu.k[3],
@@ -1382,22 +364,24 @@ bool gpu_rk_device_resident_step(
                 return false;
             }
             stage_rhs_evaluations += 1;
-            rk4_accept_kernel<<<blocks, kBlockSize, 0, stream>>>(
+            fullmag_cuda_rk4_accept(
                 gpu.m.x, gpu.m.y, gpu.m.z,
                 gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
                 gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
                 gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
                 gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
                 active_dt,
-                n);
+                n,
+                stream);
         }
     } else {
-        heun_accept_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        fullmag_cuda_heun_accept(
             gpu.m.x, gpu.m.y, gpu.m.z,
             gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
             gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
             active_dt,
-            n);
+            n,
+            stream);
     }
     fullmag_cuda_normalize_vectors(gpu.m.x, gpu.m.y, gpu.m.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK accept/normalize", reason)) {
@@ -1413,7 +397,7 @@ bool gpu_rk_device_resident_step(
     // The post-loop final-RHS path still runs for FSAL k[0] and h_eff update; the two
     // evaluations are numerically identical (same m, same fields) and the redundancy is benign.
     if (is_rk23 && adaptive) {
-        if (!compute_rhs_for_magnetization(
+        if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx,
                 gpu.m,
                 gpu.k[3],
@@ -1428,7 +412,7 @@ bool gpu_rk_device_resident_step(
     }
 
     if (adaptive) {
-        if (!compute_adaptive_error_norm_device(
+        if (!gpu_rk_compute_adaptive_error_norm_device(
                 ctx,
                 tableau,
                 active_dt,
@@ -1440,10 +424,10 @@ bool gpu_rk_device_resident_step(
             gpu.fsal_valid = false;
             return false;
         }
-        const auto adaptive_result = gpu_adaptive_pi_step(ctx, error_estimate);
+        const auto adaptive_result = gpu_rk_adaptive_pi_step(ctx, error_estimate);
         suggested_dt = adaptive_result.dt_next;
         if (!adaptive_result.accepted) {
-            if (!restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+            if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                 return false;
             }
             active_dt = adaptive_result.dt_next;
@@ -1470,7 +454,7 @@ bool gpu_rk_device_resident_step(
     break;
     }
 
-    if (!compute_rhs_for_magnetization(
+    if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
             gpu.m,
             gpu.error,
@@ -1482,7 +466,7 @@ bool gpu_rk_device_resident_step(
         return false;
     }
     if (fsal_method) {
-        if (!copy_component_device(
+        if (!gpu_rk_copy_component_device(
                 gpu.error,
                 gpu.k[0],
                 gpu.node_count,
@@ -1507,7 +491,7 @@ bool gpu_rk_device_resident_step(
     fullmag_cuda_device_max(
         gpu.scalar_reduce_workspace,
         std::max(1, blocks),
-        final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
+        gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
         gpu.scalar_reduce_temp_storage,
         reduce_bytes,
         stream);
@@ -1530,553 +514,6 @@ bool gpu_rk_device_resident_step(
     gpu.device_state = FemGpuSyncState::DeviceDirty;
     gpu.host_state = FemGpuSyncState::HostStale;
     reason.clear();
-    return true;
-}
-
-bool gpu_rk_finalize_step_stats(
-    Context &ctx,
-    fullmag_fem_step_stats &stats,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
-        gpu.scalar_reduce_result == nullptr ||
-        gpu.scalar_reduce_temp_storage == nullptr) {
-        return true;
-    }
-
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
-    std::array<double, kGpuFinalScalarSlots> scalars{};
-
-    const int n = static_cast<int>(gpu.node_count);
-    const int blocks = (n + kBlockSize - 1) / kBlockSize;
-    if (blocks <= 0) {
-        return true;
-    }
-
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_legacy_sparse_exchange_energy_blocks(
-        gpu.exchange_csr_row_offsets,
-        gpu.exchange_csr_col_indices,
-        gpu.exchange_csr_values,
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.scalar_reduce_workspace,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK exchange energy blocks", reason)) {
-        return false;
-    }
-    fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::ExchangeEnergy),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK exchange energy reduction", reason)) {
-        return false;
-    }
-
-    if (ctx.demag.enabled) {
-        if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
-            reason = "GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag";
-            return false;
-        }
-        fullmag_cuda_demag_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.h_demag.x,
-            gpu.h_demag.y,
-            gpu.h_demag.z,
-            gpu.ms,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.scalar_reduce_workspace,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK demag energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::DemagEnergy),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK demag energy reduction", reason)) {
-            return false;
-        }
-    }
-
-    if (ctx.zeeman.has_external_field) {
-        if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_ext.x == nullptr || gpu.h_ext.y == nullptr || gpu.h_ext.z == nullptr) {
-            reason = "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext";
-            return false;
-        }
-        fullmag_cuda_external_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.h_ext.x,
-            gpu.h_ext.y,
-            gpu.h_ext.z,
-            gpu.ms,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.scalar_reduce_workspace,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK external energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::ExternalEnergy),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK external energy reduction", reason)) {
-            return false;
-        }
-    }
-
-    auto compute_dmi_energy = [&](bool bulk_mode, GpuFinalScalarSlot slot) -> bool {
-        if (!gpu.mesh_geometry_uploaded ||
-            gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
-            gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
-            gpu.magnetic_element_mask == nullptr ||
-            gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
-            gpu.zhang_li_rhs.z == nullptr) {
-            reason = "GPU RK DMI energy requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
-            return false;
-        }
-        FemGpuComponentField &field = bulk_mode ? gpu.h_bulk_dmi : gpu.h_dmi;
-        fullmag_cuda_dmi_field_energy(
-            gpu.nodes_xyz,
-            gpu.elements,
-            gpu.magnetic_element_mask,
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.ms,
-            bulk_mode ? gpu.dbulk : gpu.dind,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.zhang_li_rhs.x,
-            gpu.zhang_li_rhs.y,
-            gpu.zhang_li_rhs.z,
-            field.x,
-            field.y,
-            field.z,
-            gpu.scalar_reduce_workspace,
-            ctx.material_fields.material.saturation_magnetisation,
-            bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
-            ctx.dmi.interface_normal[0],
-            ctx.dmi.interface_normal[1],
-            ctx.dmi.interface_normal[2],
-            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
-            bulk_mode,
-            static_cast<int>(ctx.mesh.n_elements),
-            n,
-            stream);
-        if (!cuda_launch_ok(bulk_mode ? "launch GPU RK bulk DMI energy blocks" : "launch GPU RK interfacial DMI energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            1,
-            final_scalar_result(gpu, slot),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok(bulk_mode ? "launch GPU RK bulk DMI energy reduction" : "launch GPU RK interfacial DMI energy reduction", reason)) {
-            return false;
-        }
-        return true;
-    };
-    if (ctx.dmi.interfacial_enabled &&
-        !compute_dmi_energy(false, GpuFinalScalarSlot::DmiEnergy)) {
-        return false;
-    }
-    if (ctx.dmi.bulk_enabled &&
-        !compute_dmi_energy(true, GpuFinalScalarSlot::BulkDmiEnergy)) {
-        return false;
-    }
-
-    if (ctx.anisotropy.uniaxial_enabled) {
-        if (gpu.ms == nullptr || gpu.ku == nullptr || gpu.ku2 == nullptr ||
-            gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_ani.x == nullptr || gpu.h_ani.y == nullptr || gpu.h_ani.z == nullptr) {
-            reason = "GPU RK uniaxial anisotropy energy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
-            return false;
-        }
-        fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.ms,
-            gpu.ku,
-            gpu.ku2,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.h_ani.x,
-            gpu.h_ani.y,
-            gpu.h_ani.z,
-            gpu.scalar_reduce_workspace,
-            ctx.anisotropy.uniaxial_Ku,
-            ctx.anisotropy.uniaxial_Ku2,
-            ctx.anisotropy.uniaxial_axis[0],
-            ctx.anisotropy.uniaxial_axis[1],
-            ctx.anisotropy.uniaxial_axis[2],
-            !ctx.material_fields.Ku_field.empty(),
-            !ctx.material_fields.Ku2_field.empty(),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::AnisotropyEnergy),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy reduction", reason)) {
-            return false;
-        }
-    }
-
-    if (ctx.anisotropy.cubic_enabled) {
-        if (gpu.ms == nullptr || gpu.kc1 == nullptr || gpu.kc2 == nullptr ||
-            gpu.kc3 == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_cubic_ani.x == nullptr || gpu.h_cubic_ani.y == nullptr ||
-            gpu.h_cubic_ani.z == nullptr) {
-            reason = "GPU RK cubic anisotropy energy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers";
-            return false;
-        }
-        fullmag_cuda_cubic_anisotropy_field_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.ms,
-            gpu.kc1,
-            gpu.kc2,
-            gpu.kc3,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            gpu.h_cubic_ani.x,
-            gpu.h_cubic_ani.y,
-            gpu.h_cubic_ani.z,
-            gpu.scalar_reduce_workspace,
-            ctx.anisotropy.cubic_Kc1,
-            ctx.anisotropy.cubic_Kc2,
-            ctx.anisotropy.cubic_Kc3,
-            ctx.anisotropy.cubic_axis1[0],
-            ctx.anisotropy.cubic_axis1[1],
-            ctx.anisotropy.cubic_axis1[2],
-            ctx.anisotropy.cubic_axis2[0],
-            ctx.anisotropy.cubic_axis2[1],
-            ctx.anisotropy.cubic_axis2[2],
-            !ctx.material_fields.Kc1_field.empty(),
-            !ctx.material_fields.Kc2_field.empty(),
-            !ctx.material_fields.Kc3_field.empty(),
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::CubicAnisotropyEnergy),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy reduction", reason)) {
-            return false;
-        }
-    }
-
-    if (ctx.magnetoelastic.enabled) {
-        const uint64_t per_node_strain_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
-        const bool use_per_node_strain = !ctx.magnetoelastic.uniform_strain;
-        if (!use_per_node_strain && ctx.magnetoelastic.strain_voigt.size() < 6u) {
-            reason = "GPU RK magnetoelastic energy requires prescribed strain data";
-            return false;
-        }
-        if (use_per_node_strain &&
-            static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()) != per_node_strain_len) {
-            reason = "GPU RK magnetoelastic energy requires 6 prescribed strain Voigt values per node";
-            return false;
-        }
-        if (use_per_node_strain &&
-            (gpu.mel_strain_voigt == nullptr || !gpu.mel_strain_uploaded ||
-                gpu.mel_strain_voigt_len != per_node_strain_len)) {
-            reason = "GPU RK magnetoelastic energy requires device-resident per-node strain";
-            return false;
-        }
-        if (gpu.ms == nullptr || gpu.exchange_lumped_mass == nullptr ||
-            gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
-            reason = "GPU RK magnetoelastic energy requires device-resident Ms, lumped mass, and H_mel buffers";
-            return false;
-        }
-        const double *eps = ctx.magnetoelastic.strain_voigt.data();
-        fullmag_cuda_magnetoelastic_field_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.ms,
-            gpu.exchange_lumped_mass,
-            gpu.magnetic_node_mask,
-            use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
-            gpu.h_mel.x,
-            gpu.h_mel.y,
-            gpu.h_mel.z,
-            gpu.scalar_reduce_workspace,
-            ctx.magnetoelastic.b1,
-            ctx.magnetoelastic.b2,
-            eps[0],
-            eps[1],
-            eps[2],
-            eps[3] * 0.5,
-            eps[4] * 0.5,
-            eps[5] * 0.5,
-            use_per_node_strain,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK magnetoelastic energy blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::MagnetoelasticEnergy),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK magnetoelastic energy reduction", reason)) {
-            return false;
-        }
-    }
-
-    fullmag_cuda_field_metric_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.h_eff.x,
-        gpu.h_eff.y,
-        gpu.h_eff.z,
-        gpu.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
-        gpu.error.x,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK field metric blocks", reason)) {
-        return false;
-    }
-
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_max(
-        gpu.scalar_reduce_workspace,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MaxHEff),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK max H_eff reduction", reason)) {
-        return false;
-    }
-
-    if (ctx.demag.enabled) {
-        // Use gpu.error.y as a scratch target for block_max_torque — we only
-        // need block_max_h (scalar_reduce_workspace) from this call. gpu.error.x
-        // must not be overwritten here because it holds the per-block H_eff
-        // torque values that are reduced into max_torque immediately below.
-        fullmag_cuda_field_metric_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.h_demag.x,
-            gpu.h_demag.y,
-            gpu.h_demag.z,
-            gpu.magnetic_node_mask,
-            gpu.scalar_reduce_workspace,
-            gpu.error.y,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK demag field metric blocks", reason)) {
-            return false;
-        }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-        fullmag_cuda_device_max(
-            gpu.scalar_reduce_workspace,
-            blocks,
-            final_scalar_result(gpu, GpuFinalScalarSlot::MaxHDemag),
-            gpu.scalar_reduce_temp_storage,
-            reduce_bytes,
-            stream);
-        if (!cuda_launch_ok("launch GPU RK max H_demag reduction", reason)) {
-            return false;
-        }
-    }
-
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_max(
-        gpu.error.x,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MaxTorque),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK max torque reduction", reason)) {
-        return false;
-    }
-
-    fullmag_cuda_magnetization_sum_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
-        gpu.error.x,
-        gpu.error.y,
-        gpu.error.z,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK magnetization average blocks", reason)) {
-        return false;
-    }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MxSum),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK mx average reduction", reason)) {
-        return false;
-    }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.error.x,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MySum),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK my average reduction", reason)) {
-        return false;
-    }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.error.y,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MzSum),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK mz average reduction", reason)) {
-        return false;
-    }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.error.z,
-        blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MagneticCount),
-        gpu.scalar_reduce_temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK magnetic count reduction", reason)) {
-        return false;
-    }
-
-    if (!read_scalar_results(
-        ctx,
-        stream,
-        "cudaMemcpyAsync GPU RK final scalar stats device->host",
-        scalars.data(),
-        scalars.size(),
-        reason)) {
-        return false;
-    }
-
-    auto scalar = [&](GpuFinalScalarSlot slot) {
-        return scalars[static_cast<size_t>(slot)];
-    };
-
-    const double max_rhs = scalar(GpuFinalScalarSlot::MaxRhs);
-    const double exchange_energy = scalar(GpuFinalScalarSlot::ExchangeEnergy);
-    const double demag_energy =
-        ctx.demag.enabled ? scalar(GpuFinalScalarSlot::DemagEnergy) : 0.0;
-    const double external_energy =
-        ctx.zeeman.has_external_field ? scalar(GpuFinalScalarSlot::ExternalEnergy) : 0.0;
-    const double anisotropy_energy =
-        ctx.anisotropy.uniaxial_enabled ? scalar(GpuFinalScalarSlot::AnisotropyEnergy) : 0.0;
-    const double cubic_anisotropy_energy =
-        ctx.anisotropy.cubic_enabled ? scalar(GpuFinalScalarSlot::CubicAnisotropyEnergy) : 0.0;
-    const double dmi_energy =
-        ctx.dmi.interfacial_enabled ? scalar(GpuFinalScalarSlot::DmiEnergy) : 0.0;
-    const double bulk_dmi_energy =
-        ctx.dmi.bulk_enabled ? scalar(GpuFinalScalarSlot::BulkDmiEnergy) : 0.0;
-    const double magnetoelastic_energy =
-        ctx.magnetoelastic.enabled ? scalar(GpuFinalScalarSlot::MagnetoelasticEnergy) : 0.0;
-    const double max_h_eff = scalar(GpuFinalScalarSlot::MaxHEff);
-    const double max_h_demag =
-        ctx.demag.enabled ? scalar(GpuFinalScalarSlot::MaxHDemag) : 0.0;
-    const double max_torque = scalar(GpuFinalScalarSlot::MaxTorque);
-    const double mx_sum = scalar(GpuFinalScalarSlot::MxSum);
-    const double my_sum = scalar(GpuFinalScalarSlot::MySum);
-    const double mz_sum = scalar(GpuFinalScalarSlot::MzSum);
-    const double magnetic_count = scalar(GpuFinalScalarSlot::MagneticCount);
-
-    stats.max_rhs_amplitude = max_rhs;
-    stats.exchange_energy_joules = exchange_energy;
-    stats.demag_energy_joules = demag_energy;
-    stats.external_energy_joules = external_energy;
-    stats.anisotropy_energy_joules = anisotropy_energy + cubic_anisotropy_energy;
-    stats.dmi_energy_joules = dmi_energy + bulk_dmi_energy;
-    stats.magnetoelastic_energy_joules = magnetoelastic_energy;
-    stats.total_energy_joules =
-        exchange_energy + demag_energy + external_energy + anisotropy_energy + cubic_anisotropy_energy +
-        dmi_energy + bulk_dmi_energy + magnetoelastic_energy;
-    stats.max_effective_field_amplitude = max_h_eff;
-    stats.max_demag_field_amplitude = max_h_demag;
-    stats.max_torque_Apm = max_torque;
-    if (magnetic_count > 0.0) {
-        stats.mx = mx_sum / magnetic_count;
-        stats.my = my_sum / magnetic_count;
-        stats.mz = mz_sum / magnetic_count;
-    } else {
-        stats.mx = 0.0;
-        stats.my = 0.0;
-        stats.mz = 0.0;
-    }
-    if (ctx.demag.enabled) {
-        fill_demag_solver_stats(ctx, stats);
-    } else {
-        stats.demag_solve_count = 0;
-        stats.demag_linear_iterations = 0;
-        stats.demag_linear_residual = 0.0;
-    }
-    stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
-    stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
-    context_update_stage_completion_from_stats(ctx, stats);
     return true;
 }
 
@@ -2109,7 +546,7 @@ bool gpu_rk_snapshot_current_state(
     ctx.adaptive_dt.current_dt = ctx.adaptive_dt.current_dt > 0.0
         ? ctx.adaptive_dt.current_dt
         : ctx.base_plan.dt_seconds;
-    if (!compute_rhs_for_magnetization(
+    if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
             gpu.m,
             gpu.k[0],
@@ -2124,7 +561,7 @@ bool gpu_rk_snapshot_current_state(
     fullmag_cuda_device_max(
         gpu.scalar_reduce_workspace,
         blocks,
-        final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
+        gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
         gpu.scalar_reduce_temp_storage,
         reduce_bytes,
         stream);

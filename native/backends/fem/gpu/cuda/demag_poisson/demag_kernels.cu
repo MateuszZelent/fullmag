@@ -3,7 +3,7 @@
 // It does not own Context construction, Poisson lifecycle, Hypre solver setup,
 // RK stage orchestration, exchange/local interaction kernels, or C ABI entrypoints.
 
-#include "gpu/cuda/kernels/demag_kernels.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 
 #include <cub/cub.cuh>
 
@@ -101,6 +101,35 @@ __global__ void demag_energy_blocks_kernel(
     }
 }
 
+__global__ void demag_robin_boundary_energy_blocks_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ u,
+    double coefficient,
+    double *__restrict__ block_sums,
+    int rows)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    double local = 0.0;
+    if (row < rows) {
+        double matrix_u = 0.0;
+        const uint32_t begin = csr_row_offsets[row];
+        const uint32_t end = csr_row_offsets[row + 1];
+        for (uint32_t cursor = begin; cursor < end; ++cursor) {
+            matrix_u += csr_values[cursor] * u[csr_col_indices[cursor]];
+        }
+        local = coefficient * u[row] * matrix_u;
+    }
+
+    typedef cub::BlockReduce<double, 256> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+    const double block_sum = BlockReduce(temp_storage).Sum(local);
+    if (threadIdx.x == 0) {
+        block_sums[blockIdx.x] = block_sum;
+    }
+}
+
 void fullmag_cuda_demag_rhs_csr(
     const uint32_t *csr_row_offsets,
     const uint32_t *csr_col_indices,
@@ -176,6 +205,27 @@ void fullmag_cuda_demag_energy_blocks(
         magnetic_node_mask,
         block_sums,
         N);
+}
+
+void fullmag_cuda_demag_robin_boundary_energy_blocks(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values,
+    const double *u,
+    double coefficient,
+    double *block_sums,
+    int rows,
+    cudaStream_t stream)
+{
+    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+    demag_robin_boundary_energy_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        csr_row_offsets,
+        csr_col_indices,
+        csr_values,
+        u,
+        coefficient,
+        block_sums,
+        rows);
 }
 
 } // namespace fullmag::fem

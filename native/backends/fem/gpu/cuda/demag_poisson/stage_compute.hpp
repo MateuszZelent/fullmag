@@ -22,4 +22,10 @@ bool compute_device_demag_for_device_stage(
     void *stream,
     std::string &reason);
 
+bool reduce_device_demag_robin_boundary_energy(
+    Context &ctx,
+    double *result,
+    void *stream,
+    std::string &reason);
+
 } // namespace fullmag::fem

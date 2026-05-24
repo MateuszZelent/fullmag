@@ -26,6 +26,8 @@ namespace fullmag::fem {
 
 namespace {
 
+constexpr int kDemagCudaBlockSize = 256;
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
 {
@@ -103,7 +105,9 @@ bool compute_device_demag_for_device_stage(
     workspace->x_par->HypreReadWrite();
     const auto solve_start = FemSteadyClock::now();
     workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
-    ctx.poisson_demag.last_solver_apply_wall_time_ns = elapsed_ns(solve_start);
+    const uint64_t solver_apply_wall_time_ns = elapsed_ns(solve_start);
+    ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
+    ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
 
     int iterations = 0;
     double residual = 0.0;
@@ -191,6 +195,63 @@ bool compute_device_demag_for_device_stage(
 #else
     (void)ctx;
     (void)m;
+    (void)raw_stream;
+    reason = "strict FEM GPU demag requires MFEM MPI, hypre GPU, and CUDA runtime support";
+    return false;
+#endif
+}
+
+bool reduce_device_demag_robin_boundary_energy(
+    Context &ctx,
+    double *result,
+    void *raw_stream,
+    std::string &reason)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    auto *workspace = workspace_ptr(ctx);
+    auto &gpu = ctx.gpu_state.device;
+    if (workspace == nullptr ||
+        workspace->robin_boundary_mass.rows == 0 ||
+        workspace->robin_boundary_mass.d_row_offsets == nullptr ||
+        workspace->robin_boundary_mass.d_col_indices == nullptr ||
+        workspace->robin_boundary_mass.d_values == nullptr ||
+        gpu.poisson_solution == nullptr ||
+        gpu.scalar_reduce_workspace == nullptr ||
+        gpu.scalar_reduce_temp_storage == nullptr ||
+        result == nullptr) {
+        reason = "GPU Poisson-Robin demag energy requires device Robin boundary mass, potential, and reduction buffers";
+        return false;
+    }
+
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
+    const int rows = static_cast<int>(workspace->robin_boundary_mass.rows);
+    fullmag_cuda_demag_robin_boundary_energy_blocks(
+        workspace->robin_boundary_mass.d_row_offsets,
+        workspace->robin_boundary_mass.d_col_indices,
+        workspace->robin_boundary_mass.d_values,
+        gpu.poisson_solution,
+        0.5 * kMu0 * ctx.poisson_demag.robin_effective_beta,
+        gpu.scalar_reduce_workspace,
+        rows,
+        stream);
+    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson-Robin demag boundary energy blocks", reason)) {
+        return false;
+    }
+    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    fullmag_cuda_device_sum(
+        gpu.scalar_reduce_workspace,
+        std::max(1, (rows + kDemagCudaBlockSize - 1) / kDemagCudaBlockSize),
+        result,
+        gpu.scalar_reduce_temp_storage,
+        reduce_bytes,
+        stream);
+    return cuda_ok(
+        cudaGetLastError(),
+        "launch GPU Poisson-Robin demag boundary energy reduction",
+        reason);
+#else
+    (void)ctx;
+    (void)result;
     (void)raw_stream;
     reason = "strict FEM GPU demag requires MFEM MPI, hypre GPU, and CUDA runtime support";
     return false;

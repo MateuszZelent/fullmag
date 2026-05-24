@@ -20,7 +20,7 @@ namespace fullmag::fem {
 struct Context;
 
 static constexpr uint32_t FEM_GPU_MAX_RK_STAGES = 7;
-static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 16;
+static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 17;
 
 enum class FemGpuSyncState {
     HostClean,

@@ -13,7 +13,7 @@ help:
 ensure-python:
     mkdir -p .fullmag/local
     if [ ! -x "{{repo_python}}" ]; then python3 -m venv .fullmag/local/python; fi
-    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3'
+    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7'
 
 build target="fullmag" cpu_only="0":
     bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
@@ -321,6 +321,32 @@ rebuild-gpu-runtime:
     just rebuild-fem-runtime
 
 # ── Benchmarks ──────────────────────────────────────────────────────────
+
+# Run the Box500 FEM CPU/GPU consistency matrix.
+# Writes CSV rows and a CPU/GPU summary JSON. Override defaults with
+# FULLMAG_BENCH_STEPS, FULLMAG_BENCH_DOMAIN_HMAX, FULLMAG_BENCH_AIRBOX_HMAX,
+# FULLMAG_BENCH_OUTPUT, FULLMAG_BENCH_SUMMARY, FULLMAG_BENCH_REPORT, and
+# FULLMAG_BENCH_PDF. The recipe intentionally returns non-zero when the
+# consistency gate finds a solver mismatch.
+bench-fem-box500-consistency:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bench_steps="${FULLMAG_BENCH_STEPS:-1}"; \
+    bench_output="${FULLMAG_BENCH_OUTPUT:-/tmp/fullmag_box500_airbox_interaction_matrix.csv}"; \
+    bench_summary="${FULLMAG_BENCH_SUMMARY:-/tmp/fullmag_box500_airbox_interaction_matrix_summary.json}"; \
+    bench_report="${FULLMAG_BENCH_REPORT:-/tmp/fullmag_box500_airbox_interaction_matrix_report.md}"; \
+    bench_pdf="${FULLMAG_BENCH_PDF:-/tmp/fullmag_box500_airbox_interaction_matrix_report.pdf}"; \
+    PYTHONPATH=packages/fullmag-py/src \
+    FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-250e-9}" \
+    FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-500e-9}" \
+    python3 scripts/analysis/fem_gpu_benchmark.py \
+      --box500-airbox-interaction-consistency-preset \
+      --steps "$bench_steps" \
+      --output "$bench_output" \
+      --cpu-gpu-summary-output "$bench_summary" \
+      --human-report-output "$bench_report" \
+      --pdf-report-output "$bench_pdf" \
+      --quiet-json-summary
 
 # Run FEM CPU scaling benchmark: tests thread counts 4, 8, 20, 40 across mesh sizes.
 # Outputs timing comparison and speedup table.

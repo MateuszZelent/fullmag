@@ -221,17 +221,29 @@ runtime bootstrap and CUDA stream/snapshot metadata are owned by
 `gpu/cuda/runtime/gpu_state_runtime.hpp/.cpp`. The legacy empty
 `src/gpu_exchange.cpp`, `src/gpu_rk.cpp`, `src/gpu_state.cpp`, and
 `src/transfer_audit.cpp` placeholder sources have been removed from the build.
+GPU shared vector field CUDA wrappers are owned by
+`gpu/cuda/fields/vector_field_kernels.hpp/.cu`.
 GPU fused LLG RHS CUDA wrappers are owned by
 `gpu/cuda/integrators/llg/llg_rhs_kernels.hpp/.cu`.
 GPU RK readiness planning is owned by
 `gpu/cuda/integrators/rk/rk.hpp` and `gpu/cuda/integrators/rk/rk_plan.cpp`, and uses the device-resident planner name
 `gpu_rk_plan_device_resident`; the older internal
-`gpu_rk_plan_exchange_only` wrapper has been removed. GPU RK CUDA step orchestration, final scalar
-statistics, and strict GPU snapshot recomputation are owned by
-`gpu/cuda/integrators/rk/rk_step.cu`. Embedded RK adaptive-error CUDA block
+`gpu_rk_plan_exchange_only` wrapper has been removed. GPU RK CUDA step orchestration and strict GPU
+snapshot recomputation are owned by `gpu/cuda/integrators/rk/rk_step.cu`.
+GPU RK final scalar slots, no-CUDA stats fallback, final scalar reductions,
+batched readback, and stats publication are owned by
+`gpu/cuda/integrators/rk/rk_step_stats.hpp/.cpp/.cu`. Embedded RK adaptive-error CUDA block
 reducers are owned by `gpu/cuda/integrators/rk/adaptive_error_kernels.hpp/.cu`.
-Shared exported CUDA kernels and the
-compatibility umbrella header are owned by `gpu/cuda/kernels/kernels.hpp/.cu`;
+Adaptive RK PI-step policy, reject restore, and device error-norm runtime
+helpers are owned by `gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp/.cu`.
+RK predictor/accept CUDA stage kernels are owned by
+`gpu/cuda/integrators/rk/rk_stage_kernels.hpp/.cu`.
+RK audited scalar-result reads and component device-copy helpers are owned by
+`gpu/cuda/integrators/rk/rk_device_io.hpp/.cu`.
+Device-resident RK RHS assembly orchestration, including exchange dispatch,
+demag dispatch, local-field accumulation, LLG RHS, and direct torque terms, is
+owned by `gpu/cuda/integrators/rk/rk_rhs_runtime.hpp/.cu`.
+The compatibility umbrella header is owned by `gpu/cuda/kernels/kernels.hpp`;
 uniaxial/cubic anisotropy CUDA field/energy wrappers are owned by
 `gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp/.cu`;
 external-field Zeeman CUDA energy wrappers are owned by
@@ -247,7 +259,7 @@ deterministic Brown thermal CUDA field wrappers are owned by
 prescribed-strain magnetoelastic CUDA field/energy wrappers are owned by
 `gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp/.cu`;
 strict device Poisson demag RHS, recovery, and energy CUDA wrappers are owned by
-`gpu/cuda/kernels/demag_kernels.hpp/.cu`. GPU step metric and average magnetization
+`gpu/cuda/demag_poisson/demag_kernels.hpp/.cu`. GPU step metric and average magnetization
 observable wrappers are owned by
 `gpu/cuda/observables/observable_kernels.hpp/.cu`. GPU device-wide scalar reductions
 are owned by `gpu/cuda/reductions/reduction_kernels.hpp/.cu`. Strict GPU demag Poisson public lifecycle and

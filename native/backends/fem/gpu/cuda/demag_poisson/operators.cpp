@@ -326,6 +326,58 @@ bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace,
     fill_recovery(rec_y, workspace.recovery_y);
     fill_recovery(rec_z, workspace.recovery_z);
 
+    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
+        ctx.poisson_demag.robin_effective_beta > 0.0 &&
+        ctx.poisson_demag.robin_boundary_mass != nullptr) {
+        auto *bdr_mass =
+            static_cast<mfem::BilinearForm *>(ctx.poisson_demag.robin_boundary_mass);
+        const mfem::SparseMatrix &matrix = bdr_mass->SpMat();
+        if (matrix.Height() != static_cast<int>(rows) ||
+            matrix.Width() != static_cast<int>(rows)) {
+            error = "strict FEM GPU demag Robin boundary mass shape does not match potential DOFs";
+            return false;
+        }
+        const int *row_offsets = matrix.GetI();
+        const int *col_indices = matrix.GetJ();
+        const double *values = matrix.GetData();
+        if (row_offsets == nullptr) {
+            error = "strict FEM GPU demag Robin boundary mass CSR row offsets are null";
+            return false;
+        }
+        const int nnz = row_offsets[static_cast<int>(rows)];
+        if (nnz < 0 || static_cast<uint64_t>(nnz) > std::numeric_limits<uint32_t>::max()) {
+            error = "strict FEM GPU demag Robin boundary mass exceeds 32-bit CSR capacity";
+            return false;
+        }
+        if (nnz > 0 && (col_indices == nullptr || values == nullptr)) {
+            error = "strict FEM GPU demag Robin boundary mass CSR data are null";
+            return false;
+        }
+        workspace.robin_boundary_mass.rows = rows;
+        workspace.robin_boundary_mass.nnz = static_cast<uint64_t>(nnz);
+        workspace.robin_boundary_mass.row_offsets.resize(static_cast<size_t>(rows) + 1u);
+        for (uint64_t row = 0; row <= rows; ++row) {
+            const int offset = row_offsets[static_cast<int>(row)];
+            if (offset < 0 || static_cast<uint64_t>(offset) > static_cast<uint64_t>(nnz)) {
+                error = "strict FEM GPU demag Robin boundary mass row offset is invalid";
+                return false;
+            }
+            workspace.robin_boundary_mass.row_offsets[static_cast<size_t>(row)] =
+                static_cast<uint32_t>(offset);
+        }
+        workspace.robin_boundary_mass.col_indices.resize(static_cast<size_t>(nnz));
+        workspace.robin_boundary_mass.values.resize(static_cast<size_t>(nnz));
+        for (int entry = 0; entry < nnz; ++entry) {
+            if (col_indices[entry] < 0 || static_cast<uint64_t>(col_indices[entry]) >= rows) {
+                error = "strict FEM GPU demag Robin boundary mass column index is invalid";
+                return false;
+            }
+            workspace.robin_boundary_mass.col_indices[static_cast<size_t>(entry)] =
+                static_cast<uint32_t>(col_indices[entry]);
+            workspace.robin_boundary_mass.values[static_cast<size_t>(entry)] = values[entry];
+        }
+    }
+
     workspace.ess_tdofs.clear();
     workspace.ess_tdofs.reserve(ctx.poisson_demag.ess_tdof_list.size());
     for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
@@ -355,6 +407,7 @@ bool upload_demag_poisson_operators(
         !upload_scalar(workspace.recovery_x, device_bytes, "cudaMalloc/upload demag recovery x CSR", error) ||
         !upload_scalar(workspace.recovery_y, device_bytes, "cudaMalloc/upload demag recovery y CSR", error) ||
         !upload_scalar(workspace.recovery_z, device_bytes, "cudaMalloc/upload demag recovery z CSR", error) ||
+        !upload_scalar(workspace.robin_boundary_mass, device_bytes, "cudaMalloc/upload demag Robin boundary mass CSR", error) ||
         !upload_device_array(
             workspace.d_ess_tdofs,
             workspace.ess_tdofs,
@@ -380,6 +433,7 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     destroy_scalar(workspace.recovery_x);
     destroy_scalar(workspace.recovery_y);
     destroy_scalar(workspace.recovery_z);
+    destroy_scalar(workspace.robin_boundary_mass);
     free_device_array(workspace.d_ess_tdofs);
 #else
     (void)workspace;

@@ -205,17 +205,6 @@ bool gpu_rk_device_resident_step(
     return false;
 }
 
-bool gpu_rk_finalize_step_stats(
-    Context &ctx,
-    fullmag_fem_step_stats &stats,
-    std::string &reason)
-{
-    (void)ctx;
-    (void)stats;
-    (void)reason;
-    return true;
-}
-
 bool gpu_rk_snapshot_current_state(
     Context &ctx,
     fullmag_fem_step_stats &stats,

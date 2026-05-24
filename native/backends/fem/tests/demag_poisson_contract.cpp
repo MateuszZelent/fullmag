@@ -725,6 +725,7 @@ void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
         "double last_residual",
         "uint64_t last_setup_wall_time_ns",
         "uint64_t last_solver_apply_wall_time_ns",
+        "uint64_t step_solver_apply_wall_time_ns",
         "bool last_solver_setup_reused",
         "uint32_t solves_current_step",
         "mfem::HypreParMatrix *cached_hypre_par",

@@ -40,10 +40,10 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
 
 bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
 {
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.demag.enabled || ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
         return true;
     }
-#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.gpu_state.device.allocated ||
         ctx.gpu_state.device.poisson_rhs == nullptr ||
         ctx.gpu_state.device.poisson_solution == nullptr ||

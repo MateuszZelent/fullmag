@@ -91,6 +91,7 @@ bool context_snapshot_stats_mfem(
     PhaseTimings timings;
     stats = {};
     ctx.poisson_demag.solves_current_step = 0;
+    ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
 
     if (!ctx.mfem_context.ready) {
         error = "MFEM snapshot requested before MFEM context initialization";

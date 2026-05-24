@@ -68,6 +68,7 @@ struct PoissonDemagRuntimeState {
     double last_residual = 0.0;
     uint64_t last_setup_wall_time_ns = 0;
     uint64_t last_solver_apply_wall_time_ns = 0;
+    uint64_t step_solver_apply_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
 

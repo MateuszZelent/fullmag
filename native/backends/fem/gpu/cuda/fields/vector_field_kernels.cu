@@ -1,18 +1,15 @@
-// ── GPU CUDA kernels source contract ───────────────────────────────────
-// This source owns exported FEM CUDA field kernel implementations. It does not own Context construction, GPU RK planning, GPU RK step orchestration, AoS/SoA transfer wrappers, device-wide reductions, MFEM runtime lifecycle, interaction physics, or C ABI entrypoints.
-//
-// ── S11: CUDA kernels for shared vector field operations ──────────────
-// Provides GPU-resident kernels for:
-//   - Vector normalization
-//   - Effective field accumulation (h_eff = h_ex + h_demag + h_ext)
-// All kernels operate on SoA (Structure-of-Arrays) layout:
-// separate contiguous arrays for x, y, z components.
+// ── GPU CUDA vector field kernels source contract ─────────────────────
+// This source owns exported FEM CUDA wrappers for shared vector field
+// operations. It does not own RK orchestration, LLG RHS, AoS/SoA transfer
+// wrappers, Context construction, MFEM runtime lifecycle, interaction physics,
+// or C ABI entrypoints.
 
-#include "gpu/cuda/kernels/kernels.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
 
 namespace fullmag::fem {
 
-// ── Normalize unit vectors ────────────────────────────────────────────
+static constexpr int kBlockSize = 256;
+
 __global__ void normalize_unit_vectors_kernel(
     double *__restrict__ mx, double *__restrict__ my, double *__restrict__ mz,
     int N)
@@ -30,8 +27,6 @@ __global__ void normalize_unit_vectors_kernel(
     }
 }
 
-// ── Effective field accumulation ──────────────────────────────────────
-// h_eff = h_ex + h_demag + h_ext (component-wise, SOA layout)
 __global__ void accumulate_heff_kernel(
     const double *__restrict__ h_ex,
     const double *__restrict__ h_demag,
@@ -71,10 +66,6 @@ __global__ void add_field_inplace_kernel(
         h_accum[i] += h_add[i];
     }
 }
-
-// ── C interface implementations ───────────────────────────────────────
-
-static constexpr int kBlockSize = 256;
 
 void fullmag_cuda_normalize_vectors(
     double *mx, double *my, double *mz,

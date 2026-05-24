@@ -307,6 +307,8 @@ void fsal_reuse_requires_autonomous_rhs() {
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
     const std::string gpu_rk_cuda =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step.cu");
+    const std::string gpu_rk_rhs =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rhs_runtime.cu");
     const std::string integrator_note = read_text_file(
         repo_root() / "docs" / "physics" / "0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md");
 
@@ -323,15 +325,15 @@ void fsal_reuse_requires_autonomous_rhs() {
             std::string::npos,
         "CPU RK FSAL reuse gate must reject time-dependent Oersted RHS");
     check(
-        gpu_rk_cuda.find("bool gpu_rk_rhs_allows_fsal_reuse(const Context &ctx)") !=
+        gpu_rk_rhs.find("bool gpu_rk_rhs_allows_fsal_reuse(const Context &ctx)") !=
             std::string::npos,
         "GPU RK stepper must centralize the autonomous-RHS FSAL reuse gate");
     check(
-        gpu_rk_cuda.find("ctx.thermal_brown.temperature > 0.0") !=
+        gpu_rk_rhs.find("ctx.thermal_brown.temperature > 0.0") !=
             std::string::npos,
         "GPU RK FSAL reuse gate must reject stochastic Brown thermal RHS");
     check(
-        gpu_rk_cuda.find("ctx.oersted.time_dep_kind != 0u") !=
+        gpu_rk_rhs.find("ctx.oersted.time_dep_kind != 0u") !=
             std::string::npos,
         "GPU RK FSAL reuse gate must reject time-dependent Oersted RHS");
     check(
