@@ -172,7 +172,6 @@ void reset_exchange_legacy_sparse(FemGpuState &state)
     state.legacy_exchange.nnz = 0;
     state.legacy_exchange.device_bytes = 0;
     state.mesh_metrics.uploaded = false;
-    state.mesh_metrics.node_count = 0;
     state.mesh_metrics.device_bytes = 0;
 }
 #endif
@@ -197,16 +196,18 @@ void reset_metadata(FemGpuState &state)
     state.legacy_exchange.cols = 0;
     state.legacy_exchange.nnz = 0;
     state.legacy_exchange.device_bytes = 0;
+    state.materials.node_count = 0;
     state.mesh_metrics.uploaded = false;
     state.mesh_metrics.node_count = 0;
     state.mesh_metrics.device_bytes = 0;
+    state.mesh_regions.node_count = 0;
     state.mel_strain_voigt_len = 0;
     state.mel_strain_uploaded = false;
-    state.mesh_element_count = 0;
-    state.mesh_geometry_uploaded = false;
-    state.hybrid_stage_m_xyz.clear();
-    state.hybrid_demag_xyz.clear();
-    state.hybrid_demag_energy_joules = 0.0;
+    state.mesh_geometry.element_count = 0;
+    state.mesh_geometry.uploaded = false;
+    state.demag_poisson.hybrid_stage_m_xyz.clear();
+    state.demag_poisson.hybrid_demag_xyz.clear();
+    state.demag_poisson.hybrid_demag_energy_joules = 0.0;
 }
 
 } // namespace
@@ -622,8 +623,8 @@ bool gpu_state_upload_mesh_geometry(
     TransferAudit &audit,
     std::string &error)
 {
-    state.mesh_element_count = 0;
-    state.mesh_geometry_uploaded = false;
+    state.mesh_geometry.element_count = 0;
+    state.mesh_geometry.uploaded = false;
     if (!state.allocated) {
         return true;
     }
@@ -650,16 +651,16 @@ bool gpu_state_upload_mesh_geometry(
         error = "FemGpuState mesh geometry buffer is too large for upload";
         return false;
     }
-    if (state.nodes_xyz == nullptr &&
-        !allocate_double(state.nodes_xyz, expected_nodes_len, state.device_bytes, error)) {
+    if (state.mesh_geometry.nodes_xyz == nullptr &&
+        !allocate_double(state.mesh_geometry.nodes_xyz, expected_nodes_len, state.device_bytes, error)) {
         return false;
     }
-    if (state.elements == nullptr &&
-        !allocate_u32(state.elements, elements_len, state.device_bytes, error)) {
+    if (state.mesh_geometry.elements == nullptr &&
+        !allocate_u32(state.mesh_geometry.elements, elements_len, state.device_bytes, error)) {
         return false;
     }
-    if (state.magnetic_element_mask == nullptr &&
-        !allocate_u8(state.magnetic_element_mask, element_count, state.device_bytes, error)) {
+    if (state.mesh_geometry.magnetic_element_mask == nullptr &&
+        !allocate_u8(state.mesh_geometry.magnetic_element_mask, element_count, state.device_bytes, error)) {
         return false;
     }
     const size_t nodes_bytes = static_cast<size_t>(nodes_xyz_len) * sizeof(double);
@@ -669,17 +670,17 @@ bool gpu_state_upload_mesh_geometry(
         std::copy(magnetic_element_mask, magnetic_element_mask + element_count, element_mask.begin());
     }
     const size_t mask_bytes = static_cast<size_t>(element_count) * sizeof(uint8_t);
-    if (!cuda_ok(cudaMemcpy(state.nodes_xyz, nodes_xyz, nodes_bytes, cudaMemcpyHostToDevice),
+    if (!cuda_ok(cudaMemcpy(state.mesh_geometry.nodes_xyz, nodes_xyz, nodes_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState nodes_xyz host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.elements, elements, elements_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.mesh_geometry.elements, elements, elements_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState elements host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.magnetic_element_mask, element_mask.data(), mask_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.mesh_geometry.magnetic_element_mask, element_mask.data(), mask_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState magnetic_element_mask host->device", error)) {
         return false;
     }
     record_host_to_device(audit, static_cast<uint64_t>(nodes_bytes + elements_bytes + mask_bytes));
-    state.mesh_element_count = element_count;
-    state.mesh_geometry_uploaded = true;
+    state.mesh_geometry.element_count = element_count;
+    state.mesh_geometry.uploaded = true;
     return true;
 #else
     (void)audit;
@@ -780,33 +781,33 @@ bool gpu_state_upload_runtime_coefficients(
         }
     }
 
-    if (!cuda_ok(cudaMemcpy(state.node_volumes, node_volume_values.data(), double_bytes, cudaMemcpyHostToDevice),
+    if (!cuda_ok(cudaMemcpy(state.mesh_metrics.node_volumes, node_volume_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState node_volumes host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.ms, ms_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.ms, ms_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState ms host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.a, a_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.a, a_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState a host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.alpha, alpha_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.alpha, alpha_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState alpha host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.ku, ku_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.ku, ku_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState ku host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.ku2, ku2_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.ku2, ku2_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState ku2 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.dind, dind_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.dind, dind_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState dind host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.dbulk, dbulk_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.dbulk, dbulk_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState dbulk host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.kc1, kc1_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.kc1, kc1_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState kc1 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.kc2, kc2_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.kc2, kc2_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState kc2 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.kc3, kc3_values.data(), double_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.materials.kc3, kc3_values.data(), double_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState kc3 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.magnetic_node_mask, magnetic_mask.data(), u8_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.mesh_regions.magnetic_node_mask, magnetic_mask.data(), u8_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState magnetic_node_mask host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.periodic_reduced_node, reduced_node.data(), u32_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.mesh_regions.periodic_reduced_node, reduced_node.data(), u32_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState periodic_reduced_node host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.periodic_representative_nodes, representative_node.data(), u32_bytes, cudaMemcpyHostToDevice),
+        !cuda_ok(cudaMemcpy(state.mesh_regions.periodic_representative_nodes, representative_node.data(), u32_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState periodic_representative_nodes host->device", error)) {
         return false;
     }
@@ -815,6 +816,9 @@ bool gpu_state_upload_runtime_coefficients(
         static_cast<uint64_t>(double_bytes) * 11ull +
             static_cast<uint64_t>(u8_bytes) +
             static_cast<uint64_t>(u32_bytes) * 2ull);
+    state.mesh_metrics.node_count = static_cast<uint64_t>(node_count);
+    state.materials.node_count = static_cast<uint64_t>(node_count);
+    state.mesh_regions.node_count = static_cast<uint64_t>(node_count);
     state.runtime_coefficients_uploaded = true;
     return true;
 #else
@@ -1049,29 +1053,29 @@ bool gpu_state_initialize(
     if (!allocate_double(state.scalar_reduce_workspace, reduce_blocks, device_bytes, error) ||
         !allocate_double(state.scalar_reduce_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error) ||
         !allocate_double(state.zhang_li_node_weight, node_count, device_bytes, error) ||
-        !allocate_double(state.node_volumes, node_count, device_bytes, error) ||
-        !allocate_double(state.ms, node_count, device_bytes, error) ||
-        !allocate_double(state.a, node_count, device_bytes, error) ||
-        !allocate_double(state.alpha, node_count, device_bytes, error) ||
-        !allocate_double(state.ku, node_count, device_bytes, error) ||
-        !allocate_double(state.ku2, node_count, device_bytes, error) ||
-        !allocate_double(state.dind, node_count, device_bytes, error) ||
-        !allocate_double(state.dbulk, node_count, device_bytes, error) ||
-        !allocate_double(state.kc1, node_count, device_bytes, error) ||
-        !allocate_double(state.kc2, node_count, device_bytes, error) ||
-        !allocate_double(state.kc3, node_count, device_bytes, error) ||
+        !allocate_double(state.mesh_metrics.node_volumes, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.ms, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.a, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.alpha, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.ku, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.ku2, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.dind, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.dbulk, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.kc1, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.kc2, node_count, device_bytes, error) ||
+        !allocate_double(state.materials.kc3, node_count, device_bytes, error) ||
         !allocate_double(state.mel_strain_voigt, mel_strain_values, device_bytes, error) ||
-        !allocate_u8(state.magnetic_node_mask, node_count, device_bytes, error) ||
-        !allocate_u32(state.periodic_reduced_node, node_count, device_bytes, error) ||
-        !allocate_u32(state.periodic_representative_nodes, node_count, device_bytes, error)) {
+        !allocate_u8(state.mesh_regions.magnetic_node_mask, node_count, device_bytes, error) ||
+        !allocate_u32(state.mesh_regions.periodic_reduced_node, node_count, device_bytes, error) ||
+        !allocate_u32(state.mesh_regions.periodic_representative_nodes, node_count, device_bytes, error)) {
         gpu_state_destroy(state);
         return false;
     }
 
     if (allocate_demag_workspace &&
-        (!allocate_double(state.poisson_rhs, node_count, device_bytes, error) ||
-            !allocate_double(state.poisson_solution, node_count, device_bytes, error) ||
-            !allocate_component(state.poisson_gradient, node_count, device_bytes, error))) {
+        (!allocate_double(state.demag_poisson.poisson_rhs, node_count, device_bytes, error) ||
+            !allocate_double(state.demag_poisson.poisson_solution, node_count, device_bytes, error) ||
+            !allocate_component(state.demag_poisson.poisson_gradient, node_count, device_bytes, error))) {
         gpu_state_destroy(state);
         return false;
     }
@@ -1111,6 +1115,9 @@ bool gpu_state_initialize(
 
     state.allocated = true;
     state.device_bytes = device_bytes;
+    state.mesh_metrics.node_count = node_count;
+    state.materials.node_count = node_count;
+    state.mesh_regions.node_count = node_count;
     state.scalar_reduce_temp_storage_bytes =
         static_cast<uint64_t>(reduce_temp_storage_bytes);
     state.reduction_workspace_bytes =
@@ -1161,27 +1168,27 @@ void gpu_state_destroy(FemGpuState &state)
     free_double(state.scalar_reduce_result);
     free_double(state.zhang_li_node_weight);
     free_bytes(state.scalar_reduce_temp_storage);
-    free_double(state.node_volumes);
-    free_double(state.ms);
-    free_double(state.a);
-    free_double(state.alpha);
-    free_double(state.ku);
-    free_double(state.ku2);
-    free_double(state.dind);
-    free_double(state.dbulk);
-    free_double(state.kc1);
-    free_double(state.kc2);
-    free_double(state.kc3);
+    free_double(state.mesh_metrics.node_volumes);
+    free_double(state.materials.ms);
+    free_double(state.materials.a);
+    free_double(state.materials.alpha);
+    free_double(state.materials.ku);
+    free_double(state.materials.ku2);
+    free_double(state.materials.dind);
+    free_double(state.materials.dbulk);
+    free_double(state.materials.kc1);
+    free_double(state.materials.kc2);
+    free_double(state.materials.kc3);
     free_double(state.mel_strain_voigt);
-    free_u8(state.magnetic_node_mask);
-    free_u32(state.periodic_reduced_node);
-    free_u32(state.periodic_representative_nodes);
-    free_double(state.nodes_xyz);
-    free_u32(state.elements);
-    free_u8(state.magnetic_element_mask);
-    free_double(state.poisson_rhs);
-    free_double(state.poisson_solution);
-    free_component(state.poisson_gradient);
+    free_u8(state.mesh_regions.magnetic_node_mask);
+    free_u32(state.mesh_regions.periodic_reduced_node);
+    free_u32(state.mesh_regions.periodic_representative_nodes);
+    free_double(state.mesh_geometry.nodes_xyz);
+    free_u32(state.mesh_geometry.elements);
+    free_u8(state.mesh_geometry.magnetic_element_mask);
+    free_double(state.demag_poisson.poisson_rhs);
+    free_double(state.demag_poisson.poisson_solution);
+    free_component(state.demag_poisson.poisson_gradient);
     reset_exchange_legacy_sparse(state);
 #endif
     reset_metadata(state);

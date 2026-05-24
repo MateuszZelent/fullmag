@@ -47,7 +47,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.legacy_exchange.csr_row_offsets == nullptr ||
         gpu.legacy_exchange.csr_col_indices == nullptr ||
         gpu.legacy_exchange.csr_values == nullptr ||
-        gpu.ms == nullptr ||
+        gpu.materials.ms == nullptr ||
         gpu.mesh_metrics.inv_lumped_mass == nullptr) {
         reason = "GPU legacy sparse exchange requires uploaded CSR/mass device buffers";
         return false;
@@ -65,9 +65,9 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.legacy_exchange.csr_col_indices,
         gpu.legacy_exchange.csr_values,
         m.x,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_ex.x,
         rows,
         stream);
@@ -76,9 +76,9 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.legacy_exchange.csr_col_indices,
         gpu.legacy_exchange.csr_values,
         m.y,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_ex.y,
         rows,
         stream);
@@ -87,9 +87,9 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.legacy_exchange.csr_col_indices,
         gpu.legacy_exchange.csr_values,
         m.z,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_ex.z,
         rows,
         stream);

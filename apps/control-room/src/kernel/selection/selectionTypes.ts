@@ -44,6 +44,17 @@ export type SelectionRef =
       nodeId: string;
       type: "mesh-quality-metric";
       visualizationTargetId: `mesh:quality:metric:${MeshQualitySelectionMetric}`;
+    }
+  | {
+      kind:
+        | "study.stage.action"
+        | "study.stage.eigenmodes"
+        | "study.stage.relax"
+        | "study.stage.run";
+      nodeId: string;
+      stageId: string;
+      stageIndex: number;
+      type: "study-stage";
     };
 
 export interface Selection {
@@ -128,6 +139,14 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.metric === right.metric &&
         left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "study-stage":
+      return (
+        right.type === "study-stage" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.stageId === right.stageId &&
+        left.stageIndex === right.stageIndex
       );
   }
 }

@@ -168,8 +168,8 @@ export function useFemViewportDerivedModel({
     return new Set(magneticSegments.map((segment) => segment.object_id));
   }, [magneticSegments, visibleObjectIds]);
   const airSegmentIds = useMemo(
-    () => (airSegmentVisible ? new Set([AIR_OBJECT_SEGMENT_ID]) : new Set<string>()),
-    [airSegmentVisible],
+    () => new Set([AIR_OBJECT_SEGMENT_ID]),
+    [],
   );
   const supportsAirboxOnlyVectors = meshData.quantityDomain === "full_domain";
   const effectiveVectorDomainFilter: FemVectorDomainFilter =
@@ -289,6 +289,8 @@ export function useFemViewportDerivedModel({
     qualityProfile,
     renderMode,
     airSegmentVisible,
+    meshParts,
+    partRenderDataById,
   });
 
   const baseViewStateByPartId = useMemo(() => {

@@ -45,11 +45,11 @@ bool gpu_rk_compute_one_dmi_field(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu.mesh_geometry_uploaded ||
-        gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
-        gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
-        gpu.magnetic_element_mask == nullptr ||
-        gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
+    if (!gpu.mesh_geometry.uploaded ||
+        gpu.mesh_geometry.element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
+        gpu.mesh_geometry.nodes_xyz == nullptr || gpu.mesh_geometry.elements == nullptr ||
+        gpu.mesh_geometry.magnetic_element_mask == nullptr ||
+        gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
         gpu.zhang_li_rhs.z == nullptr) {
         reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
@@ -61,16 +61,16 @@ bool gpu_rk_compute_one_dmi_field(
         return false;
     }
     fullmag_cuda_dmi_field_energy(
-        gpu.nodes_xyz,
-        gpu.elements,
-        gpu.magnetic_element_mask,
+        gpu.mesh_geometry.nodes_xyz,
+        gpu.mesh_geometry.elements,
+        gpu.mesh_geometry.magnetic_element_mask,
         m.x,
         m.y,
         m.z,
-        gpu.ms,
-        bulk_mode ? gpu.dbulk : gpu.dind,
+        gpu.materials.ms,
+        bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
         gpu.mesh_metrics.lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.zhang_li_rhs.x,
         gpu.zhang_li_rhs.y,
         gpu.zhang_li_rhs.z,

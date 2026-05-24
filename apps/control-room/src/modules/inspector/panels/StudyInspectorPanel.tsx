@@ -364,11 +364,22 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     latestCheckpoint ??
     null;
   const snapshot = studySnapshotFromScene(scene.data);
+  const selectedStageRef =
+    selection.ref?.type === "study-stage"
+      ? {
+          nodeId: selection.ref.nodeId,
+          stageId: selection.ref.stageId,
+          stageIndex: selection.ref.stageIndex,
+        }
+      : {
+          nodeId: selection.nodeId,
+        };
   const model = resolveStudyInspectorModel({
     commandQueue: commandQueue.data,
     currentRun: currentRun.data,
     energyHistory: energyHistory.data,
     selectedNodeId: selection.nodeId,
+    selectedStageRef,
     snapshot,
     solverStatus: solverStatus.data,
     stageExecution: stageExecution.data,
@@ -453,7 +464,10 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
         />
 
-        <StudySelectedStageSection model={model} />
+        <StudySelectedStageSection
+          model={model}
+          stageExecutionRevision={stageExecution.data?.revision ?? null}
+        />
 
         <StudyBoundarySection model={model} snapshot={snapshot} />
 
@@ -690,7 +704,13 @@ function StudyRuntimeSection({
   );
 }
 
-function StudySelectedStageSection({ model }: { model: StudyInspectorModel }) {
+export function StudySelectedStageSection({
+  model,
+  stageExecutionRevision,
+}: {
+  model: StudyInspectorModel;
+  stageExecutionRevision?: number | null;
+}) {
   return (
     <InspectorSection
       value="selected-stage"
@@ -698,6 +718,39 @@ function StudySelectedStageSection({ model }: { model: StudyInspectorModel }) {
       badge={model.selectedStage?.status ?? "none"}
     >
       <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
+      <FieldRow label="Status" value={model.selectedStage?.status ?? "none"} />
+      <FieldRow
+        label="Stop reason"
+        value={model.selectedStage?.stopReason ?? "not available"}
+      />
+      <FieldRow
+        label="Completed"
+        value={
+          model.selectedStage?.completedAtUnixMs
+            ? new Date(model.selectedStage.completedAtUnixMs).toISOString()
+            : "not completed"
+        }
+      />
+      <FieldRow
+        label="Command"
+        value={model.selectedStage?.commandId ?? "not linked"}
+      />
+      {model.selectedStage?.runtimeMetric ? (
+        <>
+          <FieldRow
+            label="Stop metric"
+            value={model.selectedStage.runtimeMetric.name}
+          />
+          <FieldRow
+            label="Metric value"
+            value={model.selectedStage.runtimeMetric.value}
+          />
+          <FieldRow
+            label="Metric threshold"
+            value={model.selectedStage.runtimeMetric.threshold}
+          />
+        </>
+      ) : null}
       <FieldRow
         label="Torque stop"
         value={model.selectedStage?.torqueToleranceFormatted ?? "not set"}
@@ -714,6 +767,26 @@ function StudySelectedStageSection({ model }: { model: StudyInspectorModel }) {
         label="Time budget"
         value={model.selectedStage?.untilSeconds ?? "not set"}
         unit={model.selectedStage?.untilSeconds ? "s" : undefined}
+      />
+      <FieldRow
+        label="Checkpoint"
+        value={model.selectedStage?.checkpointRef ?? "not available"}
+      />
+      <FieldRow
+        label="Artifacts"
+        value={
+          model.selectedStage?.artifactRefs.length
+            ? model.selectedStage.artifactRefs.join(", ")
+            : "none"
+        }
+      />
+      <FieldRow
+        label="Stage resource"
+        value={
+          stageExecutionRevision === undefined || stageExecutionRevision === null
+            ? "not loaded"
+            : `simulation/stages/execution@${stageExecutionRevision}`
+        }
       />
       <ProgressBar
         label="Selected stage progress"

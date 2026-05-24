@@ -205,4 +205,84 @@ describe("StudyInspectorPanelModel", () => {
       label: "Pause failed",
     });
   });
+
+  it("keeps terminal relaxation completion details for a selected completed stage", () => {
+    const snapshot = studySnapshotFromScene({
+      study: {
+        stages: [
+          {
+            kind: "relax",
+            stage_id: "stage-relax",
+            torque_tolerance_apm: 80,
+            max_steps: "1000",
+          },
+        ],
+      },
+    } as never);
+
+    const model = resolveStudyInspectorModel({
+      commandQueue: null,
+      currentRun: null,
+      selectedStageRef: {
+        nodeId: "model:study:stage:stage-relax",
+        stageId: "stage-relax",
+        stageIndex: 0,
+      },
+      snapshot,
+      solverStatus: {
+        can_accept_commands: true,
+        converged: true,
+        is_busy: false,
+        max_torque_Apm: 75,
+        revision: 12,
+        runtime_state: "completed",
+        runtime_status_code: "completed",
+        runtime_status_kind: "completed",
+        session_status: "completed",
+        warnings: [],
+      } as never,
+      stageExecution: {
+        active_stage_index: null,
+        active_stage_kind: null,
+        completed_stage_indexes: [0],
+        revision: 13,
+        runtime_state: "completed",
+        stage_statuses: ["completed"],
+        stages: [
+          {
+            artifact_refs: ["runs/run-1/stages/stage-relax"],
+            checkpoint_ref: "cp-relaxed",
+            command_id: "cmd-relax",
+            completed_at_unix_ms: 1_700_000_010_000,
+            index: 0,
+            kind: "relax",
+            metric_name: "max_torque_apm",
+            metric_value: 75,
+            reason: "torque",
+            stage_id: "stage-relax",
+            status: "completed",
+            threshold: 80,
+          },
+        ],
+        total_stages: 1,
+      } as never,
+    });
+
+    expect(model.selectedStage).toMatchObject({
+      artifactRefs: ["runs/run-1/stages/stage-relax"],
+      checkpointRef: "cp-relaxed",
+      commandId: "cmd-relax",
+      completedAtUnixMs: 1_700_000_010_000,
+      progressPercent: 100,
+      runtimeMetric: {
+        name: "max_torque_apm",
+        threshold: "1.005e-4 T / 8.000e1 A/m",
+        value: "9.425e-5 T / 7.500e1 A/m",
+      },
+      status: "completed",
+      stopReason: "torque",
+    });
+    expect(model.runtime.state).toBe("completed");
+    expect(model.runtime.relaxTorqueStop?.status).toBe("93.8% of threshold");
+  });
 });

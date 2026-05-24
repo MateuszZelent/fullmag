@@ -118,6 +118,8 @@
   color: var(--fm-degraded);
 }
 
+.fm-explorer-tree-row[data-status="completed"],
+.fm-explorer-tree-row[data-status="skipped"],
 .fm-explorer-tree-row[data-status="mesh-ready"] {
   color: var(--fm-success);
 }

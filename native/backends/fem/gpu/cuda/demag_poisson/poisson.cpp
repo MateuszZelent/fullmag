@@ -45,8 +45,8 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return true;
     }
     if (!ctx.gpu_state.device.allocated ||
-        ctx.gpu_state.device.poisson_rhs == nullptr ||
-        ctx.gpu_state.device.poisson_solution == nullptr ||
+        ctx.gpu_state.device.demag_poisson.poisson_rhs == nullptr ||
+        ctx.gpu_state.device.demag_poisson.poisson_solution == nullptr ||
         ctx.gpu_state.device.h_demag.x == nullptr) {
         error = "GPU Poisson demag requires allocated FemGpuState demag buffers";
         return false;
@@ -67,10 +67,10 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
             "cudaEventCreate demag compute_ready_event", error) ||
         !cuda_ok(cudaEventCreateWithFlags(&workspace->hypre_done_event, cudaEventDisableTiming),
             "cudaEventCreate demag hypre_done_event", error) ||
-        !cuda_ok(cudaMemset(ctx.gpu_state.device.poisson_rhs, 0,
+        !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_rhs, 0,
                 static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
             "cudaMemset demag poisson_rhs", error) ||
-        !cuda_ok(cudaMemset(ctx.gpu_state.device.poisson_solution, 0,
+        !cuda_ok(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
                 static_cast<size_t>(ctx.mesh.n_nodes) * sizeof(double)),
             "cudaMemset demag poisson_solution", error)) {
         gpu_demag_poisson_destroy(ctx);

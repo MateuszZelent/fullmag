@@ -95,6 +95,8 @@ export interface ExplorerNode {
   objectId?: string;
   regionId?: string;
   resourceRef?: string;
+  stageId?: string;
+  stageIndex?: number;
   status?: ExplorerNodeStatus;
 }
 

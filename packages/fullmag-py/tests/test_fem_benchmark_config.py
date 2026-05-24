@@ -1275,6 +1275,16 @@ GPU_DEMAG_KERNELS_HPP_PATH = (
     / "demag_poisson"
     / "demag_kernels.hpp"
 )
+GPU_DEMAG_STATE_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "demag_poisson"
+    / "demag_state.hpp"
+)
 GPU_DEMAG_STAGE_COMPUTE_CPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1356,6 +1366,36 @@ GPU_MESH_METRICS_STATE_HPP_PATH = (
     / "cuda"
     / "mesh"
     / "mesh_metrics_state.hpp"
+)
+GPU_MESH_REGIONS_STATE_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "mesh"
+    / "mesh_regions_state.hpp"
+)
+GPU_MESH_GEOMETRY_STATE_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "mesh"
+    / "mesh_geometry_state.hpp"
+)
+GPU_MATERIAL_STATE_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "materials"
+    / "material_state.hpp"
 )
 GPU_ANISOTROPY_KERNELS_CU_PATH = (
     REPO_ROOT
@@ -5848,25 +5888,63 @@ def test_gpu_state_uploads_local_vector_fields_outside_hot_loop():
 def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    material_state_header = GPU_MATERIAL_STATE_HPP_PATH.read_text(encoding="utf-8")
+    mesh_metrics_header = GPU_MESH_METRICS_STATE_HPP_PATH.read_text(encoding="utf-8")
+    mesh_regions_header = GPU_MESH_REGIONS_STATE_HPP_PATH.read_text(encoding="utf-8")
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
+    llg_source = GPU_RK_LLG_RHS_DISPATCH_CU_PATH.read_text(encoding="utf-8")
+    anisotropy_source = GPU_RK_ANISOTROPY_FIELD_CU_PATH.read_text(encoding="utf-8")
+    thermal_source = GPU_RK_THERMAL_FIELD_CU_PATH.read_text(encoding="utf-8")
+    exchange_dispatch_source = GPU_RK_EXCHANGE_DISPATCH_CU_PATH.read_text(
+        encoding="utf-8"
+    )
 
     assert "gpu_state_upload_runtime_coefficients" in gpu_state_header
     assert "gpu_state_upload_runtime_coefficients" in gpu_state_source
+    assert '#include "gpu/cuda/materials/material_state.hpp"' in gpu_state_header
+    assert '#include "gpu/cuda/mesh/mesh_regions_state.hpp"' in gpu_state_header
+    assert "GPU CUDA material device-state module header" in material_state_header
+    assert "struct FemGpuMaterialDeviceState" in material_state_header
+    assert "FemGpuMaterialDeviceState materials{}" in gpu_state_header
+    assert "double *node_volumes" in mesh_metrics_header
+    assert "GPU CUDA mesh region device-state module header" in mesh_regions_header
+    assert "struct FemGpuMeshRegionDeviceState" in mesh_regions_header
+    assert "uint8_t *magnetic_node_mask" in mesh_regions_header
+    assert "uint32_t *periodic_reduced_node" in mesh_regions_header
+    assert "uint32_t *periodic_representative_nodes" in mesh_regions_header
+    assert "FemGpuMeshRegionDeviceState mesh_regions{}" in gpu_state_header
+    for flat_member in (
+        "double *node_volumes = nullptr",
+        "double *ms = nullptr",
+        "double *a = nullptr",
+        "double *alpha = nullptr",
+        "double *ku = nullptr",
+        "double *ku2 = nullptr",
+        "double *dind = nullptr",
+        "double *dbulk = nullptr",
+        "double *kc1 = nullptr",
+        "double *kc2 = nullptr",
+        "double *kc3 = nullptr",
+        "uint8_t *magnetic_node_mask = nullptr",
+        "uint32_t *periodic_reduced_node = nullptr",
+        "uint32_t *periodic_representative_nodes = nullptr",
+    ):
+        assert flat_member not in gpu_state_header
     for member in (
-        "state.node_volumes",
-        "state.ms",
-        "state.a",
-        "state.alpha",
-        "state.ku",
-        "state.ku2",
-        "state.dind",
-        "state.dbulk",
-        "state.kc1",
-        "state.kc2",
-        "state.kc3",
-        "state.magnetic_node_mask",
-        "state.periodic_reduced_node",
-        "state.periodic_representative_nodes",
+        "state.mesh_metrics.node_volumes",
+        "state.materials.ms",
+        "state.materials.a",
+        "state.materials.alpha",
+        "state.materials.ku",
+        "state.materials.ku2",
+        "state.materials.dind",
+        "state.materials.dbulk",
+        "state.materials.kc1",
+        "state.materials.kc2",
+        "state.materials.kc3",
+        "state.mesh_regions.magnetic_node_mask",
+        "state.mesh_regions.periodic_reduced_node",
+        "state.mesh_regions.periodic_representative_nodes",
         "state.runtime_coefficients_uploaded",
     ):
         assert member in gpu_state_source
@@ -5881,6 +5959,65 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     ):
         assert context_member in context_source
     assert "gpu_state_upload_runtime_coefficients(" in context_source
+    assert "gpu.materials.alpha" in llg_source
+    assert "gpu.materials.ms" in anisotropy_source
+    assert "gpu.mesh_metrics.node_volumes" in thermal_source
+    assert "gpu.mesh_regions.magnetic_node_mask" in anisotropy_source
+    assert "gpu.mesh_regions.magnetic_node_mask" in thermal_source
+    assert "gpu.mesh_regions.magnetic_node_mask" in exchange_dispatch_source
+
+
+def test_gpu_mesh_geometry_device_state_is_owned_by_mesh_module():
+    gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
+    gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    mesh_geometry_header = GPU_MESH_GEOMETRY_STATE_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    dmi_field_source = GPU_RK_DMI_FIELDS_CU_PATH.read_text(encoding="utf-8")
+    dmi_energy_source = GPU_RK_DMI_ENERGY_REDUCTIONS_CU_PATH.read_text(
+        encoding="utf-8"
+    )
+    zhang_li_source = GPU_RK_ZHANG_LI_TORQUE_CU_PATH.read_text(encoding="utf-8")
+    rk_plan_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
+
+    assert "GPU CUDA mesh geometry device-state module header" in mesh_geometry_header
+    assert "struct FemGpuMeshGeometryDeviceState" in mesh_geometry_header
+    assert "double *nodes_xyz = nullptr" in mesh_geometry_header
+    assert "uint32_t *elements = nullptr" in mesh_geometry_header
+    assert "uint8_t *magnetic_element_mask = nullptr" in mesh_geometry_header
+    assert "uint64_t element_count = 0" in mesh_geometry_header
+    assert "bool uploaded = false" in mesh_geometry_header
+    assert '#include "gpu/cuda/mesh/mesh_geometry_state.hpp"' in gpu_state_header
+    assert "FemGpuMeshGeometryDeviceState mesh_geometry{}" in gpu_state_header
+    for flat_member in (
+        "double *nodes_xyz = nullptr",
+        "uint32_t *elements = nullptr",
+        "uint8_t *magnetic_element_mask = nullptr",
+        "uint64_t mesh_element_count = 0",
+        "bool mesh_geometry_uploaded = false",
+    ):
+        assert flat_member not in gpu_state_header
+    for state_member in (
+        "state.mesh_geometry.nodes_xyz",
+        "state.mesh_geometry.elements",
+        "state.mesh_geometry.magnetic_element_mask",
+        "state.mesh_geometry.element_count",
+        "state.mesh_geometry.uploaded",
+    ):
+        assert state_member in gpu_state_source
+    assert "state.nodes_xyz" not in gpu_state_source
+    assert "state.mesh_element_count" not in gpu_state_source
+    for source in (dmi_field_source, dmi_energy_source, zhang_li_source):
+        assert "gpu.mesh_geometry.uploaded" in source
+        assert "gpu.mesh_geometry.element_count" in source
+        assert "gpu.mesh_geometry.nodes_xyz" in source
+        assert "gpu.mesh_geometry.elements" in source
+        assert "gpu.mesh_geometry.magnetic_element_mask" in source
+        assert "gpu.nodes_xyz" not in source
+        assert "gpu.mesh_element_count" not in source
+    assert "ctx.gpu_state.device.mesh_geometry.uploaded" in rk_plan_source
+    assert "ctx.gpu_state.device.mesh_geometry.element_count" in rk_plan_source
+    assert "ctx.gpu_state.device.mesh_geometry_uploaded" not in rk_plan_source
 
 
 def test_legacy_sparse_exchange_csr_upload_is_wired_before_gpu_exchange_plan_can_pass():
@@ -6021,7 +6158,7 @@ def test_gpu_rk_plan_supports_per_node_damping_on_device():
     assert "gpu/cuda/integrators/llg/llg_rhs_kernels.cu" in cmake
     assert "per-node damping yet" not in rk_source
     assert "ctx.material_fields.material.damping" in llg_source
-    assert "gpu.alpha" in llg_source
+    assert "gpu.materials.alpha" in llg_source
     assert "!ctx.material_fields.alpha_field.empty()" in llg_source
     assert "const double *alpha_field" in llg_kernel_header
     assert "bool use_alpha_field" in llg_kernel_header
@@ -6095,6 +6232,53 @@ def test_gpu_cuda_demag_kernels_are_owned_by_demag_poisson_module():
     assert "fullmag_cuda_demag_recovery_csr(" not in kernel_source
     assert "fullmag_cuda_demag_energy_blocks(" not in kernel_source
     assert "fullmag_cuda_demag_robin_boundary_energy_blocks(" not in kernel_source
+
+
+def test_gpu_demag_poisson_device_state_is_owned_by_demag_poisson_module():
+    state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
+    state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    demag_state_header = GPU_DEMAG_STATE_HPP_PATH.read_text(encoding="utf-8")
+    demag_stage_source = GPU_DEMAG_STAGE_COMPUTE_CPP_PATH.read_text(encoding="utf-8")
+    demag_dispatch_source = GPU_RK_DEMAG_DISPATCH_CU_PATH.read_text(encoding="utf-8")
+
+    assert "GPU CUDA Poisson demag device-state module header" in demag_state_header
+    assert '#include "gpu/cuda/state/component_field.hpp"' in demag_state_header
+    assert "struct FemGpuDemagPoissonDeviceState" in demag_state_header
+    assert "double *poisson_rhs = nullptr" in demag_state_header
+    assert "double *poisson_solution = nullptr" in demag_state_header
+    assert "FemGpuComponentField poisson_gradient" in demag_state_header
+    assert "std::vector<double> hybrid_stage_m_xyz" in demag_state_header
+    assert "std::vector<double> hybrid_demag_xyz" in demag_state_header
+    assert "double hybrid_demag_energy_joules = 0.0" in demag_state_header
+    assert '#include "gpu/cuda/demag_poisson/demag_state.hpp"' in state_header
+    assert "FemGpuDemagPoissonDeviceState demag_poisson{}" in state_header
+    for flat_member in (
+        "double *poisson_rhs = nullptr",
+        "double *poisson_solution = nullptr",
+        "FemGpuComponentField poisson_gradient",
+        "std::vector<double> hybrid_stage_m_xyz",
+        "std::vector<double> hybrid_demag_xyz",
+        "double hybrid_demag_energy_joules = 0.0",
+    ):
+        assert flat_member not in state_header
+    for state_member in (
+        "state.demag_poisson.poisson_rhs",
+        "state.demag_poisson.poisson_solution",
+        "state.demag_poisson.poisson_gradient",
+        "state.demag_poisson.hybrid_stage_m_xyz",
+        "state.demag_poisson.hybrid_demag_xyz",
+        "state.demag_poisson.hybrid_demag_energy_joules",
+    ):
+        assert state_member in state_source
+    assert "state.poisson_rhs" not in state_source
+    assert "state.hybrid_demag_xyz" not in state_source
+    assert "gpu.demag_poisson.poisson_rhs" in demag_stage_source
+    assert "gpu.demag_poisson.poisson_solution" in demag_stage_source
+    assert "gpu.poisson_rhs" not in demag_stage_source
+    assert "gpu.demag_poisson.hybrid_stage_m_xyz" in demag_dispatch_source
+    assert "gpu.demag_poisson.hybrid_demag_xyz" in demag_dispatch_source
+    assert "gpu.demag_poisson.hybrid_demag_energy_joules" in demag_dispatch_source
+    assert "gpu.hybrid_demag_xyz" not in demag_dispatch_source
 
 
 def test_gpu_cuda_owner_modules_do_not_include_kernel_compatibility_umbrella():
@@ -8531,7 +8715,7 @@ def test_gpu_rk_plan_supports_zhang_li_stt_with_device_mesh_geometry():
     stt_kernel_source = GPU_STT_KERNELS_CU_PATH.read_text(encoding="utf-8")
 
     assert "does not support Zhang-Li STT yet" not in rk_source
-    assert "mesh_geometry_uploaded" in rk_source
+    assert "ctx.gpu_state.device.mesh_geometry.uploaded" in rk_source
     assert "FemGpuComponentField zhang_li_rhs" in state_header
     assert "double *zhang_li_node_weight" in state_header
     assert "gpu_state_upload_mesh_geometry" in context_source

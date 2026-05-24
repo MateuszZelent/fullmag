@@ -8,8 +8,13 @@
  */
 
 #include "fullmag_fem.h"
+#include "gpu/cuda/demag_poisson/demag_state.hpp"
 #include "gpu/cuda/exchange/exchange_state.hpp"
+#include "gpu/cuda/materials/material_state.hpp"
+#include "gpu/cuda/mesh/mesh_geometry_state.hpp"
 #include "gpu/cuda/mesh/mesh_metrics_state.hpp"
+#include "gpu/cuda/mesh/mesh_regions_state.hpp"
+#include "gpu/cuda/state/component_field.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <array>
@@ -30,12 +35,6 @@ enum class FemGpuSyncState {
     HostStale,
     DeviceClean,
     DeviceDirty,
-};
-
-struct FemGpuComponentField {
-    double *x = nullptr;
-    double *y = nullptr;
-    double *z = nullptr;
 };
 
 struct FemGpuState {
@@ -77,40 +76,17 @@ struct FemGpuState {
     void *scalar_reduce_temp_storage = nullptr;
     uint64_t scalar_reduce_temp_storage_bytes = 0;
 
-    double *node_volumes = nullptr;
-    double *ms = nullptr;
-    double *a = nullptr;
-    double *alpha = nullptr;
-    double *ku = nullptr;
-    double *ku2 = nullptr;
-    double *dind = nullptr;
-    double *dbulk = nullptr;
-    double *kc1 = nullptr;
-    double *kc2 = nullptr;
-    double *kc3 = nullptr;
     double *mel_strain_voigt = nullptr;
     uint64_t mel_strain_voigt_len = 0;
     bool mel_strain_uploaded = false;
-    uint8_t *magnetic_node_mask = nullptr;
-    uint32_t *periodic_reduced_node = nullptr;
-    uint32_t *periodic_representative_nodes = nullptr;
     bool runtime_coefficients_uploaded = false;
 
-    double *nodes_xyz = nullptr;
-    uint32_t *elements = nullptr;
-    uint8_t *magnetic_element_mask = nullptr;
-    uint64_t mesh_element_count = 0;
-    bool mesh_geometry_uploaded = false;
-
-    double *poisson_rhs = nullptr;
-    double *poisson_solution = nullptr;
-    FemGpuComponentField poisson_gradient;
-    std::vector<double> hybrid_stage_m_xyz;
-    std::vector<double> hybrid_demag_xyz;
-    double hybrid_demag_energy_joules = 0.0;
-
+    FemGpuDemagPoissonDeviceState demag_poisson{};
     LegacyGpuExchangeDeviceState legacy_exchange{};
+    FemGpuMaterialDeviceState materials{};
+    FemGpuMeshGeometryDeviceState mesh_geometry{};
     FemGpuMeshMetricsDeviceState mesh_metrics{};
+    FemGpuMeshRegionDeviceState mesh_regions{};
 };
 
 uint32_t gpu_state_stage_count(fullmag_fem_integrator integrator);

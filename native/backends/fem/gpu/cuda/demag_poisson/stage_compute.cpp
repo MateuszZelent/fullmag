@@ -59,12 +59,12 @@ bool compute_device_demag_for_device_stage(
         reason = "strict FEM GPU demag requires ready device_hypre_poisson workspace";
         return false;
     }
-    if (gpu.poisson_rhs == nullptr || gpu.poisson_solution == nullptr ||
+    if (gpu.demag_poisson.poisson_rhs == nullptr || gpu.demag_poisson.poisson_solution == nullptr ||
         gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
-    if (gpu.mesh_metrics.lumped_mass == nullptr || gpu.ms == nullptr) {
+    if (gpu.mesh_metrics.lumped_mass == nullptr || gpu.materials.ms == nullptr) {
         reason = "strict FEM GPU demag energy requires uploaded Ms and lumped mass buffers";
         return false;
     }
@@ -79,14 +79,14 @@ bool compute_device_demag_for_device_stage(
         m.x,
         m.y,
         m.z,
-        gpu.poisson_rhs,
+        gpu.demag_poisson.poisson_rhs,
         static_cast<int>(workspace->rhs.rows),
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
         return false;
     }
     fullmag_cuda_zero_indexed_values(
-        gpu.poisson_rhs,
+        gpu.demag_poisson.poisson_rhs,
         workspace->d_ess_tdofs,
         static_cast<int>(workspace->ess_tdofs.size()),
         stream);
@@ -128,7 +128,7 @@ bool compute_device_demag_for_device_stage(
         }
     }
     fullmag_cuda_zero_indexed_values(
-        gpu.poisson_solution,
+        gpu.demag_poisson.poisson_solution,
         workspace->d_ess_tdofs,
         static_cast<int>(workspace->ess_tdofs.size()),
         stream);
@@ -136,8 +136,8 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_x.d_row_offsets,
         workspace->recovery_x.d_col_indices,
         workspace->recovery_x.d_values,
-        gpu.poisson_solution,
-        gpu.magnetic_node_mask,
+        gpu.demag_poisson.poisson_solution,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_demag.x,
         static_cast<int>(workspace->recovery_x.rows),
         stream);
@@ -145,8 +145,8 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_y.d_row_offsets,
         workspace->recovery_y.d_col_indices,
         workspace->recovery_y.d_values,
-        gpu.poisson_solution,
-        gpu.magnetic_node_mask,
+        gpu.demag_poisson.poisson_solution,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_demag.y,
         static_cast<int>(workspace->recovery_y.rows),
         stream);
@@ -154,8 +154,8 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_z.d_row_offsets,
         workspace->recovery_z.d_col_indices,
         workspace->recovery_z.d_values,
-        gpu.poisson_solution,
-        gpu.magnetic_node_mask,
+        gpu.demag_poisson.poisson_solution,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_demag.z,
         static_cast<int>(workspace->recovery_z.rows),
         stream);
@@ -172,9 +172,9 @@ bool compute_device_demag_for_device_stage(
         gpu.h_demag.x,
         gpu.h_demag.y,
         gpu.h_demag.z,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         n,
         stream);
@@ -217,7 +217,7 @@ bool reduce_device_demag_robin_boundary_energy(
         workspace->robin_boundary_mass.d_row_offsets == nullptr ||
         workspace->robin_boundary_mass.d_col_indices == nullptr ||
         workspace->robin_boundary_mass.d_values == nullptr ||
-        gpu.poisson_solution == nullptr ||
+        gpu.demag_poisson.poisson_solution == nullptr ||
         gpu.scalar_reduce_workspace == nullptr ||
         gpu.scalar_reduce_temp_storage == nullptr ||
         result == nullptr) {
@@ -231,7 +231,7 @@ bool reduce_device_demag_robin_boundary_energy(
         workspace->robin_boundary_mass.d_row_offsets,
         workspace->robin_boundary_mass.d_col_indices,
         workspace->robin_boundary_mass.d_values,
-        gpu.poisson_solution,
+        gpu.demag_poisson.poisson_solution,
         0.5 * kMu0 * ctx.poisson_demag.robin_effective_beta,
         gpu.scalar_reduce_workspace,
         rows,

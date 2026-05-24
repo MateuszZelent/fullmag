@@ -52,7 +52,7 @@ bool gpu_rk_reduce_final_demag_energy_terms(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
+    if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
         reason = "GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag";
         return false;
@@ -64,9 +64,9 @@ bool gpu_rk_reduce_final_demag_energy_terms(
         gpu.h_demag.x,
         gpu.h_demag.y,
         gpu.h_demag.z,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         n,
         stream);

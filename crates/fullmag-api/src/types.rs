@@ -832,6 +832,10 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StageExecutionRecord {
+    #[serde(default)]
+    pub stage_id: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
     pub status: StageLifecycleState,
     #[serde(default)]
     pub command_id: Option<String>,

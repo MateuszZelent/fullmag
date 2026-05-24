@@ -1106,6 +1106,8 @@ mod tests {
             total_stages: 1,
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
+                stage_id: None,
+                kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
                 started_at_unix_ms: Some(1_700_000_000_000),
@@ -1483,6 +1485,8 @@ mod tests {
             total_stages: 1,
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
+                stage_id: None,
+                kind: None,
                 status: StageLifecycleState::Paused,
                 command_id: Some("cmd-stage-0".into()),
                 started_at_unix_ms: Some(1_700_000_000_000),
@@ -1515,6 +1519,8 @@ mod tests {
                     total_stages: 1,
                     completed_stage_indexes: vec![0],
                     stages: vec![StageExecutionRecord {
+                        stage_id: None,
+                        kind: None,
                         status: StageLifecycleState::Completed,
                         command_id: Some("cmd-stage-0".into()),
                         started_at_unix_ms: Some(1_700_000_000_000),
@@ -1661,6 +1667,8 @@ mod tests {
             total_stages: 1,
             completed_stage_indexes: Vec::new(),
             stages: vec![StageExecutionRecord {
+                stage_id: None,
+                kind: None,
                 status: stage_status,
                 command_id: None,
                 started_at_unix_ms: Some(1_700_000_000_000),

@@ -15,6 +15,7 @@ import {
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
@@ -318,5 +319,28 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(handled).toBe(true);
     expect(resources.getRevision("session:status")).toBe(12);
+  });
+
+  it("invalidates stage execution when realtime recommends the stage resource", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_STAGES_EXECUTION_PATH,
+            resource: "stages",
+            revision: 44,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision("session:status")).toBe(44);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(44);
   });
 });

@@ -407,6 +407,8 @@ function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
     parentId: "model:study",
     badge: studyStageBadge(stage),
     icon: stage.kind === "relax" || stage.kind === "run" ? "play" : "activity",
+    stageId: nodeStageId,
+    stageIndex: stage.index,
     status: stage.status ?? "ready",
     contextCommands: ["study.skip", "workspace.focus-selection"],
   };

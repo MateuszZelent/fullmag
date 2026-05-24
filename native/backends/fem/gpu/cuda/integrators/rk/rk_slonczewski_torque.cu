@@ -64,7 +64,7 @@ bool gpu_rk_add_slonczewski_torque(
         reason = "GPU RK Slonczewski STT requires explicit or geometry-derived free-layer thickness";
         return false;
     }
-    if (gpu.ms == nullptr) {
+    if (gpu.materials.ms == nullptr) {
         reason = "GPU RK Slonczewski STT requires device-resident Ms";
         return false;
     }
@@ -72,8 +72,8 @@ bool gpu_rk_add_slonczewski_torque(
         m.x,
         m.y,
         m.z,
-        gpu.ms,
-        gpu.magnetic_node_mask,
+        gpu.materials.ms,
+        gpu.mesh_regions.magnetic_node_mask,
         rhs.x,
         rhs.y,
         rhs.z,

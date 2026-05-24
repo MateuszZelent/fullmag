@@ -36,6 +36,23 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (
+    node.stageId &&
+    node.stageIndex !== undefined &&
+    (node.kind === "study.stage.action" ||
+      node.kind === "study.stage.eigenmodes" ||
+      node.kind === "study.stage.relax" ||
+      node.kind === "study.stage.run")
+  ) {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      stageId: node.stageId,
+      stageIndex: node.stageIndex,
+      type: "study-stage",
+    };
+  }
+
   return null;
 }
 

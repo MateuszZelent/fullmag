@@ -120,13 +120,13 @@ bool initialize_demag_poisson_hypre_device_solver(
     workspace.b_par = std::make_unique<mfem::HypreParVector>(
         fullmag_serial_comm(),
         glob_size,
-        ctx.gpu_state.device.poisson_rhs,
+        ctx.gpu_state.device.demag_poisson.poisson_rhs,
         workspace.row_starts,
         true);
     workspace.x_par = std::make_unique<mfem::HypreParVector>(
         fullmag_serial_comm(),
         glob_size,
-        ctx.gpu_state.device.poisson_solution,
+        ctx.gpu_state.device.demag_poisson.poisson_solution,
         workspace.row_starts,
         true);
     return true;

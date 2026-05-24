@@ -52,7 +52,7 @@ bool gpu_rk_reduce_final_magnetization_terms(
         gpu.m.x,
         gpu.m.y,
         gpu.m.z,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         gpu.error.x,
         gpu.error.y,

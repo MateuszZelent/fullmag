@@ -50,28 +50,28 @@ bool gpu_rk_add_zhang_li_torque(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu.mesh_geometry_uploaded ||
-        gpu.mesh_element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
-        gpu.nodes_xyz == nullptr || gpu.elements == nullptr ||
-        gpu.magnetic_element_mask == nullptr) {
+    if (!gpu.mesh_geometry.uploaded ||
+        gpu.mesh_geometry.element_count != static_cast<uint64_t>(ctx.mesh.n_elements) ||
+        gpu.mesh_geometry.nodes_xyz == nullptr || gpu.mesh_geometry.elements == nullptr ||
+        gpu.mesh_geometry.magnetic_element_mask == nullptr) {
         reason = "GPU RK Zhang-Li STT requires device-resident mesh geometry";
         return false;
     }
-    if (gpu.ms == nullptr || gpu.zhang_li_rhs.x == nullptr ||
+    if (gpu.materials.ms == nullptr || gpu.zhang_li_rhs.x == nullptr ||
         gpu.zhang_li_rhs.y == nullptr || gpu.zhang_li_rhs.z == nullptr ||
         gpu.zhang_li_node_weight == nullptr) {
         reason = "GPU RK Zhang-Li STT requires device-resident Ms and Zhang-Li work buffers";
         return false;
     }
     fullmag_cuda_add_zhang_li_stt_rhs(
-        gpu.nodes_xyz,
-        gpu.elements,
-        gpu.magnetic_element_mask,
+        gpu.mesh_geometry.nodes_xyz,
+        gpu.mesh_geometry.elements,
+        gpu.mesh_geometry.magnetic_element_mask,
         m.x,
         m.y,
         m.z,
-        gpu.ms,
-        gpu.magnetic_node_mask,
+        gpu.materials.ms,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.zhang_li_rhs.x,
         gpu.zhang_li_rhs.y,
         gpu.zhang_li_rhs.z,

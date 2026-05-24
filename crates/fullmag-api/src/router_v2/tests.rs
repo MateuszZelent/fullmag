@@ -511,6 +511,8 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
             completed_stage_indexes: vec![0],
             stages: vec![
                 StageExecutionRecord {
+                    stage_id: None,
+                    kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
                     started_at_unix_ms: Some(1_700_000_000_000),
@@ -526,6 +528,8 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     threshold: None,
                 },
                 StageExecutionRecord {
+                    stage_id: None,
+                    kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
                     started_at_unix_ms: Some(1_700_000_002_000),
@@ -708,6 +712,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             completed_stage_indexes: vec![0],
             stages: vec![
                 StageExecutionRecord {
+                    stage_id: None,
+                    kind: None,
                     status: StageLifecycleState::Completed,
                     command_id: Some("cmd-stage-0".into()),
                     started_at_unix_ms: Some(1_700_000_000_000),
@@ -723,6 +729,8 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     threshold: None,
                 },
                 StageExecutionRecord {
+                    stage_id: None,
+                    kind: None,
                     status: StageLifecycleState::Running,
                     command_id: Some("cmd-stage-1".into()),
                     started_at_unix_ms: Some(1_700_000_002_000),
@@ -7553,6 +7561,8 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
             total_stages: 1,
             completed_stage_indexes: vec![0],
             stages: vec![StageExecutionRecord {
+                stage_id: None,
+                kind: None,
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-stage-0".into()),
                 started_at_unix_ms: Some(1_700_000_000_000),
@@ -7768,8 +7778,8 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 kind: Some("relax".into()),
                 status: StageLifecycleState::Completed,
                 command_id: Some("cmd-relax".into()),
-                started_at_unix_ms: Some(1_700_000_000_000),
-                completed_at_unix_ms: Some(1_700_000_010_000),
+                started_at_unix_ms: Some(1_700_000_000_000u64),
+                completed_at_unix_ms: Some(1_700_000_010_000u64),
                 reason: Some(fullmag_ir::StageStopReason::Torque),
                 artifact_refs: vec!["runs/run-1/stages/stage-relax".into()],
                 checkpoint_ref: Some("cp-relaxed".into()),
@@ -7777,8 +7787,8 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 resume_from_checkpoint_ref: None,
                 state_transition: Some("preserved".into()),
                 metric_name: Some("max_torque_apm".into()),
-                metric_value: Some(7.5e1),
-                threshold: Some(8.0e1),
+                metric_value: Some(75.0f64),
+                threshold: Some(80.0f64),
             }],
             stage_statuses: vec![StageLifecycleState::Completed],
             active_stage_index: None,
@@ -7787,7 +7797,7 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
         });
     }
 
-    let app = test_router(state).await;
+    let app = build_v2_router().with_state(state);
     let response = app
         .oneshot(
             Request::builder()

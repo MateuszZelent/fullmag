@@ -215,9 +215,20 @@ energy CUDA wrappers are owned by `gpu/cuda/exchange/exchange_kernels.hpp/.cu`;
 legacy sparse exchange device-side CSR, dimensions, readiness, and byte
 accounting are owned by `gpu/cuda/exchange/exchange_state.hpp` and embedded in
 `FemGpuState` as the `legacy_exchange` substate. Shared GPU integration metrics
-such as lumped mass and inverse lumped mass are owned by
+such as node volumes, lumped mass, and inverse lumped mass are owned by
 `gpu/cuda/mesh/mesh_metrics_state.hpp` and embedded in `FemGpuState` as the
-`mesh_metrics` substate. `FemGpuState` allocation/transfer/device metadata is
+`mesh_metrics` substate. GPU material coefficients (`Ms`, exchange stiffness,
+damping, anisotropy, DMI, and cubic-anisotropy fields) are owned by
+`gpu/cuda/materials/material_state.hpp` and embedded in `FemGpuState` as the
+`materials` substate. GPU mesh-region masks and periodic node maps are owned by
+`gpu/cuda/mesh/mesh_regions_state.hpp` and embedded in `FemGpuState` as the
+`mesh_regions` substate. Uploaded GPU mesh geometry (`nodes_xyz`, tetrahedral
+connectivity, and magnetic element masks) is owned by
+`gpu/cuda/mesh/mesh_geometry_state.hpp` and embedded in `FemGpuState` as the
+`mesh_geometry` substate. GPU Poisson demag device buffers and transitional
+hybrid CPU-Poisson compatibility buffers are owned by
+`gpu/cuda/demag_poisson/demag_state.hpp` and embedded in `FemGpuState` as the
+`demag_poisson` substate. `FemGpuState` allocation/transfer/device metadata is
 owned by `gpu/cuda/state/gpu_state.hpp/.cpp`, and transfer-audit scope tracking
 is owned by `gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
 host-device CUDA transfer wrappers are owned by

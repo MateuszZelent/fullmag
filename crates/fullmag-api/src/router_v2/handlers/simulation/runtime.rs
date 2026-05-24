@@ -151,10 +151,16 @@ pub async fn get_stage_execution(
             .iter()
             .enumerate()
             .map(|(index, record)| StageExecutionRecordResource {
-                stage_id: stage_id_for_index(index),
+                stage_id: record
+                    .stage_id
+                    .clone()
+                    .unwrap_or_else(|| stage_id_for_index(index)),
                 index: index as u32,
                 label: Some(format!("Stage {}", index + 1)),
-                kind: stage_kind_for_index(stage, index),
+                kind: record
+                    .kind
+                    .clone()
+                    .or_else(|| stage_kind_for_index(stage, index)),
                 action: None,
                 status: record.status.as_str().to_string(),
                 command_id: record.command_id.clone(),

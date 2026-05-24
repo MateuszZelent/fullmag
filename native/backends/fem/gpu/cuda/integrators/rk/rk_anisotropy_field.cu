@@ -45,7 +45,7 @@ bool gpu_rk_compute_anisotropy_field_contributions(
 {
     auto &gpu = ctx.gpu_state.device;
     if (ctx.anisotropy.uniaxial_enabled) {
-        if (gpu.ms == nullptr || gpu.ku == nullptr || gpu.ku2 == nullptr ||
+        if (gpu.materials.ms == nullptr || gpu.materials.ku == nullptr || gpu.materials.ku2 == nullptr ||
             gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.h_ani.x == nullptr || gpu.h_ani.y == nullptr || gpu.h_ani.z == nullptr) {
             reason = "GPU RK uniaxial anisotropy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
@@ -55,11 +55,11 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             m.x,
             m.y,
             m.z,
-            gpu.ms,
-            gpu.ku,
-            gpu.ku2,
+            gpu.materials.ms,
+            gpu.materials.ku,
+            gpu.materials.ku2,
             gpu.mesh_metrics.lumped_mass,
-            gpu.magnetic_node_mask,
+            gpu.mesh_regions.magnetic_node_mask,
             gpu.h_ani.x,
             gpu.h_ani.y,
             gpu.h_ani.z,
@@ -78,8 +78,8 @@ bool gpu_rk_compute_anisotropy_field_contributions(
         }
     }
     if (ctx.anisotropy.cubic_enabled) {
-        if (gpu.ms == nullptr || gpu.kc1 == nullptr || gpu.kc2 == nullptr ||
-            gpu.kc3 == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
+        if (gpu.materials.ms == nullptr || gpu.materials.kc1 == nullptr || gpu.materials.kc2 == nullptr ||
+            gpu.materials.kc3 == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
             gpu.h_cubic_ani.x == nullptr || gpu.h_cubic_ani.y == nullptr ||
             gpu.h_cubic_ani.z == nullptr) {
             reason = "GPU RK cubic anisotropy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers";
@@ -89,12 +89,12 @@ bool gpu_rk_compute_anisotropy_field_contributions(
             m.x,
             m.y,
             m.z,
-            gpu.ms,
-            gpu.kc1,
-            gpu.kc2,
-            gpu.kc3,
+            gpu.materials.ms,
+            gpu.materials.kc1,
+            gpu.materials.kc2,
+            gpu.materials.kc3,
             gpu.mesh_metrics.lumped_mass,
-            gpu.magnetic_node_mask,
+            gpu.mesh_regions.magnetic_node_mask,
             gpu.h_cubic_ani.x,
             gpu.h_cubic_ani.y,
             gpu.h_cubic_ani.z,

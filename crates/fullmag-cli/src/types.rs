@@ -472,6 +472,10 @@ pub(crate) struct CurrentLiveScalarRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct CurrentLiveStageExecutionRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,

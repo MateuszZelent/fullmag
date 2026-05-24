@@ -92,8 +92,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         return plan;
     }
     if ((ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) &&
-        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
-            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
+        (!ctx.gpu_state.device.mesh_geometry.uploaded ||
+            ctx.gpu_state.device.mesh_geometry.element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK device-resident path requires device-resident mesh geometry for DMI";
         return plan;
     }
@@ -124,8 +124,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
         return plan;
     }
     if (ctx.stt.zhang_li_enabled &&
-        (!ctx.gpu_state.device.mesh_geometry_uploaded ||
-            ctx.gpu_state.device.mesh_element_count != ctx.mesh.n_elements)) {
+        (!ctx.gpu_state.device.mesh_geometry.uploaded ||
+            ctx.gpu_state.device.mesh_geometry.element_count != ctx.mesh.n_elements)) {
         reason = "GPU RK device-resident path requires device-resident mesh geometry for Zhang-Li STT";
         return plan;
     }

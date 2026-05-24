@@ -43,7 +43,7 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     if (!gpu_rk_download_component_device_to_aos(
             ctx,
             m,
-            gpu.hybrid_stage_m_xyz,
+            gpu.demag_poisson.hybrid_stage_m_xyz,
             stream,
             "cudaMemcpy2DAsync GPU RK hybrid demag stage magnetization device->host",
             reason)) {
@@ -52,20 +52,20 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     double demag_energy = 0.0;
     if (!compute_demag_field_for_magnetization(
             ctx,
-            gpu.hybrid_stage_m_xyz,
-            gpu.hybrid_demag_xyz,
+            gpu.demag_poisson.hybrid_stage_m_xyz,
+            gpu.demag_poisson.hybrid_demag_xyz,
             demag_energy,
             true,
             nullptr,
             reason)) {
         return false;
     }
-    ctx.demag.h_xyz = gpu.hybrid_demag_xyz;
-    gpu.hybrid_demag_energy_joules = demag_energy;
+    ctx.demag.h_xyz = gpu.demag_poisson.hybrid_demag_xyz;
+    gpu.demag_poisson.hybrid_demag_energy_joules = demag_energy;
     return gpu_state_upload_demag_field_aos(
         gpu,
-        gpu.hybrid_demag_xyz.data(),
-        static_cast<uint64_t>(gpu.hybrid_demag_xyz.size()),
+        gpu.demag_poisson.hybrid_demag_xyz.data(),
+        static_cast<uint64_t>(gpu.demag_poisson.hybrid_demag_xyz.size()),
         ctx.transfer_audit.audit,
         reason);
 #else

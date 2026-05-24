@@ -19,7 +19,7 @@ import {
   maxPointsToGlyphBudget,
 } from "./vectorDensityBudget";
 import type { FemMeshData, FemVectorDomainFilter, FemFerromagnetVisibilityMode, RenderMode, RenderLayer } from "./femMeshTypes";
-import type { FemLiveMeshObjectSegment } from "../../../lib/session/types";
+import type { FemLiveMeshObjectSegment, FemMeshPart } from "../../../lib/session/types";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
@@ -44,6 +44,16 @@ interface UseFemVectorDomainArgs {
   qualityProfile: ViewportQualityProfileId;
   renderMode: RenderMode;
   airSegmentVisible: boolean;
+  meshParts?: readonly FemMeshPart[];
+  partRenderDataById?: ReadonlyMap<
+    string,
+    {
+      boundaryFaceIndices: number[] | null;
+      elementIndices: number[] | null;
+      nodeMask: Uint8Array | null;
+      surfaceFaces: [number, number, number][] | null;
+    }
+  >;
 }
 
 export function resolveRuntimeRenderMode(
@@ -77,6 +87,8 @@ export function useFemVectorDomain({
   qualityProfile,
   renderMode,
   airSegmentVisible,
+  meshParts,
+  partRenderDataById,
 }: UseFemVectorDomainArgs) {
   const magneticBoundaryFaceIndices = useMemo(() => {
     if (!enableVectorDerivedModel) {
@@ -217,13 +229,13 @@ export function useFemVectorDomain({
       return null;
     }
     if (hasMeshParts) {
-      const airLayers = visibleLayers.filter((layer) => layer.part.role === "air");
-      if (airLayers.length === 0) {
+      const airParts = meshParts?.filter((part) => part.role === "air") ?? [];
+      if (airParts.length === 0) {
         return new Uint8Array(meshData.nNodes);
       }
       const combined = new Uint8Array(meshData.nNodes);
-      for (const layer of airLayers) {
-        const nodeMask = layer.nodeMask;
+      for (const part of airParts) {
+        const nodeMask = partRenderDataById?.get(part.id)?.nodeMask;
         if (!nodeMask) {
           continue;
         }
@@ -235,7 +247,15 @@ export function useFemVectorDomain({
     }
     const nodeMask = collectSegmentNodeMask(objectSegments, meshData.nNodes, airSegmentIds);
     return nodeMask ?? new Uint8Array(meshData.nNodes);
-  }, [airSegmentIds, hasMeshParts, meshData.nNodes, objectSegments, visibleLayers, enableVectorDerivedModel]);
+  }, [
+    airSegmentIds,
+    hasMeshParts,
+    meshData.nNodes,
+    objectSegments,
+    meshParts,
+    partRenderDataById,
+    enableVectorDerivedModel,
+  ]);
 
   const resolvedVectorDomain: "magnetic_only" | "full_domain" | "airbox_only" = useMemo(() => {
     if (effectiveVectorDomainFilter === "airbox_only") {

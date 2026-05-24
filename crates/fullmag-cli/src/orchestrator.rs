@@ -1423,6 +1423,8 @@ fn scripted_stage_execution_state(
 ) -> CurrentLiveStageExecutionState {
     let mut stages = vec![
         CurrentLiveStageExecutionRecord {
+            stage_id: None,
+            kind: None,
             status: "pending".to_string(),
             command_id: None,
             started_at_unix_ms: None,
@@ -1474,6 +1476,26 @@ fn user_cancelled_stage_completion(status: &str) -> fullmag_ir::StageCompletionI
     }
 }
 
+fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRecord {
+    CurrentLiveStageExecutionRecord {
+        stage_id: Some(format!("stage-{index:03}")),
+        kind: kind.map(str::to_string),
+        status: "pending".to_string(),
+        command_id: None,
+        started_at_unix_ms: None,
+        completed_at_unix_ms: None,
+        reason: None,
+        artifact_refs: Vec::new(),
+        checkpoint_ref: None,
+        loaded_state_ref: None,
+        resume_from_checkpoint_ref: None,
+        state_transition: None,
+        metric_name: None,
+        metric_value: None,
+        threshold: None,
+    }
+}
+
 #[derive(Clone)]
 struct ActiveSequenceState {
     remaining_stages: Vec<fullmag_runner::SequenceStage>,
@@ -1484,27 +1506,16 @@ struct ActiveSequenceState {
 impl ActiveSequenceState {
     fn new(stages: Vec<fullmag_runner::SequenceStage>) -> Self {
         let total_stages = stages.len();
+        let built_stages = (0..total_stages)
+            .map(|index| {
+                let kind = stages.get(index).map(|s| s.label());
+                stage_record(index, kind)
+            })
+            .collect();
         Self {
             remaining_stages: stages,
             current_stage_1based: 1,
-            stages: vec![
-                CurrentLiveStageExecutionRecord {
-                    status: "pending".to_string(),
-                    command_id: None,
-                    started_at_unix_ms: None,
-                    completed_at_unix_ms: None,
-                    reason: None,
-                    artifact_refs: Vec::new(),
-                    checkpoint_ref: None,
-                    loaded_state_ref: None,
-                    resume_from_checkpoint_ref: None,
-                    state_transition: None,
-                    metric_name: None,
-                    metric_value: None,
-                    threshold: None,
-                };
-                total_stages
-            ],
+            stages: built_stages,
         }
     }
 
@@ -1512,21 +1523,7 @@ impl ActiveSequenceState {
         Self {
             remaining_stages: Vec::new(),
             current_stage_1based: 1,
-            stages: vec![CurrentLiveStageExecutionRecord {
-                status: "pending".to_string(),
-                command_id: None,
-                started_at_unix_ms: None,
-                completed_at_unix_ms: None,
-                reason: None,
-                artifact_refs: Vec::new(),
-                checkpoint_ref: None,
-                loaded_state_ref: None,
-                resume_from_checkpoint_ref: None,
-                state_transition: None,
-                metric_name: None,
-                metric_value: None,
-                threshold: None,
-            }],
+            stages: vec![stage_record(0, Some("relax"))],
         }
     }
 
@@ -1606,6 +1603,8 @@ impl ActiveSequenceState {
                 push_unique_artifact_ref(&mut artifact_refs, artifact_ref);
             }
             self.stages[current_index] = CurrentLiveStageExecutionRecord {
+                stage_id: previous.stage_id,
+                kind: previous.kind,
                 status: status.to_string(),
                 command_id: previous.command_id,
                 started_at_unix_ms: previous.started_at_unix_ms,
@@ -7895,5 +7894,27 @@ mod tests {
         assert!(export_stage_dir.join("synthetic_stage.json").is_file());
 
         let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn active_sequence_preserves_completed_relaxation_metric_and_identity() {
+        let mut state = ActiveSequenceState::single_current();
+        state.mark_current_started("cmd-relax", 1_700_000_000_000, None);
+        let completion = fullmag_ir::StageCompletionIR {
+            status: "completed".into(),
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric_name: Some("max_torque_apm".into()),
+            metric_value: Some(75.0),
+            threshold: Some(80.0),
+        };
+        state.mark_current("completed", Some(&completion), Some(1_700_000_001_000), None);
+        let execution = state.completed_stage_execution("completed");
+
+        assert_eq!(execution.completed_stage_indexes, vec![0]);
+        assert_eq!(execution.stages[0].status, "completed");
+        assert_eq!(execution.stages[0].stage_id.as_deref(), Some("stage-000"));
+        assert_eq!(execution.stages[0].metric_name.as_deref(), Some("max_torque_apm"));
+        assert_eq!(execution.stages[0].metric_value, Some(75.0));
+        assert_eq!(execution.stages[0].threshold, Some(80.0));
     }
 }

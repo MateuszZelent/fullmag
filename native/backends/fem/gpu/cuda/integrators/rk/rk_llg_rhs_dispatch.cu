@@ -52,7 +52,7 @@ bool gpu_rk_compute_llg_rhs(
         gpu.h_eff.x, gpu.h_eff.y, gpu.h_eff.z,
         rhs.x, rhs.y, rhs.z,
         gpu.scalar_reduce_workspace,
-        gpu.alpha,
+        gpu.materials.alpha,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,
         !ctx.material_fields.alpha_field.empty(),

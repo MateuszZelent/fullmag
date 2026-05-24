@@ -282,4 +282,33 @@ describe("flattenVisibleExplorerRows", () => {
       }),
     });
   });
+
+  it("keeps completed study stages addressable by status", () => {
+    const rows = flattenVisibleExplorerRows(
+      [
+        {
+          id: "model:study:stage:stage-000",
+          kind: "study.stage.relax",
+          label: "Relax 1",
+          parentId: "model:study",
+          status: "completed",
+        },
+      ],
+      new Set(),
+    );
+
+    expect(rows[0]?.node).toMatchObject({
+      id: "model:study:stage:stage-000",
+      status: "completed",
+    });
+  });
+
+  it("styles completed explorer rows with the success token", () => {
+    const { readFileSync } = require("node:fs");
+    const { fileURLToPath } = require("node:url");
+    const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
+    const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
+    expect(css).toContain('.fm-explorer-tree-row[data-status="completed"]');
+    expect(css).toContain("var(--fm-success)");
+  });
 });

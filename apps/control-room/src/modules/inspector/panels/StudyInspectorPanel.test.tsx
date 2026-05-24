@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { Accordion } from "@/shared/ui/Accordion";
 
 import type { CommandDetailResource } from "@/kernel/api/apiTypes";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
@@ -19,6 +20,7 @@ import {
   ImportStateDialog,
   RestoreCheckpointDialog,
   StudyCommandButton,
+  StudySelectedStageSection,
 } from "./StudyInspectorPanel";
 
 describe("StudyInspectorPanel", () => {
@@ -233,5 +235,67 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("mesh revision differs");
     expect(html).toContain("initial_condition");
     expect(html).toContain("config_only");
+  });
+
+  it("renders terminal selected relaxation details", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["selected-stage"]}>
+        <StudySelectedStageSection
+          stageExecutionRevision={13}
+          model={{
+            boundary: { demagRealization: "default", externalField: "0, 0, 0 T" },
+            requested: { backend: "auto", device: "auto", mode: "strict", precision: "double" },
+            runtime: {
+              activeStageLabel: "No active stage",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "9.425e-5 T",
+              progressPercent: 100,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "run-1",
+              state: "completed",
+            },
+            selectedStage: {
+              artifactRefs: ["runs/run-1/stages/stage-relax"],
+              checkpointRef: "cp-relaxed",
+              commandId: "cmd-relax",
+              completedAtUnixMs: 1_700_000_010_000,
+              energyTolerance: null,
+              index: 0,
+              kind: "relax",
+              label: "Relax 1",
+              maxSteps: "1000",
+              progressPercent: 100,
+              runtimeMetric: {
+                name: "max_torque_apm",
+                threshold: "1.005e-4 T / 8.000e1 A/m",
+                value: "9.425e-5 T / 7.500e1 A/m",
+              },
+              stageId: "stage-relax",
+              status: "completed",
+              stopReason: "torque",
+              torqueTolerance: "80",
+              torqueToleranceFormatted: "1.005e-4 T / 8.000e1 A/m",
+              torqueToleranceShortFormatted: "1.005e-4 T",
+              untilSeconds: null,
+              algorithm: null,
+            },
+            stages: [],
+          }}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("completed");
+    expect(html).toContain("torque");
+    expect(html).toContain("cmd-relax");
+    expect(html).toContain("cp-relaxed");
+    expect(html).toContain("max_torque_apm");
+    expect(html).toContain("simulation/stages/execution@13");
+    expect(html).toContain("runs/run-1/stages/stage-relax");
   });
 });

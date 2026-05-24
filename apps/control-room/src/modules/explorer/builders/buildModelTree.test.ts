@@ -352,6 +352,8 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === "model:study:stage:runtime-relax"),
     ).toMatchObject({
+      stageId: "runtime-relax",
+      stageIndex: 0,
       status: "completed",
     });
     expect(
@@ -396,5 +398,40 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:study:stage:0")
         ?.contextCommands,
     ).toEqual(expect.arrayContaining(["study.skip"]));
+  });
+
+  it("merges stage execution by stage id before falling back to index", () => {
+    const sceneSnapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          { kind: "relax", stage_id: "relax-main" },
+          { kind: "run", stage_id: "run-main" },
+        ],
+      },
+    });
+
+    const snapshot = modelTreeSnapshotWithStageExecution(sceneSnapshot, {
+      active_stage_index: null,
+      active_stage_kind: null,
+      completed_stage_indexes: [1],
+      revision: 9,
+      runtime_state: "completed",
+      stage_statuses: ["running", "completed"],
+      stages: [
+        { index: 1, stage_id: "run-main", status: "completed" },
+        { index: 0, stage_id: "relax-main", status: "running" },
+      ],
+      total_stages: 2,
+    } as never);
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:relax-main"),
+    ).toMatchObject({ label: "Relax 1", status: "running" });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:run-main"),
+    ).toMatchObject({ label: "Run 2", status: "completed" });
   });
 });

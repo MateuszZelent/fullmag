@@ -11,6 +11,7 @@ import {
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -107,6 +108,7 @@ function resourceFamilyPrefix(pathWithObjectId: string): string {
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
   SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
 ]);
 
 function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {

@@ -271,8 +271,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.dmi.interfacial_enabled = true;
-        blocked.gpu_state.device.mesh_geometry_uploaded = true;
-        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry.uploaded = true;
+        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
@@ -285,8 +285,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.dmi.bulk_enabled = true;
-        blocked.gpu_state.device.mesh_geometry_uploaded = true;
-        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry.uploaded = true;
+        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto dmi_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
@@ -394,8 +394,8 @@ int main() {
     {
         auto blocked = ctx;
         blocked.stt.zhang_li_enabled = true;
-        blocked.gpu_state.device.mesh_geometry_uploaded = true;
-        blocked.gpu_state.device.mesh_element_count = ctx.mesh.n_elements;
+        blocked.gpu_state.device.mesh_geometry.uploaded = true;
+        blocked.gpu_state.device.mesh_geometry.element_count = ctx.mesh.n_elements;
         reason.clear();
         const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(

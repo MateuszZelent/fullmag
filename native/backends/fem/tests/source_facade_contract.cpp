@@ -452,6 +452,177 @@ void gpu_exchange_planning_is_owned_by_cuda_exchange_module() {
         "GPU CUDA exchange planning module must document its non-owning module boundary");
 }
 
+void gpu_runtime_coefficients_have_explicit_device_substates() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string gpu_state_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
+    const std::string gpu_state_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
+    const std::string material_state_header =
+        read_text_file(root / "gpu" / "cuda" / "materials" / "material_state.hpp");
+    const std::string mesh_metrics_header =
+        read_text_file(root / "gpu" / "cuda" / "mesh" / "mesh_metrics_state.hpp");
+    const std::string mesh_regions_header =
+        read_text_file(root / "gpu" / "cuda" / "mesh" / "mesh_regions_state.hpp");
+    const std::string llg_rhs_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_llg_rhs_dispatch.cu");
+    const std::string thermal_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_thermal_field.cu");
+    const std::string anisotropy_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_anisotropy_field.cu");
+    const std::string exchange_dispatch_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_dispatch.cu");
+
+    check(
+        material_state_header.find("GPU CUDA material device-state module header") !=
+                std::string::npos &&
+            material_state_header.find("struct FemGpuMaterialDeviceState") !=
+                std::string::npos &&
+            material_state_header.find("double *ms") != std::string::npos &&
+            material_state_header.find("double *alpha") != std::string::npos &&
+            material_state_header.find("double *kc3") != std::string::npos,
+        "GPU CUDA material module must own device-side material coefficients");
+    check(
+        mesh_metrics_header.find("double *node_volumes") != std::string::npos,
+        "GPU CUDA mesh metrics module must own device-side node volumes");
+    check(
+        mesh_regions_header.find("GPU CUDA mesh region device-state module header") !=
+                std::string::npos &&
+            mesh_regions_header.find("struct FemGpuMeshRegionDeviceState") !=
+                std::string::npos &&
+            mesh_regions_header.find("uint8_t *magnetic_node_mask") !=
+                std::string::npos &&
+            mesh_regions_header.find("uint32_t *periodic_reduced_node") !=
+                std::string::npos &&
+            mesh_regions_header.find("uint32_t *periodic_representative_nodes") !=
+                std::string::npos,
+        "GPU CUDA mesh region module must own device-side magnetic masks and periodic maps");
+    check(
+        gpu_state_header.find("#include \"gpu/cuda/materials/material_state.hpp\"") !=
+                std::string::npos &&
+            gpu_state_header.find("#include \"gpu/cuda/mesh/mesh_regions_state.hpp\"") !=
+                std::string::npos &&
+            gpu_state_header.find("FemGpuMaterialDeviceState materials{}") !=
+                std::string::npos &&
+            gpu_state_header.find("FemGpuMeshRegionDeviceState mesh_regions{}") !=
+                std::string::npos &&
+            gpu_state_header.find("double *ms = nullptr") == std::string::npos &&
+            gpu_state_header.find("double *alpha = nullptr") == std::string::npos &&
+            gpu_state_header.find("double *node_volumes = nullptr") == std::string::npos &&
+            gpu_state_header.find("uint8_t *magnetic_node_mask = nullptr") ==
+                std::string::npos &&
+            gpu_state_header.find("uint32_t *periodic_reduced_node = nullptr") ==
+                std::string::npos &&
+            gpu_state_header.find("uint32_t *periodic_representative_nodes = nullptr") ==
+                std::string::npos,
+        "FemGpuState must store runtime coefficients and mesh region maps through explicit substates");
+    check(
+        gpu_state_source.find("state.materials.ms") != std::string::npos &&
+            gpu_state_source.find("state.materials.alpha") != std::string::npos &&
+            gpu_state_source.find("state.mesh_metrics.node_volumes") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_regions.magnetic_node_mask") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_regions.periodic_reduced_node") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_regions.periodic_representative_nodes") !=
+                std::string::npos &&
+            gpu_state_source.find("state.ms") == std::string::npos &&
+            gpu_state_source.find("state.node_volumes") == std::string::npos &&
+            gpu_state_source.find("state.magnetic_node_mask") == std::string::npos,
+        "GPU state upload/allocation must use material, mesh-metric, and mesh-region substates");
+    check(
+        llg_rhs_source.find("gpu.materials.alpha") != std::string::npos &&
+            anisotropy_source.find("gpu.materials.ms") != std::string::npos &&
+            thermal_source.find("gpu.mesh_metrics.node_volumes") != std::string::npos &&
+            anisotropy_source.find("gpu.mesh_regions.magnetic_node_mask") !=
+                std::string::npos &&
+            thermal_source.find("gpu.mesh_regions.magnetic_node_mask") !=
+                std::string::npos &&
+            exchange_dispatch_source.find("gpu.mesh_regions.magnetic_node_mask") !=
+                std::string::npos,
+        "GPU RK dispatch must read runtime coefficients through material, mesh-metric, and mesh-region substates");
+}
+
+void gpu_mesh_geometry_is_owned_by_cuda_mesh_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string gpu_state_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
+    const std::string gpu_state_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
+    const std::string mesh_geometry_header =
+        read_text_file(root / "gpu" / "cuda" / "mesh" / "mesh_geometry_state.hpp");
+    const std::string dmi_field_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
+    const std::string dmi_energy_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_energy_reductions.cu");
+    const std::string zhang_li_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_zhang_li_torque.cu");
+    const std::string rk_plan_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_plan.cpp");
+
+    check(
+        mesh_geometry_header.find("GPU CUDA mesh geometry device-state module header") !=
+                std::string::npos &&
+            mesh_geometry_header.find("struct FemGpuMeshGeometryDeviceState") !=
+                std::string::npos &&
+            mesh_geometry_header.find("double *nodes_xyz") != std::string::npos &&
+            mesh_geometry_header.find("uint32_t *elements") != std::string::npos &&
+            mesh_geometry_header.find("uint8_t *magnetic_element_mask") !=
+                std::string::npos &&
+            mesh_geometry_header.find("uint64_t element_count") !=
+                std::string::npos &&
+            mesh_geometry_header.find("bool uploaded") != std::string::npos,
+        "GPU CUDA mesh module must own uploaded device-side mesh geometry");
+    check(
+        gpu_state_header.find("#include \"gpu/cuda/mesh/mesh_geometry_state.hpp\"") !=
+                std::string::npos &&
+            gpu_state_header.find("FemGpuMeshGeometryDeviceState mesh_geometry{}") !=
+                std::string::npos &&
+            gpu_state_header.find("double *nodes_xyz = nullptr") ==
+                std::string::npos &&
+            gpu_state_header.find("uint64_t mesh_element_count = 0") ==
+                std::string::npos &&
+            gpu_state_header.find("bool mesh_geometry_uploaded = false") ==
+                std::string::npos,
+        "FemGpuState must store mesh geometry through an explicit mesh-geometry substate");
+    check(
+        gpu_state_source.find("state.mesh_geometry.nodes_xyz") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_geometry.elements") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_geometry.magnetic_element_mask") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_geometry.element_count") !=
+                std::string::npos &&
+            gpu_state_source.find("state.mesh_geometry.uploaded") !=
+                std::string::npos &&
+            gpu_state_source.find("state.nodes_xyz") == std::string::npos &&
+            gpu_state_source.find("state.mesh_element_count") == std::string::npos,
+        "GPU mesh geometry upload/destroy/reset must use the mesh-geometry substate");
+    for (const std::string *source : {&dmi_field_source, &dmi_energy_source, &zhang_li_source}) {
+        check(
+            source->find("gpu.mesh_geometry.uploaded") != std::string::npos &&
+                source->find("gpu.mesh_geometry.element_count") !=
+                    std::string::npos &&
+                source->find("gpu.mesh_geometry.nodes_xyz") != std::string::npos &&
+                source->find("gpu.mesh_geometry.elements") != std::string::npos &&
+                source->find("gpu.mesh_geometry.magnetic_element_mask") !=
+                    std::string::npos &&
+                source->find("gpu.nodes_xyz") == std::string::npos &&
+                source->find("gpu.mesh_element_count") == std::string::npos,
+            "GPU RK DMI/STT geometry consumers must use the mesh-geometry substate");
+    }
+    check(
+        rk_plan_source.find("ctx.gpu_state.device.mesh_geometry.uploaded") !=
+                std::string::npos &&
+            rk_plan_source.find("ctx.gpu_state.device.mesh_geometry.element_count") !=
+                std::string::npos &&
+            rk_plan_source.find("ctx.gpu_state.device.mesh_geometry_uploaded") ==
+                std::string::npos,
+        "GPU RK readiness planning must use the mesh-geometry substate");
+}
+
 void gpu_exchange_kernels_are_owned_by_cuda_exchange_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string cmake = read_text_file(root / "CMakeLists.txt");
@@ -1764,6 +1935,12 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.hpp");
     const std::string stage_compute_header =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.hpp");
+    const std::string demag_state_header =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "demag_state.hpp");
+    const std::string gpu_state_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.hpp");
+    const std::string gpu_state_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string module =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "poisson.cpp");
     const std::string operators =
@@ -1820,6 +1997,47 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
             stage_compute_header.find("bool compute_device_demag_for_device_stage(") !=
                 std::string::npos,
         "GPU CUDA Poisson demag stage compute header must declare stage compute");
+    check(
+        demag_state_header.find("GPU CUDA Poisson demag device-state module header") !=
+                std::string::npos &&
+            demag_state_header.find("struct FemGpuDemagPoissonDeviceState") !=
+                std::string::npos &&
+            demag_state_header.find("double *poisson_rhs") != std::string::npos &&
+            demag_state_header.find("double *poisson_solution") !=
+                std::string::npos &&
+            demag_state_header.find("FemGpuComponentField poisson_gradient") !=
+                std::string::npos &&
+            demag_state_header.find("std::vector<double> hybrid_stage_m_xyz") !=
+                std::string::npos &&
+            demag_state_header.find("std::vector<double> hybrid_demag_xyz") !=
+                std::string::npos &&
+            demag_state_header.find("double hybrid_demag_energy_joules") !=
+                std::string::npos,
+        "GPU CUDA Poisson demag module must own device Poisson and hybrid compatibility state");
+    check(
+        gpu_state_header.find("#include \"gpu/cuda/demag_poisson/demag_state.hpp\"") !=
+                std::string::npos &&
+            gpu_state_header.find("FemGpuDemagPoissonDeviceState demag_poisson{}") !=
+                std::string::npos &&
+            gpu_state_header.find("double *poisson_rhs = nullptr") ==
+                std::string::npos &&
+            gpu_state_header.find("std::vector<double> hybrid_demag_xyz") ==
+                std::string::npos,
+        "FemGpuState must store Poisson demag device state through an explicit demag substate");
+    check(
+        gpu_state_source.find("state.demag_poisson.poisson_rhs") !=
+                std::string::npos &&
+            gpu_state_source.find("state.demag_poisson.poisson_solution") !=
+                std::string::npos &&
+            gpu_state_source.find("state.demag_poisson.poisson_gradient") !=
+                std::string::npos &&
+            gpu_state_source.find("state.demag_poisson.hybrid_stage_m_xyz") !=
+                std::string::npos &&
+            gpu_state_source.find("state.demag_poisson.hybrid_demag_xyz") !=
+                std::string::npos &&
+            gpu_state_source.find("state.poisson_rhs") == std::string::npos &&
+            gpu_state_source.find("state.hybrid_demag_xyz") == std::string::npos,
+        "GPU state allocation, destroy, and metadata reset must use the Poisson demag substate");
     check(
         header.find("bool gpu_demag_poisson_initialize(") != std::string::npos &&
             header.find("bool compute_device_demag_for_device_stage(") ==
@@ -1898,6 +2116,12 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
             stage_compute.find("fullmag_cuda_demag_energy_blocks(") !=
                 std::string::npos,
         "GPU CUDA Poisson demag stage compute module must own RHS/solve/recovery/energy orchestration");
+    check(
+        stage_compute.find("gpu.demag_poisson.poisson_rhs") != std::string::npos &&
+            stage_compute.find("gpu.demag_poisson.poisson_solution") !=
+                std::string::npos &&
+            stage_compute.find("gpu.poisson_rhs") == std::string::npos,
+        "GPU CUDA Poisson demag stage compute must use the Poisson demag device substate");
     check(
         module.find("does not own public DSL semantics, MFEM context construction, RK stage orchestration, exchange, local interaction kernels, or C ABI entrypoints") !=
             std::string::npos,
@@ -3802,6 +4026,8 @@ int main() {
     common_fem_utilities_have_single_header();
     legacy_gpu_placeholder_sources_are_removed();
     gpu_exchange_planning_is_owned_by_cuda_exchange_module();
+    gpu_runtime_coefficients_have_explicit_device_substates();
+    gpu_mesh_geometry_is_owned_by_cuda_mesh_module();
     gpu_exchange_kernels_are_owned_by_cuda_exchange_module();
     gpu_rk_planning_is_owned_by_cuda_rk_module();
     gpu_rk_step_is_owned_by_cuda_rk_module();

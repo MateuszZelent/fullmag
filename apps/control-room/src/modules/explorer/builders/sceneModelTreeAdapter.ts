@@ -58,12 +58,22 @@ export function modelTreeSnapshotWithStageExecution(
 ): ModelTreeSnapshot {
   if (!snapshot.study || !stageExecution?.stages.length) return snapshot;
 
+  const runtimeByStageId = new Map(
+    stageExecution.stages
+      .filter((stage) => typeof stage.stage_id === "string")
+      .map((stage) => [stage.stage_id, stage]),
+  );
+
   return {
     ...snapshot,
     study: {
       ...snapshot.study,
       stages: snapshot.study.stages.map((stage, index) => {
-        const runtimeStage = stageExecution.stages[index] ?? null;
+        const runtimeStage =
+          (stage.stageId ? runtimeByStageId.get(stage.stageId) : undefined) ??
+          stageExecution.stages.find((candidate) => candidate.index === index) ??
+          stageExecution.stages[index] ??
+          null;
         const runtimeStatus =
           runtimeStage?.status ?? stageExecution.stage_statuses[index] ?? null;
         return {

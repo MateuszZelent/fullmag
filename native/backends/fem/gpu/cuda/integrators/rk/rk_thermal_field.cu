@@ -55,16 +55,16 @@ bool gpu_rk_compute_thermal_field_contribution(
         reason = "GPU RK thermal field requires positive timestep";
         return false;
     }
-    if (gpu.ms == nullptr || gpu.alpha == nullptr || gpu.node_volumes == nullptr ||
+    if (gpu.materials.ms == nullptr || gpu.materials.alpha == nullptr || gpu.mesh_metrics.node_volumes == nullptr ||
         gpu.h_therm.x == nullptr || gpu.h_therm.y == nullptr || gpu.h_therm.z == nullptr) {
         reason = "GPU RK thermal field requires device-resident Ms, alpha, node volumes, and H_therm buffers";
         return false;
     }
     fullmag_cuda_thermal_field_blocks(
-        gpu.ms,
-        gpu.alpha,
-        gpu.node_volumes,
-        gpu.magnetic_node_mask,
+        gpu.materials.ms,
+        gpu.materials.alpha,
+        gpu.mesh_metrics.node_volumes,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.h_therm.x,
         gpu.h_therm.y,
         gpu.h_therm.z,

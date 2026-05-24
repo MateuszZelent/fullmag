@@ -51,7 +51,7 @@ bool gpu_rk_reduce_final_external_energy_terms(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
+    if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.h_ext.x == nullptr || gpu.h_ext.y == nullptr || gpu.h_ext.z == nullptr) {
         reason = "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext";
         return false;
@@ -63,9 +63,9 @@ bool gpu_rk_reduce_final_external_energy_terms(
         gpu.h_ext.x,
         gpu.h_ext.y,
         gpu.h_ext.z,
-        gpu.ms,
+        gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.magnetic_node_mask,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.scalar_reduce_workspace,
         n,
         stream);
