@@ -1222,6 +1222,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         build_mode=build_mode,
         fallbacks_triggered=fallbacks_triggered,
         mesh_options=mesh_options,
+        selector_resolution=result.selector_resolution if result is not None else [],
+        orphan_entities=result.orphan_entities if result is not None else [],
     )
     emit_progress_event(
         {

@@ -866,11 +866,34 @@ def _mesh_options_from_runtime_metadata(
             return None
         return entries[0].get(key)
 
+    def _per_geometry_values(key: str) -> list[object]:
+        return [
+            entry[key]
+            for entry in raw_per_geometry
+            if isinstance(entry, Mapping) and entry.get(key) is not None
+        ]
+
     def _first_non_none(*values: object) -> object | None:
         for value in values:
             if value is not None:
                 return value
         return None
+
+    def _shared_per_geometry_value(key: str) -> object | None:
+        values = _per_geometry_values(key)
+        if not values:
+            return None
+        first = values[0]
+        if any(value != first for value in values[1:]):
+            raise ValueError(f"per-geometry {key} values must match for shared-domain boundary layers")
+        return first
+
+    def _merged_per_geometry_list(key: str) -> list[object] | None:
+        merged: list[object] = []
+        for value in _per_geometry_values(key):
+            if isinstance(value, list):
+                merged.extend(value)
+        return merged or None
 
     size_fields = (
         [field for field in raw_mesh_options.get("size_fields", []) if isinstance(field, Mapping)]
@@ -912,29 +935,42 @@ def _mesh_options_from_runtime_metadata(
     )
     raw_boundary_layer_count = _first_non_none(
         raw_mesh_options.get("boundary_layer_count"),
-        _single_geometry_value("boundary_layer_count"),
+        _shared_per_geometry_value("boundary_layer_count"),
     )
     raw_boundary_layer_thickness = _first_non_none(
         raw_mesh_options.get("boundary_layer_thickness"),
-        _single_geometry_value("boundary_layer_thickness"),
+        _shared_per_geometry_value("boundary_layer_thickness"),
     )
     raw_boundary_layer_stretching = _first_non_none(
         raw_mesh_options.get("boundary_layer_stretching"),
-        _single_geometry_value("boundary_layer_stretching"),
+        _shared_per_geometry_value("boundary_layer_stretching"),
     )
     raw_boundary_layer_surface_tags = _first_non_none(
         raw_mesh_options.get("boundary_layer_target_surface_tags"),
-        _single_geometry_value("boundary_layer_target_surface_tags"),
+        _merged_per_geometry_list("boundary_layer_target_surface_tags"),
     )
     raw_boundary_layer_curve_tags = _first_non_none(
         raw_mesh_options.get("boundary_layer_target_curve_tags"),
-        _single_geometry_value("boundary_layer_target_curve_tags"),
+        _merged_per_geometry_list("boundary_layer_target_curve_tags"),
+    )
+    raw_boundary_layer_surface_selectors = _first_non_none(
+        raw_mesh_options.get("boundary_layer_target_surface_selectors"),
+        _merged_per_geometry_list("boundary_layer_target_surface_selectors"),
+    )
+    raw_boundary_layer_curve_selectors = _first_non_none(
+        raw_mesh_options.get("boundary_layer_target_curve_selectors"),
+        _merged_per_geometry_list("boundary_layer_target_curve_selectors"),
     )
 
     def _int_list(value: object) -> list[int] | None:
         if not isinstance(value, list):
             return None
         return [int(item) for item in value]
+
+    def _selector_list(value: object) -> list[dict[str, object]] | None:
+        if not isinstance(value, list):
+            return None
+        return [dict(item) for item in value if isinstance(item, Mapping)]
 
     return MeshOptions(
         algorithm_2d=int(raw_mesh_options.get("algorithm_2d", 6)),
@@ -998,4 +1034,10 @@ def _mesh_options_from_runtime_metadata(
         boundary_layer_stretching=_coerce_positive_float(raw_boundary_layer_stretching),
         boundary_layer_target_surface_tags=_int_list(raw_boundary_layer_surface_tags),
         boundary_layer_target_curve_tags=_int_list(raw_boundary_layer_curve_tags),
+        boundary_layer_target_surface_selectors=_selector_list(
+            raw_boundary_layer_surface_selectors
+        ),
+        boundary_layer_target_curve_selectors=_selector_list(
+            raw_boundary_layer_curve_selectors
+        ),
     )

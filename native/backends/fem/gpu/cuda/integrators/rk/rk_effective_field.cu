@@ -3,27 +3,25 @@
  *
  * This source owns H_eff accumulation for the device-resident RK RHS: base
  * exchange/demag/external composition, local field additions, DMI additions,
- * and scaled Oersted additions. It does not own local field generation,
- * exchange, demag dispatch, LLG RHS evaluation, direct torque terms, RK step
- * scheduling, final statistics, GPU RK planning, or C ABI entrypoints.
+ * and specialized interaction accumulation delegation. It does not own local
+ * field generation, exchange, demag dispatch, LLG RHS evaluation, direct torque
+ * terms, RK step scheduling, final statistics, GPU RK planning, or C ABI
+ * entrypoints.
  */
 
 #include "gpu/cuda/integrators/rk/rk_effective_field.hpp"
 
 #include "context.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
-#include "gpu/cuda/interactions/oersted/oersted_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk_oersted_field.hpp"
 
 #include <cuda_runtime.h>
 
-#include <cmath>
 #include <string>
 
 namespace fullmag::fem {
 
 namespace {
-
-constexpr double kPi = 3.141592653589793238462643383279502884;
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 {
@@ -37,31 +35,6 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 bool cuda_launch_ok(const char *operation, std::string &reason)
 {
     return cuda_ok(cudaPeekAtLastError(), operation, reason);
-}
-
-double gpu_rk_oersted_scale(const Context &ctx)
-{
-    if (!ctx.oersted.has_cylinder) {
-        return 1.0;
-    }
-    double scale = ctx.oersted.current;
-    switch (ctx.oersted.time_dep_kind) {
-        case 1:
-            scale *= std::sin(
-                         2.0 * kPi * ctx.oersted.time_dep_freq * ctx.state.current_time +
-                         ctx.oersted.time_dep_phase) +
-                     ctx.oersted.time_dep_offset;
-            break;
-        case 2:
-            scale *= (ctx.state.current_time >= ctx.oersted.time_dep_t_on &&
-                      ctx.state.current_time < ctx.oersted.time_dep_t_off)
-                         ? 1.0
-                         : 0.0;
-            break;
-        default:
-            break;
-    }
-    return scale;
 }
 
 } // namespace
@@ -112,18 +85,8 @@ bool gpu_rk_accumulate_effective_field(
             return false;
         }
     }
-    if (ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field) {
-        if (gpu.h_oe.x == nullptr || gpu.h_oe.y == nullptr || gpu.h_oe.z == nullptr) {
-            reason = "GPU RK Oersted field requires device-resident H_oe buffers";
-            return false;
-        }
-        const double scale = gpu_rk_oersted_scale(ctx);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.x, gpu.h_eff.x, scale, n, stream);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.y, gpu.h_eff.y, scale, n, stream);
-        fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.z, gpu.h_eff.z, scale, n, stream);
-        if (!cuda_launch_ok("launch GPU RK Oersted h_eff accumulation", reason)) {
-            return false;
-        }
+    if (!gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)) {
+        return false;
     }
     if (ctx.magnetoelastic.enabled) {
         fullmag_cuda_add_field_inplace(gpu.h_mel.x, gpu.h_eff.x, n, stream);

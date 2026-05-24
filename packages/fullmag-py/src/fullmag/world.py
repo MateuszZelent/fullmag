@@ -395,6 +395,8 @@ class _MeshSpecState:
     boundary_layer_stretching: float | None = None
     boundary_layer_target_surface_tags: list[int] | None = None
     boundary_layer_target_curve_tags: list[int] | None = None
+    boundary_layer_target_surface_selectors: list[dict[str, object]] | None = None
+    boundary_layer_target_curve_selectors: list[dict[str, object]] | None = None
     size_fields: list[dict[str, object]] = field(default_factory=list)
     # Quality
     compute_quality: bool = False
@@ -439,6 +441,8 @@ class _MeshSpecState:
             or self.boundary_layer_stretching is not None
             or self.boundary_layer_target_surface_tags is not None
             or self.boundary_layer_target_curve_tags is not None
+            or self.boundary_layer_target_surface_selectors is not None
+            or self.boundary_layer_target_curve_selectors is not None
             or self.compute_quality
             or self.per_element_quality
             or bool(self.size_fields)
@@ -514,6 +518,21 @@ def _normalize_int_tags(value: Sequence[int] | None, *, context: str) -> list[in
     return tags
 
 
+def _normalize_selector_list(
+    value: Sequence[Mapping[str, object]] | None,
+    *,
+    context: str,
+) -> list[dict[str, object]] | None:
+    if value is None:
+        return None
+    selectors: list[dict[str, object]] = []
+    for selector in value:
+        if not isinstance(selector, Mapping):
+            raise ValueError(f"{context} must contain selector dictionaries")
+        selectors.append(dict(selector))
+    return selectors
+
+
 class GeometryMeshHandle:
     """Explicit mesh workflow API bound to one flat-script geometry/magnet.
 
@@ -568,6 +587,8 @@ class GeometryMeshHandle:
         boundary_layer_stretching: float | None = None,
         boundary_layer_target_surface_tags: Sequence[int] | None = None,
         boundary_layer_target_curve_tags: Sequence[int] | None = None,
+        boundary_layer_target_surface_selectors: Sequence[Mapping[str, object]] | None = None,
+        boundary_layer_target_curve_selectors: Sequence[Mapping[str, object]] | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -608,6 +629,8 @@ class GeometryMeshHandle:
             boundary_layer_stretching=boundary_layer_stretching,
             boundary_layer_target_surface_tags=boundary_layer_target_surface_tags,
             boundary_layer_target_curve_tags=boundary_layer_target_curve_tags,
+            boundary_layer_target_surface_selectors=boundary_layer_target_surface_selectors,
+            boundary_layer_target_curve_selectors=boundary_layer_target_curve_selectors,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
@@ -657,6 +680,8 @@ class GeometryMeshHandle:
         boundary_layer_stretching: float | None = None,
         boundary_layer_target_surface_tags: Sequence[int] | None = None,
         boundary_layer_target_curve_tags: Sequence[int] | None = None,
+        boundary_layer_target_surface_selectors: Sequence[Mapping[str, object]] | None = None,
+        boundary_layer_target_curve_selectors: Sequence[Mapping[str, object]] | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -839,6 +864,16 @@ class GeometryMeshHandle:
             spec.boundary_layer_target_curve_tags = _normalize_int_tags(
                 boundary_layer_target_curve_tags,
                 context=f"{self._owner._name}.mesh.boundary_layer_target_curve_tags",
+            )
+        if boundary_layer_target_surface_selectors is not None:
+            spec.boundary_layer_target_surface_selectors = _normalize_selector_list(
+                boundary_layer_target_surface_selectors,
+                context=f"{self._owner._name}.mesh.boundary_layer_target_surface_selectors",
+            )
+        if boundary_layer_target_curve_selectors is not None:
+            spec.boundary_layer_target_curve_selectors = _normalize_selector_list(
+                boundary_layer_target_curve_selectors,
+                context=f"{self._owner._name}.mesh.boundary_layer_target_curve_selectors",
             )
         if compute_quality is not None:
             spec.compute_quality = compute_quality
@@ -3004,6 +3039,8 @@ def _configure_object_mesh_defaults(
     boundary_layer_stretching: float | None = None,
     boundary_layer_target_surface_tags: Sequence[int] | None = None,
     boundary_layer_target_curve_tags: Sequence[int] | None = None,
+    boundary_layer_target_surface_selectors: Sequence[Mapping[str, object]] | None = None,
+    boundary_layer_target_curve_selectors: Sequence[Mapping[str, object]] | None = None,
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
 ) -> None:
@@ -3108,6 +3145,16 @@ def _configure_object_mesh_defaults(
         _state._default_mesh_spec.boundary_layer_target_curve_tags = _normalize_int_tags(
             boundary_layer_target_curve_tags,
             context="study.objects.mesh.defaults.boundary_layer_target_curve_tags",
+        )
+    if boundary_layer_target_surface_selectors is not None:
+        _state._default_mesh_spec.boundary_layer_target_surface_selectors = _normalize_selector_list(
+            boundary_layer_target_surface_selectors,
+            context="study.objects.mesh.defaults.boundary_layer_target_surface_selectors",
+        )
+    if boundary_layer_target_curve_selectors is not None:
+        _state._default_mesh_spec.boundary_layer_target_curve_selectors = _normalize_selector_list(
+            boundary_layer_target_curve_selectors,
+            context="study.objects.mesh.defaults.boundary_layer_target_curve_selectors",
         )
     if compute_quality is not None:
         _state._default_mesh_spec.compute_quality = compute_quality
@@ -3567,6 +3614,14 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["boundary_layer_target_surface_tags"] = list(spec.boundary_layer_target_surface_tags)
     if spec.boundary_layer_target_curve_tags is not None:
         payload["boundary_layer_target_curve_tags"] = list(spec.boundary_layer_target_curve_tags)
+    if spec.boundary_layer_target_surface_selectors is not None:
+        payload["boundary_layer_target_surface_selectors"] = [
+            dict(selector) for selector in spec.boundary_layer_target_surface_selectors
+        ]
+    if spec.boundary_layer_target_curve_selectors is not None:
+        payload["boundary_layer_target_curve_selectors"] = [
+            dict(selector) for selector in spec.boundary_layer_target_curve_selectors
+        ]
     if spec.compute_quality:
         payload["compute_quality"] = True
     if spec.per_element_quality:
@@ -3702,6 +3757,16 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["boundary_layer_target_curve_tags"] = list(
             primary_spec.boundary_layer_target_curve_tags
         )
+    if primary_spec.boundary_layer_target_surface_selectors is not None:
+        mesh_options["boundary_layer_target_surface_selectors"] = [
+            dict(selector)
+            for selector in primary_spec.boundary_layer_target_surface_selectors
+        ]
+    if primary_spec.boundary_layer_target_curve_selectors is not None:
+        mesh_options["boundary_layer_target_curve_selectors"] = [
+            dict(selector)
+            for selector in primary_spec.boundary_layer_target_curve_selectors
+        ]
 
     per_geometry = []
     for handle in _state._magnets:

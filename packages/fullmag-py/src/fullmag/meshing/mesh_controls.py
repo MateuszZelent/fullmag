@@ -34,6 +34,52 @@ def _geometry_name(value: str) -> str:
     return name
 
 
+def _point3(name: str, value: Sequence[Number]) -> list[float]:
+    values = [float(component) for component in value]
+    if len(values) != 3:
+        raise ValueError(f"{name} must be a 3-vector")
+    return values
+
+
+def _selector_count(value: int) -> int:
+    count = int(value)
+    if count < 1:
+        raise ValueError(f"count must be >= 1, got {value!r}")
+    return count
+
+
+def nearest_surface_to_point(
+    *,
+    point: Sequence[Number],
+    geometry: str | None = None,
+    count: int = 1,
+) -> dict[str, Any]:
+    selector: dict[str, Any] = {
+        "kind": "nearest_surface_to_point",
+        "point": _point3("point", point),
+        "count": _selector_count(count),
+    }
+    if geometry is not None:
+        selector["geometry"] = _geometry_name(geometry)
+    return selector
+
+
+def nearest_curve_to_point(
+    *,
+    point: Sequence[Number],
+    geometry: str | None = None,
+    count: int = 1,
+) -> dict[str, Any]:
+    selector: dict[str, Any] = {
+        "kind": "nearest_curve_to_point",
+        "point": _point3("point", point),
+        "count": _selector_count(count),
+    }
+    if geometry is not None:
+        selector["geometry"] = _geometry_name(geometry)
+    return selector
+
+
 def object_core_relaxation(
     geometry_name: str,
     *,
@@ -161,13 +207,18 @@ def boundary_layers(
     stretching: Number = 1.2,
     target_surface_tags: Sequence[int] | None = None,
     target_curve_tags: Sequence[int] | None = None,
+    target_surfaces: Sequence[dict[str, Any]] | None = None,
+    target_curves: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return explicit boundary-layer mesh controls for tagged surfaces/curves."""
     surface_tags = [int(tag) for tag in target_surface_tags or ()]
     curve_tags = [int(tag) for tag in target_curve_tags or ()]
-    if not surface_tags and not curve_tags:
+    surface_selectors = [dict(selector) for selector in target_surfaces or ()]
+    curve_selectors = [dict(selector) for selector in target_curves or ()]
+    if not surface_tags and not curve_tags and not surface_selectors and not curve_selectors:
         raise ValueError(
-            "boundary_layers requires target_surface_tags or target_curve_tags"
+            "boundary_layers requires target_surface_tags or target_curve_tags, "
+            "target_surfaces, or target_curves"
         )
     return {
         "boundary_layer_count": _at_least_one_int("count", count),
@@ -177,4 +228,6 @@ def boundary_layers(
         "boundary_layer_stretching": _positive_float("stretching", stretching),
         "boundary_layer_target_surface_tags": surface_tags,
         "boundary_layer_target_curve_tags": curve_tags,
+        "boundary_layer_target_surface_selectors": surface_selectors,
+        "boundary_layer_target_curve_selectors": curve_selectors,
     }

@@ -194,6 +194,8 @@ class MeshOptions:
     boundary_layer_stretching: float | None = None  # layer growth ratio (e.g. 1.2–1.5)
     boundary_layer_target_surface_tags: list[int] | None = None
     boundary_layer_target_curve_tags: list[int] | None = None
+    boundary_layer_target_surface_selectors: list[dict[str, Any]] | None = None
+    boundary_layer_target_curve_selectors: list[dict[str, Any]] | None = None
 
     # ── Swept mesh / through-thickness control ──
     mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex"
@@ -1195,3 +1197,5 @@ class SharedDomainMeshResult:
     component_surface_tags: dict[str, list[int]]
     interface_surface_tags: list[int]
     outer_boundary_surface_tags: list[int]
+    selector_resolution: list[dict[str, object]] = field(default_factory=list)
+    orphan_entities: list[dict[str, object]] = field(default_factory=list)

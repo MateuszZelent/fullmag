@@ -46,6 +46,8 @@ from .mesh_controls import (
     boundary_layers,
     edge_distance_threshold,
     interface_shell,
+    nearest_curve_to_point,
+    nearest_surface_to_point,
     object_core_relaxation,
     surface_shell,
 )
@@ -79,6 +81,8 @@ __all__ = [
     "generate_shared_domain_mesh_from_components",
     "interface_shell",
     "load_surface_asset",
+    "nearest_curve_to_point",
+    "nearest_surface_to_point",
     "object_core_relaxation",
     "periodic_x",
     "periodic_y",

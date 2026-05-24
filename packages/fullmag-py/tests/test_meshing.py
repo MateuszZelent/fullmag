@@ -83,6 +83,10 @@ from fullmag.meshing._gmsh_extraction import (
     build_per_domain_quality_from_mesh_arrays,
 )
 from fullmag.meshing._gmsh_fields import validate_size_field_config
+from fullmag.meshing._gmsh_selectors import (
+    collect_orphan_entity_diagnostics,
+    resolve_entity_selectors,
+)
 from fullmag.meshing import remesh_cli as remesh_cli_module
 from fullmag.meshing._gmsh_swept import classify_sweepability
 from fullmag.meshing.quality import validate_mesh
@@ -889,6 +893,94 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(boundary_layer["status"], "applied")
         self.assertEqual(boundary_layer["details"]["target_selector"], "explicit_surfaces_or_curves")
         self.assertEqual(boundary_layer["details"]["target_surface_tags"], [11, 12])
+
+    def test_shared_domain_report_serializes_selector_and_orphan_diagnostics(self) -> None:
+        geometry = fm.Box(2.0, 2.0, 2.0, name="free_layer")
+        selector = fm.mesh.nearest_surface_to_point(
+            point=(1.0, 0.0, 0.0),
+            geometry="free_layer",
+        )
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=None,
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=[],
+            region_markers=[{"geometry_name": "free_layer", "marker": 1}],
+            build_mode="component_aware",
+            fallbacks_triggered=[],
+            mesh_options=MeshOptions(
+                boundary_layer_count=3,
+                boundary_layer_thickness=1e-9,
+                boundary_layer_target_surface_selectors=[selector],
+            ),
+            selector_resolution=[
+                {
+                    "selector": selector,
+                    "dimension": 2,
+                    "candidate_count": 6,
+                    "resolved_tags": [11],
+                    "distances": [0.0],
+                    "closest_points": [1.0, 0.0, 0.0],
+                }
+            ],
+            orphan_entities=[{"dimension": 2, "tag": 99}],
+        )
+
+        payload = report.to_dict()
+        self.assertEqual(payload["selector_resolution"][0]["resolved_tags"], [11])
+        self.assertEqual(payload["orphan_entities"], [{"dimension": 2, "tag": 99}])
+        statuses = {
+            (entry["kind"], entry["scope"]): entry
+            for entry in payload["operation_statuses"]  # type: ignore[index]
+        }
+        boundary_layer = statuses[("boundary_layer", "global")]
+        self.assertEqual(boundary_layer["status"], "applied")
+        self.assertEqual(boundary_layer["details"]["target_selector"], "semantic_selectors")
+        self.assertEqual(boundary_layer["details"]["target_surface_selectors"], [selector])
+
+    def test_shared_domain_report_marks_unresolved_selector_boundary_layer_ignored(self) -> None:
+        geometry = fm.Box(2.0, 2.0, 2.0, name="free_layer")
+        selector = fm.mesh.nearest_surface_to_point(
+            point=(1.0, 0.0, 0.0),
+            geometry="missing",
+        )
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=None,
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=[],
+            region_markers=[{"geometry_name": "free_layer", "marker": 1}],
+            build_mode="component_aware",
+            fallbacks_triggered=[],
+            mesh_options=MeshOptions(
+                boundary_layer_count=3,
+                boundary_layer_thickness=1e-9,
+                boundary_layer_target_surface_selectors=[selector],
+            ),
+            selector_resolution=[
+                {
+                    "selector": selector,
+                    "dimension": 2,
+                    "candidate_count": 0,
+                    "resolved_tags": [],
+                    "distances": [],
+                    "closest_points": [],
+                }
+            ],
+            orphan_entities=[],
+        )
+
+        statuses = {
+            (entry["kind"], entry["scope"]): entry
+            for entry in report.to_dict()["operation_statuses"]  # type: ignore[index]
+        }
+        boundary_layer = statuses[("boundary_layer", "global")]
+        self.assertEqual(boundary_layer["status"], "ignored")
+        self.assertIn("no boundary-layer selector resolved", boundary_layer["reason"])
 
     def test_remesh_cli_size_field_parser_builds_canonical_arrays(self) -> None:
         size_field = _size_field_from_dict(
@@ -3044,6 +3136,47 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 edge_distance=12e-9,
             )
 
+    def test_mesh_control_wrappers_emit_nearest_entity_selectors(self) -> None:
+        surface = fm.mesh.nearest_surface_to_point(
+            point=(50e-9, 0.0, 2.5e-9),
+            geometry="free_layer",
+        )
+        curve = fm.mesh.nearest_curve_to_point(
+            point=(50e-9, 20e-9, 2.5e-9),
+            geometry="free_layer",
+            count=2,
+        )
+
+        self.assertEqual(
+            surface,
+            {
+                "kind": "nearest_surface_to_point",
+                "geometry": "free_layer",
+                "point": [50e-9, 0.0, 2.5e-9],
+                "count": 1,
+            },
+        )
+        self.assertEqual(curve["kind"], "nearest_curve_to_point")
+        self.assertEqual(curve["point"], [50e-9, 20e-9, 2.5e-9])
+        self.assertEqual(curve["count"], 2)
+
+    def test_boundary_layers_accepts_semantic_selectors(self) -> None:
+        surface = fm.mesh.nearest_surface_to_point(
+            point=(50e-9, 0.0, 2.5e-9),
+            geometry="free_layer",
+        )
+        controls = fm.mesh.boundary_layers(
+            count=3,
+            first_layer_thickness=1e-9,
+            stretching=1.25,
+            target_surface_tags=[11],
+            target_surfaces=[surface],
+        )
+
+        self.assertEqual(controls["boundary_layer_count"], 3)
+        self.assertEqual(controls["boundary_layer_target_surface_tags"], [11])
+        self.assertEqual(controls["boundary_layer_target_surface_selectors"], [surface])
+
     def test_perimeter_refinement_fields_build_component_scoped_sub_boxes(self) -> None:
         left = fm.Box(10.0, 4.0, 1.0, name="left")
         fields = _build_perimeter_refinement_fields(
@@ -3134,6 +3267,166 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(options.boundary_layer_stretching, 1.25)
         self.assertEqual(options.boundary_layer_target_surface_tags, [11, 12])
         self.assertEqual(options.boundary_layer_target_curve_tags, [21])
+
+    def test_mesh_options_from_runtime_metadata_parses_boundary_layer_selectors(self) -> None:
+        selector = {
+            "kind": "nearest_surface_to_point",
+            "geometry": "left",
+            "point": [50e-9, 0.0, 2.5e-9],
+            "count": 1,
+        }
+        options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {
+                    "boundary_layer_count": 3,
+                    "boundary_layer_thickness": "1e-9",
+                    "boundary_layer_target_surface_selectors": [selector],
+                }
+            },
+            geometries=[fm.Box(100e-9, 20e-9, 5e-9, name="left")],
+            default_hmax=20e-9,
+        )
+
+        self.assertEqual(options.boundary_layer_count, 3)
+        self.assertEqual(options.boundary_layer_target_surface_selectors, [selector])
+
+    def test_mesh_options_from_runtime_metadata_merges_multi_object_boundary_layer_selectors(self) -> None:
+        left_selector = fm.mesh.nearest_surface_to_point(
+            point=(-1.0, 0.0, 0.0),
+            geometry="left",
+        )
+        right_selector = fm.mesh.nearest_curve_to_point(
+            point=(1.0, 0.0, 0.0),
+            geometry="right",
+        )
+
+        options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [
+                    {
+                        "geometry": "left",
+                        "boundary_layer_count": 3,
+                        "boundary_layer_thickness": "1e-9",
+                        "boundary_layer_target_surface_selectors": [left_selector],
+                    },
+                    {
+                        "geometry": "right",
+                        "boundary_layer_count": 3,
+                        "boundary_layer_thickness": "1e-9",
+                        "boundary_layer_target_curve_selectors": [right_selector],
+                    },
+                ]
+            },
+            geometries=[
+                fm.Box(2.0, 2.0, 2.0, name="left"),
+                fm.Box(2.0, 2.0, 2.0, name="right"),
+            ],
+            default_hmax=20e-9,
+            component_aware=True,
+        )
+
+        self.assertEqual(options.boundary_layer_count, 3)
+        self.assertAlmostEqual(options.boundary_layer_thickness, 1e-9)
+        self.assertEqual(options.boundary_layer_target_surface_selectors, [left_selector])
+        self.assertEqual(options.boundary_layer_target_curve_selectors, [right_selector])
+
+    def test_gmsh_selector_resolver_uses_geometry_scoped_candidates(self) -> None:
+        class FakeOcc:
+            def __init__(self) -> None:
+                self.calls: list[tuple[float, float, float, list[tuple[int, int]], int]] = []
+
+            def getClosestEntities(
+                self,
+                x: float,
+                y: float,
+                z: float,
+                dim_tags: list[tuple[int, int]],
+                n: int = 1,
+            ) -> tuple[list[tuple[int, int]], list[float], list[float]]:
+                self.calls.append((x, y, z, dim_tags, n))
+                return [(2, 7)], [2.5e-9], [x, y, z]
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.occ = FakeOcc()
+
+            def getEntities(self, dim: int) -> list[tuple[int, int]]:
+                return [(dim, 7), (dim, 8)]
+
+        fake_gmsh = SimpleNamespace(model=FakeModel())
+        selectors = [
+            {
+                "kind": "nearest_surface_to_point",
+                "geometry": "left",
+                "point": [50e-9, 0.0, 2.5e-9],
+                "count": 1,
+            }
+        ]
+
+        tags, reports = resolve_entity_selectors(
+            fake_gmsh,
+            selectors,
+            dimension=2,
+            component_surface_tags={"left": [7]},
+        )
+
+        self.assertEqual(tags, [7])
+        self.assertEqual(fake_gmsh.model.occ.calls[0][3], [(2, 7)])
+        self.assertEqual(reports[0]["selector"], selectors[0])
+        self.assertEqual(reports[0]["resolved_tags"], [7])
+        self.assertEqual(reports[0]["distances"], [2.5e-9])
+
+    def test_gmsh_orphan_diagnostics_report_orphan_entities(self) -> None:
+        class FakeModel:
+            def getEntities(self, dim: int) -> list[tuple[int, int]]:
+                if dim == 2:
+                    return [(2, 3), (2, 4)]
+                return []
+
+            def isEntityOrphan(self, dim: int, tag: int) -> bool:
+                return dim == 2 and tag == 4
+
+        diagnostics = collect_orphan_entity_diagnostics(
+            SimpleNamespace(model=FakeModel())
+        )
+
+        self.assertEqual(diagnostics, [{"dimension": 2, "tag": 4}])
+
+    def test_apply_mesh_options_resolves_boundary_layer_surface_selectors(self) -> None:
+        try:
+            import gmsh
+        except ImportError as exc:
+            self.skipTest(f"gmsh not available: {exc}")
+
+        gmsh.initialize()
+        try:
+            gmsh.model.add("boundary_layer_selector")
+            gmsh.model.occ.addBox(0.0, 0.0, 0.0, 100.0, 20.0, 5.0)
+            gmsh.model.occ.synchronize()
+
+            report = _apply_mesh_options(
+                gmsh,
+                hmax=20.0,
+                order=1,
+                opts=MeshOptions(
+                    boundary_layer_count=1,
+                    boundary_layer_thickness=1.0,
+                    boundary_layer_target_surface_selectors=[
+                        fm.mesh.nearest_surface_to_point(
+                            point=(50.0, 10.0, 5.0),
+                        )
+                    ],
+                    compute_quality=False,
+                    per_element_quality=False,
+                ),
+            )
+
+            self.assertEqual(len(report.selector_resolution), 1)
+            resolved_tags = report.selector_resolution[0]["resolved_tags"]
+            self.assertEqual(len(resolved_tags), 1)
+            self.assertIn((2, resolved_tags[0]), gmsh.model.getEntities(2))
+        finally:
+            gmsh.finalize()
 
     def test_public_boundary_layers_helper_requires_explicit_targets(self) -> None:
         with self.assertRaisesRegex(ValueError, "target_surface_tags or target_curve_tags"):

@@ -14,6 +14,7 @@ import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisua
 import {
   ensureWhiteVertexColorAttribute,
   resolveVectorFieldLayerStyle,
+  syncVectorGlyphMaterialStyle,
   syncVectorGlyphColorState,
 } from "./VectorFieldLayer";
 
@@ -153,6 +154,33 @@ describe("VectorFieldLayer style mapping", () => {
     expect(instanceColorAttr.version).toBeGreaterThan(attributeVersion);
 
     geometry.dispose();
+    material.dispose();
+  });
+
+  it("updates glyph material style in place without replacing the material", () => {
+    const material = new MeshBasicMaterial({
+      color: "#222222",
+      opacity: 1,
+      transparent: false,
+      vertexColors: false,
+    });
+    const materialVersion = material.version;
+
+    syncVectorGlyphMaterialStyle({
+      glyphTransparent: true,
+      material,
+      materialColor: "#ff3366",
+      materialOpacity: 0.42,
+      toneMapped: false,
+      useInstanceColors: false,
+    });
+
+    expect(material.opacity).toBe(0.42);
+    expect(material.transparent).toBe(true);
+    expect(material.vertexColors).toBe(false);
+    expect(material.color.getHexString()).toBe("ff3366");
+    expect(material.version).toBeGreaterThan(materialVersion);
+
     material.dispose();
   });
 

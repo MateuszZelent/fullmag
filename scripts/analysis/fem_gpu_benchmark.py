@@ -37,6 +37,17 @@ GPU_RK_CUDA_SOURCE = (
     / "rk_step.cu"
 )
 GPU_RK_CMAKE_SOURCE = "gpu/cuda/integrators/rk/rk_step.cu"
+GPU_RK_ERROR_NORM_RUNTIME_SOURCE = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_error_norm_runtime.cu"
+)
 
 PRESET_MESHES = {
     "coarse": REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json",
@@ -959,9 +970,21 @@ def build_preflight_report(
         fem_cmake_text = FEM_CMAKE.read_text(encoding="utf-8")
     except OSError:
         fem_cmake_text = ""
+    try:
+        adaptive_error_norm_runtime_text = GPU_RK_ERROR_NORM_RUNTIME_SOURCE.read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        adaptive_error_norm_runtime_text = ""
 
     assert_no_hot_loop_compute_sync = env_flag_enabled(
         env_text(actual_env, "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC")
+    )
+    adaptive_hot_loop_scalar_readback_free = (
+        adaptive_error_norm_runtime_text != ""
+        and "gpu_rk_read_scalar_result(" not in adaptive_error_norm_runtime_text
+        and "cudaMemcpyAsync GPU RK adaptive error norm scalar device->host"
+        not in adaptive_error_norm_runtime_text
     )
     report: dict[str, object] = {
         "status": "missing",
@@ -980,6 +1003,10 @@ def build_preflight_report(
         "gpu_rk_cuda_source_path": str(GPU_RK_CUDA_SOURCE),
         "gpu_rk_cuda_source_present": GPU_RK_CUDA_SOURCE.is_file(),
         "gpu_rk_cmake_wired": GPU_RK_CMAKE_SOURCE in fem_cmake_text,
+        "adaptive_gpu_rk_hot_loop_scalar_readback_free": adaptive_hot_loop_scalar_readback_free,
+        "adaptive_gpu_rk_hot_loop_scalar_readback_path": str(
+            GPU_RK_ERROR_NORM_RUNTIME_SOURCE
+        ),
         "remediation": preflight_remediation(),
     }
 
@@ -1023,6 +1050,10 @@ def adaptive_gpu_rk_acceptance_blockers(report: Mapping[str, object]) -> list[st
         )
     if not report.get("assert_no_hot_loop_compute_sync"):
         blockers.append("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1")
+    if not report.get("adaptive_gpu_rk_hot_loop_scalar_readback_free"):
+        blockers.append(
+            "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"
+        )
     return blockers
 
 
@@ -1384,6 +1415,12 @@ def run_backend(
         preflight = build_preflight_report(env)
         row["adaptive_gpu_rk_acceptance_ready"] = preflight.get(
             "adaptive_gpu_rk_acceptance_ready"
+        )
+        row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] = preflight.get(
+            "adaptive_gpu_rk_hot_loop_scalar_readback_free"
+        )
+        row["adaptive_gpu_rk_hot_loop_scalar_readback_path"] = preflight.get(
+            "adaptive_gpu_rk_hot_loop_scalar_readback_path"
         )
         blockers = preflight.get("adaptive_gpu_rk_acceptance_blockers")
         row["adaptive_gpu_rk_acceptance_blockers"] = (

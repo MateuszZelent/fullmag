@@ -103,14 +103,17 @@ describe("viewport3dFieldMapping", () => {
     ]);
   });
 
-  it("rejects sampled indices outside field coverage", () => {
-    expect(
-      buildSampledScalarColors(
-        vectorField([1, 0, 0]),
-        Uint32Array.from([0, 1]),
-        "orientation",
-      ),
-    ).toBeNull();
+  it("handles sampled indices outside field coverage by falling back to neutral color", () => {
+    const result = buildSampledScalarColors(
+      vectorField([1, 0, 0]),
+      Uint32Array.from([0, 1]),
+      "orientation",
+    );
+    expect(result).not.toBeNull();
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      1, 0, 0,
+      0.5, 0.5, 0.5,
+    ]);
   });
 
   it("keeps monochrome mode on the material color", () => {

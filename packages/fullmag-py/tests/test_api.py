@@ -3908,6 +3908,52 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_entry["boundary_layer_target_surface_tags"], [11, 12])
         self.assertEqual(mesh_entry["boundary_layer_target_curve_tags"], [21])
 
+    def test_boundary_layer_selectors_round_trip_through_script_builder(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("boundary_layer_selector_round_trip")
+        study.engine("fem")
+
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(
+            maximum_element_size=20e-9,
+            **fm.mesh.boundary_layers(
+                count=3,
+                first_layer_thickness=1e-9,
+                target_surfaces=[
+                    fm.mesh.nearest_surface_to_point(
+                        point=(50e-9, 0.0, 2.5e-9),
+                        geometry="body",
+                    )
+                ],
+            ),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_object_mesh_boundary_layer_selectors.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        expected_selector = {
+            "kind": "nearest_surface_to_point",
+            "geometry": "body",
+            "point": [50e-9, 0.0, 2.5e-9],
+            "count": 1,
+        }
+        self.assertEqual(mesh_entry["boundary_layer_target_surface_selectors"], [expected_selector])
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("boundary_layer_target_surface_selectors=", rewritten)
+        self.assertIn('"nearest_surface_to_point"', rewritten)
+
     def test_study_mesh_builder_exports_comsol_like_size_semantics(self) -> None:
         script = """
         import fullmag as fm

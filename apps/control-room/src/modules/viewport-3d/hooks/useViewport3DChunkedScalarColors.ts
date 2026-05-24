@@ -68,7 +68,7 @@ export function useViewport3DChunkedScalarColors({
       !enabled ||
       !topology ||
       !fieldVector ||
-      fieldVector.pointCount !== topology.nodeCount ||
+      fieldVector.pointCount > topology.nodeCount ||
       !fieldTransformNeedsChunking(fieldVector.pointCount) ||
       modes.length === 0
     ) {

@@ -51,6 +51,7 @@ from ._gmsh_extraction import (
     _read_mesh_file,
 )
 from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
+from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
 from ._gmsh_waveguides import add_arch_waveguide_to_occ
@@ -1042,7 +1043,7 @@ def generate_shared_domain_mesh_from_components(
                     break
 
         emit_progress("Gmsh: generating 3D tetrahedral mesh (component-aware)")
-        _apply_mesh_options(
+        application_report = _apply_mesh_options(
             gmsh,
             hmax,
             order,
@@ -1053,6 +1054,7 @@ def generate_shared_domain_mesh_from_components(
             component_surface_tags=component_surface_tags,
             airbox_maximum_element_size=airbox.maximum_element_size if airbox is not None else None,
         )
+        orphan_entities = collect_orphan_entity_diagnostics(gmsh)
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         _apply_post_mesh_options(gmsh, shared_stl_opts)
@@ -1079,6 +1081,8 @@ def generate_shared_domain_mesh_from_components(
             component_surface_tags=component_surface_tags,
             interface_surface_tags=interface_surface_tags,
             outer_boundary_surface_tags=outer_boundary_surface_tags,
+            selector_resolution=application_report.selector_resolution,
+            orphan_entities=orphan_entities,
         )
     finally:
         gmsh.finalize()

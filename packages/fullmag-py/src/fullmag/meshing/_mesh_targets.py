@@ -424,6 +424,8 @@ class SharedDomainBuildReport:
     size_fields_realized: list[dict[str, object]] = field(default_factory=list)
     operation_statuses: list["MeshOperationStatus"] = field(default_factory=list)
     thin_film_diagnostics: list["ThinFilmDiagnostic"] = field(default_factory=list)
+    selector_resolution: list[dict[str, object]] = field(default_factory=list)
+    orphan_entities: list[dict[str, object]] = field(default_factory=list)
     degraded: bool = False
 
     def to_dict(self) -> dict[str, object]:
@@ -462,6 +464,10 @@ class SharedDomainBuildReport:
             "thin_film_diagnostics": [
                 diagnostic.to_dict() for diagnostic in self.thin_film_diagnostics
             ],
+            "selector_resolution": [
+                dict(resolution) for resolution in self.selector_resolution
+            ],
+            "orphan_entities": [dict(entity) for entity in self.orphan_entities],
             "degraded": self.degraded,
         }
 

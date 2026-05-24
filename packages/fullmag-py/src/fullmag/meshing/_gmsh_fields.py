@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -14,12 +14,18 @@ from ._gmsh_types import (
     MeshOptions,
     resolve_mesh_size_controls,
 )
+from ._gmsh_selectors import resolve_entity_selectors
 
 @dataclass(frozen=True, slots=True)
 class BoundaryLayerResult:
     field_id: int | None
     status: str
     reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MeshOptionsApplicationReport:
+    selector_resolution: list[dict[str, object]] = field(default_factory=list)
 
 
 FIELD_SCHEMAS: dict[str, set[str]] = {
@@ -72,9 +78,10 @@ def _apply_mesh_options(
     component_volume_tags: dict[str, list[int]] | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
     airbox_maximum_element_size: float | None = None,
-) -> None:
+) -> MeshOptionsApplicationReport:
     """Apply MeshOptions to the Gmsh context before mesh.generate()."""
     emit_progress("Gmsh: applying mesh options")
+    selector_resolution: list[dict[str, object]] = []
     resolved_size_controls = resolve_mesh_size_controls(opts)
     algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(opts)
     if algorithm_3d_fallback_reason is not None:
@@ -151,13 +158,31 @@ def _apply_mesh_options(
         and opts.boundary_layer_thickness > 0.0
     ):
         bl_stretching = opts.boundary_layer_stretching if opts.boundary_layer_stretching else 1.2
+        selected_surface_tags, surface_reports = resolve_entity_selectors(
+            gmsh,
+            opts.boundary_layer_target_surface_selectors,
+            dimension=2,
+            component_surface_tags=component_surface_tags,
+        )
+        selected_curve_tags, curve_reports = resolve_entity_selectors(
+            gmsh,
+            opts.boundary_layer_target_curve_selectors,
+            dimension=1,
+            component_surface_tags=component_surface_tags,
+        )
+        selector_resolution.extend(surface_reports)
+        selector_resolution.extend(curve_reports)
         result = _add_boundary_layer_field(
             gmsh,
             count=opts.boundary_layer_count,
             thickness=opts.boundary_layer_thickness,
             stretching=bl_stretching,
-            target_surface_tags=opts.boundary_layer_target_surface_tags,
-            target_curve_tags=opts.boundary_layer_target_curve_tags,
+            target_surface_tags=sorted(
+                set(opts.boundary_layer_target_surface_tags or []) | set(selected_surface_tags)
+            ),
+            target_curve_tags=sorted(
+                set(opts.boundary_layer_target_curve_tags or []) | set(selected_curve_tags)
+            ),
             hscale=hscale,
         )
         if result.field_id is not None and result.status == "degraded":
@@ -206,6 +231,7 @@ def _apply_mesh_options(
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
         )
+    return MeshOptionsApplicationReport(selector_resolution=selector_resolution)
 
 
 def _apply_post_mesh_options(gmsh: Any, opts: MeshOptions) -> None:
@@ -389,13 +415,27 @@ def _add_boundary_layer_field(
     h_first = float(thickness) * hscale
     fid = gmsh.model.mesh.field.add("BoundaryLayer")
     if surf_tags:
-        gmsh.model.mesh.field.setNumbers(fid, "SurfacesList", surf_tags)
+        try:
+            boundary = gmsh.model.getBoundary(
+                [(2, tag) for tag in surf_tags],
+                oriented=False,
+                recursive=False,
+            )
+            curve_tags = sorted(
+                set(curve_tags) | {int(tag) for dim, tag in boundary if int(dim) == 1}
+            )
+        except Exception as exc:
+            return BoundaryLayerResult(
+                field_id=fid,
+                status="ignored",
+                reason=f"surface boundary-layer targets could not be converted to curves: {exc}",
+            )
     if curve_tags:
         gmsh.model.mesh.field.setNumbers(fid, "CurvesList", curve_tags)
     gmsh.model.mesh.field.setNumber(fid, "hwall_n", h_first)
-    gmsh.model.mesh.field.setNumber(fid, "hwall_t", h_first)
+    gmsh.model.mesh.field.setNumber(fid, "thickness", h_first)
     gmsh.model.mesh.field.setNumber(fid, "ratio", float(stretching) if stretching > 0.0 else 1.2)
-    gmsh.model.mesh.field.setNumber(fid, "nb_layers", int(count))
+    gmsh.model.mesh.field.setNumber(fid, "NbLayers", int(count))
     try:
         gmsh.model.mesh.field.setAsBoundaryLayer(fid)
     except Exception as exc:

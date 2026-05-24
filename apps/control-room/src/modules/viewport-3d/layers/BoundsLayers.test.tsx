@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { isValidElement, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -50,6 +52,11 @@ const visibleWireframeAirbox: VisualizationTargetSettings = {
 
 const materialProfile = resolveViewport3DMaterialProfile(
   getViewport3DVisualProfile("interactive"),
+);
+
+const boundsLayersSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/layers/BoundsLayers.tsx"),
+  "utf8",
 );
 
 function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
@@ -177,7 +184,18 @@ describe("AirboxLayer", () => {
     expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
   });
 
-
+  it("routes the airbox render branch through the wireframe primitive decision", () => {
+    expect(boundsLayersSource).toContain(
+      'wireframePrimitive === "lines" && edgeGeometry',
+    );
+    expect(boundsLayersSource).toContain(
+      'wireframePrimitive === "bounds"',
+    );
+    expect(boundsLayersSource).not.toContain(
+      "shouldRenderAirboxFullBoundsOverlay",
+    );
+    expect(boundsLayersSource).not.toContain("showFullWireframeBoundsOverlay");
+  });
 
   it("keeps airbox wireframe opacity independent from air surface opacity", () => {
     expect(

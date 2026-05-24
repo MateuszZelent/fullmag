@@ -116,6 +116,29 @@ export function syncVectorGlyphColorState({
   material.needsUpdate = true;
 }
 
+export function syncVectorGlyphMaterialStyle({
+  glyphTransparent,
+  material,
+  materialColor,
+  materialOpacity,
+  toneMapped,
+  useInstanceColors,
+}: {
+  glyphTransparent: boolean;
+  material: MeshBasicMaterial;
+  materialColor: string;
+  materialOpacity: number;
+  toneMapped: boolean;
+  useInstanceColors: boolean;
+}) {
+  material.opacity = materialOpacity;
+  material.transparent = glyphTransparent || materialOpacity < 0.99;
+  material.toneMapped = toneMapped;
+  material.vertexColors = useInstanceColors;
+  material.color.set(useInstanceColors ? "white" : materialColor);
+  material.needsUpdate = true;
+}
+
 export function ensureWhiteVertexColorAttribute(
   geometry: BufferGeometry,
 ): BufferGeometry {
@@ -229,13 +252,14 @@ export function VectorFieldLayer({
   );
 
   useEffect(() => {
-    material.opacity = resolvedStyle.materialOpacity;
-    material.transparent =
-      glyphPolicy.transparent || resolvedStyle.materialOpacity < 0.99;
-    material.toneMapped = materialProfile?.toneMapped ?? false;
-    material.vertexColors = useInstanceColors;
-    material.color.set(useInstanceColors ? "white" : resolvedStyle.materialColor);
-    material.needsUpdate = true;
+    syncVectorGlyphMaterialStyle({
+      glyphTransparent: glyphPolicy.transparent,
+      material,
+      materialColor: resolvedStyle.materialColor,
+      materialOpacity: resolvedStyle.materialOpacity,
+      toneMapped: materialProfile?.toneMapped ?? false,
+      useInstanceColors,
+    });
     invalidate();
   }, [
     material,

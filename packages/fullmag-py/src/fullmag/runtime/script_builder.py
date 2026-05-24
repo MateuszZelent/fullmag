@@ -1247,10 +1247,15 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     for key in (
         "boundary_layer_target_surface_tags",
         "boundary_layer_target_curve_tags",
+        "boundary_layer_target_surface_selectors",
+        "boundary_layer_target_curve_selectors",
     ):
         value = mesh_config.get(key)
         if isinstance(value, list) and value:
-            kwargs.append(f"{key}={_py_literal([int(tag) for tag in value])}")
+            if key.endswith("_tags"):
+                kwargs.append(f"{key}={_py_literal([int(tag) for tag in value])}")
+            else:
+                kwargs.append(f"{key}={_py_literal(value)}")
 
     if mesh_config.get("optimize") is not None:
         kwargs.append(f"optimize={_py_repr(str(mesh_config['optimize']))}")
@@ -2495,6 +2500,16 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             if isinstance(mesh_options.get("boundary_layer_target_curve_tags"), list)
             else []
         ),
+        "boundary_layer_target_surface_selectors": (
+            list(mesh_options.get("boundary_layer_target_surface_selectors"))
+            if isinstance(mesh_options.get("boundary_layer_target_surface_selectors"), list)
+            else []
+        ),
+        "boundary_layer_target_curve_selectors": (
+            list(mesh_options.get("boundary_layer_target_curve_selectors"))
+            if isinstance(mesh_options.get("boundary_layer_target_curve_selectors"), list)
+            else []
+        ),
         "resolved_size_from_curvature": (
             int(mesh_options.get("resolved_size_from_curvature"))
             if isinstance(mesh_options.get("resolved_size_from_curvature"), (int, float))
@@ -2620,6 +2635,16 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
                 if isinstance(mesh_entry.get("boundary_layer_target_curve_tags"), list)
                 else []
             ),
+            "boundary_layer_target_surface_selectors": (
+                list(mesh_entry.get("boundary_layer_target_surface_selectors"))
+                if isinstance(mesh_entry.get("boundary_layer_target_surface_selectors"), list)
+                else []
+            ),
+            "boundary_layer_target_curve_selectors": (
+                list(mesh_entry.get("boundary_layer_target_curve_selectors"))
+                if isinstance(mesh_entry.get("boundary_layer_target_curve_selectors"), list)
+                else []
+            ),
             "resolved_size_from_curvature": (
                 int(mesh_entry["resolved_size_from_curvature"])
                 if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
@@ -2680,6 +2705,8 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "boundary_layer_stretching": None,
             "boundary_layer_target_surface_tags": [],
             "boundary_layer_target_curve_tags": [],
+            "boundary_layer_target_surface_selectors": [],
+            "boundary_layer_target_curve_selectors": [],
             "resolved_size_from_curvature": None,
             "resolved_narrow_regions": None,
             "resolved_growth_rate": "",

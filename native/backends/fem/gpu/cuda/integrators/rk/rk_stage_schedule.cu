@@ -14,7 +14,8 @@
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/heun_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp"
-#include "gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.hpp"
+#include "gpu/cuda/integrators/rk/rk23_stage_sequence.hpp"
+#include "gpu/cuda/integrators/rk/rk4_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk45_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_setup.hpp"
 #include "gpu/cuda/kernels/kernels.hpp"
@@ -72,8 +73,12 @@ bool gpu_rk_run_stage_attempt(
         if (!gpu_rk_run_rk45_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)) {
             return false;
         }
-    } else if (is_rk4 || is_rk23) {
-        if (!gpu_rk_run_rk4_rk23_stage_sequence(ctx, stream, n, is_rk23, active_dt, stage_rhs_evaluations, reason)) {
+    } else if (is_rk4) {
+        if (!gpu_rk_run_rk4_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)) {
+            return false;
+        }
+    } else if (is_rk23) {
+        if (!gpu_rk_run_rk23_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)) {
             return false;
         }
     } else {

@@ -75,7 +75,8 @@ waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
-waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
+# waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
+waveguide.m = fm.texture.random(1)
 waveguide.mesh(
     maximum_element_size=6e-9,
     minimum_element_size=1.8e-9,
@@ -123,7 +124,7 @@ study.build_domain_mesh()
 # Solver — max_error=1e-4 is adequate for relaxation where the physical
 # convergence criterion (torque < tol) dominates over integrator accuracy.
 study.solver(
-    integrator="rk45",
+    integrator="rk23",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
     gamma=GAMMA,
@@ -131,12 +132,12 @@ study.solver(
 
 # Outputs
 study.tableautosave(10e-12)
-study.save("m", every=250e-12)
+# study.save("m", every=250e-12)
 
 # Stage
 study.stages.add_relax(
     algorithm="llg_overdamped",
-    solver="rk45",
+    solver="rk23",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
     tol=RELAX_TORQUE_TOLERANCE_APM,

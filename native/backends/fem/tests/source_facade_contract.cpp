@@ -767,6 +767,8 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_energy_reductions.hpp");
     const std::string exchange_energy_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_energy_reductions.hpp");
+    const std::string external_energy_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_external_energy_reductions.hpp");
     const std::string demag_energy_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.hpp");
     const std::string anisotropy_energy_header =
@@ -777,14 +779,24 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetoelastic_energy_reductions.hpp");
     const std::string observable_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_observable_reductions.hpp");
+    const std::string field_metric_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_field_metric_reductions.hpp");
+    const std::string magnetization_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetization_reductions.hpp");
     const std::string stats_fallback =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cpp");
+    const std::string stats_publication_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.hpp");
+    const std::string stats_publication_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string stats_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
     const std::string energy_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_energy_reductions.cu");
     const std::string exchange_energy_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_energy_reductions.cu");
+    const std::string external_energy_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_external_energy_reductions.cu");
     const std::string demag_energy_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.cu");
     const std::string anisotropy_energy_source =
@@ -795,11 +807,19 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetoelastic_energy_reductions.cu");
     const std::string observable_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_observable_reductions.cu");
+    const std::string field_metric_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_field_metric_reductions.cu");
+    const std::string magnetization_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetization_reductions.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_step_stats.cpp") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK final stats no-CUDA fallback from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_step_stats_publication.cpp") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK final stats publication from gpu/cuda/integrators/rk");
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_step_stats.cu") !=
             std::string::npos,
@@ -812,6 +832,10 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         cmake.find("gpu/cuda/integrators/rk/rk_exchange_energy_reductions.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK exchange final energy reductions from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_external_energy_reductions.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK external final energy reductions from gpu/cuda/integrators/rk");
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu") !=
             std::string::npos,
@@ -832,6 +856,14 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         cmake.find("gpu/cuda/integrators/rk/rk_observable_reductions.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK final observable reductions from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_field_metric_reductions.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK field metric final reductions from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_magnetization_reductions.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK magnetization final reductions from gpu/cuda/integrators/rk");
     check(
         refresh_source.find("#include \"gpu/cuda/integrators/rk/rk_step_stats.hpp\"") !=
             std::string::npos,
@@ -855,6 +887,8 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
     check(
         stats_source.find("gpu_rk_finalize_step_stats(") !=
                 std::string::npos &&
+            stats_source.find("#include \"gpu/cuda/integrators/rk/rk_step_stats_publication.hpp\"") !=
+                std::string::npos &&
             stats_source.find("#include \"gpu/cuda/integrators/rk/rk_energy_reductions.hpp\"") !=
                 std::string::npos &&
             stats_source.find("#include \"gpu/cuda/integrators/rk/rk_observable_reductions.hpp\"") !=
@@ -865,9 +899,46 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             stats_source.find("gpu_rk_read_scalar_results(") !=
                 std::string::npos &&
-            stats_source.find("context_update_stage_completion_from_stats(ctx, stats)") !=
+            stats_source.find("gpu_rk_publish_final_step_stats(ctx, scalars, stats)") !=
                 std::string::npos,
-        "GPU CUDA RK final stats source must delegate reductions and own scalar readback and stats publication");
+        "GPU CUDA RK final stats source must delegate reductions, own scalar readback, and delegate stats publication");
+    check(
+        stats_publication_header.find("GPU CUDA RK final step stats publication module header") !=
+                std::string::npos &&
+            stats_publication_header.find("gpu_rk_publish_final_step_stats(") !=
+                std::string::npos,
+        "GPU CUDA RK final stats publication header must document and declare stats publication");
+    check(
+        stats_publication_source.find("#include \"gpu/cuda/integrators/rk/rk_step_stats_publication.hpp\"") !=
+                std::string::npos &&
+            stats_publication_source.find("GPU CUDA RK final step stats publication source contract") !=
+                std::string::npos &&
+            stats_publication_source.find("stats.total_energy_joules =") !=
+                std::string::npos &&
+            stats_publication_source.find("stats.mx = mx_sum / magnetic_count") !=
+                std::string::npos &&
+            stats_publication_source.find("fill_demag_solver_stats(ctx, stats)") !=
+                std::string::npos &&
+            stats_publication_source.find("context_update_stage_completion_from_stats(ctx, stats)") !=
+                std::string::npos,
+        "GPU CUDA RK final stats publication source must own scalar-to-stats publication");
+    check(
+        stats_source.find("stats.total_energy_joules =") == std::string::npos &&
+            stats_source.find("stats.mx = mx_sum / magnetic_count") ==
+                std::string::npos &&
+            stats_source.find("fill_demag_solver_stats(ctx, stats)") ==
+                std::string::npos &&
+            stats_source.find("context_update_stage_completion_from_stats(ctx, stats)") ==
+                std::string::npos,
+        "GPU CUDA RK final stats source must delegate scalar-to-stats publication");
+    check(
+        stats_publication_source.find("gpu_rk_read_scalar_results(") ==
+                std::string::npos &&
+            stats_publication_source.find("gpu_rk_reduce_final_energy_terms(") ==
+                std::string::npos &&
+            stats_publication_source.find("gpu_rk_reduce_final_observable_terms(") ==
+                std::string::npos,
+        "GPU CUDA RK final stats publication source must not own reductions or scalar readback");
     check(
         energy_header.find("GPU CUDA RK final energy reductions module header") !=
                 std::string::npos &&
@@ -880,6 +951,12 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
             exchange_energy_header.find("gpu_rk_reduce_final_exchange_energy_terms(") !=
                 std::string::npos,
         "GPU CUDA RK exchange final energy reductions header must document and declare exchange energy reductions");
+    check(
+        external_energy_header.find("GPU CUDA RK external final energy reductions module header") !=
+                std::string::npos &&
+            external_energy_header.find("gpu_rk_reduce_final_external_energy_terms(") !=
+                std::string::npos,
+        "GPU CUDA RK external final energy reductions header must document and declare external energy reductions");
     check(
         demag_energy_header.find("GPU CUDA RK demag final energy reductions module header") !=
                 std::string::npos &&
@@ -915,13 +992,15 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             energy_source.find("#include \"gpu/cuda/integrators/rk/rk_exchange_energy_reductions.hpp\"") !=
                 std::string::npos &&
+            energy_source.find("#include \"gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp\"") !=
+                std::string::npos &&
             energy_source.find("#include \"gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.hpp\"") !=
                 std::string::npos &&
             energy_source.find("GPU CUDA RK final energy reductions source contract") !=
                 std::string::npos &&
-            energy_source.find("fullmag_cuda_external_energy_blocks(") !=
-                std::string::npos &&
             energy_source.find("gpu_rk_reduce_final_exchange_energy_terms(ctx, stream, n, blocks, reason)") !=
+                std::string::npos &&
+            energy_source.find("gpu_rk_reduce_final_external_energy_terms(ctx, stream, n, blocks, reason)") !=
                 std::string::npos &&
             energy_source.find("gpu_rk_reduce_final_demag_energy_terms(ctx, stream, n, blocks, reason)") !=
                 std::string::npos &&
@@ -958,6 +1037,38 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
             energy_source.find("launch GPU RK exchange energy reduction") ==
                 std::string::npos,
         "GPU CUDA RK final energy reductions source must delegate exchange energy internals");
+    check(
+        external_energy_source.find("#include \"gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp\"") !=
+                std::string::npos &&
+            external_energy_source.find("#include \"gpu/cuda/integrators/rk/rk_step_stats.hpp\"") !=
+                std::string::npos &&
+            external_energy_source.find("GPU CUDA RK external final energy reductions source contract") !=
+                std::string::npos &&
+            external_energy_source.find("ctx.zeeman.has_external_field") !=
+                std::string::npos &&
+            external_energy_source.find("fullmag_cuda_external_energy_blocks(") !=
+                std::string::npos &&
+            external_energy_source.find("GpuFinalScalarSlot::ExternalEnergy") !=
+                std::string::npos &&
+            external_energy_source.find("launch GPU RK external energy blocks") !=
+                std::string::npos &&
+            external_energy_source.find("launch GPU RK external energy reduction") !=
+                std::string::npos &&
+            external_energy_source.find("GPU RK external energy requires device-resident Ms, lumped mass, and H_ext") !=
+                std::string::npos,
+        "GPU CUDA RK external final energy reductions source must own external energy validation, launch, and scalar slot");
+    check(
+        energy_source.find("fullmag_cuda_external_energy_blocks(") ==
+                std::string::npos &&
+            energy_source.find("GpuFinalScalarSlot::ExternalEnergy") ==
+                std::string::npos &&
+            energy_source.find("launch GPU RK external energy blocks") ==
+                std::string::npos &&
+            energy_source.find("launch GPU RK external energy reduction") ==
+                std::string::npos &&
+            energy_source.find("GPU RK external energy requires device-resident Ms, lumped mass, and H_ext") ==
+                std::string::npos,
+        "GPU CUDA RK final energy reductions source must delegate external energy internals");
     check(
         demag_energy_source.find("#include \"gpu/cuda/integrators/rk/rk_demag_energy_reductions.hpp\"") !=
                 std::string::npos &&
@@ -1110,19 +1221,80 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK final observable reductions header must document and declare final observable reductions");
     check(
+        field_metric_header.find("GPU CUDA RK field metric final reductions module header") !=
+                std::string::npos &&
+            field_metric_header.find("gpu_rk_reduce_final_field_metric_terms(") !=
+                std::string::npos,
+        "GPU CUDA RK field metric reductions header must document and declare field metric reductions");
+    check(
+        magnetization_header.find("GPU CUDA RK magnetization final reductions module header") !=
+                std::string::npos &&
+            magnetization_header.find("gpu_rk_reduce_final_magnetization_terms(") !=
+                std::string::npos,
+        "GPU CUDA RK magnetization reductions header must document and declare magnetization reductions");
+    check(
         observable_source.find("#include \"gpu/cuda/integrators/rk/rk_observable_reductions.hpp\"") !=
+                std::string::npos &&
+            observable_source.find("#include \"gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp\"") !=
+                std::string::npos &&
+            observable_source.find("#include \"gpu/cuda/integrators/rk/rk_magnetization_reductions.hpp\"") !=
                 std::string::npos &&
             observable_source.find("GPU CUDA RK final observable reductions source contract") !=
                 std::string::npos &&
-            observable_source.find("fullmag_cuda_field_metric_blocks(") !=
+            observable_source.find("gpu_rk_reduce_final_field_metric_terms(ctx, stream, n, blocks, reason)") !=
                 std::string::npos &&
-            observable_source.find("fullmag_cuda_magnetization_sum_blocks(") !=
-                std::string::npos &&
-            observable_source.find("GpuFinalScalarSlot::MaxTorque") !=
-                std::string::npos &&
-            observable_source.find("GpuFinalScalarSlot::MagneticCount") !=
+            observable_source.find("gpu_rk_reduce_final_magnetization_terms(ctx, stream, n, blocks, reason)") !=
                 std::string::npos,
-        "GPU CUDA RK final observable reductions source must own field metrics, torque, and magnetization reductions");
+        "GPU CUDA RK final observable reductions source must delegate field metrics and magnetization reductions");
+    check(
+        field_metric_source.find("#include \"gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp\"") !=
+                std::string::npos &&
+            field_metric_source.find("GPU CUDA RK field metric final reductions source contract") !=
+                std::string::npos &&
+            field_metric_source.find("fullmag_cuda_field_metric_blocks(") !=
+                std::string::npos &&
+            field_metric_source.find("GpuFinalScalarSlot::MaxHEff") !=
+                std::string::npos &&
+            field_metric_source.find("GpuFinalScalarSlot::MaxHDemag") !=
+                std::string::npos &&
+            field_metric_source.find("GpuFinalScalarSlot::MaxTorque") !=
+                std::string::npos &&
+            field_metric_source.find("launch GPU RK max H_eff reduction") !=
+                std::string::npos &&
+            field_metric_source.find("launch GPU RK max torque reduction") !=
+                std::string::npos,
+        "GPU CUDA RK field metric reductions source must own field and torque metric reductions");
+    check(
+        magnetization_source.find("#include \"gpu/cuda/integrators/rk/rk_magnetization_reductions.hpp\"") !=
+                std::string::npos &&
+            magnetization_source.find("GPU CUDA RK magnetization final reductions source contract") !=
+                std::string::npos &&
+            magnetization_source.find("fullmag_cuda_magnetization_sum_blocks(") !=
+                std::string::npos &&
+            magnetization_source.find("GpuFinalScalarSlot::MxSum") !=
+                std::string::npos &&
+            magnetization_source.find("GpuFinalScalarSlot::MySum") !=
+                std::string::npos &&
+            magnetization_source.find("GpuFinalScalarSlot::MzSum") !=
+                std::string::npos &&
+            magnetization_source.find("GpuFinalScalarSlot::MagneticCount") !=
+                std::string::npos &&
+            magnetization_source.find("launch GPU RK magnetic count reduction") !=
+                std::string::npos,
+        "GPU CUDA RK magnetization reductions source must own average magnetization reductions");
+    check(
+        observable_source.find("fullmag_cuda_field_metric_blocks(") == std::string::npos &&
+            observable_source.find("fullmag_cuda_magnetization_sum_blocks(") ==
+                std::string::npos &&
+            observable_source.find("GpuFinalScalarSlot::MaxTorque") ==
+                std::string::npos &&
+            observable_source.find("GpuFinalScalarSlot::MagneticCount") ==
+                std::string::npos &&
+            observable_source.find("launch GPU RK max H_eff reduction") ==
+                std::string::npos &&
+            observable_source.find("launch GPU RK magnetic count reduction") ==
+                std::string::npos,
+        "GPU CUDA RK final observable reductions source must delegate observable reduction internals");
     check(
         stats_source.find("fullmag_cuda_field_metric_blocks(") == std::string::npos &&
             stats_source.find("fullmag_cuda_magnetization_sum_blocks(") ==
@@ -1250,6 +1422,14 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk4_rk23_stage_sequence.hpp");
     const std::string rk4_rk23_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk4_rk23_stage_sequence.cu");
+    const std::string rk4_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk4_stage_sequence.hpp");
+    const std::string rk4_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk4_stage_sequence.cu");
+    const std::string rk23_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk23_stage_sequence.hpp");
+    const std::string rk23_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk23_stage_sequence.cu");
     const std::string heun_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "heun_stage_sequence.hpp");
     const std::string heun_source =
@@ -1274,7 +1454,15 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
     check(
         cmake.find("gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.cu") !=
             std::string::npos,
-        "FEM CMake source list must build GPU RK4/RK23 stage sequence from gpu/cuda/integrators/rk");
+        "FEM CMake source list must build GPU RK4/RK23 compatibility stage sequence from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk4_stage_sequence.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK4 stage sequence from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk23_stage_sequence.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK23 stage sequence from gpu/cuda/integrators/rk");
     check(
         cmake.find("gpu/cuda/integrators/rk/heun_stage_sequence.cu") !=
             std::string::npos,
@@ -1316,9 +1504,15 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             schedule_source.find("gpu_rk_run_rk45_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)") !=
                 std::string::npos &&
-            schedule_source.find("#include \"gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.hpp\"") !=
+            schedule_source.find("#include \"gpu/cuda/integrators/rk/rk4_stage_sequence.hpp\"") !=
                 std::string::npos &&
-            schedule_source.find("gpu_rk_run_rk4_rk23_stage_sequence(ctx, stream, n, is_rk23, active_dt, stage_rhs_evaluations, reason)") !=
+            schedule_source.find("gpu_rk_run_rk4_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)") !=
+                std::string::npos &&
+            schedule_source.find("#include \"gpu/cuda/integrators/rk/rk23_stage_sequence.hpp\"") !=
+                std::string::npos &&
+            schedule_source.find("gpu_rk_run_rk23_stage_sequence(ctx, stream, n, active_dt, stage_rhs_evaluations, reason)") !=
+                std::string::npos &&
+            schedule_source.find("#include \"gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.hpp\"") ==
                 std::string::npos &&
             schedule_source.find("#include \"gpu/cuda/integrators/rk/heun_stage_sequence.hpp\"") !=
                 std::string::npos &&
@@ -1390,27 +1584,77 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK45 stage sequence source must own Dormand-Prince stage kernels, RHS evaluations, and DP54 accept");
     check(
-        rk4_rk23_header.find("GPU CUDA RK4/RK23 stage sequence module header") !=
+        rk4_rk23_header.find("GPU CUDA RK4/RK23 stage sequence compatibility header") !=
                 std::string::npos &&
-            rk4_rk23_header.find("gpu_rk_run_rk4_rk23_stage_sequence(") !=
+            rk4_rk23_header.find("#include \"gpu/cuda/integrators/rk/rk4_stage_sequence.hpp\"") !=
+                std::string::npos &&
+            rk4_rk23_header.find("#include \"gpu/cuda/integrators/rk/rk23_stage_sequence.hpp\"") !=
+                std::string::npos &&
+            rk4_rk23_header.find("gpu_rk_run_rk4_rk23_stage_sequence(") ==
                 std::string::npos,
-        "GPU CUDA RK4/RK23 stage sequence header must document and declare the RK4/RK23 sequence");
+        "GPU CUDA RK4/RK23 stage sequence compatibility header must include the per-integrator sequence owners");
     check(
         rk4_rk23_source.find("#include \"gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.hpp\"") !=
                 std::string::npos &&
-            rk4_rk23_source.find("GPU CUDA RK4/RK23 stage sequence source contract") !=
+            rk4_rk23_source.find("GPU CUDA RK4/RK23 stage sequence compatibility source") !=
                 std::string::npos &&
-            rk4_rk23_source.find("fullmag_cuda_euler_stage(") !=
+            rk4_rk23_source.find("gpu_rk_run_rk4_rk23_stage_sequence(") ==
                 std::string::npos &&
-            rk4_rk23_source.find("fullmag_cuda_rk4_accept(") !=
+            rk4_rk23_source.find("fullmag_cuda_euler_stage(") ==
                 std::string::npos &&
-            rk4_rk23_source.find("fullmag_cuda_bs23_accept(") !=
+            rk4_rk23_source.find("fullmag_cuda_rk4_accept(") ==
                 std::string::npos &&
-            rk4_rk23_source.find("launch GPU RK stage-2 h_eff accumulation") !=
+            rk4_rk23_source.find("fullmag_cuda_bs23_accept(") ==
                 std::string::npos &&
-            rk4_rk23_source.find("stage_rhs_evaluations += 1") !=
+            rk4_rk23_source.find("launch GPU RK stage-2 h_eff accumulation") ==
                 std::string::npos,
-        "GPU CUDA RK4/RK23 stage sequence source must own midpoint/endpoint predictors, RHS evaluations, and RK4/BS23 accepts");
+        "GPU CUDA RK4/RK23 compatibility source must not own predictor, RHS, or accept internals");
+    check(
+        rk4_header.find("GPU CUDA RK4 stage sequence module header") !=
+                std::string::npos &&
+            rk4_header.find("gpu_rk_run_rk4_stage_sequence(") !=
+                std::string::npos,
+        "GPU CUDA RK4 stage sequence header must document and declare the RK4 sequence");
+    check(
+        rk4_source.find("#include \"gpu/cuda/integrators/rk/rk4_stage_sequence.hpp\"") !=
+                std::string::npos &&
+            rk4_source.find("GPU CUDA RK4 stage sequence source contract") !=
+                std::string::npos &&
+            rk4_source.find("fullmag_cuda_euler_stage(") !=
+                std::string::npos &&
+            rk4_source.find("fullmag_cuda_rk4_accept(") !=
+                std::string::npos &&
+            rk4_source.find("fullmag_cuda_bs23_accept(") ==
+                std::string::npos &&
+            rk4_source.find("launch GPU RK stage-2 h_eff accumulation") !=
+                std::string::npos &&
+            rk4_source.find("launch GPU RK stage-3 h_eff accumulation") !=
+                std::string::npos &&
+            rk4_source.find("stage_rhs_evaluations += 1") !=
+                std::string::npos,
+        "GPU CUDA RK4 stage sequence source must own RK4 predictors, RHS evaluations, and RK4 accept");
+    check(
+        rk23_header.find("GPU CUDA RK23 BS23 stage sequence module header") !=
+                std::string::npos &&
+            rk23_header.find("gpu_rk_run_rk23_stage_sequence(") !=
+                std::string::npos,
+        "GPU CUDA RK23 stage sequence header must document and declare the BS23 sequence");
+    check(
+        rk23_source.find("#include \"gpu/cuda/integrators/rk/rk23_stage_sequence.hpp\"") !=
+                std::string::npos &&
+            rk23_source.find("GPU CUDA RK23 BS23 stage sequence source contract") !=
+                std::string::npos &&
+            rk23_source.find("fullmag_cuda_euler_stage(") !=
+                std::string::npos &&
+            rk23_source.find("fullmag_cuda_bs23_accept(") !=
+                std::string::npos &&
+            rk23_source.find("fullmag_cuda_rk4_accept(") ==
+                std::string::npos &&
+            rk23_source.find("launch GPU RK stage-2 h_eff accumulation") !=
+                std::string::npos &&
+            rk23_source.find("stage_rhs_evaluations += 1") !=
+                std::string::npos,
+        "GPU CUDA RK23 stage sequence source must own BS23 predictor, RHS evaluation, and BS23 accept");
     check(
         rk23_adaptive_header.find("GPU CUDA RK23 adaptive k3 module header") !=
                 std::string::npos &&
@@ -1484,12 +1728,36 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
         rk4_rk23_source.find("bool gpu_rk_device_resident_step(") == std::string::npos &&
             rk4_rk23_source.find("gpu_rk_adaptive_pi_step(") == std::string::npos &&
             rk4_rk23_source.find("gpu_rk_finalize_accepted_step(") == std::string::npos &&
+            rk4_rk23_source.find("fullmag_cuda_rk4_accept(") == std::string::npos &&
+            rk4_rk23_source.find("fullmag_cuda_bs23_accept(") == std::string::npos &&
             rk4_rk23_source.find("fullmag_cuda_rk45_stage(") == std::string::npos &&
             rk4_rk23_source.find("fullmag_cuda_dp54_accept(") == std::string::npos &&
             rk4_rk23_source.find("fullmag_cuda_heun_accept(") == std::string::npos &&
             rk4_rk23_source.find("launch GPU RK23 BS23 k3 for adaptive error estimate") ==
                 std::string::npos,
-        "GPU CUDA RK4/RK23 stage sequence source must not own step orchestration, adaptive policy, accepted-step finalization, RK45, Heun, or BS23 adaptive k3 internals");
+        "GPU CUDA RK4/RK23 compatibility source must not own step orchestration, adaptive policy, accepted-step finalization, accept kernels, RK45, Heun, or BS23 adaptive k3 internals");
+    check(
+        rk4_source.find("bool gpu_rk_device_resident_step(") == std::string::npos &&
+            rk4_source.find("gpu_rk_adaptive_pi_step(") == std::string::npos &&
+            rk4_source.find("gpu_rk_finalize_accepted_step(") == std::string::npos &&
+            rk4_source.find("fullmag_cuda_bs23_accept(") == std::string::npos &&
+            rk4_source.find("fullmag_cuda_rk45_stage(") == std::string::npos &&
+            rk4_source.find("fullmag_cuda_dp54_accept(") == std::string::npos &&
+            rk4_source.find("fullmag_cuda_heun_accept(") == std::string::npos &&
+            rk4_source.find("launch GPU RK23 BS23 k3 for adaptive error estimate") ==
+                std::string::npos,
+        "GPU CUDA RK4 stage sequence source must not own step orchestration, adaptive policy, accepted-step finalization, BS23, RK45, Heun, or BS23 adaptive k3 internals");
+    check(
+        rk23_source.find("bool gpu_rk_device_resident_step(") == std::string::npos &&
+            rk23_source.find("gpu_rk_adaptive_pi_step(") == std::string::npos &&
+            rk23_source.find("gpu_rk_finalize_accepted_step(") == std::string::npos &&
+            rk23_source.find("fullmag_cuda_rk4_accept(") == std::string::npos &&
+            rk23_source.find("fullmag_cuda_rk45_stage(") == std::string::npos &&
+            rk23_source.find("fullmag_cuda_dp54_accept(") == std::string::npos &&
+            rk23_source.find("fullmag_cuda_heun_accept(") == std::string::npos &&
+            rk23_source.find("launch GPU RK23 BS23 k3 for adaptive error estimate") ==
+                std::string::npos,
+        "GPU CUDA RK23 stage sequence source must not own step orchestration, adaptive policy, accepted-step finalization, RK4, RK45, Heun, or BS23 adaptive k3 internals");
     check(
         rk23_adaptive_source.find("bool gpu_rk_device_resident_step(") == std::string::npos &&
             rk23_adaptive_source.find("gpu_rk_adaptive_pi_step(") == std::string::npos &&
@@ -2036,11 +2304,53 @@ void gpu_rk_stage_kernels_are_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_kernels.hpp");
     const std::string rk_stage_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_kernels.cu");
+    const std::string predictor_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_predictor_kernels.hpp");
+    const std::string predictor_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_predictor_kernels.cu");
+    const std::string accept_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_accept_kernels.hpp");
+    const std::string accept_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_stage_accept_kernels.cu");
+    const std::string heun_accept_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_heun_accept_kernel.hpp");
+    const std::string heun_accept_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_heun_accept_kernel.cu");
+    const std::string rk4_accept_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rk4_accept_kernel.hpp");
+    const std::string rk4_accept_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rk4_accept_kernel.cu");
+    const std::string bs23_accept_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_bs23_accept_kernel.hpp");
+    const std::string bs23_accept_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_bs23_accept_kernel.cu");
+    const std::string dp54_accept_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dp54_accept_kernel.hpp");
+    const std::string dp54_accept_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dp54_accept_kernel.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_stage_kernels.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK stage CUDA kernels from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK stage predictor CUDA kernels from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_stage_accept_kernels.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK stage accept CUDA kernels from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_heun_accept_kernel.cu") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/integrators/rk/rk_rk4_accept_kernel.cu") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/integrators/rk/rk_bs23_accept_kernel.cu") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/integrators/rk/rk_dp54_accept_kernel.cu") !=
+                std::string::npos,
+        "FEM CMake source list must build per-integrator GPU RK accept kernels from gpu/cuda/integrators/rk");
     check(
         kernels_header.find("#include \"gpu/cuda/integrators/rk/rk_stage_kernels.hpp\"") !=
             std::string::npos,
@@ -2048,19 +2358,11 @@ void gpu_rk_stage_kernels_are_owned_by_cuda_rk_module() {
     check(
         rk_stage_header.find("GPU CUDA RK stage kernels module header") !=
                 std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_euler_stage(") !=
+            rk_stage_header.find("#include \"gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp\"") !=
                 std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_rk45_stage(") !=
-                std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_heun_accept(") !=
-                std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_rk4_accept(") !=
-                std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_bs23_accept(") !=
-                std::string::npos &&
-            rk_stage_header.find("fullmag_cuda_dp54_accept(") !=
+            rk_stage_header.find("#include \"gpu/cuda/integrators/rk/rk_stage_accept_kernels.hpp\"") !=
                 std::string::npos,
-        "GPU CUDA RK stage kernels header must own stage and accept wrapper declarations");
+        "GPU CUDA RK stage kernels header must include predictor and accept kernel modules");
     check(
         rk_stage_source.find("#include \"gpu/cuda/integrators/rk/rk_stage_kernels.hpp\"") !=
                 std::string::npos &&
@@ -2068,24 +2370,136 @@ void gpu_rk_stage_kernels_are_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK stage kernels source must document and include its module header");
     check(
-        rk_stage_source.find("euler_stage_kernel") !=
+        predictor_header.find("GPU CUDA RK stage predictor kernels module header") !=
                 std::string::npos &&
-            rk_stage_source.find("rk45_stage_kernel") !=
+            predictor_header.find("fullmag_cuda_euler_stage(") !=
                 std::string::npos &&
-            rk_stage_source.find("heun_accept_kernel") !=
-                std::string::npos &&
-            rk_stage_source.find("rk4_accept_kernel") !=
-                std::string::npos &&
-            rk_stage_source.find("bs23_accept_kernel") !=
-                std::string::npos &&
-            rk_stage_source.find("dp54_accept_kernel") !=
+            predictor_header.find("fullmag_cuda_rk45_stage(") !=
                 std::string::npos,
-        "GPU CUDA RK stage kernels source must own stage predictor and accept kernels");
+        "GPU CUDA RK stage predictor kernels header must own predictor wrapper declarations");
+    check(
+        accept_header.find("GPU CUDA RK stage accept kernels compatibility header") !=
+                std::string::npos &&
+            accept_header.find("#include \"gpu/cuda/integrators/rk/rk_heun_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            accept_header.find("#include \"gpu/cuda/integrators/rk/rk_rk4_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            accept_header.find("#include \"gpu/cuda/integrators/rk/rk_bs23_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            accept_header.find("#include \"gpu/cuda/integrators/rk/rk_dp54_accept_kernel.hpp\"") !=
+                std::string::npos,
+        "GPU CUDA RK stage accept kernels header must include per-integrator accept modules");
+    check(
+        predictor_source.find("#include \"gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp\"") !=
+                std::string::npos &&
+            predictor_source.find("GPU CUDA RK stage predictor kernels source contract") !=
+                std::string::npos &&
+            predictor_source.find("euler_stage_kernel") !=
+                std::string::npos &&
+            predictor_source.find("rk45_stage_kernel") !=
+                std::string::npos &&
+            predictor_source.find("fullmag_cuda_euler_stage(") !=
+                std::string::npos &&
+            predictor_source.find("fullmag_cuda_rk45_stage(") !=
+                std::string::npos,
+        "GPU CUDA RK stage predictor kernels source must own predictor kernels");
+    check(
+        accept_source.find("#include \"gpu/cuda/integrators/rk/rk_stage_accept_kernels.hpp\"") !=
+                std::string::npos &&
+            accept_source.find("GPU CUDA RK stage accept kernels source contract") !=
+                std::string::npos,
+        "GPU CUDA RK stage accept kernels source must document compatibility ownership");
+    check(
+        heun_accept_header.find("GPU CUDA RK Heun accept kernel module header") !=
+                std::string::npos &&
+            heun_accept_header.find("fullmag_cuda_heun_accept(") !=
+                std::string::npos &&
+            heun_accept_source.find("#include \"gpu/cuda/integrators/rk/rk_heun_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            heun_accept_source.find("GPU CUDA RK Heun accept kernel source contract") !=
+                std::string::npos &&
+            heun_accept_source.find("heun_accept_kernel") !=
+                std::string::npos &&
+            heun_accept_source.find("fullmag_cuda_heun_accept(") !=
+                std::string::npos,
+        "GPU CUDA RK Heun accept module must own Heun accepted-state kernel");
+    check(
+        rk4_accept_header.find("GPU CUDA RK RK4 accept kernel module header") !=
+                std::string::npos &&
+            rk4_accept_header.find("fullmag_cuda_rk4_accept(") !=
+                std::string::npos &&
+            rk4_accept_source.find("#include \"gpu/cuda/integrators/rk/rk_rk4_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            rk4_accept_source.find("GPU CUDA RK RK4 accept kernel source contract") !=
+                std::string::npos &&
+            rk4_accept_source.find("rk4_accept_kernel") !=
+                std::string::npos &&
+            rk4_accept_source.find("fullmag_cuda_rk4_accept(") !=
+                std::string::npos,
+        "GPU CUDA RK RK4 accept module must own RK4 accepted-state kernel");
+    check(
+        bs23_accept_header.find("GPU CUDA RK BS23 accept kernel module header") !=
+                std::string::npos &&
+            bs23_accept_header.find("fullmag_cuda_bs23_accept(") !=
+                std::string::npos &&
+            bs23_accept_source.find("#include \"gpu/cuda/integrators/rk/rk_bs23_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            bs23_accept_source.find("GPU CUDA RK BS23 accept kernel source contract") !=
+                std::string::npos &&
+            bs23_accept_source.find("bs23_accept_kernel") !=
+                std::string::npos &&
+            bs23_accept_source.find("fullmag_cuda_bs23_accept(") !=
+                std::string::npos,
+        "GPU CUDA RK BS23 accept module must own BS23 accepted-state kernel");
+    check(
+        dp54_accept_header.find("GPU CUDA RK DP54 accept kernel module header") !=
+                std::string::npos &&
+            dp54_accept_header.find("fullmag_cuda_dp54_accept(") !=
+                std::string::npos &&
+            dp54_accept_source.find("#include \"gpu/cuda/integrators/rk/rk_dp54_accept_kernel.hpp\"") !=
+                std::string::npos &&
+            dp54_accept_source.find("GPU CUDA RK DP54 accept kernel source contract") !=
+                std::string::npos &&
+            dp54_accept_source.find("dp54_accept_kernel") !=
+                std::string::npos &&
+            dp54_accept_source.find("fullmag_cuda_dp54_accept(") !=
+                std::string::npos,
+        "GPU CUDA RK DP54 accept module must own DP54 accepted-state kernel");
+    check(
+        rk_stage_source.find("euler_stage_kernel") == std::string::npos &&
+            rk_stage_source.find("rk45_stage_kernel") == std::string::npos &&
+            rk_stage_source.find("heun_accept_kernel") == std::string::npos &&
+            rk_stage_source.find("rk4_accept_kernel") == std::string::npos &&
+            rk_stage_source.find("bs23_accept_kernel") == std::string::npos &&
+            rk_stage_source.find("dp54_accept_kernel") == std::string::npos &&
+            accept_source.find("heun_accept_kernel") == std::string::npos &&
+            accept_source.find("rk4_accept_kernel") == std::string::npos &&
+            accept_source.find("bs23_accept_kernel") == std::string::npos &&
+            accept_source.find("dp54_accept_kernel") == std::string::npos,
+        "GPU CUDA RK stage compatibility sources must not own predictor or accept kernels");
     check(
         rk_stage_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
             rk_stage_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            predictor_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            predictor_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            accept_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            accept_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            heun_accept_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            heun_accept_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            rk4_accept_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            rk4_accept_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            bs23_accept_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            bs23_accept_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            dp54_accept_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            dp54_accept_source.find("compute_rhs_for_magnetization(") ==
                 std::string::npos,
-        "GPU CUDA RK stage kernels source must not own RK orchestration or RHS assembly");
+        "GPU CUDA RK stage kernel sources must not own RK orchestration or RHS assembly");
     check(
         rk_step.find("__global__ void euler_stage_kernel") == std::string::npos &&
             rk_step.find("__global__ void rk45_stage_kernel") == std::string::npos &&
@@ -2111,11 +2525,27 @@ void gpu_rk_device_io_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_device_io.hpp");
     const std::string io_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_device_io.cu");
+    const std::string scalar_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_scalar_readback.hpp");
+    const std::string scalar_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_scalar_readback.cu");
+    const std::string component_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_component_copy.hpp");
+    const std::string component_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_component_copy.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_device_io.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK device I/O helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_scalar_readback.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK scalar readback helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_component_copy.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK component copy helpers from gpu/cuda/integrators/rk");
     check(
         final_refresh.find("#include \"gpu/cuda/integrators/rk/rk_device_io.hpp\"") !=
                 std::string::npos &&
@@ -2129,15 +2559,11 @@ void gpu_rk_device_io_is_owned_by_cuda_rk_module() {
     check(
         io_header.find("GPU CUDA RK device I/O module header") !=
                 std::string::npos &&
-            io_header.find("gpu_rk_read_scalar_result(") !=
+            io_header.find("#include \"gpu/cuda/integrators/rk/rk_scalar_readback.hpp\"") !=
                 std::string::npos &&
-            io_header.find("gpu_rk_read_scalar_results(") !=
-                std::string::npos &&
-            io_header.find("gpu_rk_copy_component_device(") !=
-                std::string::npos &&
-            io_header.find("gpu_rk_download_component_device_to_aos(") !=
+            io_header.find("#include \"gpu/cuda/integrators/rk/rk_component_copy.hpp\"") !=
                 std::string::npos,
-        "GPU CUDA RK device I/O header must own scalar read and component copy declarations");
+        "GPU CUDA RK device I/O header must include scalar readback and component copy modules");
     check(
         io_source.find("#include \"gpu/cuda/integrators/rk/rk_device_io.hpp\"") !=
                 std::string::npos &&
@@ -2145,20 +2571,70 @@ void gpu_rk_device_io_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK device I/O source must document and include its module header");
     check(
-        io_source.find("cudaMemcpyAsync") !=
+        scalar_header.find("GPU CUDA RK scalar readback module header") !=
                 std::string::npos &&
-            io_source.find("cudaMemcpy2DAsync") !=
+            scalar_header.find("gpu_rk_read_scalar_result(") !=
                 std::string::npos &&
-            io_source.find("cudaStreamSynchronize") !=
-                std::string::npos &&
-            io_source.find("record_device_to_host") !=
+            scalar_header.find("gpu_rk_read_scalar_results(") !=
                 std::string::npos,
-        "GPU CUDA RK device I/O source must own scalar read, component copy, and audited device-to-host transfers");
+        "GPU CUDA RK scalar readback header must own scalar read declarations");
+    check(
+        component_header.find("GPU CUDA RK component copy module header") !=
+                std::string::npos &&
+            component_header.find("gpu_rk_copy_component_device(") !=
+                std::string::npos &&
+            component_header.find("gpu_rk_download_component_device_to_aos(") !=
+                std::string::npos,
+        "GPU CUDA RK component copy header must own component copy declarations");
+    check(
+        scalar_source.find("#include \"gpu/cuda/integrators/rk/rk_scalar_readback.hpp\"") !=
+                std::string::npos &&
+            scalar_source.find("GPU CUDA RK scalar readback source contract") !=
+                std::string::npos &&
+            scalar_source.find("gpu_rk_read_scalar_result(") !=
+                std::string::npos &&
+            scalar_source.find("gpu_rk_read_scalar_results(") !=
+                std::string::npos &&
+            scalar_source.find("cudaMemcpyAsync") !=
+                std::string::npos &&
+            scalar_source.find("cudaStreamSynchronize") !=
+                std::string::npos &&
+            scalar_source.find("record_device_to_host") !=
+                std::string::npos,
+        "GPU CUDA RK scalar readback source must own audited scalar device-to-host transfers");
+    check(
+        component_source.find("#include \"gpu/cuda/integrators/rk/rk_component_copy.hpp\"") !=
+                std::string::npos &&
+            component_source.find("GPU CUDA RK component copy source contract") !=
+                std::string::npos &&
+            component_source.find("gpu_rk_copy_component_device(") !=
+                std::string::npos &&
+            component_source.find("gpu_rk_download_component_device_to_aos(") !=
+                std::string::npos &&
+            component_source.find("cudaMemcpyAsync") !=
+                std::string::npos &&
+            component_source.find("cudaMemcpy2DAsync") !=
+                std::string::npos &&
+            component_source.find("record_device_to_host") !=
+                std::string::npos,
+        "GPU CUDA RK component copy source must own component device copies and audited AoS downloads");
+    check(
+        io_source.find("cudaMemcpyAsync") == std::string::npos &&
+            io_source.find("cudaMemcpy2DAsync") == std::string::npos &&
+            io_source.find("cudaStreamSynchronize") == std::string::npos &&
+            io_source.find("record_device_to_host") == std::string::npos,
+        "GPU CUDA RK device I/O compatibility source must not own low-level transfer implementations");
     check(
         io_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
             io_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            scalar_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            scalar_source.find("compute_rhs_for_magnetization(") ==
+                std::string::npos &&
+            component_source.find("gpu_rk_device_resident_step(") == std::string::npos &&
+            component_source.find("compute_rhs_for_magnetization(") ==
                 std::string::npos,
-        "GPU CUDA RK device I/O source must not own RK orchestration or RHS assembly");
+        "GPU CUDA RK device I/O sources must not own RK orchestration or RHS assembly");
     check(
         rk_step.find("bool read_scalar_result(") == std::string::npos &&
             rk_step.find("bool read_scalar_results(") == std::string::npos &&
@@ -2624,11 +3100,35 @@ void gpu_rk_local_fields_are_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_local_fields.hpp");
     const std::string local_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_local_fields.cu");
+    const std::string anisotropy_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_anisotropy_field.hpp");
+    const std::string anisotropy_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_anisotropy_field.cu");
+    const std::string magnetoelastic_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetoelastic_field.hpp");
+    const std::string magnetoelastic_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_magnetoelastic_field.cu");
+    const std::string thermal_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_thermal_field.hpp");
+    const std::string thermal_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_thermal_field.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_local_fields.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK local-field helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_anisotropy_field.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK anisotropy field helper from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_magnetoelastic_field.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK magnetoelastic field helper from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_thermal_field.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK thermal field helper from gpu/cuda/integrators/rk");
     check(
         local_header.find("GPU CUDA RK local field contributions module header") !=
                 std::string::npos &&
@@ -2638,19 +3138,124 @@ void gpu_rk_local_fields_are_owned_by_cuda_rk_module() {
     check(
         local_source.find("#include \"gpu/cuda/integrators/rk/rk_local_fields.hpp\"") !=
                 std::string::npos &&
+            local_source.find("#include \"gpu/cuda/integrators/rk/rk_anisotropy_field.hpp\"") !=
+                std::string::npos &&
+            local_source.find("#include \"gpu/cuda/integrators/rk/rk_magnetoelastic_field.hpp\"") !=
+                std::string::npos &&
+            local_source.find("#include \"gpu/cuda/integrators/rk/rk_thermal_field.hpp\"") !=
+                std::string::npos &&
             local_source.find("GPU CUDA RK local field contributions source contract") !=
+                std::string::npos &&
+            local_source.find("gpu_rk_compute_anisotropy_field_contributions(ctx, m, stream, n, reason)") !=
+                std::string::npos &&
+            local_source.find("gpu_rk_compute_magnetoelastic_field_contribution(ctx, m, stream, n, reason)") !=
+                std::string::npos &&
+            local_source.find("gpu_rk_compute_thermal_field_contribution(ctx, stream, n, reason)") !=
                 std::string::npos,
-        "GPU CUDA RK local-field source must document and include its module header");
+        "GPU CUDA RK local-field source must document its module header and delegate specialized local field generation");
     check(
-        local_source.find("fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(") !=
+        anisotropy_header.find("GPU CUDA RK anisotropy local field module header") !=
                 std::string::npos &&
-            local_source.find("fullmag_cuda_cubic_anisotropy_field_energy_blocks(") !=
-                std::string::npos &&
-            local_source.find("fullmag_cuda_magnetoelastic_field_energy_blocks(") !=
-                std::string::npos &&
-            local_source.find("fullmag_cuda_thermal_field_blocks(") !=
+            anisotropy_header.find("gpu_rk_compute_anisotropy_field_contributions(") !=
                 std::string::npos,
-        "GPU CUDA RK local-field source must own local field contribution generation");
+        "GPU CUDA RK anisotropy field header must document and declare anisotropy field generation");
+    check(
+        anisotropy_source.find("#include \"gpu/cuda/integrators/rk/rk_anisotropy_field.hpp\"") !=
+                std::string::npos &&
+            anisotropy_source.find("#include \"gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp\"") !=
+                std::string::npos &&
+            anisotropy_source.find("GPU CUDA RK anisotropy local field source contract") !=
+                std::string::npos,
+        "GPU CUDA RK anisotropy field source must document and include its module and anisotropy kernel headers");
+    check(
+        magnetoelastic_header.find("GPU CUDA RK magnetoelastic local field module header") !=
+                std::string::npos &&
+            magnetoelastic_header.find("gpu_rk_compute_magnetoelastic_field_contribution(") !=
+                std::string::npos,
+        "GPU CUDA RK magnetoelastic field header must document and declare magnetoelastic field generation");
+    check(
+        magnetoelastic_source.find("#include \"gpu/cuda/integrators/rk/rk_magnetoelastic_field.hpp\"") !=
+                std::string::npos &&
+            magnetoelastic_source.find("#include \"gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp\"") !=
+                std::string::npos &&
+            magnetoelastic_source.find("GPU CUDA RK magnetoelastic local field source contract") !=
+                std::string::npos,
+        "GPU CUDA RK magnetoelastic field source must document and include its module and magnetoelastic kernel headers");
+    check(
+        thermal_header.find("GPU CUDA RK thermal local field module header") !=
+                std::string::npos &&
+            thermal_header.find("gpu_rk_compute_thermal_field_contribution(") !=
+                std::string::npos,
+        "GPU CUDA RK thermal field header must document and declare thermal field generation");
+    check(
+        thermal_source.find("#include \"gpu/cuda/integrators/rk/rk_thermal_field.hpp\"") !=
+                std::string::npos &&
+            thermal_source.find("#include \"gpu/cuda/interactions/thermal/thermal_kernels.hpp\"") !=
+                std::string::npos &&
+            thermal_source.find("GPU CUDA RK thermal local field source contract") !=
+                std::string::npos,
+        "GPU CUDA RK thermal field source must document and include its module and thermal kernel headers");
+    check(
+        anisotropy_source.find("fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(") !=
+                std::string::npos &&
+            anisotropy_source.find("fullmag_cuda_cubic_anisotropy_field_energy_blocks(") !=
+                std::string::npos,
+        "GPU CUDA RK anisotropy field source must own anisotropy local field contribution generation");
+    check(
+        local_source.find("fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(") ==
+                std::string::npos &&
+            local_source.find("fullmag_cuda_cubic_anisotropy_field_energy_blocks(") ==
+                std::string::npos &&
+            local_source.find("launch GPU RK uniaxial anisotropy field") ==
+                std::string::npos &&
+            local_source.find("launch GPU RK cubic anisotropy field") ==
+                std::string::npos,
+        "GPU CUDA RK local-field source must delegate anisotropy field internals");
+    check(
+        magnetoelastic_source.find("ctx.magnetoelastic.enabled") !=
+                std::string::npos &&
+            magnetoelastic_source.find("fullmag_cuda_magnetoelastic_field_energy_blocks(") !=
+                std::string::npos &&
+            magnetoelastic_source.find("use_per_node_strain ? gpu.mel_strain_voigt : nullptr") !=
+                std::string::npos &&
+            magnetoelastic_source.find("launch GPU RK magnetoelastic field") !=
+                std::string::npos &&
+            magnetoelastic_source.find("GPU RK magnetoelastic field requires prescribed strain data") !=
+                std::string::npos &&
+            magnetoelastic_source.find("GPU RK magnetoelastic field requires 6 prescribed strain Voigt values per node") !=
+                std::string::npos &&
+            magnetoelastic_source.find("GPU RK magnetoelastic field requires device-resident per-node strain") !=
+                std::string::npos &&
+            magnetoelastic_source.find("GPU RK magnetoelastic field requires device-resident Ms, lumped mass, and H_mel buffers") !=
+                std::string::npos,
+        "GPU CUDA RK magnetoelastic field source must own prescribed-strain validation and launch");
+    check(
+        local_source.find("fullmag_cuda_magnetoelastic_field_energy_blocks(") ==
+                std::string::npos &&
+            local_source.find("launch GPU RK magnetoelastic field") ==
+                std::string::npos &&
+            local_source.find("GPU RK magnetoelastic field requires prescribed strain data") ==
+                std::string::npos,
+        "GPU CUDA RK local-field source must delegate magnetoelastic field internals");
+    check(
+        thermal_source.find("ctx.thermal_brown.temperature <= 0.0") !=
+                std::string::npos &&
+            thermal_source.find("ctx.thermal_brown.seed == 0") !=
+                std::string::npos &&
+            thermal_source.find("ctx.adaptive_dt.current_dt <= 0.0") !=
+                std::string::npos &&
+            thermal_source.find("fullmag_cuda_thermal_field_blocks(") !=
+                std::string::npos &&
+            thermal_source.find("launch GPU RK deterministic thermal field") !=
+                std::string::npos,
+        "GPU CUDA RK thermal field source must own deterministic Brown thermal validation and launch");
+    check(
+        local_source.find("fullmag_cuda_thermal_field_blocks(") == std::string::npos &&
+            local_source.find("launch GPU RK deterministic thermal field") ==
+                std::string::npos &&
+            local_source.find("GPU RK thermal field requires deterministic thermal seed") ==
+                std::string::npos,
+        "GPU CUDA RK local-field source must delegate thermal field internals");
     check(
         local_source.find("gpu_rk_compute_rhs_for_magnetization(") == std::string::npos &&
             local_source.find("gpu_rk_compute_legacy_sparse_exchange(") ==
@@ -2668,11 +3273,19 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_effective_field.hpp");
     const std::string effective_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_effective_field.cu");
+    const std::string oersted_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_oersted_field.hpp");
+    const std::string oersted_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_oersted_field.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_effective_field.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK effective-field helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_oersted_field.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK Oersted field helper from gpu/cuda/integrators/rk");
     check(
         effective_header.find("GPU CUDA RK effective field accumulation module header") !=
                 std::string::npos &&
@@ -2682,6 +3295,8 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
     check(
         effective_source.find("#include \"gpu/cuda/integrators/rk/rk_effective_field.hpp\"") !=
                 std::string::npos &&
+            effective_source.find("#include \"gpu/cuda/integrators/rk/rk_oersted_field.hpp\"") !=
+                std::string::npos &&
             effective_source.find("GPU CUDA RK effective field accumulation source contract") !=
                 std::string::npos,
         "GPU CUDA RK effective-field source must document and include its module header");
@@ -2690,11 +3305,39 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             effective_source.find("fullmag_cuda_add_field_inplace(") !=
                 std::string::npos &&
-            effective_source.find("fullmag_cuda_add_scaled_field_inplace(") !=
-                std::string::npos &&
-            effective_source.find("double gpu_rk_oersted_scale(const Context &ctx)") !=
+            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)") !=
                 std::string::npos,
-        "GPU CUDA RK effective-field source must own base, local, and Oersted H_eff accumulation");
+        "GPU CUDA RK effective-field source must own base/local H_eff accumulation and delegate Oersted contribution");
+    check(
+        oersted_header.find("GPU CUDA RK Oersted field accumulation module header") !=
+                std::string::npos &&
+            oersted_header.find("gpu_rk_accumulate_oersted_field(") !=
+                std::string::npos,
+        "GPU CUDA RK Oersted field header must document and declare Oersted H_eff accumulation");
+    check(
+        oersted_source.find("#include \"gpu/cuda/integrators/rk/rk_oersted_field.hpp\"") !=
+                std::string::npos &&
+            oersted_source.find("#include \"gpu/cuda/interactions/oersted/oersted_kernels.hpp\"") !=
+                std::string::npos &&
+            oersted_source.find("GPU CUDA RK Oersted field accumulation source contract") !=
+                std::string::npos &&
+            oersted_source.find("double gpu_rk_oersted_scale(const Context &ctx)") !=
+                std::string::npos &&
+            oersted_source.find("ctx.oersted.time_dep_kind") !=
+                std::string::npos &&
+            oersted_source.find("fullmag_cuda_add_scaled_field_inplace(") !=
+                std::string::npos &&
+            oersted_source.find("launch GPU RK Oersted h_eff accumulation") !=
+                std::string::npos,
+        "GPU CUDA RK Oersted field source must own time-dependent scaling and scaled field addition");
+    check(
+        effective_source.find("fullmag_cuda_add_scaled_field_inplace(") ==
+                std::string::npos &&
+            effective_source.find("double gpu_rk_oersted_scale(const Context &ctx)") ==
+                std::string::npos &&
+            effective_source.find("launch GPU RK Oersted h_eff accumulation") ==
+                std::string::npos,
+        "GPU CUDA RK effective-field source must delegate Oersted internals");
     check(
         effective_source.find("gpu_rk_compute_rhs_for_magnetization(") == std::string::npos &&
             effective_source.find("gpu_rk_compute_local_field_contributions(") ==
@@ -2712,11 +3355,27 @@ void gpu_rk_direct_torques_are_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_direct_torques.hpp");
     const std::string direct_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_direct_torques.cu");
+    const std::string slonczewski_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_slonczewski_torque.hpp");
+    const std::string slonczewski_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_slonczewski_torque.cu");
+    const std::string zhang_li_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_zhang_li_torque.hpp");
+    const std::string zhang_li_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_zhang_li_torque.cu");
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_direct_torques.cu") !=
             std::string::npos,
         "FEM CMake source list must build GPU RK direct-torque helpers from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_slonczewski_torque.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK Slonczewski torque helper from gpu/cuda/integrators/rk");
+    check(
+        cmake.find("gpu/cuda/integrators/rk/rk_zhang_li_torque.cu") !=
+            std::string::npos,
+        "FEM CMake source list must build GPU RK Zhang-Li torque helper from gpu/cuda/integrators/rk");
     check(
         direct_header.find("GPU CUDA RK direct torque module header") !=
                 std::string::npos &&
@@ -2726,21 +3385,69 @@ void gpu_rk_direct_torques_are_owned_by_cuda_rk_module() {
     check(
         direct_source.find("#include \"gpu/cuda/integrators/rk/rk_direct_torques.hpp\"") !=
                 std::string::npos &&
+            direct_source.find("#include \"gpu/cuda/integrators/rk/rk_slonczewski_torque.hpp\"") !=
+                std::string::npos &&
+            direct_source.find("#include \"gpu/cuda/integrators/rk/rk_zhang_li_torque.hpp\"") !=
+                std::string::npos &&
             direct_source.find("GPU CUDA RK direct torque source contract") !=
                 std::string::npos,
         "GPU CUDA RK direct-torque source must document and include its module header");
     check(
-        direct_source.find("fullmag_cuda_add_slonczewski_stt_rhs(") !=
+        direct_source.find("gpu_rk_add_slonczewski_torque(ctx, m, rhs, stream, n, reason)") !=
                 std::string::npos &&
-            direct_source.find("fullmag_cuda_add_zhang_li_stt_rhs(") !=
-                std::string::npos &&
-            direct_source.find("gpu_rk_current_density_magnitude(ctx)") !=
-                std::string::npos &&
-            direct_source.find("gpu_rk_resolve_slonczewski_thickness(ctx)") !=
-                std::string::npos &&
-            direct_source.find("requires device-resident mesh geometry") !=
+            direct_source.find("gpu_rk_add_zhang_li_torque(ctx, m, rhs, stream, n, reason)") !=
                 std::string::npos,
-        "GPU CUDA RK direct-torque source must own Slonczewski and Zhang-Li RHS additions");
+        "GPU CUDA RK direct-torque source must delegate Slonczewski and Zhang-Li RHS additions");
+    check(
+        slonczewski_header.find("GPU CUDA RK Slonczewski torque module header") !=
+                std::string::npos &&
+            slonczewski_header.find("gpu_rk_add_slonczewski_torque(") !=
+                std::string::npos,
+        "GPU CUDA RK Slonczewski torque header must document and declare Slonczewski RHS addition");
+    check(
+        slonczewski_source.find("#include \"gpu/cuda/integrators/rk/rk_slonczewski_torque.hpp\"") !=
+                std::string::npos &&
+            slonczewski_source.find("#include \"gpu/cuda/interactions/stt/stt_kernels.hpp\"") !=
+                std::string::npos &&
+            slonczewski_source.find("GPU CUDA RK Slonczewski torque source contract") !=
+                std::string::npos &&
+            slonczewski_source.find("fullmag_cuda_add_slonczewski_stt_rhs(") !=
+                std::string::npos &&
+            slonczewski_source.find("gpu_rk_current_density_magnitude(ctx)") !=
+                std::string::npos &&
+            slonczewski_source.find("gpu_rk_resolve_slonczewski_thickness(ctx)") !=
+                std::string::npos,
+        "GPU CUDA RK Slonczewski torque source must own Slonczewski validation and launch");
+    check(
+        zhang_li_header.find("GPU CUDA RK Zhang-Li torque module header") !=
+                std::string::npos &&
+            zhang_li_header.find("gpu_rk_add_zhang_li_torque(") !=
+                std::string::npos,
+        "GPU CUDA RK Zhang-Li torque header must document and declare Zhang-Li RHS addition");
+    check(
+        zhang_li_source.find("#include \"gpu/cuda/integrators/rk/rk_zhang_li_torque.hpp\"") !=
+                std::string::npos &&
+            zhang_li_source.find("#include \"gpu/cuda/interactions/stt/stt_kernels.hpp\"") !=
+                std::string::npos &&
+            zhang_li_source.find("GPU CUDA RK Zhang-Li torque source contract") !=
+                std::string::npos &&
+            zhang_li_source.find("fullmag_cuda_add_zhang_li_stt_rhs(") !=
+                std::string::npos &&
+            zhang_li_source.find("requires device-resident mesh geometry") !=
+                std::string::npos,
+        "GPU CUDA RK Zhang-Li torque source must own Zhang-Li validation and launch");
+    check(
+        direct_source.find("fullmag_cuda_add_slonczewski_stt_rhs(") ==
+                std::string::npos &&
+            direct_source.find("fullmag_cuda_add_zhang_li_stt_rhs(") ==
+                std::string::npos &&
+            direct_source.find("gpu_rk_current_density_magnitude(ctx)") ==
+                std::string::npos &&
+            direct_source.find("gpu_rk_resolve_slonczewski_thickness(ctx)") ==
+                std::string::npos &&
+            direct_source.find("requires device-resident mesh geometry") ==
+                std::string::npos,
+        "GPU CUDA RK direct-torque source must delegate specialized STT internals");
     check(
         direct_source.find("gpu_rk_compute_rhs_for_magnetization(") == std::string::npos &&
             direct_source.find("gpu_rk_accumulate_effective_field(") ==

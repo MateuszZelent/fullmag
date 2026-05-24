@@ -35,6 +35,8 @@ def _build_shared_domain_build_report(
     build_mode: str,
     fallbacks_triggered: list[str],
     mesh_options: MeshOptions,
+    selector_resolution: list[dict[str, object]] | None = None,
+    orphan_entities: list[dict[str, object]] | None = None,
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
         geometries, hints,
@@ -71,6 +73,7 @@ def _build_shared_domain_build_report(
         airbox=airbox,
         build_mode=build_mode,
         fallbacks_triggered=fallbacks_triggered,
+        selector_resolution=selector_resolution,
     )
     thin_film_diagnostics = _build_thin_film_diagnostics(
         geometries,
@@ -92,6 +95,8 @@ def _build_shared_domain_build_report(
         size_fields_realized=size_fields_realized,
         operation_statuses=operation_statuses,
         thin_film_diagnostics=thin_film_diagnostics,
+        selector_resolution=[dict(item) for item in selector_resolution or []],
+        orphan_entities=[dict(item) for item in orphan_entities or []],
         degraded=degraded,
     )
 
@@ -194,6 +199,7 @@ def _build_mesh_operation_statuses(
     airbox: AirboxOptions | None,
     build_mode: str,
     fallbacks_triggered: list[str],
+    selector_resolution: list[dict[str, object]] | None = None,
 ) -> list[MeshOperationStatus]:
     statuses: list[MeshOperationStatus] = []
 
@@ -245,15 +251,39 @@ def _build_mesh_operation_statuses(
             and opts.boundary_layer_thickness is not None
             and opts.boundary_layer_thickness > 0.0
         )
-        boundary_layer_has_targets = bool(opts.boundary_layer_target_surface_tags) or bool(
-            opts.boundary_layer_target_curve_tags
+        boundary_layer_has_explicit_targets = bool(
+            opts.boundary_layer_target_surface_tags
+        ) or bool(opts.boundary_layer_target_curve_tags)
+        boundary_layer_has_requested_selectors = bool(
+            opts.boundary_layer_target_surface_selectors
+        ) or bool(
+            opts.boundary_layer_target_curve_selectors
+        )
+        resolved_selector_tags = [
+            tag
+            for resolution in selector_resolution or []
+            for tag in (
+                resolution.get("resolved_tags")
+                if isinstance(resolution.get("resolved_tags"), list)
+                else []
+            )
+        ]
+        boundary_layer_has_selector_targets = (
+            boundary_layer_has_requested_selectors and bool(resolved_selector_tags)
+        )
+        boundary_layer_has_targets = (
+            boundary_layer_has_explicit_targets or boundary_layer_has_selector_targets
         )
         boundary_layer_applied = boundary_layer_valid and boundary_layer_has_targets
         reason = None
         if not boundary_layer_valid:
             reason = "boundary_layer_count and boundary_layer_thickness must both be positive"
         elif not boundary_layer_has_targets:
-            reason = "no explicit boundary-layer target surfaces or curves were provided"
+            reason = (
+                "no boundary-layer selector resolved to target surfaces or curves"
+                if boundary_layer_has_requested_selectors
+                else "no explicit boundary-layer target surfaces or curves were provided"
+            )
         statuses.append(
             MeshOperationStatus(
                 kind="boundary_layer",
@@ -264,9 +294,25 @@ def _build_mesh_operation_statuses(
                 actual_method="gmsh_boundary_layer" if boundary_layer_applied else None,
                 reason=reason,
                 details={
-                    "target_selector": "explicit_surfaces_or_curves" if boundary_layer_has_targets else None,
+                    "target_selector": (
+                        "semantic_selectors"
+                        if boundary_layer_has_selector_targets
+                        else (
+                            "explicit_surfaces_or_curves"
+                            if boundary_layer_has_explicit_targets
+                            else None
+                        )
+                    ),
                     "target_surface_tags": list(opts.boundary_layer_target_surface_tags or []),
                     "target_curve_tags": list(opts.boundary_layer_target_curve_tags or []),
+                    "target_surface_selectors": [
+                        dict(selector)
+                        for selector in opts.boundary_layer_target_surface_selectors or []
+                    ],
+                    "target_curve_selectors": [
+                        dict(selector)
+                        for selector in opts.boundary_layer_target_curve_selectors or []
+                    ],
                     "layer_count": opts.boundary_layer_count,
                     "first_layer_thickness": opts.boundary_layer_thickness,
                     "stretching": opts.boundary_layer_stretching or 1.2,

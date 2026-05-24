@@ -48,8 +48,8 @@ int main()
     const std::filesystem::path root = fem_source_root();
     const std::string cpu_recovery =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
-    const std::string gpu_rk_stats =
-        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
+    const std::string gpu_rk_stats_publication =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
 
     check(
         cpu_recovery.find("ctx.demag.cached_robin_boundary_energy") != std::string::npos &&
@@ -57,13 +57,16 @@ int main()
                 std::string::npos,
         "CPU Poisson-Robin demag energy must add the cached boundary correction");
     check(
-        gpu_rk_stats.find("ctx.demag.cached_robin_boundary_energy") != std::string::npos,
+        gpu_rk_stats_publication.find("ctx.demag.cached_robin_boundary_energy") !=
+            std::string::npos,
         "strict GPU final demag energy must add the same Poisson-Robin boundary correction");
     check(
-        gpu_rk_stats.find("stats.demag_energy_joules = demag_energy") != std::string::npos,
+        gpu_rk_stats_publication.find("stats.demag_energy_joules = demag_energy") !=
+            std::string::npos,
         "strict GPU final stats must publish the corrected demag energy variable");
     check(
-        gpu_rk_stats.find("exchange_energy + demag_energy + external_energy") != std::string::npos,
+        gpu_rk_stats_publication.find("exchange_energy + demag_energy + external_energy") !=
+            std::string::npos,
         "strict GPU total energy must use the corrected demag energy variable");
 
     return 0;

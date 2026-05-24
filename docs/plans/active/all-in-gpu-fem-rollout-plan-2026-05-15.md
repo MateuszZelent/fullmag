@@ -328,7 +328,10 @@ Status implementacji 2026-05-15:
 - Benchmark preflight publikuje `adaptive_gpu_rk_acceptance_ready` oraz
   `adaptive_gpu_rk_acceptance_blockers`, zeby odroznic lokalnie zielony scaffold
   od zaakceptowanej sciezki adaptive GPU RK na hoscie z CUDA/MFEM. Preflight
-  wypelnia te pola takze dla `ok_prebuilt` i `invalid_prebuilt`, a `run_backend`
+  sprawdza tez, czy adaptive RK nadal wykonuje hot-loop scalar D2H readback dla
+  decyzji accept/reject; dopoki tak jest, acceptance pozostaje zablokowane nawet
+  przy dostepnym CUDA/MFEM i `FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1`.
+  Preflight wypelnia te pola takze dla `ok_prebuilt` i `invalid_prebuilt`, a `run_backend`
   przenosi je do wiersza CSV dla `fem_gpu`, rowniez gdy binarka GPU jest lokalnie
   niedostepna i wiersz ma `status=missing_binary`.
 - Dla `status=missing_binary` w `fem_gpu + exchange_only` benchmark publikuje

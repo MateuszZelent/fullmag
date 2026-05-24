@@ -22,6 +22,7 @@ set(FEM_SOURCES
     gpu/cuda/integrators/rk/rk_plan.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
+    gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
     gpu/cuda/state/gpu_state.cpp
     gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
@@ -132,34 +133,53 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
             gpu/cuda/integrators/rk/rk_adaptive_runtime.cu
+            gpu/cuda/integrators/rk/rk_anisotropy_field.cu
             gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_attempt_loop.cu
             gpu/cuda/integrators/rk/rk_attempt_setup.cu
+            gpu/cuda/integrators/rk/rk_bs23_accept_kernel.cu
+            gpu/cuda/integrators/rk/rk_component_copy.cu
             gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_demag_dispatch.cu
             gpu/cuda/integrators/rk/rk_device_io.cu
             gpu/cuda/integrators/rk/rk_direct_torques.cu
             gpu/cuda/integrators/rk/rk_dmi_fields.cu
             gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu
+            gpu/cuda/integrators/rk/rk_dp54_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_effective_field.cu
             gpu/cuda/integrators/rk/rk_error_norm_runtime.cu
             gpu/cuda/integrators/rk/rk_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_exchange_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_exchange_dispatch.cu
+            gpu/cuda/integrators/rk/rk_external_energy_reductions.cu
+            gpu/cuda/integrators/rk/rk_field_metric_reductions.cu
+            gpu/cuda/integrators/rk/rk_heun_accept_kernel.cu
             gpu/cuda/integrators/rk/rk23_adaptive_k3.cu
+            gpu/cuda/integrators/rk/rk23_stage_sequence.cu
             gpu/cuda/integrators/rk/rk4_rk23_stage_sequence.cu
+            gpu/cuda/integrators/rk/rk4_stage_sequence.cu
             gpu/cuda/integrators/rk/rk45_stage_sequence.cu
             gpu/cuda/integrators/rk/rk_final_refresh.cu
             gpu/cuda/integrators/rk/rk_local_fields.cu
             gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.cu
+            gpu/cuda/integrators/rk/rk_magnetization_reductions.cu
+            gpu/cuda/integrators/rk/rk_magnetoelastic_field.cu
             gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_observable_reductions.cu
+            gpu/cuda/integrators/rk/rk_oersted_field.cu
             gpu/cuda/integrators/rk/rk_rhs_runtime.cu
+            gpu/cuda/integrators/rk/rk_rk4_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_snapshot.cu
+            gpu/cuda/integrators/rk/rk_slonczewski_torque.cu
+            gpu/cuda/integrators/rk/rk_scalar_readback.cu
+            gpu/cuda/integrators/rk/rk_stage_accept_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_kernels.cu
+            gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
             gpu/cuda/integrators/rk/rk_step_preflight.cu
             gpu/cuda/integrators/rk/rk_step_stats.cu
+            gpu/cuda/integrators/rk/rk_thermal_field.cu
+            gpu/cuda/integrators/rk/rk_zhang_li_torque.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu

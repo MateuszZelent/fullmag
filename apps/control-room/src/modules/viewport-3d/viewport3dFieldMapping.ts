@@ -82,7 +82,11 @@ export function buildSampledScalarColors(
   for (let index = 0; index < pointIndices.length; index += 1) {
     const pointIndex = pointIndices[index] ?? 0;
     if (pointIndex >= fieldVector.pointCount) {
-      return null;
+      const target = index * 3;
+      colors[target] = 0.5;
+      colors[target + 1] = 0.5;
+      colors[target + 2] = 0.5;
+      continue;
     }
     const [red, green, blue] = colorAt(
       fieldVector,

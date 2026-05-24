@@ -48,8 +48,8 @@ int main()
     const std::filesystem::path root = fem_source_root();
     const std::string gpu_stage =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
-    const std::string gpu_rk_stats =
-        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
+    const std::string gpu_rk_stats_publication =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string gpu_rk_demag_energy =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_demag_energy_reductions.cu");
 
@@ -62,12 +62,12 @@ int main()
             std::string::npos,
         "strict GPU RK demag final energy reductions must include the demag stage compute declarations");
     check(
-        gpu_rk_stats.find("demag_timings.solver_apply_wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns") !=
-            std::string::npos,
+        gpu_rk_stats_publication.find("demag_timings.solver_apply_wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns") !=
+                std::string::npos,
         "strict GPU RK final stats must publish measured demag solver apply wall time");
     check(
-        gpu_rk_stats.find("fill_demag_poisson_phase_stats(demag_timings, stats)") !=
-            std::string::npos,
+        gpu_rk_stats_publication.find("fill_demag_poisson_phase_stats(demag_timings, stats)") !=
+                std::string::npos,
         "strict GPU RK final stats must use the Poisson timing stats publisher");
 
     return 0;

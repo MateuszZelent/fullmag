@@ -1,8 +1,8 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useEffect, useMemo, memo } from "react";
-import { BufferAttribute, BufferGeometry } from "three";
+import { useEffect, useMemo, memo, useRef } from "react";
+import { BufferAttribute, BufferGeometry, type MeshStandardMaterial } from "three";
 import {
   RENDER_POLICIES,
   materialPolicyProps,
@@ -147,8 +147,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     vertexColorsEnabled,
   ]);
 
-  if (!geometry || !settings.visible) return null;
-
+  const materialRef = useRef<MeshStandardMaterial>(null);
   const part = partModel.part;
   const hasScalarColors =
     vertexColorsEnabled &&
@@ -156,6 +155,14 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       effectiveScalarColors,
       topologyModel?.nodeCount ?? 0,
     );
+
+  useEffect(() => {
+    if (materialRef.current) {
+      materialRef.current.needsUpdate = true;
+    }
+  }, [hasScalarColors]);
+
+  if (!geometry || !settings.visible) return null;
   const meshColor = surfaceMaterialColorFromSettings(
     settings,
     hasScalarColors
@@ -180,6 +187,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
             : RENDER_POLICIES.solidSurface.renderOrder}
         >
           <meshStandardMaterial
+            ref={materialRef}
             color={meshColor}
             opacity={opacityFromSettings(settings)}
             {...materialProfile.magneticSurface}

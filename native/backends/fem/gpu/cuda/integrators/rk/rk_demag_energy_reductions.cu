@@ -72,7 +72,7 @@ bool gpu_rk_reduce_final_demag_energy_terms(
     if (!cuda_launch_ok("launch GPU RK demag energy blocks", reason)) {
         return false;
     }
-    const size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
     fullmag_cuda_device_sum(
         gpu.scalar_reduce_workspace,
         blocks,
