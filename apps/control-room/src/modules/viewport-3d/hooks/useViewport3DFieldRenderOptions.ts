@@ -138,7 +138,6 @@ export function useViewport3DFieldRenderOptions({
       }
       const airboxVisible =
         airboxVectorsAllowed &&
-        airboxSettings.visible &&
         airboxSettings.vectorsVisible;
       if (airboxVisible && airboxSettings.vectorBudget > 0) {
         partVectorBudgets.set(partId, airboxSettings.vectorBudget);
