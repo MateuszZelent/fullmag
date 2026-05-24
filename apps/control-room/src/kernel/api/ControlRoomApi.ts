@@ -930,7 +930,7 @@ export class ControlRoomApi {
           headers["if-none-match"] = options.etag;
         }
 
-        let lastResponse: Response | null = null;
+        let lastResponse: any = null;
         let result: any;
         try {
           result = await this.transport.GET(path as never, {

@@ -162,7 +162,14 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     }
   }, [hasScalarColors]);
 
-  if (!geometry || !settings.visible) return null;
+  const hasAnyVisibleSubLayer =
+    settings.shaderVisible ||
+    settings.wireframeVisible ||
+    settings.pointsVisible ||
+    settings.vectorsVisible ||
+    settings.boundsVisible;
+
+  if (!geometry || (!settings.visible && !hasAnyVisibleSubLayer)) return null;
   const meshColor = surfaceMaterialColorFromSettings(
     settings,
     hasScalarColors

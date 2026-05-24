@@ -736,7 +736,14 @@ export function AirboxLayer({
   tracker: Viewport3DResourceTracker;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  if (!settings.visible) return null;
+  const hasAnyVisibleSubLayer =
+    settings.shaderVisible ||
+    settings.wireframeVisible ||
+    settings.pointsVisible ||
+    settings.vectorsVisible ||
+    settings.boundsVisible;
+
+  if (!settings.visible && !hasAnyVisibleSubLayer) return null;
 
   return (
     <>

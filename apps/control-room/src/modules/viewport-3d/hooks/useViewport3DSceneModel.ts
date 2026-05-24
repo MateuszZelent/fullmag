@@ -75,6 +75,7 @@ import {
 } from "../viewport3dRenderModel";
 import {
   getViewport3DCacheStats as getCacheStats,
+  useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
   useViewport3DFieldVector,
@@ -103,6 +104,7 @@ import {
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 
 function resolveSelectionMeshQualityMetric(
   selection: Selection,
@@ -541,6 +543,25 @@ export function useViewport3DSceneModel({
       }).settings,
     [objectVisualizationSnapshot, renderingState],
   );
+  const airboxVectorsAllowed =
+    vectorDomain !== "magnetic_only" &&
+    vectorDomain !== "object" &&
+    vectorDomain !== "part";
+  const airboxFieldVectorParts = useMemo(
+    () =>
+      currentTopologyRenderModel?.airboxParts.map((partModel) => partModel.part) ??
+      EMPTY_AIRBOX_FIELD_VECTOR_PARTS,
+    [currentTopologyRenderModel],
+  );
+  const airboxFieldVectors = useViewport3DAirboxFieldVectors(
+    quantityId,
+    airboxFieldVectorParts,
+    Boolean(
+      airboxVectorsAllowed &&
+        airboxSettings.vectorsVisible &&
+        airboxFieldVectorParts.length > 0,
+    ),
+  );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
     fallbackSettings,
@@ -549,6 +570,16 @@ export function useViewport3DSceneModel({
     vectorColorMode,
     vectorDomain,
   });
+  const resolvedFieldRenderOptions = useMemo(
+    () =>
+      airboxFieldVectors.data && airboxFieldVectors.data.size > 0
+        ? {
+            ...fieldRenderOptions,
+            partFieldVectors: airboxFieldVectors.data,
+          }
+        : fieldRenderOptions,
+    [airboxFieldVectors.data, fieldRenderOptions],
+  );
   const fdmSurfaceColorMode =
     fdmDomain && fdmSettings.visible && fdmSettings.shaderVisible
       ? surfaceColorSourceToColorMode(fdmSettings.surfaceColorSource)
@@ -626,11 +657,11 @@ export function useViewport3DSceneModel({
     const model = measureViewport3DModelBuild(
       "fullmag.viewport3d.buildViewport3DFieldRenderModel",
       () =>
-        buildViewport3DFieldRenderModel(
+          buildViewport3DFieldRenderModel(
           currentTopologyRenderModel,
           fieldVector.data,
           vectorScale,
-          fieldRenderOptions,
+          resolvedFieldRenderOptions,
         ),
     );
     return mergeViewport3DFieldScalarColors(
@@ -641,8 +672,8 @@ export function useViewport3DSceneModel({
   }, [
     chunkedScalarColors,
     currentTopologyRenderModel,
-    fieldRenderOptions,
     fieldVector.data,
+    resolvedFieldRenderOptions,
     vectorColorMode,
     vectorScale,
   ]);
@@ -651,6 +682,7 @@ export function useViewport3DSceneModel({
     topology.error?.message ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
+    airboxFieldVectors.error?.message ??
     scene.error?.message ??
     universe.error?.message ??
     domainMeta.error?.message ??
@@ -685,6 +717,12 @@ export function useViewport3DSceneModel({
       id: "field-vector",
       revision: fieldVector.revision,
       status: fieldVector.status,
+    },
+    {
+      error: airboxFieldVectors.error?.message,
+      id: "airbox-field-vectors",
+      revision: airboxFieldVectors.revision,
+      status: airboxFieldVectors.status,
     },
     {
       error: meshQualityOverlayVisible
