@@ -3,6 +3,9 @@ use utoipa::ToSchema;
 
 use crate::schemas::status::{DisplayViewMode, FieldComponent};
 
+/// Default vector budget for airbox visualization (glyph count, not stride).
+pub(crate) const DEFAULT_AIRBOX_VECTOR_BUDGET: u32 = 1200;
+
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct VisualizationStateResource {
     /// Monotonic revision of all visualization state.
@@ -702,7 +705,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
                 surface_visible: false,
                 vector_alpha: 1.0,
-                vector_budget: 1,
+                vector_budget: DEFAULT_AIRBOX_VECTOR_BUDGET,
                 vector_color_mode: VectorColorMode::Orientation,
                 vector_length_scale: 1.0,
                 vector_mono_color: "var(--fm-accent)".to_string(),

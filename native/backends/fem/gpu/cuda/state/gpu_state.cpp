@@ -12,17 +12,21 @@
 
 #include "context.hpp"
 #include "gpu/cuda/exchange/exchange_upload.hpp"
+#include "gpu/cuda/fields/field_buffer_memory.hpp"
+#include "gpu/cuda/fields/field_buffer_upload.hpp"
+#include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
+#include "gpu/cuda/interactions/local_interaction_workspace_memory.hpp"
+#include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.hpp"
 #include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp"
 #include "gpu/cuda/mesh/mesh_geometry_upload.hpp"
+#include "gpu/cuda/reductions/reduction_workspace_memory.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
+#include "gpu/cuda/state/magnetization_memory.hpp"
+#include "gpu/cuda/state/magnetization_transfer.hpp"
+#include "gpu/cuda/state/runtime_coefficients_memory.hpp"
 #include "gpu/cuda/state/runtime_coefficients_upload.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
 
-#if FULLMAG_HAS_CUDA_RUNTIME
-#include "gpu/cuda/reductions/reduction_kernels.hpp"
-#endif
-
-#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <vector>
@@ -30,8 +34,6 @@
 namespace fullmag::fem {
 
 namespace {
-
-constexpr uint32_t kCudaBlockSize = 256;
 
 void reset_metadata(FemGpuState &state)
 {
@@ -104,12 +106,11 @@ bool gpu_state_upload_magnetization_aos(
         return false;
     }
 
-    if (!gpu_component_upload_aos(
+    if (!gpu_magnetization_upload_aos(
             state.lifecycle,
-            state.magnetization.m,
+            state.magnetization,
             m_xyz,
             len,
-            "m",
             audit,
             error)) {
         return false;
@@ -135,12 +136,11 @@ bool gpu_state_download_magnetization_aos(
         return false;
     }
 
-    if (!gpu_component_download_aos(
+    if (!gpu_magnetization_download_aos(
             state.lifecycle,
-            state.magnetization.m,
+            state.magnetization,
             out_m_xyz,
             audit,
-            "m",
             error)) {
         return false;
     }
@@ -170,17 +170,16 @@ bool gpu_state_upload_effective_fields_aos(
     TransferAudit &audit,
     std::string &error)
 {
-    if (!state.lifecycle.allocated) {
-        return true;
-    }
-    if (!gpu_component_upload_aos(
-            state.lifecycle, state.fields.h_ex, h_ex_xyz, len, "h_ex", audit, error) ||
-        !gpu_component_upload_aos(
-            state.lifecycle, state.fields.h_demag, h_demag_xyz, len, "h_demag", audit, error) ||
-        !gpu_component_upload_aos(
-            state.lifecycle, state.fields.h_ext, h_ext_xyz, len, "h_ext", audit, error) ||
-        !gpu_component_upload_aos(
-            state.lifecycle, state.fields.h_eff, h_eff_xyz, len, "h_eff", audit, error)) {
+    if (!gpu_field_buffers_upload_effective_fields_aos(
+            state.lifecycle,
+            state.fields,
+            h_ex_xyz,
+            h_demag_xyz,
+            h_ext_xyz,
+            h_eff_xyz,
+            len,
+            audit,
+            error)) {
         return false;
     }
     state.residency.device_state = FemGpuSyncState::DeviceClean;
@@ -194,12 +193,11 @@ bool gpu_state_upload_demag_field_aos(
     TransferAudit &audit,
     std::string &error)
 {
-    return gpu_component_upload_aos(
+    return gpu_field_buffers_upload_demag_field_aos(
         state.lifecycle,
-        state.fields.h_demag,
+        state.fields,
         h_demag_xyz,
         len,
-        "h_demag",
         audit,
         error);
 }
@@ -217,23 +215,19 @@ bool gpu_state_upload_local_vector_fields_aos(
     TransferAudit &audit,
     std::string &error)
 {
-    if (!state.lifecycle.allocated) {
-        return true;
-    }
-    if (!gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_ani, h_ani_xyz, len, "h_ani", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_cubic_ani, h_cubic_ani_xyz, len, "h_cubic_ani", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_dmi, h_dmi_xyz, len, "h_dmi", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_bulk_dmi, h_bulk_dmi_xyz, len, "h_bulk_dmi", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_oe, h_oe_xyz, len, "h_oe", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_therm, h_therm_xyz, len, "h_therm", audit, error) ||
-        !gpu_component_upload_optional_aos(
-            state.lifecycle, state.fields.h_mel, h_mel_xyz, len, "h_mel", audit, error)) {
+    if (!gpu_field_buffers_upload_local_vector_fields_aos(
+            state.lifecycle,
+            state.fields,
+            h_ani_xyz,
+            h_cubic_ani_xyz,
+            h_dmi_xyz,
+            h_bulk_dmi_xyz,
+            h_oe_xyz,
+            h_therm_xyz,
+            h_mel_xyz,
+            len,
+            audit,
+            error)) {
         return false;
     }
     state.residency.device_state = FemGpuSyncState::DeviceClean;
@@ -430,58 +424,24 @@ bool gpu_state_initialize(
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint64_t device_bytes = 0;
-    if (!gpu_device_allocate_component(state.magnetization.m, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_ex, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_demag, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_ext, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_ani, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_cubic_ani, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_dmi, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_bulk_dmi, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_oe, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_therm, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_mel, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.fields.h_eff, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.rk.m_backup, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.rk.m_stage, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.rk.error, node_count, device_bytes, error) ||
-        !gpu_device_allocate_component(state.local_interactions.vector, node_count, device_bytes, error)) {
-        gpu_state_destroy(state);
-        return false;
-    }
-
-    for (uint32_t stage = 0; stage < state.lifecycle.stage_count; ++stage) {
-        if (!gpu_device_allocate_component(state.rk.k[stage], node_count, device_bytes, error)) {
-            gpu_state_destroy(state);
-            return false;
-        }
-    }
-
-    const uint64_t reduce_blocks = (node_count + kCudaBlockSize - 1ull) / kCudaBlockSize;
-    if (node_count > std::numeric_limits<uint64_t>::max() / 6ull) {
-        error = "FemGpuState node count is too large for magnetoelastic strain allocation";
-        gpu_state_destroy(state);
-        return false;
-    }
-    const uint64_t mel_strain_values = node_count * 6ull;
-    if (!gpu_device_allocate_double(state.reductions.scalar_workspace, reduce_blocks, device_bytes, error) ||
-        !gpu_device_allocate_double(state.reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error) ||
-        !gpu_device_allocate_double(state.local_interactions.node_weight, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.mesh_metrics.node_volumes, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.ms, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.a, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.alpha, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.ku, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.ku2, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.dind, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.dbulk, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.kc1, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.kc2, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.materials.kc3, node_count, device_bytes, error) ||
-        !gpu_device_allocate_double(state.magnetoelastic.strain_voigt, mel_strain_values, device_bytes, error) ||
-        !gpu_device_allocate_u8(state.mesh_regions.magnetic_node_mask, node_count, device_bytes, error) ||
-        !gpu_device_allocate_u32(state.mesh_regions.periodic_reduced_node, node_count, device_bytes, error) ||
-        !gpu_device_allocate_u32(state.mesh_regions.periodic_representative_nodes, node_count, device_bytes, error)) {
+    if (!gpu_magnetization_allocate(state.magnetization, node_count, device_bytes, error) ||
+        !gpu_field_buffers_allocate(state.fields, node_count, device_bytes, error) ||
+        !gpu_rk_workspace_allocate(state.rk, node_count, state.lifecycle.stage_count, device_bytes, error) ||
+        !gpu_local_interaction_workspace_allocate(state.local_interactions, node_count, device_bytes, error) ||
+        !gpu_magnetoelastic_allocate(state.magnetoelastic, node_count, device_bytes, error) ||
+        !gpu_reduction_workspace_allocate(
+            state.reductions,
+            node_count,
+            device_bytes,
+            state.lifecycle.reduction_workspace_bytes,
+            error) ||
+        !gpu_runtime_coefficients_allocate(
+            state.materials,
+            state.mesh_metrics,
+            state.mesh_regions,
+            node_count,
+            device_bytes,
+            error)) {
         gpu_state_destroy(state);
         return false;
     }
@@ -494,49 +454,8 @@ bool gpu_state_initialize(
         return false;
     }
 
-    size_t reduce_temp_storage_bytes = 0;
-    if (reduce_blocks > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-        error = "FemGpuState reduction block count is too large for CUB device max";
-        gpu_state_destroy(state);
-        return false;
-    }
-    fullmag_cuda_device_max(
-        state.reductions.scalar_workspace,
-        static_cast<int>(reduce_blocks),
-        state.reductions.scalar_result,
-        nullptr,
-        reduce_temp_storage_bytes,
-        nullptr);
-    size_t reduce_sum_temp_storage_bytes = 0;
-    fullmag_cuda_device_sum(
-        state.reductions.scalar_workspace,
-        static_cast<int>(reduce_blocks),
-        state.reductions.scalar_result,
-        nullptr,
-        reduce_sum_temp_storage_bytes,
-        nullptr);
-    reduce_temp_storage_bytes =
-        std::max(reduce_temp_storage_bytes, reduce_sum_temp_storage_bytes);
-    if (reduce_temp_storage_bytes > 0 &&
-        !gpu_device_allocate_bytes(
-            &state.reductions.temp_storage,
-            reduce_temp_storage_bytes,
-            device_bytes,
-            error)) {
-        gpu_state_destroy(state);
-        return false;
-    }
-
     state.lifecycle.allocated = true;
     state.lifecycle.device_bytes = device_bytes;
-    state.mesh_metrics.node_count = node_count;
-    state.materials.node_count = node_count;
-    state.mesh_regions.node_count = node_count;
-    state.reductions.temp_storage_bytes =
-        static_cast<uint64_t>(reduce_temp_storage_bytes);
-    state.lifecycle.reduction_workspace_bytes =
-        (reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS) * sizeof(double) +
-        state.reductions.temp_storage_bytes;
 
     if (!gpu_state_upload_magnetization_aos(
             state,
@@ -559,44 +478,13 @@ bool gpu_state_initialize(
 void gpu_state_destroy(FemGpuState &state)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
-    gpu_device_free_component(state.magnetization.m);
-    gpu_device_free_component(state.fields.h_ex);
-    gpu_device_free_component(state.fields.h_demag);
-    gpu_device_free_component(state.fields.h_ext);
-    gpu_device_free_component(state.fields.h_ani);
-    gpu_device_free_component(state.fields.h_cubic_ani);
-    gpu_device_free_component(state.fields.h_dmi);
-    gpu_device_free_component(state.fields.h_bulk_dmi);
-    gpu_device_free_component(state.fields.h_oe);
-    gpu_device_free_component(state.fields.h_therm);
-    gpu_device_free_component(state.fields.h_mel);
-    gpu_device_free_component(state.fields.h_eff);
-    gpu_device_free_component(state.rk.m_backup);
-    gpu_device_free_component(state.rk.m_stage);
-    gpu_device_free_component(state.rk.error);
-    gpu_device_free_component(state.local_interactions.vector);
-    for (auto &stage : state.rk.k) {
-        gpu_device_free_component(stage);
-    }
-    gpu_device_free_double(state.reductions.scalar_workspace);
-    gpu_device_free_double(state.reductions.scalar_result);
-    gpu_device_free_double(state.local_interactions.node_weight);
-    gpu_device_free_bytes(state.reductions.temp_storage);
-    gpu_device_free_double(state.mesh_metrics.node_volumes);
-    gpu_device_free_double(state.materials.ms);
-    gpu_device_free_double(state.materials.a);
-    gpu_device_free_double(state.materials.alpha);
-    gpu_device_free_double(state.materials.ku);
-    gpu_device_free_double(state.materials.ku2);
-    gpu_device_free_double(state.materials.dind);
-    gpu_device_free_double(state.materials.dbulk);
-    gpu_device_free_double(state.materials.kc1);
-    gpu_device_free_double(state.materials.kc2);
-    gpu_device_free_double(state.materials.kc3);
-    gpu_device_free_double(state.magnetoelastic.strain_voigt);
-    gpu_device_free_u8(state.mesh_regions.magnetic_node_mask);
-    gpu_device_free_u32(state.mesh_regions.periodic_reduced_node);
-    gpu_device_free_u32(state.mesh_regions.periodic_representative_nodes);
+    gpu_magnetization_free(state.magnetization);
+    gpu_field_buffers_free(state.fields);
+    gpu_rk_workspace_free(state.rk);
+    gpu_local_interaction_workspace_free(state.local_interactions);
+    gpu_magnetoelastic_free(state.magnetoelastic);
+    gpu_reduction_workspace_free(state.reductions);
+    gpu_runtime_coefficients_free(state.materials, state.mesh_metrics, state.mesh_regions);
     gpu_device_free_double(state.mesh_geometry.nodes_xyz);
     gpu_device_free_u32(state.mesh_geometry.elements);
     gpu_device_free_u8(state.mesh_geometry.magnetic_element_mask);

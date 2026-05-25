@@ -222,6 +222,8 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_kernels.cu");
     const std::string component_transfer =
         read_text_file(root / "gpu" / "cuda" / "transfer" / "component_transfer.cpp");
+    const std::string magnetization_transfer =
+        read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_transfer.cpp");
 
     const std::string initialize_body =
         extract_function_body(gpu_state, "bool gpu_state_initialize(");
@@ -239,6 +241,10 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         extract_function_body(gpu_state, "bool gpu_state_upload_magnetization_aos(");
     const std::string download_m_body =
         extract_function_body(gpu_state, "bool gpu_state_download_magnetization_aos(");
+    const std::string upload_m_transfer_body =
+        extract_function_body(magnetization_transfer, "bool gpu_magnetization_upload_aos(");
+    const std::string download_m_transfer_body =
+        extract_function_body(magnetization_transfer, "bool gpu_magnetization_download_aos(");
     const std::string upload_component_body =
         extract_function_body(component_transfer, "bool gpu_component_upload_aos(");
     const std::string upload_optional_component_body =
@@ -258,18 +264,24 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
             download_m_body.find("std::vector<double> mz") == std::string::npos,
         "GPU magnetization download must not allocate host SoA-to-AoS component vectors");
     check(
-        upload_m_body.find("gpu_component_upload_aos(") != std::string::npos &&
+        upload_m_body.find("gpu_magnetization_upload_aos(") != std::string::npos &&
             upload_m_body.find("state.lifecycle") !=
                 std::string::npos &&
-            upload_m_body.find("state.magnetization.m") !=
+            upload_m_body.find("state.magnetization") !=
+                std::string::npos &&
+            upload_m_transfer_body.find("gpu_component_upload_aos(") != std::string::npos &&
+            upload_m_transfer_body.find("magnetization.m") !=
                 std::string::npos &&
             upload_m_body.find("fullmag_cuda_upload_aos_to_soa") == std::string::npos,
         "GPU magnetization upload must delegate generic AoS/SoA transfer to component-transfer module");
     check(
-        download_m_body.find("gpu_component_download_aos(") != std::string::npos &&
+        download_m_body.find("gpu_magnetization_download_aos(") != std::string::npos &&
             download_m_body.find("state.lifecycle") !=
                 std::string::npos &&
-            download_m_body.find("state.magnetization.m") !=
+            download_m_body.find("state.magnetization") !=
+                std::string::npos &&
+            download_m_transfer_body.find("gpu_component_download_aos(") != std::string::npos &&
+            download_m_transfer_body.find("magnetization.m") !=
                 std::string::npos &&
             download_m_body.find("fullmag_cuda_download_soa_to_aos") == std::string::npos,
         "GPU magnetization download must delegate generic AoS/SoA transfer to component-transfer module");

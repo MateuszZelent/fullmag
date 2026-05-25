@@ -1182,6 +1182,46 @@ GPU_MAGNETIZATION_STATE_HPP_PATH = (
     / "state"
     / "magnetization_state.hpp"
 )
+GPU_MAGNETIZATION_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "magnetization_memory.hpp"
+)
+GPU_MAGNETIZATION_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "magnetization_memory.cpp"
+)
+GPU_MAGNETIZATION_TRANSFER_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "magnetization_transfer.hpp"
+)
+GPU_MAGNETIZATION_TRANSFER_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "magnetization_transfer.cpp"
+)
 GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1191,6 +1231,26 @@ GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH = (
     / "cuda"
     / "state"
     / "runtime_coefficients_state.hpp"
+)
+GPU_RUNTIME_COEFFICIENTS_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "runtime_coefficients_memory.hpp"
+)
+GPU_RUNTIME_COEFFICIENTS_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "runtime_coefficients_memory.cpp"
 )
 GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH = (
     REPO_ROOT
@@ -1262,6 +1322,46 @@ GPU_FIELD_BUFFER_STATE_HPP_PATH = (
     / "fields"
     / "field_buffer_state.hpp"
 )
+GPU_FIELD_BUFFER_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "field_buffer_memory.hpp"
+)
+GPU_FIELD_BUFFER_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "field_buffer_memory.cpp"
+)
+GPU_FIELD_BUFFER_UPLOAD_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "field_buffer_upload.hpp"
+)
+GPU_FIELD_BUFFER_UPLOAD_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "fields"
+    / "field_buffer_upload.cpp"
+)
 GPU_RK_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1273,6 +1373,28 @@ GPU_RK_WORKSPACE_STATE_HPP_PATH = (
     / "rk"
     / "rk_workspace_state.hpp"
 )
+GPU_RK_WORKSPACE_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_workspace_memory.hpp"
+)
+GPU_RK_WORKSPACE_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "integrators"
+    / "rk"
+    / "rk_workspace_memory.cpp"
+)
 GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1282,6 +1404,26 @@ GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH = (
     / "cuda"
     / "reductions"
     / "reduction_workspace_state.hpp"
+)
+GPU_REDUCTION_WORKSPACE_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "reductions"
+    / "reduction_workspace_memory.hpp"
+)
+GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "reductions"
+    / "reduction_workspace_memory.cpp"
 )
 GPU_RK_FINAL_REFRESH_CU_PATH = (
     REPO_ROOT
@@ -1625,6 +1767,28 @@ GPU_MAGNETOELASTIC_STATE_HPP_PATH = (
     / "magnetoelastic"
     / "magnetoelastic_state.hpp"
 )
+GPU_MAGNETOELASTIC_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "magnetoelastic"
+    / "magnetoelastic_memory.hpp"
+)
+GPU_MAGNETOELASTIC_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "magnetoelastic"
+    / "magnetoelastic_memory.cpp"
+)
 GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1656,6 +1820,26 @@ GPU_LOCAL_INTERACTION_WORKSPACE_STATE_HPP_PATH = (
     / "cuda"
     / "interactions"
     / "local_interaction_workspace_state.hpp"
+)
+GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "local_interaction_workspace_memory.hpp"
+)
+GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "local_interaction_workspace_memory.cpp"
 )
 GPU_STT_KERNELS_CU_PATH = (
     REPO_ROOT
@@ -6037,12 +6221,16 @@ def test_gpu_rk_uses_preallocated_device_reduction_workspace():
     reduction_workspace_header = GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH.read_text(
         encoding="utf-8"
     )
+    reduction_workspace_memory_source = (
+        GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    )
 
     assert "FemGpuReductionWorkspaceDeviceState reductions{}" in gpu_state_header
     assert "temp_storage" in reduction_workspace_header
     assert "temp_storage_bytes" in reduction_workspace_header
-    assert "fullmag_cuda_device_max(" in gpu_state_source
-    assert "allocate_bytes(\n            &state.reductions.temp_storage" in gpu_state_source
+    assert "fullmag_cuda_device_max(" in reduction_workspace_memory_source
+    assert "gpu_device_allocate_bytes(\n            &reductions.temp_storage" in reduction_workspace_memory_source
+    assert "fullmag_cuda_device_max(" not in gpu_state_source
     assert "gpu.reductions.temp_storage" in function_source
     assert "gpu.reductions.temp_storage_bytes" in function_source
     assert "nullptr,\n        reduce_bytes" not in function_source
@@ -6052,47 +6240,57 @@ def test_gpu_state_allocates_batched_scalar_result_slots():
     reduction_workspace_header = GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH.read_text(
         encoding="utf-8"
     )
-    gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    reduction_workspace_memory_source = (
+        GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    )
 
     assert "FEM_GPU_SCALAR_RESULT_SLOTS" in reduction_workspace_header
     assert (
-        "allocate_double(state.reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS"
-        in gpu_state_source
+        "gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS"
+        in reduction_workspace_memory_source
     )
-    assert "reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS" in gpu_state_source
+    assert "reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS" in reduction_workspace_memory_source
 
 
 def test_gpu_state_uploads_effective_fields_outside_hot_loop():
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    field_buffer_upload_source = GPU_FIELD_BUFFER_UPLOAD_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
 
     assert "gpu_state_upload_effective_fields_aos" in gpu_state_header
     assert "gpu_state_upload_effective_fields_aos" in gpu_state_source
-    assert "state.fields.h_ex" in gpu_state_source
-    assert "state.fields.h_demag" in gpu_state_source
-    assert "state.fields.h_ext" in gpu_state_source
-    assert "state.fields.h_eff" in gpu_state_source
+    assert "gpu_field_buffers_upload_effective_fields_aos(" in gpu_state_source
+    assert "fields.h_ex" in field_buffer_upload_source
+    assert "fields.h_demag" in field_buffer_upload_source
+    assert "fields.h_ext" in field_buffer_upload_source
+    assert "fields.h_eff" in field_buffer_upload_source
     assert "gpu_state_upload_effective_fields_aos(" in context_source
 
 
 def test_gpu_state_uploads_local_vector_fields_outside_hot_loop():
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    field_buffer_upload_source = GPU_FIELD_BUFFER_UPLOAD_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
 
     assert "gpu_state_upload_local_vector_fields_aos" in gpu_state_header
     assert "gpu_state_upload_local_vector_fields_aos" in gpu_state_source
+    assert "gpu_field_buffers_upload_local_vector_fields_aos(" in gpu_state_source
     for member in (
-        "state.fields.h_ani",
-        "state.fields.h_cubic_ani",
-        "state.fields.h_dmi",
-        "state.fields.h_bulk_dmi",
-        "state.fields.h_oe",
-        "state.fields.h_therm",
-        "state.fields.h_mel",
+        "fields.h_ani",
+        "fields.h_cubic_ani",
+        "fields.h_dmi",
+        "fields.h_bulk_dmi",
+        "fields.h_oe",
+        "fields.h_therm",
+        "fields.h_mel",
     ):
-        assert member in gpu_state_source
+        assert member in field_buffer_upload_source
     for context_member in (
         "ctx.anisotropy.h_uniaxial_xyz.data()",
         "ctx.anisotropy.h_cubic_xyz.data()",
@@ -6109,6 +6307,19 @@ def test_gpu_field_buffers_are_owned_by_fields_module():
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     field_buffer_header = GPU_FIELD_BUFFER_STATE_HPP_PATH.read_text(encoding="utf-8")
+    field_buffer_memory_header = GPU_FIELD_BUFFER_MEMORY_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    field_buffer_memory_source = GPU_FIELD_BUFFER_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    field_buffer_upload_header = GPU_FIELD_BUFFER_UPLOAD_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    field_buffer_upload_source = GPU_FIELD_BUFFER_UPLOAD_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     effective_source = GPU_RK_EFFECTIVE_FIELD_CU_PATH.read_text(encoding="utf-8")
     demag_stage_source = GPU_DEMAG_STAGE_COMPUTE_CPP_PATH.read_text(
         encoding="utf-8"
@@ -6133,6 +6344,30 @@ def test_gpu_field_buffers_are_owned_by_fields_module():
         "h_eff",
     ):
         assert f"FemGpuComponentField {field}" in field_buffer_header
+        assert f"fields.{field}" in field_buffer_memory_source
+        assert f"fields.{field}" in field_buffer_upload_source
+        assert f"gpu_device_allocate_component(state.fields.{field}" not in gpu_state_source
+        assert f"gpu_device_free_component(state.fields.{field}" not in gpu_state_source
+    assert "GPU CUDA field-buffer memory module header" in field_buffer_memory_header
+    assert "GPU CUDA field-buffer memory source contract" in field_buffer_memory_source
+    assert "bool gpu_field_buffers_allocate(" in field_buffer_memory_header
+    assert "void gpu_field_buffers_free(" in field_buffer_memory_header
+    assert "bool gpu_field_buffers_allocate(" in field_buffer_memory_source
+    assert "void gpu_field_buffers_free(" in field_buffer_memory_source
+    assert "gpu_field_buffers_allocate(" in gpu_state_source
+    assert "gpu_field_buffers_free(" in gpu_state_source
+    assert "gpu/cuda/fields/field_buffer_memory.cpp" in cmake
+    assert "GPU CUDA field-buffer upload module header" in field_buffer_upload_header
+    assert "GPU CUDA field-buffer upload source contract" in field_buffer_upload_source
+    for helper in (
+        "gpu_field_buffers_upload_effective_fields_aos(",
+        "gpu_field_buffers_upload_demag_field_aos(",
+        "gpu_field_buffers_upload_local_vector_fields_aos(",
+    ):
+        assert helper in field_buffer_upload_header
+        assert helper in field_buffer_upload_source
+        assert helper in gpu_state_source
+    assert "gpu/cuda/fields/field_buffer_upload.cpp" in cmake
     assert '#include "gpu/cuda/fields/field_buffer_state.hpp"' in gpu_state_header
     assert "FemGpuFieldBufferDeviceState fields{}" in gpu_state_header
     for flat_member in (
@@ -6150,28 +6385,38 @@ def test_gpu_field_buffers_are_owned_by_fields_module():
     ):
         assert flat_member not in gpu_state_header
     for state_member in (
-        "state.fields.h_ex",
-        "state.fields.h_demag",
-        "state.fields.h_ext",
-        "state.fields.h_ani",
-        "state.fields.h_cubic_ani",
-        "state.fields.h_dmi",
-        "state.fields.h_bulk_dmi",
-        "state.fields.h_oe",
-        "state.fields.h_therm",
-        "state.fields.h_mel",
-        "state.fields.h_eff",
+        "state.fields",
+        "gpu_field_buffers_allocate(",
+        "gpu_field_buffers_free(",
+        "gpu_field_buffers_upload_effective_fields_aos(",
+        "gpu_field_buffers_upload_demag_field_aos(",
+        "gpu_field_buffers_upload_local_vector_fields_aos(",
     ):
         assert state_member in gpu_state_source
+    assert "gpu_component_upload_aos(\n            state.lifecycle, state.fields" not in gpu_state_source
+    assert "gpu_component_upload_optional_aos(\n            state.lifecycle, state.fields" not in gpu_state_source
     for source in (effective_source, demag_stage_source, exchange_source, llg_source, oersted_source):
         assert "gpu.fields." in source
         assert "gpu.h_" not in source
 
 
 def test_gpu_magnetization_state_is_owned_by_gpu_state_module():
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     magnetization_header = GPU_MAGNETIZATION_STATE_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetization_memory_header = GPU_MAGNETIZATION_MEMORY_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetization_memory_source = GPU_MAGNETIZATION_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetization_transfer_header = GPU_MAGNETIZATION_TRANSFER_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetization_transfer_source = GPU_MAGNETIZATION_TRANSFER_CPP_PATH.read_text(
         encoding="utf-8"
     )
     attempt_setup_source = GPU_RK_ATTEMPT_SETUP_CU_PATH.read_text(encoding="utf-8")
@@ -6184,11 +6429,39 @@ def test_gpu_magnetization_state_is_owned_by_gpu_state_module():
     assert "GPU CUDA magnetization device-state module header" in magnetization_header
     assert "struct FemGpuMagnetizationDeviceState" in magnetization_header
     assert "FemGpuComponentField m" in magnetization_header
+    assert "GPU CUDA magnetization memory module header" in magnetization_memory_header
+    assert "GPU CUDA magnetization memory source contract" in magnetization_memory_source
+    assert "gpu/cuda/state/magnetization_memory.cpp" in cmake
+    assert "bool gpu_magnetization_allocate(" in magnetization_memory_header
+    assert "void gpu_magnetization_free(" in magnetization_memory_header
+    assert "bool gpu_magnetization_allocate(" in magnetization_memory_source
+    assert "void gpu_magnetization_free(" in magnetization_memory_source
+    assert "GPU CUDA magnetization transfer module header" in magnetization_transfer_header
+    assert "GPU CUDA magnetization transfer source contract" in magnetization_transfer_source
+    assert "gpu/cuda/state/magnetization_transfer.cpp" in cmake
+    assert "bool gpu_magnetization_upload_aos(" in magnetization_transfer_header
+    assert "bool gpu_magnetization_download_aos(" in magnetization_transfer_header
+    assert "bool gpu_magnetization_upload_aos(" in magnetization_transfer_source
+    assert "bool gpu_magnetization_download_aos(" in magnetization_transfer_source
     assert '#include "gpu/cuda/state/magnetization_state.hpp"' in gpu_state_header
     assert "FemGpuMagnetizationDeviceState magnetization{}" in gpu_state_header
     assert "FemGpuComponentField m;" not in gpu_state_header
-    assert "state.magnetization.m" in gpu_state_source
+    assert "state.magnetization" in gpu_state_source
     assert "state.m.x" not in gpu_state_source
+    assert "gpu_magnetization_allocate(" in gpu_state_source
+    assert "gpu_magnetization_free(" in gpu_state_source
+    assert "gpu_magnetization_upload_aos(" in gpu_state_source
+    assert "gpu_magnetization_download_aos(" in gpu_state_source
+    assert "magnetization.m" in magnetization_memory_source
+    assert "magnetization.m" in magnetization_transfer_source
+    assert "gpu_device_allocate_component(" in magnetization_memory_source
+    assert "gpu_device_free_component(" in magnetization_memory_source
+    assert "gpu_component_upload_aos(" in magnetization_transfer_source
+    assert "gpu_component_download_aos(" in magnetization_transfer_source
+    assert "gpu_device_allocate_component(state.magnetization.m" not in gpu_state_source
+    assert "gpu_device_free_component(state.magnetization.m" not in gpu_state_source
+    assert "gpu_component_upload_aos(\n            state.lifecycle,\n            state.magnetization.m" not in gpu_state_source
+    assert "gpu_component_download_aos(\n            state.lifecycle,\n            state.magnetization.m" not in gpu_state_source
     for source in (
         attempt_setup_source,
         refresh_source,
@@ -6292,8 +6565,42 @@ def test_gpu_device_memory_helpers_are_owned_by_device_memory_module():
     component_transfer_source = GPU_COMPONENT_TRANSFER_CPP_PATH.read_text(
         encoding="utf-8"
     )
+    field_buffer_memory_source = GPU_FIELD_BUFFER_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetization_memory_source = GPU_MAGNETIZATION_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetoelastic_memory_source = GPU_MAGNETOELASTIC_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    rk_workspace_memory_source = GPU_RK_WORKSPACE_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    local_interaction_workspace_memory_source = (
+        GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    )
+    reduction_workspace_memory_source = (
+        GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    )
+    runtime_coefficients_memory_source = (
+        GPU_RUNTIME_COEFFICIENTS_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    )
     device_memory_header = GPU_DEVICE_MEMORY_HPP_PATH.read_text(encoding="utf-8")
     device_memory_source = GPU_DEVICE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
+    device_memory_consumers = "\n".join(
+        (
+            gpu_state_source,
+            component_transfer_source,
+            field_buffer_memory_source,
+            magnetization_memory_source,
+            magnetoelastic_memory_source,
+            rk_workspace_memory_source,
+            local_interaction_workspace_memory_source,
+            reduction_workspace_memory_source,
+            runtime_coefficients_memory_source,
+        )
+    )
 
     assert "GPU CUDA device-memory helper module header" in device_memory_header
     assert "GPU CUDA device-memory helper source contract" in device_memory_source
@@ -6328,7 +6635,7 @@ def test_gpu_device_memory_helpers_are_owned_by_device_memory_module():
         "gpu_device_free_u32(",
         "gpu_device_free_component(",
     ):
-        assert helper in gpu_state_source or helper in component_transfer_source
+        assert helper in device_memory_consumers
     for local_helper in (
         "bool checked_node_bytes(",
         "bool allocate_bytes(",
@@ -6350,6 +6657,12 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     runtime_coefficients_header = GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH.read_text(
         encoding="utf-8"
+    )
+    runtime_coefficients_memory_header = (
+        GPU_RUNTIME_COEFFICIENTS_MEMORY_HPP_PATH.read_text(encoding="utf-8")
+    )
+    runtime_coefficients_memory_source = (
+        GPU_RUNTIME_COEFFICIENTS_MEMORY_CPP_PATH.read_text(encoding="utf-8")
     )
     runtime_coefficients_upload_header = (
         GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH.read_text(encoding="utf-8")
@@ -6383,6 +6696,19 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     assert "bool gpu_runtime_coefficients_upload(" in runtime_coefficients_upload_header
     assert "bool gpu_runtime_coefficients_upload(" in runtime_coefficients_upload_source
     assert "gpu/cuda/state/runtime_coefficients_upload.cpp" in cmake
+    assert (
+        "GPU CUDA runtime-coefficients memory module header"
+        in runtime_coefficients_memory_header
+    )
+    assert (
+        "GPU CUDA runtime-coefficients memory source contract"
+        in runtime_coefficients_memory_source
+    )
+    assert "gpu/cuda/state/runtime_coefficients_memory.cpp" in cmake
+    assert "bool gpu_runtime_coefficients_allocate(" in runtime_coefficients_memory_header
+    assert "void gpu_runtime_coefficients_free(" in runtime_coefficients_memory_header
+    assert "bool gpu_runtime_coefficients_allocate(" in runtime_coefficients_memory_source
+    assert "void gpu_runtime_coefficients_free(" in runtime_coefficients_memory_source
     assert (
         "GPU CUDA runtime-coefficients readiness device-state module header"
         in runtime_coefficients_header
@@ -6439,8 +6765,27 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
         "runtime_coefficients.uploaded",
     ):
         assert member in runtime_coefficients_upload_source
+    for memory_member in (
+        "mesh_metrics.node_volumes",
+        "materials.ms",
+        "materials.a",
+        "materials.alpha",
+        "materials.ku",
+        "materials.ku2",
+        "materials.dind",
+        "materials.dbulk",
+        "materials.kc1",
+        "materials.kc2",
+        "materials.kc3",
+        "mesh_regions.magnetic_node_mask",
+        "mesh_regions.periodic_reduced_node",
+        "mesh_regions.periodic_representative_nodes",
+    ):
+        assert memory_member in runtime_coefficients_memory_source
     for delegated_member in (
         "gpu_runtime_coefficients_upload(",
+        "gpu_runtime_coefficients_allocate(",
+        "gpu_runtime_coefficients_free(",
         "state.lifecycle",
         "state.runtime_coefficients",
         "state.materials",
@@ -6465,6 +6810,37 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
         "cudaMemcpy(state.mesh_regions.periodic_representative_nodes",
     ):
         assert forbidden_upload_detail not in gpu_state_source
+    for forbidden_memory_detail in (
+        "gpu_device_allocate_double(state.mesh_metrics.node_volumes",
+        "gpu_device_allocate_double(state.materials.ms",
+        "gpu_device_allocate_double(state.materials.a",
+        "gpu_device_allocate_double(state.materials.alpha",
+        "gpu_device_allocate_double(state.materials.ku",
+        "gpu_device_allocate_double(state.materials.ku2",
+        "gpu_device_allocate_double(state.materials.dind",
+        "gpu_device_allocate_double(state.materials.dbulk",
+        "gpu_device_allocate_double(state.materials.kc1",
+        "gpu_device_allocate_double(state.materials.kc2",
+        "gpu_device_allocate_double(state.materials.kc3",
+        "gpu_device_allocate_u8(state.mesh_regions.magnetic_node_mask",
+        "gpu_device_allocate_u32(state.mesh_regions.periodic_reduced_node",
+        "gpu_device_allocate_u32(state.mesh_regions.periodic_representative_nodes",
+        "gpu_device_free_double(state.mesh_metrics.node_volumes)",
+        "gpu_device_free_double(state.materials.ms)",
+        "gpu_device_free_double(state.materials.a)",
+        "gpu_device_free_double(state.materials.alpha)",
+        "gpu_device_free_double(state.materials.ku)",
+        "gpu_device_free_double(state.materials.ku2)",
+        "gpu_device_free_double(state.materials.dind)",
+        "gpu_device_free_double(state.materials.dbulk)",
+        "gpu_device_free_double(state.materials.kc1)",
+        "gpu_device_free_double(state.materials.kc2)",
+        "gpu_device_free_double(state.materials.kc3)",
+        "gpu_device_free_u8(state.mesh_regions.magnetic_node_mask)",
+        "gpu_device_free_u32(state.mesh_regions.periodic_reduced_node)",
+        "gpu_device_free_u32(state.mesh_regions.periodic_representative_nodes)",
+    ):
+        assert forbidden_memory_detail not in gpu_state_source
     assert "state.runtime_coefficients_uploaded" not in gpu_state_source
     for context_member in (
         "ctx.material_fields.Ku_field.data()",
@@ -6562,10 +6938,17 @@ def test_gpu_mesh_geometry_device_state_is_owned_by_mesh_module():
 
 
 def test_gpu_scalar_reduction_workspace_is_owned_by_reductions_module():
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     reduction_workspace_header = GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH.read_text(
         encoding="utf-8"
+    )
+    reduction_workspace_memory_header = (
+        GPU_REDUCTION_WORKSPACE_MEMORY_HPP_PATH.read_text(encoding="utf-8")
+    )
+    reduction_workspace_memory_source = (
+        GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
     )
     error_norm_source = GPU_RK_ERROR_NORM_RUNTIME_CU_PATH.read_text(
         encoding="utf-8"
@@ -6586,10 +6969,30 @@ def test_gpu_scalar_reduction_workspace_is_owned_by_reductions_module():
     assert "void *temp_storage = nullptr" in reduction_workspace_header
     assert "uint64_t temp_storage_bytes = 0" in reduction_workspace_header
     assert (
+        "GPU CUDA scalar reduction workspace memory module header"
+        in reduction_workspace_memory_header
+    )
+    assert (
+        "GPU CUDA scalar reduction workspace memory source contract"
+        in reduction_workspace_memory_source
+    )
+    assert "gpu/cuda/reductions/reduction_workspace_memory.cpp" in cmake
+    assert "bool gpu_reduction_workspace_allocate(" in reduction_workspace_memory_header
+    assert "void gpu_reduction_workspace_free(" in reduction_workspace_memory_header
+    assert "bool gpu_reduction_workspace_allocate(" in reduction_workspace_memory_source
+    assert "void gpu_reduction_workspace_free(" in reduction_workspace_memory_source
+    assert "fullmag_cuda_device_max(" in reduction_workspace_memory_source
+    assert "fullmag_cuda_device_sum(" in reduction_workspace_memory_source
+    assert "gpu_device_allocate_bytes(" in reduction_workspace_memory_source
+    assert (
         '#include "gpu/cuda/reductions/reduction_workspace_state.hpp"'
         in gpu_state_header
     )
     assert "FemGpuReductionWorkspaceDeviceState reductions{}" in gpu_state_header
+    assert (
+        '#include "gpu/cuda/reductions/reduction_workspace_memory.hpp"'
+        in gpu_state_source
+    )
     for flat_member in (
         "double *scalar_reduce_workspace = nullptr",
         "double *scalar_reduce_result = nullptr",
@@ -6598,12 +7001,22 @@ def test_gpu_scalar_reduction_workspace_is_owned_by_reductions_module():
     ):
         assert flat_member not in gpu_state_header
     for state_member in (
-        "state.reductions.scalar_workspace",
-        "state.reductions.scalar_result",
-        "state.reductions.temp_storage",
-        "state.reductions.temp_storage_bytes",
+        "reductions.scalar_workspace",
+        "reductions.scalar_result",
+        "reductions.temp_storage",
+        "reductions.temp_storage_bytes",
     ):
-        assert state_member in gpu_state_source
+        assert state_member in reduction_workspace_memory_source
+    assert "gpu_reduction_workspace_allocate(" in gpu_state_source
+    assert "gpu_reduction_workspace_free(" in gpu_state_source
+    assert "gpu_device_allocate_double(state.reductions.scalar_workspace" not in gpu_state_source
+    assert "gpu_device_allocate_double(state.reductions.scalar_result" not in gpu_state_source
+    assert "gpu_device_allocate_bytes(\n            &state.reductions.temp_storage" not in gpu_state_source
+    assert "gpu_device_free_double(state.reductions.scalar_workspace)" not in gpu_state_source
+    assert "gpu_device_free_double(state.reductions.scalar_result)" not in gpu_state_source
+    assert "gpu_device_free_bytes(state.reductions.temp_storage)" not in gpu_state_source
+    assert "fullmag_cuda_device_max(" not in gpu_state_source
+    assert "fullmag_cuda_device_sum(" not in gpu_state_source
     for source in (error_norm_source, demag_stage_source):
         assert "gpu.reductions.scalar_workspace" in source
         assert "gpu.reductions.scalar_result" in source
@@ -6622,6 +7035,12 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     magnetoelastic_state_header = GPU_MAGNETOELASTIC_STATE_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetoelastic_memory_header = GPU_MAGNETOELASTIC_MEMORY_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetoelastic_memory_source = GPU_MAGNETOELASTIC_MEMORY_CPP_PATH.read_text(
         encoding="utf-8"
     )
     magnetoelastic_upload_header = GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH.read_text(
@@ -6647,6 +7066,14 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     assert "double *strain_voigt = nullptr" in magnetoelastic_state_header
     assert "uint64_t strain_voigt_len = 0" in magnetoelastic_state_header
     assert "bool strain_uploaded = false" in magnetoelastic_state_header
+    assert "GPU CUDA magnetoelastic memory module header" in magnetoelastic_memory_header
+    assert "GPU CUDA magnetoelastic memory source contract" in magnetoelastic_memory_source
+    assert "bool gpu_magnetoelastic_allocate(" in magnetoelastic_memory_header
+    assert "void gpu_magnetoelastic_free(" in magnetoelastic_memory_header
+    assert "bool gpu_magnetoelastic_allocate(" in magnetoelastic_memory_source
+    assert "void gpu_magnetoelastic_free(" in magnetoelastic_memory_source
+    assert "gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp" in cmake
+    assert "magnetoelastic.strain_voigt" in magnetoelastic_memory_source
     assert "GPU CUDA magnetoelastic upload module header" in magnetoelastic_upload_header
     assert "GPU CUDA magnetoelastic upload source contract" in magnetoelastic_upload_source
     assert "bool gpu_magnetoelastic_upload_strain(" in magnetoelastic_upload_header
@@ -6664,9 +7091,11 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     ):
         assert flat_member not in gpu_state_header
     for state_member in (
+        "gpu_magnetoelastic_allocate(",
+        "gpu_magnetoelastic_free(",
         "gpu_magnetoelastic_upload_strain(",
         "state.lifecycle",
-        "state.magnetoelastic.strain_voigt",
+        "state.magnetoelastic",
         "state.magnetoelastic.strain_voigt_len",
         "state.magnetoelastic.strain_uploaded",
     ):
@@ -6678,6 +7107,8 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     ):
         assert upload_member in magnetoelastic_upload_source
     assert "cudaMemcpy(state.magnetoelastic.strain_voigt" not in gpu_state_source
+    assert "gpu_device_allocate_double(state.magnetoelastic.strain_voigt" not in gpu_state_source
+    assert "gpu_device_free_double(state.magnetoelastic.strain_voigt)" not in gpu_state_source
     assert "state.mel_strain_voigt" not in gpu_state_source
     assert "ctx.gpu_state.device.magnetoelastic.strain_uploaded" in rk_plan_source
     assert "ctx.gpu_state.device.magnetoelastic.strain_voigt_len" in rk_plan_source
@@ -6691,10 +7122,17 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
 
 
 def test_gpu_local_interaction_workspace_is_owned_by_interactions_module():
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
     workspace_header = GPU_LOCAL_INTERACTION_WORKSPACE_STATE_HPP_PATH.read_text(
         encoding="utf-8"
+    )
+    workspace_memory_header = (
+        GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_HPP_PATH.read_text(encoding="utf-8")
+    )
+    workspace_memory_source = (
+        GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_CPP_PATH.read_text(encoding="utf-8")
     )
     dmi_field_source = GPU_RK_DMI_FIELDS_CU_PATH.read_text(encoding="utf-8")
     dmi_energy_source = GPU_RK_DMI_ENERGY_REDUCTIONS_CU_PATH.read_text(
@@ -6710,6 +7148,19 @@ def test_gpu_local_interaction_workspace_is_owned_by_interactions_module():
     assert "FemGpuComponentField vector" in workspace_header
     assert "double *node_weight = nullptr" in workspace_header
     assert (
+        "GPU CUDA local interaction workspace memory module header"
+        in workspace_memory_header
+    )
+    assert (
+        "GPU CUDA local interaction workspace memory source contract"
+        in workspace_memory_source
+    )
+    assert "gpu/cuda/interactions/local_interaction_workspace_memory.cpp" in cmake
+    assert "bool gpu_local_interaction_workspace_allocate(" in workspace_memory_header
+    assert "void gpu_local_interaction_workspace_free(" in workspace_memory_header
+    assert "bool gpu_local_interaction_workspace_allocate(" in workspace_memory_source
+    assert "void gpu_local_interaction_workspace_free(" in workspace_memory_source
+    assert (
         '#include "gpu/cuda/interactions/local_interaction_workspace_state.hpp"'
         in gpu_state_header
     )
@@ -6723,10 +7174,17 @@ def test_gpu_local_interaction_workspace_is_owned_by_interactions_module():
     ):
         assert flat_member not in gpu_state_header
     for state_member in (
-        "state.local_interactions.vector",
-        "state.local_interactions.node_weight",
+        "state.local_interactions",
+        "gpu_local_interaction_workspace_allocate(",
+        "gpu_local_interaction_workspace_free(",
     ):
         assert state_member in gpu_state_source
+    assert "local_interactions.vector" in workspace_memory_source
+    assert "local_interactions.node_weight" in workspace_memory_source
+    assert "gpu_device_allocate_component(state.local_interactions.vector" not in gpu_state_source
+    assert "gpu_device_allocate_double(state.local_interactions.node_weight" not in gpu_state_source
+    assert "gpu_device_free_component(state.local_interactions.vector" not in gpu_state_source
+    assert "gpu_device_free_double(state.local_interactions.node_weight" not in gpu_state_source
     assert "state.zhang_li_rhs" not in gpu_state_source
     assert "state.zhang_li_node_weight" not in gpu_state_source
     for source in (dmi_field_source, dmi_energy_source, zhang_li_source):
@@ -6741,7 +7199,14 @@ def test_gpu_local_interaction_workspace_is_owned_by_interactions_module():
 def test_gpu_rk_workspace_is_owned_by_rk_integrator_module():
     gpu_state_header = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     workspace_header = GPU_RK_WORKSPACE_STATE_HPP_PATH.read_text(encoding="utf-8")
+    workspace_memory_header = GPU_RK_WORKSPACE_MEMORY_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    workspace_memory_source = GPU_RK_WORKSPACE_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
     attempt_setup_source = GPU_RK_ATTEMPT_SETUP_CU_PATH.read_text(encoding="utf-8")
     refresh_source = GPU_RK_FINAL_REFRESH_CU_PATH.read_text(encoding="utf-8")
     adaptive_source = GPU_RK_ADAPTIVE_RUNTIME_CU_PATH.read_text(encoding="utf-8")
@@ -6755,6 +7220,13 @@ def test_gpu_rk_workspace_is_owned_by_rk_integrator_module():
     assert "FemGpuComponentField error" in workspace_header
     assert "std::array<FemGpuComponentField, FEM_GPU_MAX_RK_STAGES> k{}" in workspace_header
     assert "bool fsal_valid = false" in workspace_header
+    assert "GPU CUDA RK workspace memory module header" in workspace_memory_header
+    assert "GPU CUDA RK workspace memory source contract" in workspace_memory_source
+    assert "gpu/cuda/integrators/rk/rk_workspace_memory.cpp" in cmake
+    assert "bool gpu_rk_workspace_allocate(" in workspace_memory_header
+    assert "void gpu_rk_workspace_free(" in workspace_memory_header
+    assert "bool gpu_rk_workspace_allocate(" in workspace_memory_source
+    assert "void gpu_rk_workspace_free(" in workspace_memory_source
     assert '#include "gpu/cuda/integrators/rk/rk_workspace_state.hpp"' in gpu_state_header
     assert "FemGpuRkWorkspaceDeviceState rk{}" in gpu_state_header
     for flat_member in (
@@ -6772,7 +7244,18 @@ def test_gpu_rk_workspace_is_owned_by_rk_integrator_module():
         "state.rk.k",
         "state.rk.fsal_valid",
     ):
-        assert state_member in gpu_state_source
+        assert state_member in gpu_state_source or state_member.replace("state.rk", "rk") in workspace_memory_source
+    assert "gpu_rk_workspace_allocate(" in gpu_state_source
+    assert "gpu_rk_workspace_free(" in gpu_state_source
+    assert "gpu_device_allocate_component(state.rk" not in gpu_state_source
+    assert "gpu_device_free_component(state.rk" not in gpu_state_source
+    assert "gpu_device_allocate_component(rk.m_backup" in workspace_memory_source
+    assert "gpu_device_allocate_component(rk.m_stage" in workspace_memory_source
+    assert "gpu_device_allocate_component(rk.error" in workspace_memory_source
+    assert "gpu_device_allocate_component(rk.k[stage]" in workspace_memory_source
+    assert "gpu_device_free_component(rk.m_backup" in workspace_memory_source
+    assert "for (auto &stage : rk.k)" in workspace_memory_source
+    assert "gpu_device_free_component(stage)" in workspace_memory_source
     assert "gpu.rk.m_stage" in attempt_setup_source
     assert "gpu.rk.k" in attempt_setup_source
     assert "gpu.rk.m_stage" in rk23_source
@@ -6993,6 +7476,7 @@ def test_gpu_cuda_transfer_kernels_are_owned_by_transfer_module():
 def test_gpu_component_transfer_helpers_are_owned_by_transfer_module():
     cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    field_buffer_upload_source = GPU_FIELD_BUFFER_UPLOAD_CPP_PATH.read_text(encoding="utf-8")
     component_header = GPU_COMPONENT_TRANSFER_HPP_PATH.read_text(encoding="utf-8")
     component_source = GPU_COMPONENT_TRANSFER_CPP_PATH.read_text(encoding="utf-8")
 
@@ -7008,12 +7492,12 @@ def test_gpu_component_transfer_helpers_are_owned_by_transfer_module():
     ):
         assert helper in component_header
         assert helper in component_source
-    for delegated_helper in (
-        "gpu_component_download_aos(",
-        "gpu_component_upload_aos(",
-        "gpu_component_upload_optional_aos(",
-    ):
-        assert delegated_helper in gpu_state_source
+    assert "gpu_component_download_aos(" in gpu_state_source
+    assert (
+        "gpu_component_upload_aos(" in gpu_state_source
+        or "gpu_component_upload_aos(" in field_buffer_upload_source
+    )
+    assert "gpu_component_upload_optional_aos(" in field_buffer_upload_source
     assert "fullmag_cuda_upload_aos_to_soa(" in component_source
     assert "fullmag_cuda_download_soa_to_aos(" in component_source
     assert "cudaMemset" in component_source
@@ -7029,6 +7513,9 @@ def test_gpu_component_transfer_helpers_are_owned_by_transfer_module():
 
 def test_gpu_magnetization_transfers_delegate_to_component_transfer_module():
     gpu_state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    magnetization_transfer_source = GPU_MAGNETIZATION_TRANSFER_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
 
     upload_start = gpu_state_source.index("bool gpu_state_upload_magnetization_aos(")
     upload_end = gpu_state_source.index("\nbool gpu_state_download_magnetization_aos(", upload_start)
@@ -7037,12 +7524,16 @@ def test_gpu_magnetization_transfers_delegate_to_component_transfer_module():
     download_end = gpu_state_source.index("\nbool gpu_state_download_component_aos(", download_start)
     download_body = gpu_state_source[download_start:download_end]
 
-    assert "gpu_component_upload_aos(" in upload_body
+    assert "gpu_magnetization_upload_aos(" in upload_body
+    assert "gpu_component_upload_aos(" not in upload_body
     assert "state.lifecycle" in upload_body
-    assert "state.magnetization.m" in upload_body
-    assert "gpu_component_download_aos(" in download_body
+    assert "state.magnetization" in upload_body
+    assert "gpu_magnetization_download_aos(" in download_body
+    assert "gpu_component_download_aos(" not in download_body
     assert "state.lifecycle" in download_body
-    assert "state.magnetization.m" in download_body
+    assert "state.magnetization" in download_body
+    assert "gpu_component_upload_aos(" in magnetization_transfer_source
+    assert "gpu_component_download_aos(" in magnetization_transfer_source
     assert "fullmag_cuda_upload_aos_to_soa(" not in upload_body
     assert "fullmag_cuda_download_soa_to_aos(" not in download_body
     assert "state.residency.device_state = FemGpuSyncState::DeviceClean" in upload_body
@@ -8564,6 +9055,9 @@ def test_gpu_rk_disables_fsal_reuse_for_stochastic_or_time_dependent_rhs():
 def test_gpu_rk_keeps_device_backup_for_future_adaptive_reject_retry():
     header_source = GPU_STATE_HPP_PATH.read_text(encoding="utf-8")
     state_source = GPU_STATE_CPP_PATH.read_text(encoding="utf-8")
+    workspace_memory_source = GPU_RK_WORKSPACE_MEMORY_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     attempt_loop_source = GPU_RK_ATTEMPT_LOOP_CU_PATH.read_text(encoding="utf-8")
     attempt_setup_source = GPU_RK_ATTEMPT_SETUP_CU_PATH.read_text(encoding="utf-8")
@@ -8573,8 +9067,10 @@ def test_gpu_rk_keeps_device_backup_for_future_adaptive_reject_retry():
     function_source = cuda_source[function_start:function_end]
 
     assert "FemGpuRkWorkspaceDeviceState rk{}" in header_source
-    assert "allocate_component(state.rk.m_backup" in state_source
-    assert "free_component(state.rk.m_backup)" in state_source
+    assert "gpu_rk_workspace_allocate(" in state_source
+    assert "gpu_rk_workspace_free(" in state_source
+    assert "allocate_component(rk.m_backup" in workspace_memory_source
+    assert "free_component(rk.m_backup)" in workspace_memory_source
     assert "gpu_rk_run_accepted_attempt_loop(" in function_source
     assert "gpu_rk_run_stage_attempt(" in attempt_loop_source
     assert "gpu_rk_copy_component_device(" in attempt_setup_source

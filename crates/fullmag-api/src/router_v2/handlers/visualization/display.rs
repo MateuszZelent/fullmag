@@ -26,6 +26,7 @@ use crate::schemas::visualization_state::{
     VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
     VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
     VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
+    DEFAULT_AIRBOX_VECTOR_BUDGET,
 };
 use crate::types::{
     AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
@@ -608,7 +609,7 @@ fn default_visualization_layers(
             points: basic_layer(false, 1.0),
             vectors: VectorLayerState {
                 visible: false,
-                density: vector_density,
+                density: DEFAULT_AIRBOX_VECTOR_BUDGET,
                 domain: VectorLayerDomain::AirboxOnly,
             },
             opacity: 0.18,

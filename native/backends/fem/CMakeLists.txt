@@ -19,15 +19,24 @@ set(FEM_SOURCES
     core/fem_state.cpp
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/exchange/exchange_upload.cpp
+    gpu/cuda/fields/field_buffer_memory.cpp
+    gpu/cuda/fields/field_buffer_upload.cpp
     gpu/cuda/integrators/rk/rk_fsal_policy.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
+    gpu/cuda/integrators/rk/rk_workspace_memory.cpp
+    gpu/cuda/interactions/local_interaction_workspace_memory.cpp
+    gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
+    gpu/cuda/reductions/reduction_workspace_memory.cpp
     gpu/cuda/state/device_memory.cpp
     gpu/cuda/state/gpu_state.cpp
+    gpu/cuda/state/magnetization_memory.cpp
+    gpu/cuda/state/magnetization_transfer.cpp
+    gpu/cuda/state/runtime_coefficients_memory.cpp
     gpu/cuda/state/runtime_coefficients_upload.cpp
     gpu/cuda/transfer/component_transfer.cpp
     gpu/cuda/transfer/transfer_audit.cpp

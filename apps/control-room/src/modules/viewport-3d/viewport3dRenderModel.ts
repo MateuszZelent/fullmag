@@ -293,8 +293,14 @@ export function buildViewport3DFieldRenderModel(
     const surfaceOffsetScale =
       options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
     const partFieldVector = options.partFieldVectors?.get(partId) ?? fieldVector;
+    // Only build a scoped resolver when the part field data is genuinely scoped (fewer points
+    // than the full topology). When the API returns full-domain data for a scoped request
+    // (e.g. scope_kind=airbox returning all 18701 nodes), applying the resolver would read
+    // field values at the wrong (local) indices instead of the correct global node indices.
     const fieldValueResolver =
-      partFieldVector && partFieldVector !== fieldVector
+      partFieldVector &&
+      partFieldVector !== fieldVector &&
+      partFieldVector.pointCount < topology.nodeCount
         ? buildScopedPartFieldValueResolver(partModel.part, topology)
         : null;
     partVectorSegments.set(

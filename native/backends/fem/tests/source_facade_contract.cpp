@@ -524,6 +524,10 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
         read_text_file(root / "gpu" / "cuda" / "transfer" / "component_transfer.cpp");
     const std::string runtime_coefficients_header =
         read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_state.hpp");
+    const std::string runtime_coefficients_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_memory.hpp");
+    const std::string runtime_coefficients_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_memory.cpp");
     const std::string runtime_coefficients_upload_header =
         read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_upload.hpp");
     const std::string runtime_coefficients_upload_source =
@@ -566,6 +570,22 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
             cmake.find("gpu/cuda/state/runtime_coefficients_upload.cpp") !=
                 std::string::npos,
         "GPU CUDA state module must own runtime-coefficients upload/allocation boundary");
+    check(
+        runtime_coefficients_memory_header.find("GPU CUDA runtime-coefficients memory module header") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("GPU CUDA runtime-coefficients memory source contract") !=
+                std::string::npos &&
+            runtime_coefficients_memory_header.find("bool gpu_runtime_coefficients_allocate(") !=
+                std::string::npos &&
+            runtime_coefficients_memory_header.find("void gpu_runtime_coefficients_free(") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("bool gpu_runtime_coefficients_allocate(") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("void gpu_runtime_coefficients_free(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/state/runtime_coefficients_memory.cpp") !=
+                std::string::npos,
+        "GPU CUDA state module must own runtime-coefficients memory helpers");
     check(
         material_state_header.find("GPU CUDA material device-state module header") !=
                 std::string::npos &&
@@ -618,6 +638,10 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
     check(
         gpu_state_source.find("gpu_runtime_coefficients_upload(") !=
                 std::string::npos &&
+            gpu_state_source.find("gpu_runtime_coefficients_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_runtime_coefficients_free(") !=
+                std::string::npos &&
             gpu_state_source.find("state.lifecycle") != std::string::npos &&
             gpu_state_source.find("state.runtime_coefficients") !=
                 std::string::npos &&
@@ -638,11 +662,43 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
                 std::string::npos &&
             runtime_coefficients_upload_source.find("runtime_coefficients.uploaded") !=
                 std::string::npos &&
+            runtime_coefficients_memory_source.find("mesh_metrics.node_volumes") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("materials.ms") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("materials.alpha") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("mesh_regions.magnetic_node_mask") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("mesh_regions.periodic_reduced_node") !=
+                std::string::npos &&
+            runtime_coefficients_memory_source.find("mesh_regions.periodic_representative_nodes") !=
+                std::string::npos &&
             gpu_state_source.find("cudaMemcpy(state.mesh_metrics.node_volumes") ==
                 std::string::npos &&
             gpu_state_source.find("cudaMemcpy(state.materials.ms") ==
                 std::string::npos &&
             gpu_state_source.find("cudaMemcpy(state.mesh_regions.magnetic_node_mask") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.mesh_metrics.node_volumes") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.materials.ms") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.materials.alpha") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_u8(state.mesh_regions.magnetic_node_mask") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_u32(state.mesh_regions.periodic_reduced_node") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.mesh_metrics.node_volumes)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.materials.ms)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.materials.alpha)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_u8(state.mesh_regions.magnetic_node_mask)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_u32(state.mesh_regions.periodic_reduced_node)") ==
                 std::string::npos &&
             gpu_state_source.find("state.runtime_coefficients_uploaded") ==
                 std::string::npos &&
@@ -785,6 +841,15 @@ void gpu_field_buffers_are_owned_by_cuda_fields_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string field_buffer_header =
         read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_state.hpp");
+    const std::string field_buffer_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_memory.hpp");
+    const std::string field_buffer_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_memory.cpp");
+    const std::string field_buffer_upload_header =
+        read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_upload.hpp");
+    const std::string field_buffer_upload_source =
+        read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_upload.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string effective_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_effective_field.cu");
     const std::string demag_stage_source =
@@ -825,6 +890,38 @@ void gpu_field_buffers_are_owned_by_cuda_fields_module() {
                 std::string::npos,
         "GPU CUDA fields module must own device field-buffer state");
     check(
+        field_buffer_memory_header.find("GPU CUDA field-buffer memory module header") !=
+                std::string::npos &&
+            field_buffer_memory_source.find("GPU CUDA field-buffer memory source contract") !=
+                std::string::npos &&
+            field_buffer_memory_header.find("bool gpu_field_buffers_allocate(") !=
+                std::string::npos &&
+            field_buffer_memory_header.find("void gpu_field_buffers_free(") !=
+                std::string::npos &&
+            field_buffer_memory_source.find("bool gpu_field_buffers_allocate(") !=
+                std::string::npos &&
+            field_buffer_memory_source.find("void gpu_field_buffers_free(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/fields/field_buffer_memory.cpp") !=
+                std::string::npos,
+        "GPU CUDA fields module must own field-buffer memory helpers");
+    check(
+        field_buffer_upload_header.find("GPU CUDA field-buffer upload module header") !=
+                std::string::npos &&
+            field_buffer_upload_source.find("GPU CUDA field-buffer upload source contract") !=
+                std::string::npos &&
+            field_buffer_upload_header.find("gpu_field_buffers_upload_effective_fields_aos(") !=
+                std::string::npos &&
+            field_buffer_upload_header.find("gpu_field_buffers_upload_demag_field_aos(") !=
+                std::string::npos &&
+            field_buffer_upload_header.find("gpu_field_buffers_upload_local_vector_fields_aos(") !=
+                std::string::npos &&
+            field_buffer_upload_source.find("gpu_field_buffers_upload_effective_fields_aos(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/fields/field_buffer_upload.cpp") !=
+                std::string::npos,
+        "GPU CUDA fields module must own field-buffer upload helpers");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/fields/field_buffer_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuFieldBufferDeviceState fields{}") !=
@@ -842,18 +939,44 @@ void gpu_field_buffers_are_owned_by_cuda_fields_module() {
             gpu_state_header.find("FemGpuComponentField h_eff") == std::string::npos,
         "FemGpuState must store field buffers through an explicit fields substate");
     check(
-        gpu_state_source.find("state.fields.h_ex") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_demag") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_ext") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_ani") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_cubic_ani") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_dmi") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_bulk_dmi") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_oe") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_therm") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_mel") != std::string::npos &&
-            gpu_state_source.find("state.fields.h_eff") != std::string::npos,
+        gpu_state_source.find("state.fields") != std::string::npos &&
+            gpu_state_source.find("gpu_field_buffers_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_field_buffers_free(") !=
+                std::string::npos &&
+            field_buffer_memory_source.find("fields.h_ex") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_demag") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_ext") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_ani") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_cubic_ani") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_dmi") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_bulk_dmi") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_oe") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_therm") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_mel") != std::string::npos &&
+            field_buffer_memory_source.find("fields.h_eff") != std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_component(state.fields.") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_component(state.fields.") ==
+                std::string::npos,
         "GPU state allocation/upload/destroy must use the fields substate");
+    check(
+        gpu_state_source.find("gpu_field_buffers_upload_effective_fields_aos(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_field_buffers_upload_demag_field_aos(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_field_buffers_upload_local_vector_fields_aos(") !=
+                std::string::npos &&
+            field_buffer_upload_source.find("fields.h_ex") != std::string::npos &&
+            field_buffer_upload_source.find("fields.h_demag") != std::string::npos &&
+            field_buffer_upload_source.find("fields.h_ext") != std::string::npos &&
+            field_buffer_upload_source.find("fields.h_ani") != std::string::npos &&
+            field_buffer_upload_source.find("fields.h_eff") != std::string::npos &&
+            gpu_state_source.find("gpu_component_upload_aos(\n            state.lifecycle, state.fields") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_component_upload_optional_aos(\n            state.lifecycle, state.fields") ==
+                std::string::npos,
+        "GPU state must delegate field-buffer upload details to the fields module");
     for (const std::string *source : {&effective_source, &demag_stage_source, &exchange_source, &llg_source, &oersted_source}) {
         check(
             source->find("gpu.fields.") != std::string::npos &&
@@ -870,6 +993,15 @@ void gpu_magnetization_state_is_owned_by_cuda_state_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string magnetization_header =
         read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_state.hpp");
+    const std::string magnetization_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_memory.hpp");
+    const std::string magnetization_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_memory.cpp");
+    const std::string magnetization_transfer_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_transfer.hpp");
+    const std::string magnetization_transfer_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "magnetization_transfer.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string attempt_setup_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_attempt_setup.cu");
     const std::string refresh_source =
@@ -888,6 +1020,38 @@ void gpu_magnetization_state_is_owned_by_cuda_state_module() {
                 std::string::npos,
         "GPU CUDA state module must own current magnetization device state");
     check(
+        magnetization_memory_header.find("GPU CUDA magnetization memory module header") !=
+                std::string::npos &&
+            magnetization_memory_source.find("GPU CUDA magnetization memory source contract") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/state/magnetization_memory.cpp") !=
+                std::string::npos &&
+            magnetization_memory_header.find("bool gpu_magnetization_allocate(") !=
+                std::string::npos &&
+            magnetization_memory_header.find("void gpu_magnetization_free(") !=
+                std::string::npos &&
+            magnetization_memory_source.find("bool gpu_magnetization_allocate(") !=
+                std::string::npos &&
+            magnetization_memory_source.find("void gpu_magnetization_free(") !=
+                std::string::npos,
+        "GPU CUDA state module must own magnetization memory helpers");
+    check(
+        magnetization_transfer_header.find("GPU CUDA magnetization transfer module header") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("GPU CUDA magnetization transfer source contract") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/state/magnetization_transfer.cpp") !=
+                std::string::npos &&
+            magnetization_transfer_header.find("bool gpu_magnetization_upload_aos(") !=
+                std::string::npos &&
+            magnetization_transfer_header.find("bool gpu_magnetization_download_aos(") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("bool gpu_magnetization_upload_aos(") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("bool gpu_magnetization_download_aos(") !=
+                std::string::npos,
+        "GPU CUDA state module must own magnetization transfer helpers");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/state/magnetization_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuMagnetizationDeviceState magnetization{}") !=
@@ -895,9 +1059,39 @@ void gpu_magnetization_state_is_owned_by_cuda_state_module() {
             gpu_state_header.find("FemGpuComponentField m;") == std::string::npos,
         "FemGpuState must store current magnetization through an explicit magnetization substate");
     check(
-        gpu_state_source.find("state.magnetization.m") != std::string::npos &&
-            gpu_state_source.find("state.m.x") == std::string::npos,
-        "GPU state allocation/upload/download/destroy must use the magnetization substate");
+        gpu_state_source.find("state.magnetization") != std::string::npos &&
+            gpu_state_source.find("state.m.x") == std::string::npos &&
+            gpu_state_source.find("gpu_magnetization_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_magnetization_free(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_magnetization_upload_aos(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_magnetization_download_aos(") !=
+                std::string::npos &&
+            magnetization_memory_source.find("magnetization.m") !=
+                std::string::npos &&
+            magnetization_memory_source.find("gpu_device_allocate_component(") !=
+                std::string::npos &&
+            magnetization_memory_source.find("gpu_device_free_component(") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("magnetization.m") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("gpu_component_upload_aos(") !=
+                std::string::npos &&
+            magnetization_transfer_source.find("gpu_component_download_aos(") !=
+                std::string::npos &&
+            gpu_state_source.find(
+                "gpu_component_upload_aos(\n            state.lifecycle,\n            state.magnetization.m") ==
+                std::string::npos &&
+            gpu_state_source.find(
+                "gpu_component_download_aos(\n            state.lifecycle,\n            state.magnetization.m") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_component(state.magnetization.m") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_component(state.magnetization.m") ==
+                std::string::npos,
+        "GPU state allocation/upload/download/destroy must use the magnetization substate and delegate transfer details");
     for (const std::string *source : {&attempt_setup_source, &refresh_source, &snapshot_source, &magnetization_source}) {
         check(
             source->find("gpu.magnetization.m") != std::string::npos &&
@@ -1128,12 +1322,17 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string reduction_workspace_header =
         read_text_file(root / "gpu" / "cuda" / "reductions" / "reduction_workspace_state.hpp");
+    const std::string reduction_workspace_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "reductions" / "reduction_workspace_memory.hpp");
+    const std::string reduction_workspace_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "reductions" / "reduction_workspace_memory.cpp");
     const std::string error_norm_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_error_norm_runtime.cu");
     const std::string step_stats_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
     const std::string demag_stage_source =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
 
     check(
         reduction_workspace_header.find("GPU CUDA scalar reduction workspace device-state module header") !=
@@ -1151,6 +1350,22 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
                 std::string::npos,
         "GPU CUDA reductions module must own scalar reduction workspace state");
     check(
+        reduction_workspace_memory_header.find("GPU CUDA scalar reduction workspace memory module header") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("GPU CUDA scalar reduction workspace memory source contract") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/reductions/reduction_workspace_memory.cpp") !=
+                std::string::npos &&
+            reduction_workspace_memory_header.find("bool gpu_reduction_workspace_allocate(") !=
+                std::string::npos &&
+            reduction_workspace_memory_header.find("void gpu_reduction_workspace_free(") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("bool gpu_reduction_workspace_allocate(") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("void gpu_reduction_workspace_free(") !=
+                std::string::npos,
+        "GPU CUDA reductions module must own scalar reduction workspace memory helpers");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/reductions/reduction_workspace_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuReductionWorkspaceDeviceState reductions{}") !=
@@ -1165,15 +1380,39 @@ void gpu_scalar_reduction_workspace_is_owned_by_cuda_reductions_module() {
                 std::string::npos,
         "FemGpuState must store scalar reduction buffers through an explicit reductions substate");
     check(
-        gpu_state_source.find("state.reductions.scalar_workspace") !=
+        gpu_state_source.find("#include \"gpu/cuda/reductions/reduction_workspace_memory.hpp\"") !=
                 std::string::npos &&
-            gpu_state_source.find("state.reductions.scalar_result") !=
+            gpu_state_source.find("gpu_reduction_workspace_allocate(") !=
                 std::string::npos &&
-            gpu_state_source.find("state.reductions.temp_storage") !=
+            gpu_state_source.find("gpu_reduction_workspace_free(") !=
                 std::string::npos &&
-            gpu_state_source.find("state.reductions.temp_storage_bytes") !=
-                std::string::npos,
-        "GPU state allocation/destroy must use the reductions substate");
+            reduction_workspace_memory_source.find("reductions.scalar_workspace") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("reductions.scalar_result") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("reductions.temp_storage") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("reductions.temp_storage_bytes") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("fullmag_cuda_device_max(") !=
+                std::string::npos &&
+            reduction_workspace_memory_source.find("fullmag_cuda_device_sum(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.reductions.scalar_workspace") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.reductions.scalar_result") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_bytes(\n            &state.reductions.temp_storage") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.reductions.scalar_workspace)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.reductions.scalar_result)") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_bytes(state.reductions.temp_storage)") ==
+                std::string::npos &&
+            gpu_state_source.find("fullmag_cuda_device_max(") == std::string::npos &&
+            gpu_state_source.find("fullmag_cuda_device_sum(") == std::string::npos,
+        "GPU state lifecycle must delegate scalar reduction workspace memory to reductions module");
     for (const std::string *source : {&error_norm_source, &demag_stage_source}) {
         check(
             source->find("gpu.reductions.scalar_workspace") != std::string::npos &&
@@ -1202,6 +1441,10 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string magnetoelastic_state_header =
         read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_state.hpp");
+    const std::string magnetoelastic_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_memory.hpp");
+    const std::string magnetoelastic_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_memory.cpp");
     const std::string magnetoelastic_upload_header =
         read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_upload.hpp");
     const std::string magnetoelastic_upload_source =
@@ -1226,6 +1469,22 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
             magnetoelastic_state_header.find("bool strain_uploaded") !=
                 std::string::npos,
         "GPU CUDA magnetoelastic module must own per-node prescribed strain device state");
+    check(
+        magnetoelastic_memory_header.find("GPU CUDA magnetoelastic memory module header") !=
+                std::string::npos &&
+            magnetoelastic_memory_source.find("GPU CUDA magnetoelastic memory source contract") !=
+                std::string::npos &&
+            magnetoelastic_memory_header.find("bool gpu_magnetoelastic_allocate(") !=
+                std::string::npos &&
+            magnetoelastic_memory_header.find("void gpu_magnetoelastic_free(") !=
+                std::string::npos &&
+            magnetoelastic_memory_source.find("bool gpu_magnetoelastic_allocate(") !=
+                std::string::npos &&
+            magnetoelastic_memory_source.find("void gpu_magnetoelastic_free(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp") !=
+                std::string::npos,
+        "GPU CUDA magnetoelastic module must own prescribed strain memory helpers");
     check(
         magnetoelastic_upload_header.find("GPU CUDA magnetoelastic upload module header") !=
                 std::string::npos &&
@@ -1253,8 +1512,14 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
     check(
         gpu_state_source.find("gpu_magnetoelastic_upload_strain(") !=
                 std::string::npos &&
+            gpu_state_source.find("gpu_magnetoelastic_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_magnetoelastic_free(") !=
+                std::string::npos &&
             gpu_state_source.find("state.lifecycle") != std::string::npos &&
             gpu_state_source.find("state.magnetoelastic") != std::string::npos &&
+            magnetoelastic_memory_source.find("magnetoelastic.strain_voigt") !=
+                std::string::npos &&
             magnetoelastic_upload_source.find("magnetoelastic.strain_voigt") !=
                 std::string::npos &&
             magnetoelastic_upload_source.find("magnetoelastic.strain_voigt_len") !=
@@ -1262,6 +1527,10 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
             magnetoelastic_upload_source.find("magnetoelastic.strain_uploaded") !=
                 std::string::npos &&
             gpu_state_source.find("cudaMemcpy(state.magnetoelastic.strain_voigt") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.magnetoelastic.strain_voigt") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.magnetoelastic.strain_voigt)") ==
                 std::string::npos &&
             gpu_state_source.find("state.magnetoelastic.strain_voigt_len") !=
                 std::string::npos &&
@@ -1298,6 +1567,11 @@ void gpu_local_interaction_workspace_is_owned_by_cuda_interactions_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string workspace_header =
         read_text_file(root / "gpu" / "cuda" / "interactions" / "local_interaction_workspace_state.hpp");
+    const std::string workspace_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "local_interaction_workspace_memory.hpp");
+    const std::string workspace_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "local_interaction_workspace_memory.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string dmi_field_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_dmi_fields.cu");
     const std::string dmi_energy_source =
@@ -1315,6 +1589,22 @@ void gpu_local_interaction_workspace_is_owned_by_cuda_interactions_module() {
             workspace_header.find("double *node_weight") != std::string::npos,
         "GPU CUDA interactions module must own shared local-interaction workspace state");
     check(
+        workspace_memory_header.find("GPU CUDA local interaction workspace memory module header") !=
+                std::string::npos &&
+            workspace_memory_source.find("GPU CUDA local interaction workspace memory source contract") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/interactions/local_interaction_workspace_memory.cpp") !=
+                std::string::npos &&
+            workspace_memory_header.find("bool gpu_local_interaction_workspace_allocate(") !=
+                std::string::npos &&
+            workspace_memory_header.find("void gpu_local_interaction_workspace_free(") !=
+                std::string::npos &&
+            workspace_memory_source.find("bool gpu_local_interaction_workspace_allocate(") !=
+                std::string::npos &&
+            workspace_memory_source.find("void gpu_local_interaction_workspace_free(") !=
+                std::string::npos,
+        "GPU CUDA interactions module must own local-interaction workspace memory helpers");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/interactions/local_interaction_workspace_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuLocalInteractionWorkspaceDeviceState local_interactions{}") !=
@@ -1325,9 +1615,23 @@ void gpu_local_interaction_workspace_is_owned_by_cuda_interactions_module() {
                 std::string::npos,
         "FemGpuState must store DMI/STT local workspace through an explicit local-interactions substate");
     check(
-        gpu_state_source.find("state.local_interactions.vector") !=
+        gpu_state_source.find("state.local_interactions") !=
                 std::string::npos &&
-            gpu_state_source.find("state.local_interactions.node_weight") !=
+            gpu_state_source.find("gpu_local_interaction_workspace_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_local_interaction_workspace_free(") !=
+                std::string::npos &&
+            workspace_memory_source.find("local_interactions.vector") !=
+                std::string::npos &&
+            workspace_memory_source.find("local_interactions.node_weight") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_component(state.local_interactions.vector") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_double(state.local_interactions.node_weight") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_component(state.local_interactions.vector") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_double(state.local_interactions.node_weight") ==
                 std::string::npos &&
             gpu_state_source.find("state.zhang_li_rhs") == std::string::npos &&
             gpu_state_source.find("state.zhang_li_node_weight") == std::string::npos,
@@ -1357,6 +1661,11 @@ void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string workspace_header =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_workspace_state.hpp");
+    const std::string workspace_memory_header =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_workspace_memory.hpp");
+    const std::string workspace_memory_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_workspace_memory.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string attempt_setup_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_attempt_setup.cu");
     const std::string refresh_source =
@@ -1384,6 +1693,22 @@ void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK module must own RK workspace device state");
     check(
+        workspace_memory_header.find("GPU CUDA RK workspace memory module header") !=
+                std::string::npos &&
+            workspace_memory_source.find("GPU CUDA RK workspace memory source contract") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/integrators/rk/rk_workspace_memory.cpp") !=
+                std::string::npos &&
+            workspace_memory_header.find("bool gpu_rk_workspace_allocate(") !=
+                std::string::npos &&
+            workspace_memory_header.find("void gpu_rk_workspace_free(") !=
+                std::string::npos &&
+            workspace_memory_source.find("bool gpu_rk_workspace_allocate(") !=
+                std::string::npos &&
+            workspace_memory_source.find("void gpu_rk_workspace_free(") !=
+                std::string::npos,
+        "GPU CUDA RK module must own RK workspace memory helpers");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/integrators/rk/rk_workspace_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuRkWorkspaceDeviceState rk{}") !=
@@ -1399,11 +1724,20 @@ void gpu_rk_workspace_is_owned_by_cuda_rk_module() {
             gpu_state_header.find("bool fsal_valid = false") == std::string::npos,
         "FemGpuState must store RK scratch, stages, error, and FSAL state through the RK substate");
     check(
-        gpu_state_source.find("state.rk.m_backup") != std::string::npos &&
-            gpu_state_source.find("state.rk.m_stage") != std::string::npos &&
-            gpu_state_source.find("state.rk.error") != std::string::npos &&
-            gpu_state_source.find("state.rk.k") != std::string::npos &&
-            gpu_state_source.find("state.rk.fsal_valid") != std::string::npos,
+        gpu_state_source.find("state.rk") != std::string::npos &&
+            gpu_state_source.find("state.rk.fsal_valid") != std::string::npos &&
+            gpu_state_source.find("gpu_rk_workspace_allocate(") !=
+                std::string::npos &&
+            gpu_state_source.find("gpu_rk_workspace_free(") !=
+                std::string::npos &&
+            workspace_memory_source.find("rk.m_backup") != std::string::npos &&
+            workspace_memory_source.find("rk.m_stage") != std::string::npos &&
+            workspace_memory_source.find("rk.error") != std::string::npos &&
+            workspace_memory_source.find("rk.k") != std::string::npos &&
+            gpu_state_source.find("gpu_device_allocate_component(state.rk") ==
+                std::string::npos &&
+            gpu_state_source.find("gpu_device_free_component(state.rk") ==
+                std::string::npos,
         "GPU state allocation/reset/destroy must use the RK workspace substate");
     check(
         attempt_setup_source.find("gpu.rk.m_backup") != std::string::npos &&
@@ -3060,6 +3394,8 @@ void gpu_component_transfers_are_owned_by_cuda_transfer_module() {
     const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string gpu_state_source =
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
+    const std::string field_buffer_upload_source =
+        read_text_file(root / "gpu" / "cuda" / "fields" / "field_buffer_upload.cpp");
     const std::string component_header =
         read_text_file(root / "gpu" / "cuda" / "transfer" / "component_transfer.hpp");
     const std::string component_source =
@@ -3100,9 +3436,11 @@ void gpu_component_transfers_are_owned_by_cuda_transfer_module() {
     check(
         gpu_state_source.find("gpu_component_download_aos(") !=
                 std::string::npos &&
-            gpu_state_source.find("gpu_component_upload_aos(") !=
-                std::string::npos &&
-            gpu_state_source.find("gpu_component_upload_optional_aos(") !=
+            (gpu_state_source.find("gpu_component_upload_aos(") !=
+                 std::string::npos ||
+             field_buffer_upload_source.find("gpu_component_upload_aos(") !=
+                 std::string::npos) &&
+            field_buffer_upload_source.find("gpu_component_upload_optional_aos(") !=
                 std::string::npos,
         "GPU state implementation must delegate generic component transfers");
     check(

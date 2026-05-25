@@ -227,8 +227,9 @@ damping, anisotropy, DMI, and cubic-anisotropy fields) are owned by
 `mesh_regions` substate. Runtime-coefficients readiness spanning material
 fields, mesh metrics, and mesh-region maps is owned by
 `gpu/cuda/state/runtime_coefficients_state.hpp` and embedded in `FemGpuState`
-as the `runtime_coefficients` substate; fallback expansion, periodic-map
-construction, host-to-device upload, and readiness marking are owned by
+as the `runtime_coefficients` substate; runtime-coefficient device allocation
+and cleanup are owned by `gpu/cuda/state/runtime_coefficients_memory.hpp/.cpp`;
+fallback expansion, periodic-map construction, host-to-device upload, and readiness marking are owned by
 `gpu/cuda/state/runtime_coefficients_upload.hpp/.cpp`. GPU data-residency
 source-of-truth and
 host/device sync state are owned by `gpu/cuda/state/residency_state.hpp` and
@@ -247,25 +248,40 @@ hybrid CPU-Poisson compatibility buffers are owned by
 `demag_poisson` substate. GPU effective-field and interaction field buffers
 (`H_ex`, `H_demag`, `H_ext`, local interaction fields, and `H_eff`) are owned by
 `gpu/cuda/fields/field_buffer_state.hpp` and embedded in `FemGpuState` as the
-`fields` substate. Shared local-interaction projected-vector and nodal
+`fields` substate; field-buffer device allocation/free is owned by
+`gpu/cuda/fields/field_buffer_memory.hpp/.cpp`, and host-to-device
+field-buffer uploads are owned by `gpu/cuda/fields/field_buffer_upload.hpp/.cpp`.
+Shared local-interaction
+projected-vector and nodal
 weight workspace used by DMI and Zhang-Li STT is owned by
 `gpu/cuda/interactions/local_interaction_workspace_state.hpp` and embedded in
-`FemGpuState` as the `local_interactions` substate. GPU magnetoelastic per-node
+`FemGpuState` as the `local_interactions` substate; allocation and cleanup are
+owned by `gpu/cuda/interactions/local_interaction_workspace_memory.hpp/.cpp`.
+GPU magnetoelastic per-node
 prescribed-strain device data is owned by
 `gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp` and embedded in
-`FemGpuState` as the `magnetoelastic` substate; prescribed-strain validation,
-host-to-device upload, and readiness marking are owned by
+`FemGpuState` as the `magnetoelastic` substate; prescribed-strain device
+allocation and cleanup are owned by
+`gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.hpp/.cpp`;
+prescribed-strain validation, host-to-device upload, and readiness marking are owned by
 `gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp/.cpp`. Shared
 scalar-reduction
 workspace, scalar result slots, and CUB temporary storage are owned by
 `gpu/cuda/reductions/reduction_workspace_state.hpp` and embedded in
-`FemGpuState` as the `reductions` substate. The current device-resident
+`FemGpuState` as the `reductions` substate; allocation, CUB temporary-storage
+sizing, byte accounting, and cleanup are owned by
+`gpu/cuda/reductions/reduction_workspace_memory.hpp/.cpp`. The current device-resident
 magnetization solution state is owned by
 `gpu/cuda/state/magnetization_state.hpp` and embedded in `FemGpuState` as the
-`magnetization` substate. Device-resident explicit RK scratch
+`magnetization` substate; magnetization device allocation/free is owned by
+`gpu/cuda/state/magnetization_memory.hpp/.cpp`, and host/device magnetization
+transfer helpers are owned by `gpu/cuda/state/magnetization_transfer.hpp/.cpp`.
+Device-resident explicit RK scratch
 state (`m_backup`, `m_stage`, embedded-error buffer, stage RHS buffers, and
 FSAL validity) is owned by `gpu/cuda/integrators/rk/rk_workspace_state.hpp` and
-embedded in `FemGpuState` as the `rk` substate. `FemGpuState`
+embedded in `FemGpuState` as the `rk` substate; RK scratch/stage device
+allocation and cleanup are owned by
+`gpu/cuda/integrators/rk/rk_workspace_memory.hpp/.cpp`. `FemGpuState`
 allocation lifecycle, transfers, and device metadata are owned by
 `gpu/cuda/state/gpu_state.hpp/.cpp`, while low-level device allocation/free
 helpers are owned by `gpu/cuda/state/device_memory.hpp/.cpp`.
