@@ -350,6 +350,27 @@ export function buildMagnetizationAssignmentPatch(
   };
 }
 
+export function objectMagneticTexturePresetChangePatch(
+  model: ObjectMagneticTexturePanelModel,
+  draft: ObjectMagneticTextureDraft,
+  presetKind: MagnetizationTexturePresetId,
+): Partial<ObjectMagneticTextureDraft> {
+  const patch: Partial<ObjectMagneticTextureDraft> = { presetKind };
+  const committedRef = normalizeMagnetizationRef(model.assetId);
+  const draftRef = normalizeMagnetizationRef(draft.magnetizationRef);
+  if (!draftRef || (committedRef && draftRef === committedRef)) {
+    patch.magnetizationRef = "";
+  }
+
+  const currentLabel = draft.assetLabel.trim();
+  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind));
+  if (!currentLabel || currentLabel === oldDefaultLabel) {
+    patch.assetLabel = defaultLabel(presetKind);
+  }
+
+  return patch;
+}
+
 export function buildObjectMagneticTextureAssetDraft(
   model: ObjectMagneticTexturePanelModel,
   draft: ObjectMagneticTextureDraft,
@@ -367,10 +388,19 @@ export function buildObjectMagneticTextureAssetDraft(
           regionId: model.regionId,
         }
       : { kind: "object" as const, objectId: model.objectId };
+  const committedRef = normalizeMagnetizationRef(model.assetId);
+  const draftRef = normalizeMagnetizationRef(draft.magnetizationRef);
+  const presetChanged = asPresetKind(model.presetKind) !== presetKind;
   const assetId =
-    normalizeMagnetizationRef(draft.magnetizationRef) ??
-    magnetizationTextureAssetId(target, presetKind);
-  const label = stringOrDefault(draft.assetLabel, defaultLabel(presetKind));
+    presetChanged && committedRef && draftRef === committedRef
+      ? magnetizationTextureAssetId(target, presetKind)
+      : (draftRef ?? magnetizationTextureAssetId(target, presetKind));
+  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind));
+  const draftLabel = draft.assetLabel.trim();
+  const label =
+    presetChanged && (!draftLabel || draftLabel === oldDefaultLabel)
+      ? defaultLabel(presetKind)
+      : stringOrDefault(draft.assetLabel, defaultLabel(presetKind));
   const asset = presetMagnetizationAsset({
     id: assetId,
     label,
@@ -434,7 +464,7 @@ function presetParamsFromDraft(
   };
 }
 
-function defaultLabel(presetKind: MagnetizationTexturePresetId): string {
+function defaultLabel(presetKind: MagnetizationTexturePresetId | null): string {
   if (presetKind === "uniform") return "Uniform texture";
   if (presetKind === "random_seeded") return "Random seeded texture";
   return "Vortex texture";

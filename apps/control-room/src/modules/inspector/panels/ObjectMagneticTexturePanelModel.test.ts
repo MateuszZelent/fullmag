@@ -6,6 +6,7 @@ import {
   normalizeMagnetizationRef,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftKey,
+  objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
 } from "./ObjectMagneticTexturePanelModel";
 
@@ -233,6 +234,161 @@ describe("ObjectMagneticTexturePanelModel", () => {
         rotation_quat: expect.arrayContaining([expect.any(Number)]),
         translation: [2, 0, 0],
       },
+    });
+  });
+
+  it("uses canonical asset identity when a committed random preset changes to uniform", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:random_seeded",
+            kind: "preset_texture",
+            name: "Random seeded texture",
+            preset_kind: "random_seeded",
+            preset_params: { seed: 7 },
+            ui_label: "Random seeded texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:random_seeded",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+    const draft = {
+      ...objectMagneticTextureDraftFromModel(model),
+      directionX: "1",
+      directionY: "0",
+      directionZ: "0",
+      presetKind: "uniform" as const,
+    };
+
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      id: "mag:arch_waveguide:uniform",
+      name: "Uniform texture",
+      preset_kind: "uniform",
+      preset_params: { direction: [1, 0, 0] },
+      ui_label: "Uniform texture",
+    });
+  });
+
+  it("preserves an explicit custom magnetization ref when preset changes", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:random_seeded",
+            kind: "preset_texture",
+            name: "Random seeded texture",
+            preset_kind: "random_seeded",
+            preset_params: { seed: 7 },
+            ui_label: "Random seeded texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:random_seeded",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+    const draft = {
+      ...objectMagneticTextureDraftFromModel(model),
+      assetLabel: "Custom uniform",
+      magnetizationRef: "mag:custom:arch_waveguide:uniform",
+      presetKind: "uniform" as const,
+    };
+
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      id: "mag:custom:arch_waveguide:uniform",
+      name: "Custom uniform",
+      preset_kind: "uniform",
+    });
+  });
+
+  it("keeps explicit draft refs out of preset-change patches", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:random_seeded",
+            kind: "preset_texture",
+            name: "Random seeded texture",
+            preset_kind: "random_seeded",
+            preset_params: { seed: 7 },
+            ui_label: "Random seeded texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:random_seeded",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+    const draft = {
+      ...objectMagneticTextureDraftFromModel(model),
+      assetLabel: "Custom uniform",
+      magnetizationRef: "mag:custom:arch_waveguide:uniform",
+    };
+
+    expect(
+      objectMagneticTexturePresetChangePatch(model, draft, "uniform"),
+    ).toEqual({
+      presetKind: "uniform",
     });
   });
 });

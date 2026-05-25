@@ -160,9 +160,15 @@ function objectMeshState(
   objectId: string,
   sceneRevision: number,
   manifest: MeshSharedDomainManifestResource | null | undefined,
+  object?: JsonRecord | null,
 ): Viewport3DPrimitiveMeshState | "mesh-ready" {
   const meshObjectIds = objectIdsWithMesh(manifest);
   if (!meshObjectIds.has(objectId)) return "primitive-only";
+
+  if (object && Array.isArray(object.tags) && object.tags.includes("mesh:ready")) {
+    return "mesh-ready";
+  }
+
   return manifest?.source_scene_revision === sceneRevision
     ? "mesh-ready"
     : "mesh-stale";
@@ -319,7 +325,7 @@ export function buildViewport3DPrimitiveRenderModel(
     const geometry = asRecord(object?.geometry);
     if (!object || !objectId || !geometry) return [];
 
-    const state = objectMeshState(objectId, sceneRevision, manifest);
+    const state = objectMeshState(objectId, sceneRevision, manifest, object);
     if (state === "mesh-ready") return [];
 
     const transform = asRecord(object.transform);

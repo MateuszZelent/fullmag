@@ -19,16 +19,32 @@ export function resolveVisualizationTopologyFreshness(
   scene: unknown,
   manifest: unknown,
 ): VisualizationTopologyFreshness {
-  const sceneRevision = asFiniteNumber(asRecord(scene)?.revision);
-  const sourceSceneRevision = asFiniteNumber(
-    asRecord(manifest)?.source_scene_revision,
-  );
+  const sceneRecord = asRecord(scene);
+  const sceneRevision = asFiniteNumber(sceneRecord?.revision);
+  const manifestRecord = asRecord(manifest);
+  const sourceSceneRevision = asFiniteNumber(manifestRecord?.source_scene_revision);
 
   if (sceneRevision === null || sourceSceneRevision === null) {
     return "unknown";
   }
 
-  return sceneRevision === sourceSceneRevision ? "current" : "stale";
+  if (sceneRevision === sourceSceneRevision) {
+    return "current";
+   }
+
+  if (Array.isArray(sceneRecord?.objects)) {
+    const hasDirtyGeometry = sceneRecord.objects.some((objValue) => {
+      const obj = asRecord(objValue);
+      if (!obj) return false;
+      const tags = Array.isArray(obj.tags) ? obj.tags.map(String) : [];
+      return tags.includes("mesh:dirty") || tags.includes("mesh:building");
+    });
+    if (!hasDirtyGeometry) {
+      return "current";
+    }
+  }
+
+  return "stale";
 }
 
 export function isVisualizationTopologyCurrent(

@@ -788,9 +788,10 @@ export function resolveAirboxVisualizationSettingsFromState(
     }),
     shaderVisible,
     vectorBudget:
-      targetSettings === null
-        ? airbox?.vectors?.density ?? baseSettings.vectorBudget
-        : baseSettings.vectorBudget,
+      state?.targets?.airbox?.settings?.vector_budget !== undefined &&
+      state?.targets?.airbox?.settings?.vector_budget !== null
+        ? baseSettings.vectorBudget
+        : airbox?.vectors?.density ?? baseSettings.vectorBudget,
     vectorsVisible:
       airbox?.vectors?.visible ?? baseSettings.vectorsVisible,
     visible: airbox?.visible ?? baseSettings.visible,

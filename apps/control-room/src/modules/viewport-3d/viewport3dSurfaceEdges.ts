@@ -8,7 +8,9 @@ export function buildSurfaceEdgeIndices(
   }
 
   const seen = new Set<number>();
-  const edges: number[] = [];
+  const maxEdges = surfaceIndices.length;
+  const edges = new Uint32Array(maxEdges * 2);
+  let edgeCount = 0;
 
   for (let index = 0; index < surfaceIndices.length; index += 3) {
     const a = surfaceIndices[index];
@@ -17,12 +19,45 @@ export function buildSurfaceEdgeIndices(
     if (!isValidIndex(a) || !isValidIndex(b) || !isValidIndex(c)) {
       return null;
     }
-    appendEdge(edges, seen, a, b);
-    appendEdge(edges, seen, b, c);
-    appendEdge(edges, seen, c, a);
+
+    // Edge A-B
+    if (a !== b) {
+      const minVal = a < b ? a : b;
+      const maxVal = a > b ? a : b;
+      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      if (!seen.has(key)) {
+        seen.add(key);
+        edges[edgeCount++] = minVal;
+        edges[edgeCount++] = maxVal;
+      }
+    }
+
+    // Edge B-C
+    if (b !== c) {
+      const minVal = b < c ? b : c;
+      const maxVal = b > c ? b : c;
+      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      if (!seen.has(key)) {
+        seen.add(key);
+        edges[edgeCount++] = minVal;
+        edges[edgeCount++] = maxVal;
+      }
+    }
+
+    // Edge C-A
+    if (c !== a) {
+      const minVal = c < a ? c : a;
+      const maxVal = c > a ? c : a;
+      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      if (!seen.has(key)) {
+        seen.add(key);
+        edges[edgeCount++] = minVal;
+        edges[edgeCount++] = maxVal;
+      }
+    }
   }
 
-  return edges.length > 0 ? new Uint32Array(edges) : null;
+  return edgeCount > 0 ? edges.slice(0, edgeCount) : null;
 }
 
 export function buildSurfaceEdgeGeometry(
@@ -71,30 +106,7 @@ export function buildSurfaceEdgeGeometryFromBufferGeometry(
   return geometry;
 }
 
-/**
- * Szudzik pairing function — maps two non-negative integers to a unique
- * non-negative integer.  Collision-free for indices < 2^23 (~8M vertices).
- * Used instead of string keys to eliminate per-edge string allocation and
- * GC pressure on large meshes.
- */
-function szudzikPair(a: number, b: number): number {
-  return a >= b ? a * a + a + b : b * b + a;
-}
 
-function appendEdge(
-  edges: number[],
-  seen: Set<number>,
-  first: number,
-  second: number,
-): void {
-  if (first === second) return;
-  const a = Math.min(first, second);
-  const b = Math.max(first, second);
-  const key = szudzikPair(a, b);
-  if (seen.has(key)) return;
-  seen.add(key);
-  edges.push(a, b);
-}
 
 function isValidIndex(value: number | undefined): value is number {
   return value !== undefined && Number.isInteger(value) && value >= 0;

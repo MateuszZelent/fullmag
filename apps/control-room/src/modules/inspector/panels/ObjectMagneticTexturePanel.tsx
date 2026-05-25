@@ -29,12 +29,13 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
+  buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftKey,
-  buildObjectMagneticTextureAssetDraft,
+  objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
   type ObjectMagneticTextureDraft,
-  } from "./ObjectMagneticTexturePanelModel";
+} from "./ObjectMagneticTexturePanelModel";
 
 interface DraftState {
   draft: ObjectMagneticTextureDraft;
@@ -98,9 +99,11 @@ function MagneticTextureSummarySection({
 
 function MagneticTextureAssignmentSection({
   draft,
+  model,
   updateDraft,
 }: {
   draft: ObjectMagneticTextureDraft;
+  model: MagneticTexturePanelModel;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
@@ -125,11 +128,13 @@ function MagneticTextureAssignmentSection({
         label="Preset"
         type="select"
         value={draft.presetKind}
-        onChange={(event) =>
-          updateDraft({
-            presetKind: event.target.value as ObjectMagneticTextureDraft["presetKind"],
-          })
-        }
+        onChange={(event) => {
+          const nextPreset = event.target
+            .value as ObjectMagneticTextureDraft["presetKind"];
+          updateDraft(
+            objectMagneticTexturePresetChangePatch(model, draft, nextPreset),
+          );
+        }}
       >
         {MAGNETIZATION_TEXTURE_PRESETS.map((preset) => (
           <option key={preset.id} value={preset.id}>
@@ -458,7 +463,11 @@ export function ObjectMagneticTexturePanel({
         regionsStatus={regions.status}
         sceneStatus={scene.status}
       />
-      <MagneticTextureAssignmentSection draft={draft} updateDraft={updateDraft} />
+      <MagneticTextureAssignmentSection
+        draft={draft}
+        model={model}
+        updateDraft={updateDraft}
+      />
       <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />
       <MagneticTextureTransformSection draft={draft} updateDraft={updateDraft} />
       <MagneticTextureMappingSection draft={draft} updateDraft={updateDraft} />

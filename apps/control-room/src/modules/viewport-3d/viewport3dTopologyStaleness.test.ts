@@ -18,6 +18,20 @@ describe("viewport3dTopologyStaleness", () => {
     ).toBe("stale");
   });
 
+  it("keeps shared-domain topology current if no objects are dirty or building even if manifest provenance lags", () => {
+    expect(
+      resolveViewport3DTopologyFreshness(
+        {
+          objects: [
+            { id: "box", tags: ["mesh:ready"] }
+          ],
+          revision: 12,
+        },
+        { source_scene_revision: 11 },
+      ),
+    ).toBe("current");
+  });
+
   it("keeps matching manifest provenance current", () => {
     expect(
       resolveViewport3DTopologyFreshness(

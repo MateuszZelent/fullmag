@@ -367,6 +367,46 @@ describe("viewport3dPrimitiveModel", () => {
     expect(model.objects).toEqual([]);
   });
 
+  it("suppresses primitive fallback when object has mesh:ready tag even if revision is stale", () => {
+    const manifest: MeshSharedDomainManifestResource = {
+      mesh_id: "mesh-1",
+      mesh_name: "Mesh",
+      mesh_parts: [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part-box",
+          label: "Box",
+          node_count: 0,
+          node_start: 0,
+          object_id: "box",
+          role: "magnetic",
+        },
+      ],
+      revision: 2,
+      source_scene_revision: 6,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: { geometry_kind: "Box", geometry_params: { size: [1, 1, 1] } },
+            id: "box",
+            name: "Box",
+            tags: ["mesh:ready"],
+          },
+        ],
+        revision: 7,
+      },
+      manifest,
+    );
+
+    expect(model.objects).toEqual([]);
+  });
+
   it("keeps unchanged primitive geometry keys stable across unrelated scene revisions", () => {
     const first = buildViewport3DPrimitiveRenderModel(
       {
