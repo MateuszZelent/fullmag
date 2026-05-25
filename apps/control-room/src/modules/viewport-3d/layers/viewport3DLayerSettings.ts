@@ -7,7 +7,7 @@ import type { ColorRepresentation } from "three";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
-export const VERTEX_COLOR_MATERIAL_COLOR = "#ffffff";
+export const VERTEX_COLOR_MATERIAL_COLOR = 0xffffff;
 
 export function opacityFromSettings(
   settings: VisualizationTargetSettings,

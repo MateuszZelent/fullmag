@@ -638,16 +638,52 @@ fn initial_magnetization_for_object(
     {
         return InitialMagnetizationIR::Uniform { value };
     }
-    if asset.kind == "preset_texture" && asset.preset_kind.as_deref() == Some("uniform") {
-        if let Some(value) = asset
-            .preset_params
-            .as_ref()
-            .and_then(|params| params.get("direction"))
-            .and_then(|value| value.as_array())
-            .and_then(|values| vec3_from_json_slice(values))
-        {
-            return InitialMagnetizationIR::Uniform { value };
+    if asset.kind == "preset_texture" {
+        let preset_kind = asset.preset_kind.clone().unwrap_or_else(|| "uniform".to_string());
+        if preset_kind == "uniform" {
+            if let Some(value) = asset
+                .preset_params
+                .as_ref()
+                .and_then(|params| params.get("direction"))
+                .and_then(|value| value.as_array())
+                .and_then(|values| vec3_from_json_slice(values))
+            {
+                return InitialMagnetizationIR::Uniform { value };
+            }
         }
+
+        // Map non-uniform preset textures correctly
+        let mut preset_params = std::collections::BTreeMap::new();
+        if let Some(serde_json::Value::Object(map)) = &asset.preset_params {
+            for (k, v) in map {
+                preset_params.insert(k.clone(), v.clone());
+            }
+        }
+
+        let mapping = fullmag_ir::TextureMappingIR {
+            space: asset.mapping.space.clone(),
+            projection: match asset.mapping.projection.as_str() {
+                "planar_xy" | "planarXy" => fullmag_ir::TextureProjectionMode::PlanarXy,
+                "planar_xz" | "planarXz" => fullmag_ir::TextureProjectionMode::PlanarXz,
+                "planar_yz" | "planarYz" => fullmag_ir::TextureProjectionMode::PlanarYz,
+                _ => fullmag_ir::TextureProjectionMode::ObjectLocal,
+            },
+            clamp_mode: asset.mapping.clamp_mode.clone(),
+        };
+
+        let texture_transform = fullmag_ir::TextureTransform3DIR {
+            translation: asset.texture_transform.translation,
+            rotation_quat: asset.texture_transform.rotation_quat,
+            scale: asset.texture_transform.scale,
+            pivot: asset.texture_transform.pivot,
+        };
+
+        return InitialMagnetizationIR::PresetTexture {
+            preset_kind,
+            preset_params,
+            mapping,
+            texture_transform,
+        };
     }
     InitialMagnetizationIR::Uniform {
         value: [0.0, 0.0, 1.0],

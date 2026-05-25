@@ -159,6 +159,10 @@ export const MODEL_TRANSACTIONS_PATH = openApiV2Path(
   "/v2/sessions/current/model/transactions",
 );
 
+export const MODEL_SYNCS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/syncs",
+);
+
 export const MODEL_OBJECTS_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects",
 );

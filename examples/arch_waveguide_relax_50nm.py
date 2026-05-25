@@ -42,7 +42,7 @@ study = fm.study("arch_waveguide_relax_50nm")
 
 # Engine
 study.engine("fem")
-study.device("gpu", precision="double")
+study.device("cpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 study.universe(

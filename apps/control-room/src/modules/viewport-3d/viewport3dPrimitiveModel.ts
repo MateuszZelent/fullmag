@@ -43,6 +43,12 @@ export interface Viewport3DPrimitiveRenderModel {
 type JsonRecord = Record<string, unknown>;
 const VORTEX_PREVIEW_RGB: [number, number, number] = [0.1529, 0.7686, 0.9098];
 const RANDOM_SEEDED_PREVIEW_RGB: [number, number, number] = [0.2627, 0.8196, 0.4784];
+const ANTIVORTEX_PREVIEW_RGB: [number, number, number] = [0.98, 0.49, 0.49];
+const SKYRMION_PREVIEW_RGB: [number, number, number] = [0.76, 0.33, 0.94];
+const DOMAIN_WALL_PREVIEW_RGB: [number, number, number] = [0.94, 0.87, 0.31];
+const TWO_DOMAIN_PREVIEW_RGB: [number, number, number] = [0.95, 0.52, 0.19];
+const HELICAL_PREVIEW_RGB: [number, number, number] = [0.45, 0.73, 0.98];
+const CONICAL_PREVIEW_RGB: [number, number, number] = [0.99, 0.64, 0.69];
 const DEFAULT_PREVIEW_RGB: [number, number, number] = [0.6235, 0.7098, 1];
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -208,7 +214,13 @@ function magnetizationPreviewColor(
     );
   }
   if (presetKind === "vortex") return rgbToHex(VORTEX_PREVIEW_RGB);
-  if (presetKind === "random_seeded") return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
+  if (presetKind === "antivortex") return rgbToHex(ANTIVORTEX_PREVIEW_RGB);
+  if (presetKind === "random_seeded" || presetKind === "random") return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") return rgbToHex(SKYRMION_PREVIEW_RGB);
+  if (presetKind === "domain_wall") return rgbToHex(DOMAIN_WALL_PREVIEW_RGB);
+  if (presetKind === "two_domain") return rgbToHex(TWO_DOMAIN_PREVIEW_RGB);
+  if (presetKind === "helical") return rgbToHex(HELICAL_PREVIEW_RGB);
+  if (presetKind === "conical") return rgbToHex(CONICAL_PREVIEW_RGB);
   return rgbToHex(DEFAULT_PREVIEW_RGB);
 }
 

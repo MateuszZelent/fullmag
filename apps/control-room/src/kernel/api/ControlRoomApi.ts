@@ -51,6 +51,7 @@ import {
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
+  MODEL_SYNCS_PATH,
   MODEL_UNIVERSE_PATH,
   PERSISTENCE_CHECKPOINT_PATH,
   PERSISTENCE_CHECKPOINT_RESTORE_PATH,
@@ -138,6 +139,8 @@ import type {
   ScalarWindowQuery,
   ScalarWindowResource,
   SceneResource,
+  ScriptSyncRequest,
+  ScriptSyncResponse,
   SessionExportRequest,
   SessionExportResponse,
   SessionImportCommitRequest,
@@ -612,6 +615,15 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    syncAuthoringScript: (
+      request: ScriptSyncRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<ScriptSyncResponse, ScriptSyncRequest>(
+        MODEL_SYNCS_PATH,
+        request,
+        options,
+      ),
     study: (options?: RequestOptions) =>
       this.requestJson<StudyRuntimeResource>(MODEL_STUDY_PATH, options),
     patchStudy: (

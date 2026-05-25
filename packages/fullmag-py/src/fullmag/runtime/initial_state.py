@@ -222,6 +222,7 @@ def prepare_initial_magnetization(
         preset_kind = str(spec["preset_kind"])
         _METRIC_ANALYTIC_PRESETS = frozenset({
             "vortex", "antivortex", "bloch_skyrmion", "neel_skyrmion", "domain_wall",
+            "helical", "conical", "two_domain",
         })
         clamp_mode = _mapping_clamp_mode(mapping_ir)
         if clamp_mode != "none" and preset_kind not in _METRIC_ANALYTIC_PRESETS:

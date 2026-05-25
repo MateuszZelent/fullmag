@@ -32,6 +32,8 @@ export interface ObjectMagneticTexturePanelModel {
   regionId: string | null;
   targetKind: "object" | "region";
   textureTransform: string;
+  boundsMin?: number[] | null;
+  boundsMax?: number[] | null;
 }
 
 export interface ObjectMagneticTextureDraft {
@@ -59,6 +61,39 @@ export interface ObjectMagneticTextureDraft {
   translationX: string;
   translationY: string;
   translationZ: string;
+  // New presets fields:
+  plane: string;
+  circulation: string;
+  core_polarity: string;
+  core_radius: string;
+  radius: string;
+  wall_width: string;
+  normal_axis: string;
+  center_offset: string;
+  leftX: string;
+  leftY: string;
+  leftZ: string;
+  rightX: string;
+  rightY: string;
+  rightZ: string;
+  wallX: string;
+  wallY: string;
+  wallZ: string;
+  kind: string;
+  wavevectorX: string;
+  wavevectorY: string;
+  wavevectorZ: string;
+  e1X: string;
+  e1Y: string;
+  e1Z: string;
+  e2X: string;
+  e2Y: string;
+  e2Z: string;
+  phase_rad: string;
+  cone_axisX: string;
+  cone_axisY: string;
+  cone_axisZ: string;
+  cone_angle_rad: string;
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -71,13 +106,33 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
+function asNumber (value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function asPresetKind(value: unknown): MagnetizationTexturePresetId | null {
-  return value === "uniform" || value === "random_seeded" || value === "vortex"
+function asNumberArray(value: unknown): number[] | null {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
     ? value
+    : null;
+}
+
+const PRESET_IDS = new Set<string>([
+  "uniform",
+  "random_seeded",
+  "vortex",
+  "antivortex",
+  "bloch_skyrmion",
+  "neel_skyrmion",
+  "domain_wall",
+  "two_domain",
+  "helical",
+  "conical",
+]);
+
+function asPresetKind(value: unknown): MagnetizationTexturePresetId | null {
+  return typeof value === "string" && PRESET_IDS.has(value)
+    ? (value as MagnetizationTexturePresetId)
     : null;
 }
 
@@ -142,8 +197,8 @@ function quatFromRecord(
 }
 
 function numberText(value: number): string {
-  const rounded = Math.abs(value) < 1e-9 ? 0 : Number(value.toFixed(6));
-  return String(rounded);
+  if (value === 0) return "0";
+  return Number(value.toPrecision(12)).toString();
 }
 
 function vec3Text(
@@ -265,6 +320,10 @@ export function resolveObjectMagneticTexturePanelModel(
     assetId ??
     "unassigned";
 
+  const geometryRecord = asRecord(object?.geometry);
+  const boundsMin = asNumberArray(geometryRecord?.bounds_min);
+  const boundsMax = asNumberArray(geometryRecord?.bounds_max);
+
   return {
     assignment: textureModel.assignment,
     asset,
@@ -279,6 +338,8 @@ export function resolveObjectMagneticTexturePanelModel(
     regionId: target.kind === "region" ? target.regionId : null,
     targetKind: target.kind,
     textureTransform: formatJson(asset?.texture_transform),
+    boundsMin,
+    boundsMax,
   };
 }
 
@@ -299,6 +360,14 @@ export function objectMagneticTextureDraftFromModel(
   );
   const scale = vec3Text(vectorFromRecord(transform, "scale", [1, 1, 1]));
   const pivot = vec3Text(vectorFromRecord(transform, "pivot", [0, 0, 0]));
+
+  const left = vec3Text(vectorFromRecord(params, "left", [1, 0, 0]));
+  const right = vec3Text(vectorFromRecord(params, "right", [-1, 0, 0]));
+  const wall = vec3Text(vectorFromRecord(params, "wall", [0, 1, 0]));
+  const wavevector = vec3Text(vectorFromRecord(params, "wavevector", [1, 0, 0]));
+  const e1 = vec3Text(vectorFromRecord(params, "e1", [1, 0, 0]));
+  const e2 = vec3Text(vectorFromRecord(params, "e2", [0, 1, 0]));
+  const cone_axis = vec3Text(vectorFromRecord(params, "cone_axis", [0, 0, 1]));
 
   return {
     assetLabel: model.assetLabel === "unassigned" ? "" : model.assetLabel,
@@ -325,6 +394,38 @@ export function objectMagneticTextureDraftFromModel(
     translationX: translation[0],
     translationY: translation[1],
     translationZ: translation[2],
+    plane: asString(params?.plane) ?? "xy",
+    circulation: numberText(asNumber(params?.circulation) ?? 1),
+    core_polarity: numberText(asNumber(params?.core_polarity) ?? (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" ? -1 : 1)),
+    core_radius: numberText(asNumber(params?.core_radius) ?? 1e-9),
+    radius: numberText(asNumber(params?.radius) ?? 10e-9),
+    wall_width: numberText(asNumber(params?.wall_width) ?? 2e-9),
+    normal_axis: asString(params?.normal_axis) ?? "x",
+    center_offset: numberText(asNumber(params?.center_offset) ?? 0.0),
+    leftX: left[0],
+    leftY: left[1],
+    leftZ: left[2],
+    rightX: right[0],
+    rightY: right[1],
+    rightZ: right[2],
+    wallX: wall[0],
+    wallY: wall[1],
+    wallZ: wall[2],
+    kind: asString(params?.kind) ?? "neel",
+    wavevectorX: wavevector[0],
+    wavevectorY: wavevector[1],
+    wavevectorZ: wavevector[2],
+    e1X: e1[0],
+    e1Y: e1[1],
+    e1Z: e1[2],
+    e2X: e2[0],
+    e2Y: e2[1],
+    e2Z: e2[2],
+    phase_rad: numberText(asNumber(params?.phase_rad) ?? 0.0),
+    cone_axisX: cone_axis[0],
+    cone_axisY: cone_axis[1],
+    cone_axisZ: cone_axis[2],
+    cone_angle_rad: numberText(asNumber(params?.cone_angle_rad) ?? 0.785398),
   };
 }
 
@@ -363,7 +464,7 @@ export function objectMagneticTexturePresetChangePatch(
   }
 
   const currentLabel = draft.assetLabel.trim();
-  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind));
+  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind) ?? "uniform");
   if (!currentLabel || currentLabel === oldDefaultLabel) {
     patch.assetLabel = defaultLabel(presetKind);
   }
@@ -395,7 +496,7 @@ export function buildObjectMagneticTextureAssetDraft(
     presetChanged && committedRef && draftRef === committedRef
       ? magnetizationTextureAssetId(target, presetKind)
       : (draftRef ?? magnetizationTextureAssetId(target, presetKind));
-  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind));
+  const oldDefaultLabel = defaultLabel(asPresetKind(model.presetKind) ?? "uniform");
   const draftLabel = draft.assetLabel.trim();
   const label =
     presetChanged && (!draftLabel || draftLabel === oldDefaultLabel)
@@ -448,10 +549,100 @@ function presetParamsFromDraft(
     };
   }
 
-  if (presetKind === "vortex") {
+  if (presetKind === "vortex" || presetKind === "antivortex") {
     return {
-      chirality: requiredNumber(draft.chirality, "Chirality"),
-      polarity: requiredNumber(draft.polarity, "Polarity"),
+      plane: stringOrDefault(draft.plane, "xy"),
+      circulation: requiredInteger(draft.circulation, "Circulation"),
+      core_polarity: requiredInteger(draft.core_polarity, "Core polarity"),
+      core_radius: requiredNumber(draft.core_radius, "Core radius"),
+    };
+  }
+
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") {
+    return {
+      plane: stringOrDefault(draft.plane, "xy"),
+      radius: requiredNumber(draft.radius, "Radius"),
+      wall_width: requiredNumber(draft.wall_width, "Wall width"),
+      core_polarity: requiredInteger(draft.core_polarity, "Core polarity"),
+      chirality: requiredInteger(draft.chirality, "Chirality"),
+    };
+  }
+
+  if (presetKind === "domain_wall") {
+    return {
+      normal_axis: stringOrDefault(draft.normal_axis, "x"),
+      center_offset: requiredNumber(draft.center_offset, "Center offset"),
+      width: requiredNumber(draft.wall_width, "Wall width"),
+      left: [
+        requiredNumber(draft.leftX, "Left X"),
+        requiredNumber(draft.leftY, "Left Y"),
+        requiredNumber(draft.leftZ, "Left Z"),
+      ],
+      right: [
+        requiredNumber(draft.rightX, "Right X"),
+        requiredNumber(draft.rightY, "Right Y"),
+        requiredNumber(draft.rightZ, "Right Z"),
+      ],
+      kind: stringOrDefault(draft.kind, "neel"),
+    };
+  }
+
+  if (presetKind === "two_domain") {
+    return {
+      normal_axis: stringOrDefault(draft.normal_axis, "x"),
+      left: [
+        requiredNumber(draft.leftX, "Left X"),
+        requiredNumber(draft.leftY, "Left Y"),
+        requiredNumber(draft.leftZ, "Left Z"),
+      ],
+      right: [
+        requiredNumber(draft.rightX, "Right X"),
+        requiredNumber(draft.rightY, "Right Y"),
+        requiredNumber(draft.rightZ, "Right Z"),
+      ],
+      wall: [
+        requiredNumber(draft.wallX, "Wall X"),
+        requiredNumber(draft.wallY, "Wall Y"),
+        requiredNumber(draft.wallZ, "Wall Z"),
+      ],
+    };
+  }
+
+  if (presetKind === "helical") {
+    return {
+      wavevector: [
+        requiredNumber(draft.wavevectorX, "Wavevector X"),
+        requiredNumber(draft.wavevectorY, "Wavevector Y"),
+        requiredNumber(draft.wavevectorZ, "Wavevector Z"),
+      ],
+      e1: [
+        requiredNumber(draft.e1X, "E1 X"),
+        requiredNumber(draft.e1Y, "E1 Y"),
+        requiredNumber(draft.e1Z, "E1 Z"),
+      ],
+      e2: [
+        requiredNumber(draft.e2X, "E2 X"),
+        requiredNumber(draft.e2Y, "E2 Y"),
+        requiredNumber(draft.e2Z, "E2 Z"),
+      ],
+      phase_rad: requiredNumber(draft.phase_rad, "Phase (rad)"),
+    };
+  }
+
+  if (presetKind === "conical") {
+    return {
+      wavevector: [
+        requiredNumber(draft.wavevectorX, "Wavevector X"),
+        requiredNumber(draft.wavevectorY, "Wavevector Y"),
+        requiredNumber(draft.wavevectorZ, "Wavevector Z"),
+      ],
+      cone_axis: [
+        requiredNumber(draft.cone_axisX, "Cone axis X"),
+        requiredNumber(draft.cone_axisY, "Cone axis Y"),
+        requiredNumber(draft.cone_axisZ, "Cone axis Z"),
+      ],
+      phase_rad: requiredNumber(draft.phase_rad, "Phase (rad)"),
+      cone_angle_rad: requiredNumber(draft.cone_angle_rad, "Cone angle (rad)"),
     };
   }
 
@@ -464,8 +655,29 @@ function presetParamsFromDraft(
   };
 }
 
-function defaultLabel(presetKind: MagnetizationTexturePresetId | null): string {
-  if (presetKind === "uniform") return "Uniform texture";
-  if (presetKind === "random_seeded") return "Random seeded texture";
-  return "Vortex texture";
+function defaultLabel(presetKind: MagnetizationTexturePresetId): string {
+  switch (presetKind) {
+    case "uniform":
+      return "Uniform texture";
+    case "random_seeded":
+      return "Random seeded texture";
+    case "vortex":
+      return "Vortex texture";
+    case "antivortex":
+      return "Antivortex texture";
+    case "bloch_skyrmion":
+      return "Bloch Skyrmion texture";
+    case "neel_skyrmion":
+      return "Néel Skyrmion texture";
+    case "domain_wall":
+      return "Domain Wall texture";
+    case "two_domain":
+      return "Two Domain texture";
+    case "helical":
+      return "Helical texture";
+    case "conical":
+      return "Conical texture";
+    default:
+      return "Custom texture";
+  }
 }

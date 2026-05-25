@@ -218,8 +218,10 @@ describe("ObjectMagneticTexturePanelModel", () => {
     const draft = {
       ...objectMagneticTextureDraftFromModel(model),
       assetLabel: "Edited vortex",
-      chirality: "-1",
-      polarity: "1",
+      circulation: "2",
+      core_polarity: "-1",
+      core_radius: "5e-9",
+      plane: "xz",
       presetKind: "vortex" as const,
       rotationZDeg: "90",
       translationX: "2",
@@ -229,10 +231,78 @@ describe("ObjectMagneticTexturePanelModel", () => {
       id: "mag:free-layer:region:free-layer:vortex",
       name: "Edited vortex",
       preset_kind: "vortex",
-      preset_params: { chirality: -1, polarity: 1 },
+      preset_params: {
+        circulation: 2,
+        core_polarity: -1,
+        core_radius: 5e-9,
+        plane: "xz",
+      },
       texture_transform: {
         rotation_quat: expect.arrayContaining([expect.any(Number)]),
         translation: [2, 0, 0],
+      },
+    });
+  });
+
+  it("preserves nanoscale preset parameters when rebuilding texture assets", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:neel_skyrmion",
+            kind: "preset_texture",
+            name: "Néel Skyrmion texture",
+            preset_kind: "neel_skyrmion",
+            preset_params: {
+              chirality: 1,
+              core_polarity: -1,
+              plane: "xy",
+              radius: 10e-9,
+              wall_width: 2e-9,
+            },
+            texture_transform: {
+              pivot: [0, 0, 0],
+              rotation_quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+              translation: [0, 0, 0],
+            },
+            ui_label: "Néel Skyrmion texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:neel_skyrmion",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+
+    const draft = objectMagneticTextureDraftFromModel(model);
+
+    expect(draft.radius).toBe("1e-8");
+    expect(draft.wall_width).toBe("2e-9");
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      preset_kind: "neel_skyrmion",
+      preset_params: {
+        radius: 10e-9,
+        wall_width: 2e-9,
       },
     });
   });

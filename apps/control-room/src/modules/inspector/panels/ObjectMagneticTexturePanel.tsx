@@ -32,7 +32,6 @@ import {
   buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftKey,
-  objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
   type ObjectMagneticTextureDraft,
 } from "./ObjectMagneticTexturePanelModel";
@@ -99,11 +98,9 @@ function MagneticTextureSummarySection({
 
 function MagneticTextureAssignmentSection({
   draft,
-  model,
   updateDraft,
 }: {
   draft: ObjectMagneticTextureDraft;
-  model: MagneticTexturePanelModel;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
@@ -129,11 +126,14 @@ function MagneticTextureAssignmentSection({
         type="select"
         value={draft.presetKind}
         onChange={(event) => {
-          const nextPreset = event.target
-            .value as ObjectMagneticTextureDraft["presetKind"];
-          updateDraft(
-            objectMagneticTexturePresetChangePatch(model, draft, nextPreset),
-          );
+          const nextPreset = event.target.value as ObjectMagneticTextureDraft["presetKind"];
+          const found = MAGNETIZATION_TEXTURE_PRESETS.find((p) => p.id === nextPreset);
+          const defaultLabel = found ? `${found.label} texture` : `${nextPreset} texture`;
+          updateDraft({
+            presetKind: nextPreset,
+            magnetizationRef: "",
+            assetLabel: defaultLabel,
+          });
         }}
       >
         {MAGNETIZATION_TEXTURE_PRESETS.map((preset) => (
@@ -185,19 +185,336 @@ function MagneticTexturePresetParametersSection({
           onChange={(event) => updateDraft({ seed: event.target.value })}
         />
       )}
-      {draft.presetKind === "vortex" && (
+      {(draft.presetKind === "vortex" || draft.presetKind === "antivortex") && (
         <>
+          <FormField
+            label="Plane"
+            type="select"
+            value={draft.plane}
+            onChange={(event) => updateDraft({ plane: event.target.value })}
+          >
+            <option value="xy">XY</option>
+            <option value="xz">XZ</option>
+            <option value="yz">YZ</option>
+          </FormField>
+          <FormField
+            label="Circulation"
+            type="number"
+            value={draft.circulation}
+            onChange={(event) => updateDraft({ circulation: event.target.value })}
+          />
+          <FormField
+            label="Core Polarity"
+            type="number"
+            value={draft.core_polarity}
+            onChange={(event) => updateDraft({ core_polarity: event.target.value })}
+          />
+          <FormField
+            label="Core Radius"
+            type="number"
+            unit="m"
+            value={draft.core_radius}
+            onChange={(event) => updateDraft({ core_radius: event.target.value })}
+          />
+        </>
+      )}
+      {(draft.presetKind === "bloch_skyrmion" || draft.presetKind === "neel_skyrmion") && (
+        <>
+          <FormField
+            label="Plane"
+            type="select"
+            value={draft.plane}
+            onChange={(event) => updateDraft({ plane: event.target.value })}
+          >
+            <option value="xy">XY</option>
+            <option value="xz">XZ</option>
+            <option value="yz">YZ</option>
+          </FormField>
+          <FormField
+            label="Radius"
+            type="number"
+            unit="m"
+            value={draft.radius}
+            onChange={(event) => updateDraft({ radius: event.target.value })}
+          />
+          <FormField
+            label="Wall Width"
+            type="number"
+            unit="m"
+            value={draft.wall_width}
+            onChange={(event) => updateDraft({ wall_width: event.target.value })}
+          />
+          <FormField
+            label="Core Polarity"
+            type="number"
+            value={draft.core_polarity}
+            onChange={(event) => updateDraft({ core_polarity: event.target.value })}
+          />
           <FormField
             label="Chirality"
             type="number"
             value={draft.chirality}
             onChange={(event) => updateDraft({ chirality: event.target.value })}
           />
+        </>
+      )}
+      {draft.presetKind === "domain_wall" && (
+        <>
           <FormField
-            label="Polarity"
+            label="Normal Axis"
+            type="select"
+            value={draft.normal_axis}
+            onChange={(event) => updateDraft({ normal_axis: event.target.value })}
+          >
+            <option value="x">X</option>
+            <option value="y">Y</option>
+            <option value="z">Z</option>
+          </FormField>
+          <FormField
+            label="Center Offset"
             type="number"
-            value={draft.polarity}
-            onChange={(event) => updateDraft({ polarity: event.target.value })}
+            unit="m"
+            value={draft.center_offset}
+            onChange={(event) => updateDraft({ center_offset: event.target.value })}
+          />
+          <FormField
+            label="Wall Width"
+            type="number"
+            unit="m"
+            value={draft.wall_width}
+            onChange={(event) => updateDraft({ wall_width: event.target.value })}
+          />
+          <FormField
+            label="Kind"
+            type="select"
+            value={draft.kind}
+            onChange={(event) => updateDraft({ kind: event.target.value })}
+          >
+            <option value="neel">Néel</option>
+            <option value="bloch">Bloch</option>
+          </FormField>
+          <FormField
+            label="Left X"
+            type="number"
+            value={draft.leftX}
+            onChange={(event) => updateDraft({ leftX: event.target.value })}
+          />
+          <FormField
+            label="Left Y"
+            type="number"
+            value={draft.leftY}
+            onChange={(event) => updateDraft({ leftY: event.target.value })}
+          />
+          <FormField
+            label="Left Z"
+            type="number"
+            value={draft.leftZ}
+            onChange={(event) => updateDraft({ leftZ: event.target.value })}
+          />
+          <FormField
+            label="Right X"
+            type="number"
+            value={draft.rightX}
+            onChange={(event) => updateDraft({ rightX: event.target.value })}
+          />
+          <FormField
+            label="Right Y"
+            type="number"
+            value={draft.rightY}
+            onChange={(event) => updateDraft({ rightY: event.target.value })}
+          />
+          <FormField
+            label="Right Z"
+            type="number"
+            value={draft.rightZ}
+            onChange={(event) => updateDraft({ rightZ: event.target.value })}
+          />
+        </>
+      )}
+      {draft.presetKind === "two_domain" && (
+        <>
+          <FormField
+            label="Normal Axis"
+            type="select"
+            value={draft.normal_axis}
+            onChange={(event) => updateDraft({ normal_axis: event.target.value })}
+          >
+            <option value="x">X</option>
+            <option value="y">Y</option>
+            <option value="z">Z</option>
+          </FormField>
+          <FormField
+            label="Left X"
+            type="number"
+            value={draft.leftX}
+            onChange={(event) => updateDraft({ leftX: event.target.value })}
+          />
+          <FormField
+            label="Left Y"
+            type="number"
+            value={draft.leftY}
+            onChange={(event) => updateDraft({ leftY: event.target.value })}
+          />
+          <FormField
+            label="Left Z"
+            type="number"
+            value={draft.leftZ}
+            onChange={(event) => updateDraft({ leftZ: event.target.value })}
+          />
+          <FormField
+            label="Right X"
+            type="number"
+            value={draft.rightX}
+            onChange={(event) => updateDraft({ rightX: event.target.value })}
+          />
+          <FormField
+            label="Right Y"
+            type="number"
+            value={draft.rightY}
+            onChange={(event) => updateDraft({ rightY: event.target.value })}
+          />
+          <FormField
+            label="Right Z"
+            type="number"
+            value={draft.rightZ}
+            onChange={(event) => updateDraft({ rightZ: event.target.value })}
+          />
+          <FormField
+            label="Wall X"
+            type="number"
+            value={draft.wallX}
+            onChange={(event) => updateDraft({ wallX: event.target.value })}
+          />
+          <FormField
+            label="Wall Y"
+            type="number"
+            value={draft.wallY}
+            onChange={(event) => updateDraft({ wallY: event.target.value })}
+          />
+          <FormField
+            label="Wall Z"
+            type="number"
+            value={draft.wallZ}
+            onChange={(event) => updateDraft({ wallZ: event.target.value })}
+          />
+        </>
+      )}
+      {draft.presetKind === "helical" && (
+        <>
+          <FormField
+            label="Wavevector X"
+            type="number"
+            value={draft.wavevectorX}
+            onChange={(event) => updateDraft({ wavevectorX: event.target.value })}
+          />
+          <FormField
+            label="Wavevector Y"
+            type="number"
+            value={draft.wavevectorY}
+            onChange={(event) => updateDraft({ wavevectorY: event.target.value })}
+          />
+          <FormField
+            label="Wavevector Z"
+            type="number"
+            value={draft.wavevectorZ}
+            onChange={(event) => updateDraft({ wavevectorZ: event.target.value })}
+          />
+          <FormField
+            label="E1 X"
+            type="number"
+            value={draft.e1X}
+            onChange={(event) => updateDraft({ e1X: event.target.value })}
+          />
+          <FormField
+            label="E1 Y"
+            type="number"
+            value={draft.e1Y}
+            onChange={(event) => updateDraft({ e1Y: event.target.value })}
+          />
+          <FormField
+            label="E1 Z"
+            type="number"
+            value={draft.e1Z}
+            onChange={(event) => updateDraft({ e1Z: event.target.value })}
+          />
+          <FormField
+            label="E2 X"
+            type="number"
+            value={draft.e2X}
+            onChange={(event) => updateDraft({ e2X: event.target.value })}
+          />
+          <FormField
+            label="E2 Y"
+            type="number"
+            value={draft.e2Y}
+            onChange={(event) => updateDraft({ e2Y: event.target.value })}
+          />
+          <FormField
+            label="E2 Z"
+            type="number"
+            value={draft.e2Z}
+            onChange={(event) => updateDraft({ e2Z: event.target.value })}
+          />
+          <FormField
+            label="Phase"
+            type="number"
+            unit="rad"
+            value={draft.phase_rad}
+            onChange={(event) => updateDraft({ phase_rad: event.target.value })}
+          />
+        </>
+      )}
+      {draft.presetKind === "conical" && (
+        <>
+          <FormField
+            label="Wavevector X"
+            type="number"
+            value={draft.wavevectorX}
+            onChange={(event) => updateDraft({ wavevectorX: event.target.value })}
+          />
+          <FormField
+            label="Wavevector Y"
+            type="number"
+            value={draft.wavevectorY}
+            onChange={(event) => updateDraft({ wavevectorY: event.target.value })}
+          />
+          <FormField
+            label="Wavevector Z"
+            type="number"
+            value={draft.wavevectorZ}
+            onChange={(event) => updateDraft({ wavevectorZ: event.target.value })}
+          />
+          <FormField
+            label="Cone Axis X"
+            type="number"
+            value={draft.cone_axisX}
+            onChange={(event) => updateDraft({ cone_axisX: event.target.value })}
+          />
+          <FormField
+            label="Cone Axis Y"
+            type="number"
+            value={draft.cone_axisY}
+            onChange={(event) => updateDraft({ cone_axisY: event.target.value })}
+          />
+          <FormField
+            label="Cone Axis Z"
+            type="number"
+            value={draft.cone_axisZ}
+            onChange={(event) => updateDraft({ cone_axisZ: event.target.value })}
+          />
+          <FormField
+            label="Phase"
+            type="number"
+            unit="rad"
+            value={draft.phase_rad}
+            onChange={(event) => updateDraft({ phase_rad: event.target.value })}
+          />
+          <FormField
+            label="Cone Angle"
+            type="number"
+            unit="rad"
+            value={draft.cone_angle_rad}
+            onChange={(event) => updateDraft({ cone_angle_rad: event.target.value })}
           />
         </>
       )}
@@ -207,13 +524,54 @@ function MagneticTexturePresetParametersSection({
 
 function MagneticTextureTransformSection({
   draft,
+  model,
   updateDraft,
 }: {
   draft: ObjectMagneticTextureDraft;
+  model: MagneticTexturePanelModel;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
+  const hasBounds = Boolean(model.boundsMin && model.boundsMax);
+
+  function handleFitToObject(): void {
+    if (!model.boundsMin || !model.boundsMax) return;
+    const dx = model.boundsMax[0] - model.boundsMin[0];
+    const dy = model.boundsMax[1] - model.boundsMin[1];
+    const dz = model.boundsMax[2] - model.boundsMin[2];
+    const cx = (model.boundsMax[0] + model.boundsMin[0]) * 0.5;
+    const cy = (model.boundsMax[1] + model.boundsMin[1]) * 0.5;
+    const cz = (model.boundsMax[2] + model.boundsMin[2]) * 0.5;
+
+    updateDraft({
+      translationX: String(cx),
+      translationY: String(cy),
+      translationZ: String(cz),
+      scaleX: String(dx),
+      scaleY: String(dy),
+      scaleZ: String(dz),
+      pivotX: "0",
+      pivotY: "0",
+      pivotZ: "0",
+      rotationXDeg: "0",
+      rotationYDeg: "0",
+      rotationZDeg: "0",
+    });
+  }
+
   return (
     <InspectorSection value="transform" title="Texture Transform">
+      {hasBounds && (
+        <div className="fm-inspector-toolbar" style={{ marginBottom: "0.75rem" }}>
+          <Button
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={handleFitToObject}
+          >
+            Fit to Object
+          </Button>
+        </div>
+      )}
       <FormField label="Translate X" type="number" unit="m" value={draft.translationX} onChange={(event) => updateDraft({ translationX: event.target.value })} />
       <FormField label="Translate Y" type="number" unit="m" value={draft.translationY} onChange={(event) => updateDraft({ translationY: event.target.value })} />
       <FormField label="Translate Z" type="number" unit="m" value={draft.translationZ} onChange={(event) => updateDraft({ translationZ: event.target.value })} />
@@ -242,7 +600,9 @@ function MagneticTextureMappingSection({
       </FormField>
       <FormField label="Projection" type="select" value={draft.mappingProjection} onChange={(event) => updateDraft({ mappingProjection: event.target.value })}>
         <option value="object_local">Object local</option>
-        <option value="world_xyz">World XYZ</option>
+        <option value="planar_xy">Planar XY</option>
+        <option value="planar_xz">Planar XZ</option>
+        <option value="planar_yz">Planar YZ</option>
       </FormField>
       <FormField label="Clamp" type="select" value={draft.clampMode} onChange={(event) => updateDraft({ clampMode: event.target.value })}>
         <option value="none">None</option>
@@ -402,6 +762,7 @@ export function ObjectMagneticTexturePanel({
           ? response.revision
           : assetResponse.scene_revision ?? model.baseRevision ?? 0;
       invalidateTextureResources(revision);
+      await api.model.syncAuthoringScript({});
       setDraftState({
         draft: { ...draft, magnetizationRef: asset.id },
         key: draftKey,
@@ -440,6 +801,7 @@ export function ObjectMagneticTexturePanel({
           ? response.revision
           : model.baseRevision ?? 0;
       invalidateTextureResources(revision);
+      await api.model.syncAuthoringScript({});
       setDraftState({
         draft: { ...baseDraft, magnetizationRef: "" },
         key: draftKey,
@@ -465,11 +827,10 @@ export function ObjectMagneticTexturePanel({
       />
       <MagneticTextureAssignmentSection
         draft={draft}
-        model={model}
         updateDraft={updateDraft}
       />
       <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />
-      <MagneticTextureTransformSection draft={draft} updateDraft={updateDraft} />
+      <MagneticTextureTransformSection draft={draft} model={model} updateDraft={updateDraft} />
       <MagneticTextureMappingSection draft={draft} updateDraft={updateDraft} />
       <MagneticTextureRawAssetSection model={model} />
       <MagneticTextureActionsSection

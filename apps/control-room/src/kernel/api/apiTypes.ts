@@ -234,6 +234,8 @@ export interface ScalarWindowQuery {
 }
 export type SessionExportRequest =
   components["schemas"]["SessionExportRequest"];
+export type ScriptSyncRequest = components["schemas"]["ScriptSyncRequest"];
+export type ScriptSyncResponse = components["schemas"]["ScriptSyncResponse"];
 export type SessionExportResponse =
   components["schemas"]["SessionExportResponse"];
 export type SessionImportCommitRequest =

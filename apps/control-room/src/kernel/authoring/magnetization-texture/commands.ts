@@ -47,9 +47,11 @@ function sceneRevision(context: CommandContext): number | null {
     : null;
 }
 
+import type { MagnetizationTexturePresetId } from "@/shared/domain/magnetization-texture/texturePresets";
+
 async function assignPreset(
   context: CommandContext,
-  presetKind: "random_seeded" | "uniform" | "vortex",
+  presetKind: MagnetizationTexturePresetId,
   presetParams: JsonObject,
 ): Promise<CommandResult> {
   const target = selectedTarget(context);
@@ -94,7 +96,7 @@ async function assignPreset(
 function presetCommand(
   id: string,
   title: string,
-  presetKind: "random_seeded" | "uniform" | "vortex",
+  presetKind: MagnetizationTexturePresetId,
   presetParams: JsonObject,
 ): CommandContribution {
   return {
@@ -126,6 +128,48 @@ export const MAGNETIZATION_TEXTURE_COMMANDS: CommandContribution[] = [
     "magnetization-texture.assign-vortex",
     "Assign Vortex Magnetization",
     "vortex",
-    { chirality: 1, polarity: 1 },
+    { plane: "xy", circulation: 1, core_polarity: 1, core_radius: 1e-9 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-antivortex",
+    "Assign Antivortex Magnetization",
+    "antivortex",
+    { plane: "xy", circulation: 1, core_polarity: 1, core_radius: 1e-9 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-bloch-skyrmion",
+    "Assign Bloch Skyrmion Magnetization",
+    "bloch_skyrmion",
+    { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-neel-skyrmion",
+    "Assign Néel Skyrmion Magnetization",
+    "neel_skyrmion",
+    { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-domain-wall",
+    "Assign Domain Wall Magnetization",
+    "domain_wall",
+    { normal_axis: "x", center_offset: 0.0, width: 10e-9, left: [1, 0, 0], right: [-1, 0, 0], kind: "neel" },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-two-domain",
+    "Assign Two Domain Magnetization",
+    "two_domain",
+    { normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0], wall: [0, 1, 0] },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-helical",
+    "Assign Helical Magnetization",
+    "helical",
+    { wavevector: [1, 0, 0], e1: [1, 0, 0], e2: [0, 1, 0], phase_rad: 0.0 },
+  ),
+  presetCommand(
+    "magnetization-texture.assign-conical",
+    "Assign Conical Magnetization",
+    "conical",
+    { wavevector: [1, 0, 0], cone_axis: [0, 0, 1], phase_rad: 0.0, cone_angle_rad: 0.785398 },
   ),
 ];
