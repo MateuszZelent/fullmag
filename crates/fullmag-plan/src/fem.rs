@@ -487,16 +487,9 @@ fn normalize_nonzero_vector3(value: [f64; 3], field_name: &str) -> Result<[f64; 
 
 fn resolve_interfacial_dmi_normal(
     requested_normal: Option<[f64; 3]>,
-    execution_mode: fullmag_ir::ExecutionMode,
-    planner_label: &str,
 ) -> Result<Option<[f64; 3]>, String> {
     let Some(raw_normal) = requested_normal else {
-        if execution_mode == fullmag_ir::ExecutionMode::Strict {
-            return Err(format!(
-                "{planner_label} planning in strict execution mode requires InterfacialDmi.interface_normal to be set explicitly",
-            ));
-        }
-        return Ok(None);
+        return Ok(Some([0.0, 0.0, 1.0]));
     };
     normalize_nonzero_vector3(raw_normal, "InterfacialDmi.interface_normal").map(Some)
 }
@@ -521,6 +514,8 @@ fn build_region_material_fields(
     let mut kc1_values = vec![base_material.cubic_anisotropy_kc1.unwrap_or(0.0); node_count];
     let mut kc2_values = vec![base_material.cubic_anisotropy_kc2.unwrap_or(0.0); node_count];
     let mut kc3_values = vec![base_material.cubic_anisotropy_kc3.unwrap_or(0.0); node_count];
+    let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
+    let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
@@ -542,6 +537,8 @@ fn build_region_material_fields(
             kc1_values[index] = region_material.cubic_anisotropy_kc1.unwrap_or(0.0);
             kc2_values[index] = region_material.cubic_anisotropy_kc2.unwrap_or(0.0);
             kc3_values[index] = region_material.cubic_anisotropy_kc3.unwrap_or(0.0);
+            dind_values[index] = region_material.interfacial_dmi.unwrap_or(0.0);
+            dbulk_values[index] = region_material.bulk_dmi.unwrap_or(0.0);
         }
     }
 
@@ -573,6 +570,10 @@ fn build_region_material_fields(
         base_material.cubic_anisotropy_kc3.unwrap_or(0.0),
     )
     .then_some(kc3_values);
+    material.dind_field = values_differ(&dind_values, base_material.interfacial_dmi.unwrap_or(0.0))
+        .then_some(dind_values);
+    material.dbulk_field =
+        values_differ(&dbulk_values, base_material.bulk_dmi.unwrap_or(0.0)).then_some(dbulk_values);
     material
 }
 
@@ -820,22 +821,34 @@ pub(crate) fn plan_fem(
         }
     }
     if interfacial_dmi.is_some() {
-        match resolve_interfacial_dmi_normal(
-            interfacial_dmi_normal,
-            problem.validation_profile.execution_mode,
-            "FEM",
-        ) {
+        match resolve_interfacial_dmi_normal(interfacial_dmi_normal) {
             Ok(normal) => interfacial_dmi_normal = normal,
             Err(reason) => errors.push(reason),
         }
     } else {
         interfacial_dmi_normal = None;
     }
+    let has_material_interfacial_dmi = problem.materials.iter().any(|material| {
+        material.interfacial_dmi.is_some()
+            || material
+                .dind_field
+                .as_ref()
+                .is_some_and(|values: &Vec<f64>| !values.is_empty())
+    });
+    let has_material_bulk_dmi = problem.materials.iter().any(|material| {
+        material.bulk_dmi.is_some()
+            || material
+                .dbulk_field
+                .as_ref()
+                .is_some_and(|values: &Vec<f64>| !values.is_empty())
+    });
     if !(enable_exchange
         || enable_demag
         || external_field.is_some()
         || interfacial_dmi.is_some()
         || bulk_dmi.is_some()
+        || has_material_interfacial_dmi
+        || has_material_bulk_dmi
         || has_magnetoelastic)
     {
         errors.push(
@@ -856,6 +869,9 @@ pub(crate) fn plan_fem(
                     | fullmag_ir::EnergyTermIR::OerstedField { .. }
             )
         }),
+        interfacial_dmi.is_some() || has_material_interfacial_dmi,
+        bulk_dmi.is_some() || has_material_bulk_dmi,
+        true,
         has_magnetoelastic,
         has_antenna_field_source(problem),
         &mut errors,
@@ -1022,6 +1038,27 @@ pub(crate) fn plan_fem(
     } else {
         base_material.clone()
     };
+    if interfacial_dmi.is_none() {
+        interfacial_dmi = material.interfacial_dmi;
+    }
+    if bulk_dmi.is_none() {
+        bulk_dmi = material.bulk_dmi;
+    }
+    if interfacial_dmi.is_some()
+        || material
+            .dind_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+    {
+        match resolve_interfacial_dmi_normal(interfacial_dmi_normal) {
+            Ok(normal) => interfacial_dmi_normal = normal,
+            Err(reason) => {
+                return Err(PlanError {
+                    reasons: vec![reason],
+                })
+            }
+        }
+    }
     let domain_frame = problem_domain_frame(problem)
         .map(|frame| frame.with_mesh_bounds(mesh_bounds(&mesh)))
         .and_then(DomainFrameIR::finalized);
@@ -1094,6 +1131,9 @@ pub(crate) fn plan_fem(
         });
     }
 
+    let dind_field = material.dind_field.clone();
+    let dbulk_field = material.dbulk_field.clone();
+
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
         mesh_source,
@@ -1124,8 +1164,8 @@ pub(crate) fn plan_fem(
         interfacial_dmi,
         dmi_interface_normal: interfacial_dmi_normal,
         bulk_dmi,
-        dind_field: None,
-        dbulk_field: None,
+        dind_field,
+        dbulk_field,
         temperature: problem.temperature,
         current_density: spin_torque.current_density,
         stt_degree: spin_torque.stt_degree,
@@ -1532,11 +1572,7 @@ pub(crate) fn plan_fem_eigen(
         }
     }
     if interfacial_dmi.is_some() {
-        match resolve_interfacial_dmi_normal(
-            interfacial_dmi_normal,
-            problem.validation_profile.execution_mode,
-            "FEM eigen",
-        ) {
+        match resolve_interfacial_dmi_normal(interfacial_dmi_normal) {
             Ok(normal) => interfacial_dmi_normal = normal,
             Err(reason) => errors.push(reason),
         }

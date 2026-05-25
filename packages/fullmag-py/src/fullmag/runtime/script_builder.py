@@ -195,6 +195,11 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
+    geom_viz_lines = _render_geometry_visualization_hints(
+        base_problem, magnet_vars, base_problem.meta.runtime_metadata
+    )
+    if geom_viz_lines:
+        lines.extend(geom_viz_lines)
 
     external_field_lines = _render_external_field(
         base_problem,
@@ -584,6 +589,18 @@ def _render_runtime(
         lines.append(f"{_surface_call(surface, 'interactive')}(True)")
     if runtime_metadata.get("wait_for_solve") is True:
         lines.append(f"{_surface_call(surface, 'wait_for_solve')}(True)")
+    visualization_hint = _normalize_mapping(runtime_metadata.get("visualization_hint"))
+    if visualization_hint:
+        active_qty = visualization_hint.get("active_quantity_id")
+        if isinstance(active_qty, str) and active_qty.strip():
+            lines.append(
+                f"{_surface_call(surface, 'visualization')}(active_quantity_id={_py_repr(active_qty)})"
+            )
+        airbox_hint = _normalize_mapping(visualization_hint.get("airbox"))
+        if airbox_hint:
+            airbox_kwargs = _render_visualization_hint_kwargs(airbox_hint)
+            if airbox_kwargs and surface == "study":
+                lines.append(f"study.airbox.visualization({airbox_kwargs})")
     adaptive_mesh = _normalize_mapping(runtime_metadata.get("adaptive_mesh"))
     if adaptive_mesh:
         kwargs: list[str] = []
@@ -640,6 +657,42 @@ def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | Non
     if policy.atol is not None:
         payload["atol"] = policy.atol
     return payload
+
+
+def _render_visualization_hint_kwargs(hint: dict[str, object]) -> str:
+    """Render kwargs string for a visualization hint dict (show=, mode=)."""
+    parts: list[str] = []
+    if "show" in hint:
+        parts.append(f"show={_py_repr(hint['show'])}")
+    if "mode" in hint and isinstance(hint["mode"], str) and hint["mode"].strip():
+        parts.append(f"mode={_py_repr(hint['mode'])}")
+    return ", ".join(parts)
+
+
+def _render_geometry_visualization_hints(
+    problem: "Problem",
+    magnet_vars: dict[str, str],
+    runtime_metadata: dict[str, object],
+) -> list[str]:
+    """Render per-geometry and airbox visualization hints after geometry block."""
+    lines: list[str] = []
+    visualization_hint = _normalize_mapping(runtime_metadata.get("visualization_hint"))
+    if not visualization_hint:
+        return lines
+    geometry_hints = _normalize_mapping(visualization_hint.get("geometry_hints"))
+    if not geometry_hints:
+        return lines
+    for geom_name, raw_hint in geometry_hints.items():
+        hint = _normalize_mapping(raw_hint)
+        if not hint:
+            continue
+        var_name = magnet_vars.get(geom_name)
+        if not var_name:
+            continue
+        kwargs_str = _render_visualization_hint_kwargs(hint)
+        if kwargs_str:
+            lines.append(f"{var_name}.visualization({kwargs_str})")
+    return lines
 
 
 def _render_geometry_and_materials(

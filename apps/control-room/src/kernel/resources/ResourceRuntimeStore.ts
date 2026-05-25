@@ -93,6 +93,20 @@ export class ResourceRuntimeStore<TData = unknown> {
     return entry?.snapshot ?? createInitialSnapshot<TSnapshotData>();
   }
 
+  updateData<TUpdateData = TData>(
+    resourceKey: ResourceKey,
+    data: TUpdateData,
+    revision: ResourceRevision,
+  ): void {
+    const entry = this.getOrCreateEntry<TUpdateData>(resourceKey);
+    entry.snapshot = {
+      ...markResourceReady(entry.snapshot, data, revision),
+      settledExternalRevision: revision,
+      settledResourceKey: resourceKey,
+    };
+    this.notify(entry);
+  }
+
   subscribe(
     resourceKey: ResourceKey,
     listener: ResourceRuntimeListener,

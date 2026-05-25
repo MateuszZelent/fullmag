@@ -33,6 +33,7 @@ MS = 956e3
 AEX = 10e-12
 ALPHA = 0.1
 KU1 = 0.8e6
+DIND = 1e-3
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
@@ -45,6 +46,8 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
+study.visualization(active_quantity_id="h_eff")
+
 study.universe(
     mode="auto",
     size=(4.0e-6, 2.2e-6, 5.5e-7),
@@ -74,8 +77,10 @@ waveguide.Ms = MS
 waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
-waveguide.anisU = ANIS_U
+waveguide.anisU = ANIS_U    
+waveguide.dind = DIND
 waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
+waveguide.m = fm.texture.bloch_skyrmion(100e-9,20e-9,1,"xy")
 # waveguide.m = fm.texture.random(1)
 waveguide.mesh(
     maximum_element_size=6e-9,

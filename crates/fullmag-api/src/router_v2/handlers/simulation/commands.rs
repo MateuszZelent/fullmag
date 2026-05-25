@@ -470,6 +470,10 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             uniaxial_anisotropy: None,
             uniaxial_anisotropy_k2: None,
             anisotropy_axis: None,
+            interfacial_dmi: material_asset.properties.dind,
+            bulk_dmi: material_asset.properties.dbulk,
+            dind_field: None,
+            dbulk_field: None,
         });
         magnets.push(MagnetIR {
             initial_magnetization: Some(initial_magnetization_for_object(scene, object)),

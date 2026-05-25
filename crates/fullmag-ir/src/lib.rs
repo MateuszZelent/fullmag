@@ -318,6 +318,10 @@ impl ProblemIR {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             }],
             magnets: vec![MagnetIR {
                 name: "strip".to_string(),
@@ -445,6 +449,8 @@ impl ProblemIR {
         }
         validate_current_modules(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
+        validate_dmi_energy_terms(self, &mut errors);
+        validate_material_dmi_values(self, &mut errors);
         validate_legacy_spin_torque_fields(self, &mut errors);
         validate_spin_torque_modules(self, &mut errors);
         validate_magnetoelastic(self, &mut errors);

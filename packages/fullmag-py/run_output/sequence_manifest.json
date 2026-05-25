@@ -1,0 +1,11 @@
+{
+  "kind": "flat_sequence",
+  "stages": [
+    {
+      "index": 1,
+      "entrypoint_kind": "flat_run",
+      "until_seconds": 4e-12,
+      "output_dir": "run_output/stage_01_flat_run"
+    }
+  ]
+}

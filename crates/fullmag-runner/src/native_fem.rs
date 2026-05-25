@@ -1773,6 +1773,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             enable_exchange: true,
@@ -1910,6 +1914,111 @@ mod tests {
                 err.message
             );
         }
+    }
+
+    #[test]
+    fn native_fem_cpu_dmi_step_exposes_fields_and_energy_when_mfem_stack_is_available() {
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        ];
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.dmi_interface_normal = Some([0.0, 0.0, 1.0]);
+        plan.bulk_dmi = Some(2.0e-3);
+
+        let mut backend = match NativeFemBackend::create(&plan) {
+            Ok(backend) => backend,
+            Err(err) => {
+                if err.message.contains("MFEM") || err.message.contains("scaffold") {
+                    eprintln!("skipping native FEM CPU DMI runtime test: {}", err.message);
+                    return;
+                }
+                panic!("native FEM CPU DMI create: {}", err.message);
+            }
+        };
+
+        let stats = backend.step(1e-13).expect("native FEM CPU DMI step");
+        assert!(stats.e_dmi.is_finite(), "DMI energy must be finite");
+        assert!(
+            stats.e_dmi.abs() > 0.0,
+            "non-uniform magnetization with active DMI should report non-zero DMI energy"
+        );
+
+        let h_dmi = backend
+            .copy_h_dmi(plan.mesh.nodes.len())
+            .expect("copy interfacial DMI field");
+        let h_bulk_dmi = backend
+            .copy_h_dmi_bulk(plan.mesh.nodes.len())
+            .expect("copy bulk DMI field");
+        assert!(
+            h_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active interfacial DMI should expose a non-zero H_dmi field"
+        );
+        assert!(
+            h_bulk_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active bulk DMI should expose a non-zero H_dmi_bulk field"
+        );
+    }
+
+    #[test]
+    fn native_fem_gpu_dmi_step_exposes_fields_and_energy_when_cuda_is_available() {
+        if !is_gpu_available() {
+            eprintln!(
+                "skipping native FEM GPU DMI runtime test: CUDA/MFEM GPU runtime unavailable"
+            );
+            return;
+        }
+
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        ];
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.dmi_interface_normal = Some([0.0, 0.0, 1.0]);
+        plan.bulk_dmi = Some(2.0e-3);
+
+        let mut backend = NativeFemBackend::create(&plan).expect("native FEM GPU DMI create");
+        let stats = backend.step(1e-13).expect("native FEM GPU DMI step");
+        assert!(stats.e_dmi.is_finite(), "GPU DMI energy must be finite");
+        assert!(
+            stats.e_dmi.abs() > 0.0,
+            "non-uniform magnetization with active GPU DMI should report non-zero DMI energy"
+        );
+
+        let h_dmi = backend
+            .copy_h_dmi(plan.mesh.nodes.len())
+            .expect("copy GPU interfacial DMI field");
+        let h_bulk_dmi = backend
+            .copy_h_dmi_bulk(plan.mesh.nodes.len())
+            .expect("copy GPU bulk DMI field");
+        assert!(
+            h_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active GPU interfacial DMI should expose a non-zero H_dmi field"
+        );
+        assert!(
+            h_bulk_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active GPU bulk DMI should expose a non-zero H_dmi_bulk field"
+        );
     }
 
     #[test]
@@ -2127,6 +2236,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             enable_exchange: true,
@@ -3132,13 +3245,24 @@ mod tests {
 
     #[test]
     fn native_fem_dmi_element_loops_reuse_context_workspace() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let sources = [
+            (
+                "compute_interfacial_dmi_field(",
+                include_str!(
+                    "../../../native/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp"
+                ),
+            ),
+            (
+                "compute_bulk_dmi_field(",
+                include_str!("../../../native/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp"),
+            ),
+        ];
 
-        for function_name in ["compute_interfacial_dmi_field(", "compute_bulk_dmi_field("] {
+        for (function_name, source) in sources {
             let start = source.find(function_name).expect("DMI function definition");
             let rest = &source[start..];
             let end = rest
-                .find("\ndouble external_energy_from_field")
+                .find("\n} // namespace fullmag::fem")
                 .expect("DMI function end marker");
             let body = &rest[..end];
 

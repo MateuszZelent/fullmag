@@ -1,13 +1,18 @@
 # FEM Dzyaloshinskii-Moriya Interaction
 
-- Status: native FEM CPU module contract, MFEM execution path requires runtime validation
-- Last updated: 2026-05-18
+- Status: native FEM CPU runtime validated; native FEM GPU source/enablement
+  contract wired with runtime smoke gate, pending live CUDA host proof
+- Last updated: 2026-05-25
 - Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_bulk.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_workspace.hpp/.cpp`
 - Test: `native/backends/fem/tests/dmi_contract.cpp`
 - Residual helpers: `native/backends/fem/src/dmi_weak_residual.cpp`
+- GPU implementation: `native/backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.*`,
+  `native/backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.*`,
+  `native/backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.*`
+- Runner quantities/outputs: `H_dmi`, `H_dmi_bulk`, and `e_dmi`
 
 ## Pole
 
@@ -78,7 +83,7 @@ scratch lifetime and per-element MFEM buffers are isolated in
 `dmi_workspace.*`; interfacial residual and energy assembly live in
 `dmi_interfacial.*`.
 
-## Ograniczenia capability
+## Capability and runtime status
 
 - Active DMI requires `FULLMAG_HAS_MFEM_STACK`.
 - Local non-MFEM builds verify disabled behavior and explicit environment
@@ -88,11 +93,20 @@ scratch lifetime and per-element MFEM buffers are isolated in
   both paths share `dmi_workspace.*` for private element-loop scratch.
 - Public unit semantics for interfacial thin-film DMI remain release-blocking
   before a production label.
-- GPU parity is not claimed by this module.
+- Native CPU runtime smoke covers a non-uniform tetrahedron with active
+  interfacial and bulk DMI, checking finite non-zero `e_dmi` and non-zero
+  `H_dmi` / `H_dmi_bulk` readback.
+- Native GPU has source-level contracts for device DMI field/energy kernels and
+  an enablement-gate runtime smoke:
+  `native_fem_gpu_dmi_step_exposes_fields_and_energy_when_cuda_is_available`.
+  This test executes the same non-uniform DMI step on a CUDA-enabled host and
+  checks `e_dmi`, `H_dmi`, and `H_dmi_bulk`. On hosts without CUDA/MFEM GPU
+  access it skips explicitly, so local host success alone is not a full CUDA
+  runtime proof.
 
 ## Testy
 
-Current gate:
+Current gates:
 
 - `fem_dmi_contract` checks that disabled interfacial and bulk DMI return zero
   field/energy, that active DMI reports a clear MFEM-stack requirement in a
@@ -101,13 +115,21 @@ Current gate:
   DMI workspace ownership stays in `dmi_workspace.*`. It also checks top-level
   source contracts for `dmi.cpp`, `dmi_interfacial.cpp`, `dmi_bulk.cpp`, and
   `dmi_workspace.cpp` so source files keep their ownership boundaries visible.
+- `fem_dmi_weak_residual` checks the interfacial and bulk weak-residual
+  directional-derivative fixtures.
+- `cargo test -p fullmag-runner --features fem-gpu dmi -- --test-threads=1`
+  covers runner DMI quantity activation, field snapshot readback, CPU native DMI
+  runtime, GPU DMI runtime smoke wiring, and FEM eigen bulk-DMI non-reciprocity.
+- `scripts/verify_fem_gpu_enablement.sh` runs the native GPU DMI runtime smoke
+  in the `fem-gpu` Docker environment after NVIDIA visibility and existing
+  exchange-only GPU smoke checks.
 
 Required before production qualification:
 
-- directional derivative check against `dE = -mu0 integral Ms H_DMI . delta_m`;
 - domain-wall handedness for interfacial DMI;
 - spiral-pitch fixture for bulk DMI;
 - boundary-tilt fixture;
 - normal-rotation symmetry for `dmi_n_hat`;
 - explicit public-unit/thickness policy test;
-- MFEM-stack compile and runtime fixture with full MFEM headers.
+- live CUDA runtime evidence from a GPU-enabled host running the DMI smoke in
+  `scripts/verify_fem_gpu_enablement.sh`.

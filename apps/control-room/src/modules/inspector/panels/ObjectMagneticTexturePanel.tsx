@@ -32,6 +32,7 @@ import {
   buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftKey,
+  objectMagneticTexturePresetChangePatch,
   resolveObjectMagneticTexturePanelModel,
   type ObjectMagneticTextureDraft,
 } from "./ObjectMagneticTexturePanelModel";
@@ -98,9 +99,11 @@ function MagneticTextureSummarySection({
 
 function MagneticTextureAssignmentSection({
   draft,
+  model,
   updateDraft,
 }: {
   draft: ObjectMagneticTextureDraft;
+  model: MagneticTexturePanelModel;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
@@ -127,13 +130,7 @@ function MagneticTextureAssignmentSection({
         value={draft.presetKind}
         onChange={(event) => {
           const nextPreset = event.target.value as ObjectMagneticTextureDraft["presetKind"];
-          const found = MAGNETIZATION_TEXTURE_PRESETS.find((p) => p.id === nextPreset);
-          const defaultLabel = found ? `${found.label} texture` : `${nextPreset} texture`;
-          updateDraft({
-            presetKind: nextPreset,
-            magnetizationRef: "",
-            assetLabel: defaultLabel,
-          });
+          updateDraft(objectMagneticTexturePresetChangePatch(model, draft, nextPreset));
         }}
       >
         {MAGNETIZATION_TEXTURE_PRESETS.map((preset) => (
@@ -827,6 +824,7 @@ export function ObjectMagneticTexturePanel({
       />
       <MagneticTextureAssignmentSection
         draft={draft}
+        model={model}
         updateDraft={updateDraft}
       />
       <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />

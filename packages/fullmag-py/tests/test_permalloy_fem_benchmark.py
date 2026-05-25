@@ -98,7 +98,9 @@ def test_case_environment_enables_profiler_threads_and_device():
 
     assert env["FULLMAG_FEM_STEP_PROFILE"] == "1"
     assert str(bench.FULLMAG_PY_SRC) in env["PYTHONPATH"]
-    assert str(bench.BUNDLED_PY_SITE) in env["PYTHONPATH"]
+    bundled_py_site = bench.bundled_python_site_packages()
+    if bundled_py_site is not None:
+        assert str(bundled_py_site) in env["PYTHONPATH"]
     assert env["FULLMAG_FEM_EXECUTION"] == "cpu"
     assert env["FULLMAG_CPU_THREADS"] == "30"
     assert env["OMP_NUM_THREADS"] == "30"

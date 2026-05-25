@@ -45,7 +45,7 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.energy import Demag, Exchange, InterfacialDMI, Zeeman
+from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, Zeeman
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -224,6 +224,7 @@ class MagnetHandle:
         self.Aex: float | None = None
         self.alpha: float = 0.01
         self.Dind: float | None = None
+        self.Dbulk: float | None = None
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
         self._m_value: Any = None
@@ -231,6 +232,7 @@ class MagnetHandle:
         self._mesh_spec = _MeshSpecState()
         self._last_mesh_quality: object | None = None
         self.mesh = GeometryMeshHandle(self)
+        self._visualization: dict[str, object] | None = None
 
     def __repr__(self) -> str:
         return f"MagnetHandle({self._name!r}, Ms={self.Ms}, Aex={self.Aex}, m={self._m_value!r})"
@@ -242,6 +244,22 @@ class MagnetHandle:
     @m.setter
     def m(self, value: Any) -> None:  # type: ignore[assignment]
         self._m_value = value
+
+    @property
+    def dind(self) -> float | None:
+        return self.Dind
+
+    @dind.setter
+    def dind(self, value: float | None) -> None:
+        self.Dind = value
+
+    @property
+    def dbulk(self) -> float | None:
+        return self.Dbulk
+
+    @dbulk.setter
+    def dbulk(self, value: float | None) -> None:
+        self.Dbulk = value
 
     def _resolved_geometry(self) -> object:
         """Return geometry with a stable per-magnet geometry asset name."""
@@ -267,6 +285,8 @@ class MagnetHandle:
             alpha=self.alpha,
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
+            Dind=self.Dind,
+            Dbulk=self.Dbulk,
         )
 
         if self._m_value is None:
@@ -290,6 +310,31 @@ class MagnetHandle:
             region=region,
             m0=m0,
         )
+
+    def visualization(
+        self,
+        *,
+        show: bool = True,
+        mode: str | None = None,
+    ) -> "MagnetHandle":
+        """Declare an initial viewport display hint for this geometry.
+
+        Parameters
+        ----------
+        show:
+            Whether the geometry should be visible when the session opens.
+        mode:
+            Display mode, e.g. ``"surface"``, ``"vectors"``, ``"wireframe"``.
+            ``None`` leaves the control room at its own default.
+        """
+        hint: dict[str, object] = {"show": bool(show)}
+        if mode is not None:
+            if not isinstance(mode, str) or not mode.strip():
+                raise ValueError("visualization mode must be a non-empty string")
+            hint["mode"] = mode
+        self._visualization = hint
+        _state._register_geometry_visualization_hint(self._name, hint)
+        return self
 
 
 class MagnetizationHandle:
@@ -1120,6 +1165,8 @@ class _WorldState:
     _interactive: bool = False
     _wait_for_solve: bool = False
     _adaptive_mesh: dict[str, object] | None = None
+    _visualization_hint: dict[str, object] | None = None
+    _geometry_visualization_hints: dict[str, dict[str, object]] = field(default_factory=dict)
 
     # Periodic boundary conditions (per-axis)
     _pbc: FdmPbc | None = None
@@ -1130,6 +1177,14 @@ class _WorldState:
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
+
+    def _register_geometry_visualization_hint(self, name: str, hint: dict[str, object]) -> None:
+        self._geometry_visualization_hints[name] = hint
+
+    def _register_airbox_visualization_hint(self, hint: dict[str, object]) -> None:
+        if self._visualization_hint is None:
+            self._visualization_hint = {}
+        self._visualization_hint["airbox"] = hint
 
     # Problem name
     _name: str = "fullmag_sim"
@@ -2287,6 +2342,59 @@ def _configure_study_universe(
     return universe
 
 
+class StudyAirboxVisualizationHandle:
+    """Viewport display hint for the airbox / universe domain.
+
+    Accessed as ``study.airbox.visualization(...)``::
+
+        study.airbox.visualization(show=True, mode="vectors")
+    """
+
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def __call__(
+        self,
+        *,
+        show: bool = True,
+        mode: str | None = None,
+    ) -> "StudyBuilder":
+        """Declare an initial viewport display hint for the airbox.
+
+        Parameters
+        ----------
+        show:
+            Whether the airbox should be visible when the session opens.
+        mode:
+            Display mode, e.g. ``\"vectors\"``, ``\"surface\"``, ``\"wireframe\"``.\n            ``None`` leaves the control room at its own default.
+        """
+        hint: dict[str, object] = {"show": bool(show)}
+        if mode is not None:
+            if not isinstance(mode, str) or not mode.strip():
+                raise ValueError("visualization mode must be a non-empty string")
+            hint["mode"] = mode
+        _state._register_airbox_visualization_hint(hint)
+        return self._owner
+
+
+class StudyAirboxHandle:
+    """Facade for airbox/universe configuration sub-handles.
+
+    Accessed as ``study.airbox``::
+
+        study.airbox.visualization(show=True, mode="vectors")
+    """
+
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self.visualization = StudyAirboxVisualizationHandle(owner)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise ValueError(
+            "study.airbox(...) is no longer part of the canonical API. "
+            "Use study.universe(...) or study.universe.mesh(...) instead."
+        )
+
+
 class StudyUniverseHandle:
     """Callable study-domain facade with a separate airbox/domain mesh scope."""
 
@@ -2384,6 +2492,7 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.universe = StudyUniverseHandle(self)
+        self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
         if problem_name is not None:
             name(problem_name)
@@ -2508,6 +2617,10 @@ class StudyBuilder:
         )
         return self
 
+    def visualization(self, active_quantity_id: str | None = None) -> "StudyBuilder":
+        visualization(active_quantity_id)
+        return self
+
     def demag(
         self,
         *,
@@ -2522,12 +2635,6 @@ class StudyBuilder:
     def exchange(self, *, enabled: bool = True) -> "StudyBuilder":
         exchange(enabled=enabled)
         return self
-
-    def airbox(self, *args: object, **kwargs: object) -> "StudyBuilder":
-        raise _mesh_api_migration_error(
-            "study.airbox(...)",
-            "study.universe.mesh(...)",
-        )
 
     def domain_mesh(
         self,
@@ -3352,6 +3459,36 @@ def adaptive_mesh(
         "chunk_until_seconds": chunk_until_seconds,
         "steps_per_pass": steps_per_pass,
     }
+
+
+def visualization(active_quantity_id: str | None = None) -> None:
+    """Declare the initial visualization quantity for the control room.
+
+    When a session is started interactively, the control room will switch
+    to this quantity immediately, before the user interacts.
+
+    Parameters
+    ----------
+    active_quantity_id:
+        The quantity to display on session open, e.g. ``"m"``, ``"h_eff"``,
+        ``"h_demag"``, ``"exchange_field"``.  Pass ``None`` (the default) to
+        leave the control room at its own default (usually ``"m"``).
+    """
+    if active_quantity_id is not None and not isinstance(active_quantity_id, str):
+        raise TypeError("active_quantity_id must be a string or None")
+    if active_quantity_id is not None and not active_quantity_id.strip():
+        raise ValueError("active_quantity_id must not be empty")
+    # Preserve existing sub-keys (airbox, geometry_hints) when updating active_quantity_id.
+    if active_quantity_id is not None:
+        if _state._visualization_hint is None:
+            _state._visualization_hint = {}
+        _state._visualization_hint["active_quantity_id"] = active_quantity_id
+    else:
+        # Only clear active_quantity_id, leave other sub-keys intact.
+        if _state._visualization_hint is not None:
+            _state._visualization_hint.pop("active_quantity_id", None)
+            if not _state._visualization_hint:
+                _state._visualization_hint = None
 
 
 def _mesh_source_root() -> Path:
@@ -4439,6 +4576,10 @@ def _build_problem(
         if h.Dind is not None:
             energy.append(InterfacialDMI(D=h.Dind))
             break
+    for h in s._magnets:
+        if h.Dbulk is not None:
+            energy.append(BulkDMI(D=h.Dbulk))
+            break
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
 
@@ -4507,6 +4648,12 @@ def _build_problem(
         runtime_metadata["wait_for_solve"] = True
     if s._adaptive_mesh is not None:
         runtime_metadata["adaptive_mesh"] = dict(s._adaptive_mesh)
+    # Assemble complete visualization_hint from all sources.
+    viz_hint: dict[str, object] = dict(s._visualization_hint) if s._visualization_hint else {}
+    if s._geometry_visualization_hints:
+        viz_hint["geometry_hints"] = dict(s._geometry_visualization_hints)
+    if viz_hint:
+        runtime_metadata["visualization_hint"] = viz_hint
     mesh_workflow = _collect_mesh_workflow_metadata()
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow

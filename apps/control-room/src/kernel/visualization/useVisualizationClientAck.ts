@@ -103,6 +103,27 @@ export function useVisualizationClientAckSender({
   api: ControlRoomApi;
 }) {
   const lastSentKeyRef = useRef<string | null>(null);
+  const pendingAcksRef = useRef<
+    Map<
+      number,
+      {
+        request: VisualizationClientAckRequest;
+        timeoutId: ReturnType<typeof setTimeout>;
+        sentKey: string;
+      }
+    >
+  >(new Map());
+
+  // Clean up all pending timeouts on unmount to avoid memory leaks or late triggers
+  useEffect(() => {
+    const pending = pendingAcksRef.current;
+    return () => {
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timeoutId);
+      }
+      pending.clear();
+    };
+  }, []);
 
   return useCallback(
     ({
@@ -132,9 +153,37 @@ export function useVisualizationClientAckSender({
 
       const sentKey = JSON.stringify(request);
       if (lastSentKeyRef.current === sentKey) return;
-      lastSentKeyRef.current = sentKey;
 
-      void api.visualization.ack(request).catch(() => undefined);
+      // Check if there is already a pending ACK for this revision
+      const pending = pendingAcksRef.current.get(revision);
+      if (pending) {
+        // If the new status is "rendered" or "failed", and the pending one is "applied",
+        // then the new status completely supersedes and cancels the "applied" status.
+        if (
+          (status === "rendered" || status === "failed") &&
+          pending.request.status === "applied"
+        ) {
+          clearTimeout(pending.timeoutId);
+          pendingAcksRef.current.delete(revision);
+        } else {
+          // If a rendered/failed ACK is already pending or sent, ignore any redundant/slower status updates.
+          return;
+        }
+      }
+
+      // If this is an "applied" status, we defer sending it slightly (50ms) to see if "rendered" or "failed" arrives.
+      if (status === "applied") {
+        const timeoutId = setTimeout(() => {
+          pendingAcksRef.current.delete(revision);
+          lastSentKeyRef.current = sentKey;
+          void api.visualization.ack(request).catch(() => undefined);
+        }, 50);
+        pendingAcksRef.current.set(revision, { request, timeoutId, sentKey });
+      } else {
+        // "rendered" and "failed" are high priority and sent immediately
+        lastSentKeyRef.current = sentKey;
+        void api.visualization.ack(request).catch(() => undefined);
+      }
     },
     [api],
   );

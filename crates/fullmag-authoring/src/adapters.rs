@@ -143,6 +143,7 @@ pub fn scene_document_to_script_builder(
                     ))
                 })?;
             let material_dind = material.dind;
+            let material_dbulk = material.dbulk;
 
             let mut geometry_params = object.geometry.geometry_params.clone();
             strip_translation_fields(&mut geometry_params);
@@ -159,7 +160,7 @@ pub fn scene_document_to_script_builder(
                 bounds_max: object.geometry.bounds_max,
                 material,
                 magnetization,
-                physics_stack: ensure_object_physics_stack(&object.physics_stack, material_dind),
+                physics_stack: ensure_object_physics_stack(&object.physics_stack, material_dind, material_dbulk),
                 mesh: object
                     .object_mesh
                     .clone()
@@ -774,7 +775,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         region_name: geometry.region_name.clone(),
         magnetization_ref: Some(magnetization_id_for_geometry(&geometry.name)),
         region_overrides: BTreeMap::new(),
-        physics_stack: ensure_object_physics_stack(&geometry.physics_stack, geometry.material.dind),
+        physics_stack: ensure_object_physics_stack(&geometry.physics_stack, geometry.material.dind, geometry.material.dbulk),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
         notes: None,
@@ -784,22 +785,24 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
     }
 }
 
-const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 4] = [
+const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 5] = [
     ScriptBuilderMagneticInteractionKind::Exchange,
     ScriptBuilderMagneticInteractionKind::Demag,
     ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+    ScriptBuilderMagneticInteractionKind::BulkDmi,
     ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy,
 ];
 
 fn ensure_object_physics_stack(
     raw: &[ScriptBuilderMagneticInteractionEntry],
     material_dind: Option<f64>,
+    material_dbulk: Option<f64>,
 ) -> Vec<ScriptBuilderMagneticInteractionEntry> {
     let mut normalized: Vec<ScriptBuilderMagneticInteractionEntry> = Vec::new();
     for entry in raw {
         upsert_interaction(
             &mut normalized,
-            normalize_interaction_entry(entry, material_dind),
+            normalize_interaction_entry(entry, material_dind, material_dbulk),
         );
     }
     if !normalized
@@ -842,6 +845,25 @@ fn ensure_object_physics_stack(
                     params: None,
                 },
                 material_dind,
+                None,
+            ),
+        );
+    }
+    if material_dbulk.is_some()
+        && !normalized
+            .iter()
+            .any(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::BulkDmi)
+    {
+        upsert_interaction(
+            &mut normalized,
+            normalize_interaction_entry(
+                &ScriptBuilderMagneticInteractionEntry {
+                    kind: ScriptBuilderMagneticInteractionKind::BulkDmi,
+                    enabled: true,
+                    params: None,
+                },
+                None,
+                material_dbulk,
             ),
         );
     }
@@ -854,6 +876,7 @@ fn ensure_object_physics_stack(
 fn normalize_interaction_entry(
     entry: &ScriptBuilderMagneticInteractionEntry,
     material_dind: Option<f64>,
+    material_dbulk: Option<f64>,
 ) -> ScriptBuilderMagneticInteractionEntry {
     match entry.kind {
         ScriptBuilderMagneticInteractionKind::Exchange => ScriptBuilderMagneticInteractionEntry {
@@ -876,6 +899,20 @@ fn normalize_interaction_entry(
             params.insert("dind".to_string(), Value::from(dind));
             ScriptBuilderMagneticInteractionEntry {
                 kind: ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+                enabled: entry.enabled,
+                params: Some(Value::Object(params)),
+            }
+        }
+        ScriptBuilderMagneticInteractionKind::BulkDmi => {
+            let mut params = params_map(entry.params.as_ref());
+            let dbulk = params
+                .get("dbulk")
+                .and_then(Value::as_f64)
+                .or(material_dbulk)
+                .unwrap_or(1e-3);
+            params.insert("dbulk".to_string(), Value::from(dbulk));
+            ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::BulkDmi,
                 enabled: entry.enabled,
                 params: Some(Value::Object(params)),
             }

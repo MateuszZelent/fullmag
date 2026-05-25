@@ -140,6 +140,31 @@ class TestJsonRoundTrip:
         ir = preset.to_ir()
         assert "core_radius" not in ir["preset_params"]
 
+    def test_bloch_skyrmion_positional_arguments(self):
+        # 1. Full positional signature
+        preset = texture.bloch_skyrmion(100e-9, 20e-9, 1, -1, "xy")
+        ir = preset.to_ir()
+        assert ir["preset_kind"] == "bloch_skyrmion"
+        assert ir["preset_params"]["radius"] == 100e-9
+        assert ir["preset_params"]["wall_width"] == 20e-9
+        assert ir["preset_params"]["chirality"] == 1
+        assert ir["preset_params"]["core_polarity"] == -1
+        assert ir["preset_params"]["plane"] == "xy"
+
+        # 2. Positional signature with plane at core_polarity position (omitting core_polarity)
+        preset2 = texture.bloch_skyrmion(100e-9, 20e-9, 1, "xz")
+        ir2 = preset2.to_ir()
+        assert ir2["preset_params"]["chirality"] == 1
+        assert ir2["preset_params"]["core_polarity"] == -1  # restored default
+        assert ir2["preset_params"]["plane"] == "xz"         # intercepted from core_polarity
+
+        # 3. Positional signature with plane at chirality position (omitting both chirality and core_polarity)
+        preset3 = texture.bloch_skyrmion(100e-9, 20e-9, "yz")
+        ir3 = preset3.to_ir()
+        assert ir3["preset_params"]["chirality"] == 1       # restored default
+        assert ir3["preset_params"]["core_polarity"] == -1  # restored default
+        assert ir3["preset_params"]["plane"] == "yz"         # intercepted from chirality
+
 
 # ---------------------------------------------------------------------------
 # 8.2  Inverse transform correctness

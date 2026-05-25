@@ -6,6 +6,7 @@ import type {
 import type { ResourceRevision } from "../api/apiTypes";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
 
 type VisualizationRegistrySyncListener = () => void;
 
@@ -150,6 +151,14 @@ export class VisualizationRegistrySyncController {
       .patch(patch)
       .then((state) => {
         this.observeRemoteState(state);
+        // Optimize: populate the local resource cache pessimistically with the fresh patched state
+        // to avoid triggering a redundant GET /v2/sessions/current/visualization/state fetch.
+        sharedResourceRuntimeStore.updateData(
+          VISUALIZATION_STATE_PATH,
+          state,
+          state.revision,
+        );
+
         if (renderAffectingPatch) {
           this.resources?.invalidate(
             VISUALIZATION_STATE_PATH,

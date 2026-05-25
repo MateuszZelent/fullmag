@@ -12,6 +12,7 @@ export interface MagneticParametersDraft extends MaterialAssignmentDraft {
   aex: string;
   alpha: string;
   dind: string;
+  dbulk: string;
   materialName: string;
   ms: string;
 }
@@ -48,6 +49,7 @@ export function magneticParametersDraftFromResource(
     aex: formatOptionalNumber(material?.properties.Aex),
     alpha: formatRequiredNumber(material?.properties.alpha, 0.01),
     dind: formatOptionalNumber(material?.properties.Dind),
+    dbulk: formatOptionalNumber(material?.properties.Dbulk),
     materialName: material?.name ?? "",
     materialRef: normalizeMaterialRef(materialRef ?? "") ?? "",
     ms: formatOptionalNumber(material?.properties.Ms),
@@ -66,6 +68,7 @@ export function materialParametersDraftKey(
     formatOptionalNumber(material?.properties.Aex),
     formatRequiredNumber(material?.properties.alpha, 0.01),
     formatOptionalNumber(material?.properties.Dind),
+    formatOptionalNumber(material?.properties.Dbulk),
   ].join(":");
 }
 
@@ -80,6 +83,8 @@ export function buildMaterialParametersPatch(
   if ("error" in alpha) return alpha;
   const dind = parseOptionalNumber(draft.dind, "Dind");
   if ("error" in dind) return dind;
+  const dbulk = parseOptionalNumber(draft.dbulk, "Dbulk");
+  if ("error" in dbulk) return dbulk;
 
   const name = draft.materialName.trim();
   return {
@@ -88,6 +93,7 @@ export function buildMaterialParametersPatch(
       properties: {
         Aex: aex.value,
         Dind: dind.value,
+        Dbulk: dbulk.value,
         Ms: ms.value,
         alpha: alpha.value,
       },

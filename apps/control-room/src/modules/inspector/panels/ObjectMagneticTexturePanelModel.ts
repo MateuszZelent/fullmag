@@ -368,6 +368,8 @@ export function objectMagneticTextureDraftFromModel(
   const e1 = vec3Text(vectorFromRecord(params, "e1", [1, 0, 0]));
   const e2 = vec3Text(vectorFromRecord(params, "e2", [0, 1, 0]));
   const cone_axis = vec3Text(vectorFromRecord(params, "cone_axis", [0, 0, 1]));
+  const wallWidth =
+    presetKind === "domain_wall" ? asNumber(params?.width) : asNumber(params?.wall_width);
 
   return {
     assetLabel: model.assetLabel === "unassigned" ? "" : model.assetLabel,
@@ -399,7 +401,7 @@ export function objectMagneticTextureDraftFromModel(
     core_polarity: numberText(asNumber(params?.core_polarity) ?? (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" ? -1 : 1)),
     core_radius: numberText(asNumber(params?.core_radius) ?? 1e-9),
     radius: numberText(asNumber(params?.radius) ?? 10e-9),
-    wall_width: numberText(asNumber(params?.wall_width) ?? 2e-9),
+    wall_width: numberText(wallWidth ?? (presetKind === "domain_wall" ? 10e-9 : 2e-9)),
     normal_axis: asString(params?.normal_axis) ?? "x",
     center_offset: numberText(asNumber(params?.center_offset) ?? 0.0),
     leftX: left[0],
@@ -456,7 +458,10 @@ export function objectMagneticTexturePresetChangePatch(
   draft: ObjectMagneticTextureDraft,
   presetKind: MagnetizationTexturePresetId,
 ): Partial<ObjectMagneticTextureDraft> {
-  const patch: Partial<ObjectMagneticTextureDraft> = { presetKind };
+  const patch: Partial<ObjectMagneticTextureDraft> = {
+    presetKind,
+    ...defaultPresetDraftPatch(presetKind),
+  };
   const committedRef = normalizeMagnetizationRef(model.assetId);
   const draftRef = normalizeMagnetizationRef(draft.magnetizationRef);
   if (!draftRef || (committedRef && draftRef === committedRef)) {
@@ -470,6 +475,108 @@ export function objectMagneticTexturePresetChangePatch(
   }
 
   return patch;
+}
+
+function defaultPresetDraftPatch(
+  presetKind: MagnetizationTexturePresetId,
+): Partial<ObjectMagneticTextureDraft> {
+  if (presetKind === "random_seeded") {
+    return { seed: "1" };
+  }
+
+  if (presetKind === "vortex" || presetKind === "antivortex") {
+    return {
+      circulation: "1",
+      core_polarity: "1",
+      core_radius: numberText(1e-9),
+      plane: "xy",
+    };
+  }
+
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") {
+    return {
+      chirality: "1",
+      core_polarity: "-1",
+      plane: "xy",
+      radius: numberText(10e-9),
+      wall_width: numberText(2e-9),
+    };
+  }
+
+  if (presetKind === "domain_wall") {
+    const left = vec3Text([1, 0, 0]);
+    const right = vec3Text([-1, 0, 0]);
+    return {
+      center_offset: "0",
+      kind: "neel",
+      leftX: left[0],
+      leftY: left[1],
+      leftZ: left[2],
+      normal_axis: "x",
+      rightX: right[0],
+      rightY: right[1],
+      rightZ: right[2],
+      wall_width: numberText(10e-9),
+    };
+  }
+
+  if (presetKind === "two_domain") {
+    const left = vec3Text([1, 0, 0]);
+    const right = vec3Text([-1, 0, 0]);
+    const wall = vec3Text([0, 1, 0]);
+    return {
+      leftX: left[0],
+      leftY: left[1],
+      leftZ: left[2],
+      normal_axis: "x",
+      rightX: right[0],
+      rightY: right[1],
+      rightZ: right[2],
+      wallX: wall[0],
+      wallY: wall[1],
+      wallZ: wall[2],
+    };
+  }
+
+  if (presetKind === "helical") {
+    const wavevector = vec3Text([1, 0, 0]);
+    const e1 = vec3Text([1, 0, 0]);
+    const e2 = vec3Text([0, 1, 0]);
+    return {
+      e1X: e1[0],
+      e1Y: e1[1],
+      e1Z: e1[2],
+      e2X: e2[0],
+      e2Y: e2[1],
+      e2Z: e2[2],
+      phase_rad: "0",
+      wavevectorX: wavevector[0],
+      wavevectorY: wavevector[1],
+      wavevectorZ: wavevector[2],
+    };
+  }
+
+  if (presetKind === "conical") {
+    const wavevector = vec3Text([1, 0, 0]);
+    const coneAxis = vec3Text([0, 0, 1]);
+    return {
+      cone_angle_rad: numberText(0.785398),
+      cone_axisX: coneAxis[0],
+      cone_axisY: coneAxis[1],
+      cone_axisZ: coneAxis[2],
+      phase_rad: "0",
+      wavevectorX: wavevector[0],
+      wavevectorY: wavevector[1],
+      wavevectorZ: wavevector[2],
+    };
+  }
+
+  const direction = vec3Text([1, 0, 0]);
+  return {
+    directionX: direction[0],
+    directionY: direction[1],
+    directionZ: direction[2],
+  };
 }
 
 export function buildObjectMagneticTextureAssetDraft(

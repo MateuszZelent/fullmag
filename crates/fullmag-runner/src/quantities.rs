@@ -94,6 +94,10 @@ fn filter_active_quantities(
     filtered
 }
 
+fn has_values(values: &Option<Vec<f64>>) -> bool {
+    values.as_ref().is_some_and(|values| !values.is_empty())
+}
+
 fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
         FdmEngine::CpuReference => matches!(
@@ -177,6 +181,8 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HAnt
                 | QuantityId::Torque
                 | QuantityId::HEff
+                | QuantityId::HDmi
+                | QuantityId::HDmiBulk
         ),
         FemEngine::NativeGpu => matches!(
             id,
@@ -208,8 +214,8 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HAnt => !plan.current_modules.is_empty(),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
-        QuantityId::HDmi => plan.interfacial_dmi.is_some(),
-        QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
+        QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
+        QuantityId::HDmiBulk => plan.bulk_dmi.is_some() || has_values(&plan.dbulk_field),
         QuantityId::HMel => plan.magnetoelastic.is_some(),
         QuantityId::HOe => {
             plan.has_oersted_cylinder
@@ -334,6 +340,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             external_field: None,
@@ -436,6 +446,36 @@ mod tests {
         assert_eq!(
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
+        );
+    }
+
+    #[test]
+    fn fem_dmi_quantities_are_active_for_native_cpu_and_gpu_constants_and_fields() {
+        let mut plan = fem_plan();
+        let quantities = ["H_dmi", "H_dmi_bulk"];
+
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.bulk_dmi = Some(2.0e-3);
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
+            vec!["H_dmi", "H_dmi_bulk"]
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
+            vec!["H_dmi", "H_dmi_bulk"]
+        );
+
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = None;
+        plan.dind_field = Some(vec![1.0e-3, 1.1e-3]);
+        plan.dbulk_field = Some(vec![2.0e-3, 2.1e-3]);
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
+            vec!["H_dmi", "H_dmi_bulk"]
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
+            vec!["H_dmi", "H_dmi_bulk"]
         );
     }
 }

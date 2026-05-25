@@ -202,6 +202,18 @@ impl CurrentLiveDisplaySelectionHandle {
         }
     }
 
+    /// Apply an initial visualization quantity hint from script `runtime_metadata`.
+    ///
+    /// Pushes a synthetic display-sync command before the solver loop starts, so
+    /// the control room opens with the requested quantity already selected.
+    pub(super) fn set_quantity_hint(&self, quantity: &str) {
+        let mut selection = CurrentDisplaySelection::default();
+        selection.selection.quantity = quantity.to_string();
+        selection.selection.canonicalize();
+        let command = synthetic_display_sync_command(selection);
+        self.push_command_front(command);
+    }
+
     pub(super) fn take_solver_profile_command(&self) -> Option<SessionCommand> {
         self.pop_front_matching(|command| command.kind == "set_solver_profile")
     }

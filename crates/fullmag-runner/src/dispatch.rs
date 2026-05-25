@@ -3791,18 +3791,7 @@ fn execute_native_fem(
     }
 
     for schedule in &mut field_schedules {
-        let values = match schedule.name.as_str() {
-            "m" => backend.copy_m(node_count)?,
-            "H_ex" => backend.copy_h_ex(node_count)?,
-            "H_demag" => backend.copy_h_demag(node_count)?,
-            "H_ext" => backend.copy_h_ext(node_count)?,
-            "H_eff" => backend.copy_h_eff(node_count)?,
-            other => {
-                return Err(RunError {
-                    message: format!("unsupported native FEM field snapshot '{}'", other),
-                })
-            }
-        };
+        let values = copy_native_fem_field_snapshot(&backend, &schedule.name, node_count)?;
         artifacts.record_field_snapshot(FieldSnapshot {
             name: schedule.name.clone(),
             step: final_stats.step,
@@ -4160,6 +4149,30 @@ fn record_cuda_final_outputs(
     Ok(())
 }
 
+#[cfg(feature = "fem-gpu")]
+fn copy_native_fem_field_snapshot(
+    backend: &NativeFemBackend,
+    name: &str,
+    node_count: usize,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let quantity = normalized_quantity_name(name).map_err(|_| RunError {
+        message: format!("unsupported native FEM field snapshot '{}'", name),
+    })?;
+    match quantity {
+        "m" => backend.copy_m(node_count),
+        "H_ex" => backend.copy_h_ex(node_count),
+        "H_demag" => backend.copy_h_demag(node_count),
+        "H_ext" => backend.copy_h_ext(node_count),
+        "H_ani" => backend.copy_h_ani(node_count),
+        "H_dmi" => backend.copy_h_dmi(node_count),
+        "H_dmi_bulk" => backend.copy_h_dmi_bulk(node_count),
+        "H_eff" => backend.copy_h_eff(node_count),
+        other => Err(RunError {
+            message: format!("unsupported native FEM field snapshot '{}'", other),
+        }),
+    }
+}
+
 #[cfg(feature = "cuda")]
 fn copy_cuda_field_snapshot(
     backend: &NativeFdmBackend,
@@ -4267,6 +4280,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_fem_field_outputs_expose_dmi_snapshot_quantities() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("dispatch.rs should be readable");
+
+        assert!(
+            source.contains("fn copy_native_fem_field_snapshot("),
+            "native FEM field outputs should share one copy helper"
+        );
+        assert!(
+            source.contains("\"H_dmi\" => backend.copy_h_dmi(node_count)")
+                && source.contains("\"H_dmi_bulk\" => backend.copy_h_dmi_bulk(node_count)"),
+            "native FEM field output helper must expose interfacial and bulk DMI fields"
+        );
+        assert!(
+            source
+                .contains("copy_native_fem_field_snapshot(&backend, &schedule.name, node_count)?"),
+            "native FEM final field snapshots should use the shared field copy helper"
+        );
+    }
+
     fn fem_policy_problem() -> ProblemIR {
         let mut problem = ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = BackendTarget::Fem;
@@ -4347,6 +4381,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             enable_exchange: true,

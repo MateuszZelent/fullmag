@@ -4186,6 +4186,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut start_solver_command_id: Option<String> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
 
+    // ── visualization quantity hint ──────────────────────────────────────
+    // If the script declared `fm.visualization(active_quantity_id="...")`, push a
+    // synthetic display-sync so the control room opens on that quantity.
+    if let Some(qty) = stages[0]
+        .ir
+        .problem_meta
+        .runtime_metadata
+        .get("visualization_hint")
+        .and_then(|v| v.get("active_quantity_id"))
+        .and_then(|v| v.as_str())
+    {
+        if !qty.is_empty() {
+            display_selection_handle.set_quantity_hint(qty);
+        }
+    }
+
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = stages
         .first()
@@ -7288,6 +7304,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             enable_exchange: true,
@@ -7414,6 +7434,10 @@ mod tests {
                 kc1_field: None,
                 kc2_field: None,
                 kc3_field: None,
+                interfacial_dmi: None,
+                bulk_dmi: None,
+                dind_field: None,
+                dbulk_field: None,
             },
             region_materials: Vec::new(),
             enable_exchange: true,

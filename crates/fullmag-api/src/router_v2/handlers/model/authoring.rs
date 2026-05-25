@@ -662,9 +662,16 @@ pub async fn patch_authoring_material(
                 NullableF64PatchValue::Null => None,
             };
         }
+        if let Some(value) = properties.dbulk {
+            material.properties.dbulk = match value {
+                NullableF64PatchValue::Value(value) => Some(value),
+                NullableF64PatchValue::Null => None,
+            };
+        }
     }
 
     sync_interfacial_dmi_for_material(&mut scene, &material_id);
+    sync_bulk_dmi_for_material(&mut scene, &material_id);
 
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     let material = committed
@@ -804,13 +811,14 @@ pub async fn patch_authoring_object_interaction(
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let kind = parse_interaction_kind(&interaction_kind)?;
     let material_dind = material_dind_for_object(&scene, &object_id);
+    let material_dbulk = material_dbulk_for_object(&scene, &object_id);
     let object = scene
         .objects
         .iter_mut()
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
 
-    apply_interaction_patch(object, kind, material_dind, req)?;
+    apply_interaction_patch(object, kind, material_dind, material_dbulk, req)?;
 
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     let object = committed
@@ -1552,6 +1560,7 @@ fn magnetic_interaction_kind_id(kind: ScriptBuilderMagneticInteractionKind) -> &
         ScriptBuilderMagneticInteractionKind::Exchange => "exchange",
         ScriptBuilderMagneticInteractionKind::Demag => "demag",
         ScriptBuilderMagneticInteractionKind::InterfacialDmi => "interfacial_dmi",
+        ScriptBuilderMagneticInteractionKind::BulkDmi => "bulk_dmi",
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
     }
 }
@@ -1565,6 +1574,7 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
             aex: material.properties.aex,
             alpha: material.properties.alpha,
             dind: material.properties.dind,
+            dbulk: material.properties.dbulk,
         },
     }
 }
@@ -1611,11 +1621,38 @@ fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &st
     }
 }
 
+fn sync_bulk_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
+    let material_dbulk = scene
+        .materials
+        .iter()
+        .find(|entry| entry.id == material_id)
+        .and_then(|entry| entry.properties.dbulk)
+        .unwrap_or(0.0);
+    for object in &mut scene.objects {
+        if object.material_ref != material_id {
+            continue;
+        }
+        if let Some(interaction) = object
+            .physics_stack
+            .iter_mut()
+            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::BulkDmi)
+        {
+            let mut params = match interaction.params.clone() {
+                Some(Value::Object(map)) => map,
+                _ => Default::default(),
+            };
+            params.insert("dbulk".to_string(), Value::from(material_dbulk));
+            interaction.params = Some(Value::Object(params));
+        }
+    }
+}
+
 fn parse_interaction_kind(raw: &str) -> Result<ScriptBuilderMagneticInteractionKind, ApiError> {
     match raw {
         "exchange" => Ok(ScriptBuilderMagneticInteractionKind::Exchange),
         "demag" => Ok(ScriptBuilderMagneticInteractionKind::Demag),
         "interfacial_dmi" => Ok(ScriptBuilderMagneticInteractionKind::InterfacialDmi),
+        "bulk_dmi" => Ok(ScriptBuilderMagneticInteractionKind::BulkDmi),
         "uniaxial_anisotropy" => Ok(ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy),
         _ => Err(ApiError::bad_request(format!(
             "unsupported interaction kind: {raw}"
@@ -1628,6 +1665,7 @@ fn interaction_kind_str(kind: ScriptBuilderMagneticInteractionKind) -> &'static 
         ScriptBuilderMagneticInteractionKind::Exchange => "exchange",
         ScriptBuilderMagneticInteractionKind::Demag => "demag",
         ScriptBuilderMagneticInteractionKind::InterfacialDmi => "interfacial_dmi",
+        ScriptBuilderMagneticInteractionKind::BulkDmi => "bulk_dmi",
         ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy => "uniaxial_anisotropy",
     }
 }
@@ -1647,6 +1685,15 @@ fn material_dind_for_object(scene: &SceneDocument, object_id: &str) -> Option<f6
         .iter()
         .find(|entry| entry.id == object.material_ref)
         .and_then(|entry| entry.properties.dind)
+}
+
+fn material_dbulk_for_object(scene: &SceneDocument, object_id: &str) -> Option<f64> {
+    let object = scene.objects.iter().find(|entry| entry.id == object_id)?;
+    scene
+        .materials
+        .iter()
+        .find(|entry| entry.id == object.material_ref)
+        .and_then(|entry| entry.properties.dbulk)
 }
 
 fn find_interaction(
@@ -1685,6 +1732,7 @@ fn apply_interaction_patch(
     object: &mut SceneObject,
     kind: ScriptBuilderMagneticInteractionKind,
     material_dind: Option<f64>,
+    material_dbulk: Option<f64>,
     req: ObjectInteractionPatchRequest,
 ) -> Result<(), ApiError> {
     if req.present == Some(false) && is_required_interaction(kind) {
@@ -1704,6 +1752,14 @@ fn apply_interaction_patch(
             [(
                 "dind".to_string(),
                 Value::from(material_dind.unwrap_or(1e-3)),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        ScriptBuilderMagneticInteractionKind::BulkDmi => Value::Object(
+            [(
+                "dbulk".to_string(),
+                Value::from(material_dbulk.unwrap_or(1e-3)),
             )]
             .into_iter()
             .collect(),

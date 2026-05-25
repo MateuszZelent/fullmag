@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import warnings
 
-from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
+from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive, require_finite
 from fullmag.init import InitialMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
@@ -49,6 +49,8 @@ class Material:
     Kc3: float | None = None
     anisC1: tuple[float, float, float] | None = None
     anisC2: tuple[float, float, float] | None = None
+    Dind: float | None = None
+    Dbulk: float | None = None
     # Per-node spatially varying fields (override scalar when provided)
     Ms_field: list[float] | None = None
     A_field: list[float] | None = None
@@ -58,6 +60,8 @@ class Material:
     Kc1_field: list[float] | None = None
     Kc2_field: list[float] | None = None
     Kc3_field: list[float] | None = None
+    Dind_field: list[float] | None = None
+    Dbulk_field: list[float] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -74,6 +78,10 @@ class Material:
             object.__setattr__(self, "anisC1", as_vector3(self.anisC1, "anisC1"))
         if self.anisC2 is not None:
             object.__setattr__(self, "anisC2", as_vector3(self.anisC2, "anisC2"))
+        if self.Dind is not None:
+            require_finite(self.Dind, "Dind")
+        if self.Dbulk is not None:
+            require_finite(self.Dbulk, "Dbulk")
         _warn_if_suspicious_si("Ms", self.Ms, lower=1.0e3, upper=1.0e8, unit="A/m")
         _warn_if_suspicious_si("A", self.A, lower=1.0e-14, upper=1.0e-8, unit="J/m")
         _warn_if_suspicious_si("alpha", self.alpha, lower=0.0, upper=10.0, unit="dimensionless")
@@ -87,6 +95,10 @@ class Material:
             _warn_if_suspicious_si("Kc2", self.Kc2, lower=0.0, upper=1.0e10, unit="J/m^3")
         if self.Kc3 is not None:
             _warn_if_suspicious_si("Kc3", self.Kc3, lower=0.0, upper=1.0e10, unit="J/m^3")
+        if self.Dind is not None:
+            _warn_if_suspicious_si("Dind", self.Dind, lower=-1.0e-1, upper=1.0e-1, unit="J/m^2")
+        if self.Dbulk is not None:
+            _warn_if_suspicious_si("Dbulk", self.Dbulk, lower=-1.0e-1, upper=1.0e-1, unit="J/m^3")
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -102,6 +114,8 @@ class Material:
             "cubic_anisotropy_kc3": self.Kc3,
             "cubic_anisotropy_axis1": list(self.anisC1) if self.anisC1 else None,
             "cubic_anisotropy_axis2": list(self.anisC2) if self.anisC2 else None,
+            "interfacial_dmi": self.Dind,
+            "bulk_dmi": self.Dbulk,
             "ms_field": self.Ms_field,
             "a_field": self.A_field,
             "alpha_field": self.alpha_field,
@@ -110,6 +124,8 @@ class Material:
             "kc1_field": self.Kc1_field,
             "kc2_field": self.Kc2_field,
             "kc3_field": self.Kc3_field,
+            "dind_field": self.Dind_field,
+            "dbulk_field": self.Dbulk_field,
         }
 
 

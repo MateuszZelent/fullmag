@@ -393,6 +393,8 @@ pub struct ScriptBuilderMaterialState {
     pub alpha: f64,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "Dind")]
     pub dind: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "Dbulk")]
+    pub dbulk: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -401,6 +403,7 @@ pub enum ScriptBuilderMagneticInteractionKind {
     Exchange,
     Demag,
     InterfacialDmi,
+    BulkDmi,
     UniaxialAnisotropy,
 }
 

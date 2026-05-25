@@ -696,6 +696,10 @@ fn fem_permalloy() -> MaterialIR {
         kc1_field: None,
         kc2_field: None,
         kc3_field: None,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
     }
 }
 

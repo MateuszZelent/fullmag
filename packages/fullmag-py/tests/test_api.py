@@ -33,6 +33,21 @@ from fullmag.meshing.gmsh_bridge import MeshData
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_dmi_lowercase_properties_redirect_to_uppercase(self) -> None:
+        fm.reset()
+        geom = fm.Box(size=(10e-9, 10e-9, 10e-9), name="box")
+        layer = fm.geometry(geom)
+        
+        # Test interfacial DMI getter/setter redirection
+        layer.dind = 1.5e-3
+        self.assertEqual(layer.Dind, 1.5e-3)
+        self.assertEqual(layer.dind, 1.5e-3)
+        
+        # Test bulk DMI getter/setter redirection
+        layer.dbulk = -2.5e-3
+        self.assertEqual(layer.Dbulk, -2.5e-3)
+        self.assertEqual(layer.dbulk, -2.5e-3)
+
     def _write_binary_cube_stl(self, path: Path) -> None:
         vertices = np.asarray(
             [
@@ -342,6 +357,16 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             term.to_ir(),
             {"kind": "interfacial_dmi", "D": 3e-3, "interface_normal": [0.0, 3.0, 4.0]},
+        )
+
+    def test_dmi_terms_preserve_signed_constants_in_ir(self) -> None:
+        self.assertEqual(
+            fm.InterfacialDMI(D=-3e-3).to_ir(),
+            {"kind": "interfacial_dmi", "D": -3e-3},
+        )
+        self.assertEqual(
+            fm.BulkDMI(D=-2e-3).to_ir(),
+            {"kind": "bulk_dmi", "D": -2e-3},
         )
 
     def test_interfacial_dmi_rejects_invalid_interface_normal_shape(self) -> None:
@@ -4243,6 +4268,84 @@ class ProblemApiTests(unittest.TestCase):
         self.assertTrue(
             ir["problem_meta"]["runtime_metadata"]["interactive_session_requested"]
         )
+
+    def test_flat_visualization_hint_sets_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        fm.visualization(active_quantity_id="h_demag")
+        fm.run(4e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_flat_viz.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint")
+        self.assertEqual(hint, {"active_quantity_id": "h_demag"})
+
+    def test_study_visualization_hint_sets_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        fm.study().engine("fdm").visualization(active_quantity_id="h_eff").relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_viz.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint")
+        self.assertEqual(hint, {"active_quantity_id": "h_eff"})
+
+    def test_visualization_hint_round_trips_through_script_export(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        fm.visualization(active_quantity_id="exchange_field")
+        fm.run(4e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_viz_roundtrip.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('visualization(active_quantity_id="exchange_field")', exported)
 
     def test_llg_requires_supported_integrator_and_positive_timestep(self) -> None:
         with self.assertRaisesRegex(ValueError, "integrator must be one of"):

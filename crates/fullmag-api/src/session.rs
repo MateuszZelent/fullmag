@@ -152,6 +152,20 @@ fn infer_dispatched_command_completion(
         "close" if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Completed) => {
             Some(CommandCompletionState::Completed)
         }
+        "run" | "relax" | "solve" if snapshot_runtime_is_terminal_or_idle(snapshot) => {
+            if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Failed)
+                || command_has_terminal_log(record, snapshot, "failed")
+                || command_has_terminal_log(record, snapshot, "Error")
+            {
+                Some(CommandCompletionState::Failed)
+            } else if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Cancelled)
+                || command_has_terminal_log(record, snapshot, "cancelled")
+            {
+                Some(CommandCompletionState::Cancelled)
+            } else {
+                Some(CommandCompletionState::Completed)
+            }
+        }
         _ => None,
     }
 }

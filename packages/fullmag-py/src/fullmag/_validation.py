@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import numbers
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -16,6 +17,13 @@ def require_positive(value: float, field_name: str) -> float:
     if value <= 0.0:
         raise ValueError(f"{field_name} must be positive")
     return value
+
+
+def require_finite(value: float, field_name: str) -> float:
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise ValueError(f"{field_name} must be finite")
+    return numeric
 
 
 def require_positive_int(value: int, field_name: str) -> int:

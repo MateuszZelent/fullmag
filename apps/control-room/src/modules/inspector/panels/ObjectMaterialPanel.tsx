@@ -259,6 +259,14 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
           value={draft.dind}
           onChange={(event) => updateDraft({ dind: event.target.value })}
         />
+        <FormField
+          label="Dbulk"
+          type="number"
+          unit="J/m³"
+          disabled={!material.data}
+          value={draft.dbulk}
+          onChange={(event) => updateDraft({ dbulk: event.target.value })}
+        />
       </InspectorSection>
 
       <InspectorSection value="actions" title="Actions">

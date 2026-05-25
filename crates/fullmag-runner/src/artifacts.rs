@@ -1093,7 +1093,7 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
         .map_or(observable, |(base, _)| base);
     match base_observable {
         "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" => "A/m",
+        "H_ex" | "H_demag" | "H_ext" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" => "A/m",
         "torque" => "T",
         other => panic!("unsupported observable '{}'", other),
     }
@@ -1112,6 +1112,14 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dmi_field_artifact_units_include_bulk_quantity() {
+        assert_eq!(field_unit("H_dmi"), "A/m");
+        assert_eq!(field_unit("H_dmi.x"), "A/m");
+        assert_eq!(field_unit("H_dmi_bulk"), "A/m");
+        assert_eq!(field_unit("H_dmi_bulk.z"), "A/m");
+    }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
         ExecutionPlanIR {
@@ -1321,6 +1329,10 @@ mod tests {
                     kc1_field: None,
                     kc2_field: None,
                     kc3_field: None,
+                    interfacial_dmi: None,
+                    bulk_dmi: None,
+                    dind_field: None,
+                    dbulk_field: None,
                 },
                 region_materials: Vec::new(),
                 enable_exchange: true,

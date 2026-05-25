@@ -147,6 +147,8 @@ pub struct MaterialPropertiesResource {
     pub alpha: f64,
     #[serde(rename = "Dind")]
     pub dind: Option<f64>,
+    #[serde(rename = "Dbulk")]
+    pub dbulk: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -183,6 +185,9 @@ pub struct MaterialPropertiesPatchRequest {
     #[serde(rename = "Dind")]
     #[serde(default, deserialize_with = "deserialize_nullable_f64_patch_field")]
     pub dind: Option<NullableF64PatchValue>,
+    #[serde(rename = "Dbulk")]
+    #[serde(default, deserialize_with = "deserialize_nullable_f64_patch_field")]
+    pub dbulk: Option<NullableF64PatchValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

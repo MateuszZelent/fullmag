@@ -148,6 +148,14 @@ pub(crate) fn plan_fdm(
         enable_demag,
         external_field.is_some(),
         enable_oersted,
+        problem.energy_terms.iter().any(|term| {
+            matches!(
+                term,
+                EnergyTermIR::InterfacialDmi { .. } | EnergyTermIR::BulkDmi { .. }
+            )
+        }),
+        false,
+        false,
         false,
         false,
         &mut errors,
@@ -913,6 +921,9 @@ pub(crate) fn plan_fdm_multilayer(
                 EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
             )
         }),
+        interfacial_dmi.is_some() || bulk_dmi.is_some(),
+        false,
+        false,
         false,
         false,
         &mut errors,

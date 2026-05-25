@@ -908,6 +908,7 @@ GPU_RK_DMI_FIELDS_HPP_PATH = (
     / "rk"
     / "rk_dmi_fields.hpp"
 )
+VERIFY_FEM_GPU_ENABLEMENT_SCRIPT = REPO_ROOT / "scripts" / "verify_fem_gpu_enablement.sh"
 GPU_RK_STEP_STATS_CU_PATH = (
     REPO_ROOT
     / "native"
@@ -8600,6 +8601,18 @@ def test_gpu_rk_dmi_fields_are_owned_by_rk_module():
         "gpu_rk_compute_legacy_sparse_exchange(",
     ):
         assert non_owner not in dmi_source
+
+
+def test_fem_gpu_enablement_script_runs_native_dmi_runtime_smoke():
+    script = VERIFY_FEM_GPU_ENABLEMENT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "FEM GPU smoke: DMI fields and energy" in script
+    assert (
+        "native_fem_gpu_dmi_step_exposes_fields_and_energy_when_cuda_is_available"
+        in script
+    )
+    assert "cargo test -p fullmag-runner" in script
+    assert "--features fem-gpu" in script
 
 
 def test_gpu_rk_final_refresh_is_owned_by_rk_module():

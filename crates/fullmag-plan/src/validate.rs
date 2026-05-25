@@ -128,6 +128,9 @@ pub(crate) fn validate_executable_outputs(
     enable_demag: bool,
     enable_zeeman: bool,
     enable_oersted: bool,
+    enable_h_dmi: bool,
+    enable_h_dmi_bulk: bool,
+    allow_h_dmi_bulk: bool,
     enable_magnetoelastic: bool,
     enable_antenna_field: bool,
     errors: &mut Vec<String>,
@@ -169,9 +172,10 @@ pub(crate) fn validate_executable_outputs(
                     && !mechanical_fields.contains(&name.as_str())
                     && !(enable_oersted && name == "H_OE")
                     && !(enable_antenna_field && name == "H_ant")
+                    && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_mel, and H_eff",
+                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_dmi, H_dmi_bulk, H_mel, and H_eff",
                         name
                     ));
                 } else if name == "H_ex" && !enable_exchange {
@@ -180,6 +184,10 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("field output 'H_demag' requires Demag()".to_string());
                 } else if name == "H_ext" && !enable_zeeman {
                     errors.push("field output 'H_ext' requires Zeeman(...)".to_string());
+                } else if name == "H_dmi" && !enable_h_dmi {
+                    errors.push("field output 'H_dmi' requires InterfacialDmi(...)".to_string());
+                } else if name == "H_dmi_bulk" && !enable_h_dmi_bulk {
+                    errors.push("field output 'H_dmi_bulk' requires BulkDmi(...)".to_string());
                 } else if name == "H_OE" && !enable_oersted {
                     errors.push(
                         "field output 'H_OE' requires OerstedCylinder() or OerstedField(...)"
@@ -239,9 +247,10 @@ pub(crate) fn validate_executable_outputs(
                     && !mechanical_fields.contains(&field.as_str())
                     && !(enable_oersted && field == "H_OE")
                     && !(enable_antenna_field && field == "H_ant")
+                    && !(allow_h_dmi_bulk && field == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, and H_eff",
+                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, H_ext, H_OE, H_dmi, H_dmi_bulk, and H_eff",
                         field
                     ));
                 } else if field == "H_ex" && !enable_exchange {
@@ -250,6 +259,10 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("snapshot field 'H_demag' requires Demag()".to_string());
                 } else if field == "H_ext" && !enable_zeeman {
                     errors.push("snapshot field 'H_ext' requires Zeeman(...)".to_string());
+                } else if field == "H_dmi" && !enable_h_dmi {
+                    errors.push("snapshot field 'H_dmi' requires InterfacialDmi(...)".to_string());
+                } else if field == "H_dmi_bulk" && !enable_h_dmi_bulk {
+                    errors.push("snapshot field 'H_dmi_bulk' requires BulkDmi(...)".to_string());
                 } else if field == "H_OE" && !enable_oersted {
                     errors.push(
                         "snapshot field 'H_OE' requires OerstedCylinder() or OerstedField(...)"

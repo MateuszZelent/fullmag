@@ -90,6 +90,84 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
     }
 }
 
+pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<String>) {
+    for (index, term) in problem.energy_terms.iter().enumerate() {
+        match term {
+            EnergyTermIR::InterfacialDmi {
+                d,
+                interface_normal,
+            } => {
+                if !d.is_finite() {
+                    errors.push(format!(
+                        "energy_terms[{index}] interfacial_dmi D must be finite"
+                    ));
+                }
+                if let Some(normal) = interface_normal {
+                    if !vector3_is_finite(normal) {
+                        errors.push(format!(
+                            "energy_terms[{index}] interfacial_dmi interface_normal must contain finite values"
+                        ));
+                    } else {
+                        let norm_sq =
+                            normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+                        if norm_sq <= 1e-30 {
+                            errors.push(format!(
+                                "energy_terms[{index}] interfacial_dmi interface_normal must be non-zero"
+                            ));
+                        }
+                    }
+                }
+            }
+            EnergyTermIR::BulkDmi { d } => {
+                if !d.is_finite() {
+                    errors.push(format!("energy_terms[{index}] bulk_dmi D must be finite"));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn validate_material_dmi_values(problem: &ProblemIR, errors: &mut Vec<String>) {
+    for material in &problem.materials {
+        if material
+            .interfacial_dmi
+            .is_some_and(|value| !value.is_finite())
+        {
+            errors.push(format!(
+                "material '{}' interfacial_dmi must be finite",
+                material.name
+            ));
+        }
+        if material.bulk_dmi.is_some_and(|value| !value.is_finite()) {
+            errors.push(format!(
+                "material '{}' bulk_dmi must be finite",
+                material.name
+            ));
+        }
+        if material
+            .dind_field
+            .as_ref()
+            .is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+        {
+            errors.push(format!(
+                "material '{}' dind_field must contain finite values",
+                material.name
+            ));
+        }
+        if material
+            .dbulk_field
+            .as_ref()
+            .is_some_and(|values| values.iter().any(|value| !value.is_finite()))
+        {
+            errors.push(format!(
+                "material '{}' dbulk_field must contain finite values",
+                material.name
+            ));
+        }
+    }
+}
+
 pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
     for (index, module) in problem.current_modules.iter().enumerate() {
         match module {

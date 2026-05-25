@@ -1164,7 +1164,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
 }
 
 #[test]
-fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode() {
+fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -1217,18 +1217,22 @@ fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode
             build_report: None,
         }),
     });
-    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::InterfacialDmi {
-        d: 3.0e-3,
-        interface_normal: None,
-    }];
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 3.0e-3,
+            interface_normal: None,
+        },
+    ];
 
-    let error = plan(&ir).expect_err(
-        "strict FEM planning should reject InterfacialDmi without explicit interface_normal",
-    );
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("InterfacialDmi.interface_normal")
-            && reason.contains("strict execution mode")
-    }));
+    let plan = plan(&ir).expect("strict FEM planning should default missing iDMI normal to +z");
+    match plan.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            assert_eq!(fem.interfacial_dmi, Some(3.0e-3));
+            assert_eq!(fem.dmi_interface_normal, Some([0.0, 0.0, 1.0]));
+        }
+        other => panic!("expected FEM plan, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2196,6 +2200,10 @@ fn fem_backend_multibody_rejects_incompatible_material_law() {
         kc1_field: None,
         kc2_field: None,
         kc3_field: None,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        dind_field: None,
+        dbulk_field: None,
     });
     ir.geometry.entries.push(GeometryEntryIR::Box {
         name: "second".to_string(),
@@ -2342,10 +2350,16 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
         kc1_field: None,
         kc2_field: None,
         kc3_field: None,
+        interfacial_dmi: Some(2.0e-3),
+        bulk_dmi: Some(-1.5e-3),
+        dind_field: None,
+        dbulk_field: None,
     });
     ir.materials[0].uniaxial_anisotropy = Some(2.5e4);
     ir.materials[0].damping = 0.5;
     ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    ir.materials[0].interfacial_dmi = Some(1.0e-3);
+    ir.materials[0].bulk_dmi = Some(-0.5e-3);
     ir.geometry.entries.push(GeometryEntryIR::Box {
         name: "second".to_string(),
         size: [1.0, 1.0, 1.0],
@@ -2421,6 +2435,16 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
     assert_eq!(fem.mesh_parts[0].material_id.as_deref(), Some("Py"));
     assert_eq!(fem.mesh_parts[1].material_id.as_deref(), Some("Co"));
     assert!(fem.material.ms_field.is_some());
+    assert_eq!(fem.interfacial_dmi, Some(1.0e-3));
+    assert_eq!(fem.bulk_dmi, Some(-0.5e-3));
+    assert_eq!(
+        fem.dind_field.as_ref().map(|values| values.as_slice()),
+        Some([1.0e-3, 1.0e-3, 1.0e-3, 1.0e-3, 2.0e-3, 2.0e-3, 2.0e-3, 2.0e-3].as_slice())
+    );
+    assert_eq!(
+        fem.dbulk_field.as_ref().map(|values| values.as_slice()),
+        Some([-0.5e-3, -0.5e-3, -0.5e-3, -0.5e-3, -1.5e-3, -1.5e-3, -1.5e-3, -1.5e-3].as_slice())
+    );
 }
 
 #[test]
@@ -2653,6 +2677,127 @@ fn inactive_term_output_is_rejected_for_execution() {
         .reasons
         .iter()
         .any(|reason| reason.contains("requires Demag()")));
+}
+
+fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+}
+
+#[test]
+fn fem_dmi_field_outputs_require_matching_dmi_terms() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![
+                OutputIR::Field {
+                    name: "H_dmi".to_string(),
+                    every_seconds: 1e-12,
+                },
+                OutputIR::Field {
+                    name: "H_dmi_bulk".to_string(),
+                    every_seconds: 1e-12,
+                },
+            ],
+        },
+    };
+
+    let err = plan(&ir).expect_err("DMI field outputs require active DMI terms");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("field output 'H_dmi' requires InterfacialDmi")));
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("field output 'H_dmi_bulk' requires BulkDmi")));
+}
+
+#[test]
+fn fem_bulk_dmi_field_output_plans_when_bulk_dmi_is_active() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 },
+    ];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![OutputIR::Field {
+                name: "H_dmi_bulk".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let planned = plan(&ir).expect("active bulk DMI should allow H_dmi_bulk field output");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.bulk_dmi, Some(2.0e-3));
+}
+
+#[test]
+fn fem_material_dmi_constants_lower_to_native_plan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.materials[0].interfacial_dmi = Some(-1.5e-3);
+    ir.materials[0].bulk_dmi = Some(2.5e-3);
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: ir.study.dynamics().clone(),
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![
+                OutputIR::Field {
+                    name: "H_dmi".to_string(),
+                    every_seconds: 1e-12,
+                },
+                OutputIR::Field {
+                    name: "H_dmi_bulk".to_string(),
+                    every_seconds: 1e-12,
+                },
+            ],
+        },
+    };
+
+    let planned = plan(&ir).expect("material DMI constants should lower into FEM plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert_eq!(fem.interfacial_dmi, Some(-1.5e-3));
+    assert_eq!(fem.dmi_interface_normal, Some([0.0, 0.0, 1.0]));
+    assert_eq!(fem.bulk_dmi, Some(2.5e-3));
 }
 
 #[test]
@@ -3606,7 +3751,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
 }
 
 #[test]
-fn fem_eigen_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode() {
+fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -3651,10 +3796,13 @@ fn fem_eigen_backend_interfacial_dmi_requires_explicit_interface_normal_in_stric
         }],
         fem_domain_mesh_asset: None,
     });
-    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::InterfacialDmi {
-        d: 3.0e-3,
-        interface_normal: None,
-    }];
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 3.0e-3,
+            interface_normal: None,
+        },
+    ];
     ir.study = fullmag_ir::StudyIR::Eigenmodes {
         dynamics: ir.study.dynamics().clone(),
         operator: fullmag_ir::EigenOperatorConfigIR {
@@ -3678,13 +3826,15 @@ fn fem_eigen_backend_interfacial_dmi_requires_explicit_interface_normal_in_stric
         mode_tracking: None,
     };
 
-    let error = plan(&ir).expect_err(
-        "strict FEM eigen planning should reject InterfacialDmi without explicit interface_normal",
-    );
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("InterfacialDmi.interface_normal")
-            && reason.contains("strict execution mode")
-    }));
+    let plan =
+        plan(&ir).expect("strict FEM eigen planning should default missing iDMI normal to +z");
+    match plan.backend_plan {
+        BackendPlanIR::FemEigen(fem) => {
+            assert_eq!(fem.interfacial_dmi, Some(3.0e-3));
+            assert_eq!(fem.dmi_interface_normal, Some([0.0, 0.0, 1.0]));
+        }
+        other => panic!("expected FEM eigen plan, got {other:?}"),
+    }
 }
 
 #[test]

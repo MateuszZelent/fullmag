@@ -234,12 +234,20 @@ class texture:
 
     @staticmethod
     def vortex(
-        *,
         circulation: int = 1,
         core_polarity: int = 1,
         core_radius: float | None = None,
         plane: str = "xy",
     ) -> PresetTexture:
+        if isinstance(core_radius, str):
+            plane = core_radius
+            core_radius = None
+        if isinstance(core_polarity, str):
+            plane = core_polarity
+            core_polarity = 1
+        if isinstance(circulation, str):
+            plane = circulation
+            circulation = 1
         return PresetTexture(
             preset_kind="vortex",
             params=_drop_none_params(
@@ -255,12 +263,20 @@ class texture:
 
     @staticmethod
     def antivortex(
-        *,
         circulation: int = 1,
         core_polarity: int = 1,
         core_radius: float | None = None,
         plane: str = "xy",
     ) -> PresetTexture:
+        if isinstance(core_radius, str):
+            plane = core_radius
+            core_radius = None
+        if isinstance(core_polarity, str):
+            plane = core_polarity
+            core_polarity = 1
+        if isinstance(circulation, str):
+            plane = circulation
+            circulation = 1
         return PresetTexture(
             preset_kind="antivortex",
             params=_drop_none_params(
@@ -276,13 +292,18 @@ class texture:
 
     @staticmethod
     def bloch_skyrmion(
-        *,
         radius: float,
         wall_width: float,
         chirality: int = 1,
         core_polarity: int = -1,
         plane: str = "xy",
     ) -> PresetTexture:
+        if isinstance(core_polarity, str):
+            plane = core_polarity
+            core_polarity = -1
+        if isinstance(chirality, str):
+            plane = chirality
+            chirality = 1
         return PresetTexture(
             preset_kind="bloch_skyrmion",
             params={
@@ -297,13 +318,18 @@ class texture:
 
     @staticmethod
     def neel_skyrmion(
-        *,
         radius: float,
         wall_width: float,
         chirality: int = 1,
         core_polarity: int = -1,
         plane: str = "xy",
     ) -> PresetTexture:
+        if isinstance(core_polarity, str):
+            plane = core_polarity
+            core_polarity = -1
+        if isinstance(chirality, str):
+            plane = chirality
+            chirality = 1
         return PresetTexture(
             preset_kind="neel_skyrmion",
             params={
@@ -318,9 +344,8 @@ class texture:
 
     @staticmethod
     def domain_wall(
-        *,
-        kind: Literal["bloch", "neel"] = "neel",
         width: float,
+        kind: Literal["bloch", "neel"] = "neel",
         center_offset: float = 0.0,
         normal_axis: Literal["x", "y", "z"] = "x",
         left: Sequence[float] = (1.0, 0.0, 0.0),
@@ -341,7 +366,6 @@ class texture:
 
     @staticmethod
     def two_domain(
-        *,
         left: Sequence[float],
         right: Sequence[float],
         wall: Sequence[float],
@@ -360,7 +384,6 @@ class texture:
 
     @staticmethod
     def helical(
-        *,
         wavevector: Sequence[float],
         e1: Sequence[float] = (1.0, 0.0, 0.0),
         e2: Sequence[float] = (0.0, 1.0, 0.0),
@@ -379,7 +402,6 @@ class texture:
 
     @staticmethod
     def conical(
-        *,
         wavevector: Sequence[float],
         cone_axis: Sequence[float] = (0.0, 0.0, 1.0),
         cone_angle_rad: float = math.pi / 4.0,

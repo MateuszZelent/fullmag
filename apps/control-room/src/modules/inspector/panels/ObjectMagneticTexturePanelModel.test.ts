@@ -307,6 +307,68 @@ describe("ObjectMagneticTexturePanelModel", () => {
     });
   });
 
+  it("preserves domain wall width when rebuilding texture assets", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:domain_wall",
+            kind: "preset_texture",
+            name: "Domain Wall texture",
+            preset_kind: "domain_wall",
+            preset_params: {
+              center_offset: 0,
+              kind: "neel",
+              left: [1, 0, 0],
+              normal_axis: "x",
+              right: [-1, 0, 0],
+              width: 10e-9,
+            },
+            texture_transform: {
+              pivot: [0, 0, 0],
+              rotation_quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+              translation: [0, 0, 0],
+            },
+            ui_label: "Domain Wall texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:domain_wall",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+
+    const draft = objectMagneticTextureDraftFromModel(model);
+
+    expect(draft.wall_width).toBe("1e-8");
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      preset_kind: "domain_wall",
+      preset_params: {
+        width: 10e-9,
+      },
+    });
+  });
+
   it("uses canonical asset identity when a committed random preset changes to uniform", () => {
     const model = resolveObjectMagneticTexturePanelModel(
       {
@@ -412,6 +474,66 @@ describe("ObjectMagneticTexturePanelModel", () => {
     });
   });
 
+  it("uses canonical preset defaults when preset changes", () => {
+    const model = resolveObjectMagneticTexturePanelModel(
+      {
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
+        moduleSource: "explorer",
+        nodeId: "model:object:arch_waveguide:magnetic-texture",
+        objectId: "arch_waveguide",
+        ref: {
+          kind: "object.magnetic-texture",
+          nodeId: "model:object:arch_waveguide:magnetic-texture",
+          objectId: "arch_waveguide",
+          type: "scene-object",
+          visualizationTargetId: "object:arch_waveguide",
+        },
+      },
+      {
+        magnetization_assets: [
+          {
+            id: "mag:arch_waveguide:uniform",
+            kind: "preset_texture",
+            name: "Uniform texture",
+            preset_kind: "uniform",
+            preset_params: { direction: [1, 0, 0] },
+            ui_label: "Uniform texture",
+          },
+        ],
+        objects: [
+          {
+            id: "arch_waveguide",
+            magnetization_ref: "mag:arch_waveguide:uniform",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 12,
+      },
+    );
+    const draft = objectMagneticTextureDraftFromModel(model);
+
+    expect(
+      objectMagneticTexturePresetChangePatch(model, draft, "neel_skyrmion"),
+    ).toMatchObject({
+      assetLabel: "Néel Skyrmion texture",
+      core_polarity: "-1",
+      magnetizationRef: "",
+      presetKind: "neel_skyrmion",
+      radius: "1e-8",
+      wall_width: "2e-9",
+    });
+    expect(
+      objectMagneticTexturePresetChangePatch(model, draft, "domain_wall"),
+    ).toMatchObject({
+      assetLabel: "Domain Wall texture",
+      center_offset: "0",
+      magnetizationRef: "",
+      presetKind: "domain_wall",
+      wall_width: "1e-8",
+    });
+  });
+
   it("keeps explicit draft refs out of preset-change patches", () => {
     const model = resolveObjectMagneticTexturePanelModel(
       {
@@ -458,6 +580,9 @@ describe("ObjectMagneticTexturePanelModel", () => {
     expect(
       objectMagneticTexturePresetChangePatch(model, draft, "uniform"),
     ).toEqual({
+      directionX: "1",
+      directionY: "0",
+      directionZ: "0",
       presetKind: "uniform",
     });
   });

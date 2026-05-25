@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from fullmag._validation import as_vector3, require_non_empty, require_positive
+from fullmag._validation import as_vector3, require_finite, require_non_empty, require_positive
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,8 +129,7 @@ class InterfacialDMI:
     interface_normal: tuple[float, float, float] | None = None
 
     def __init__(self, D: float, interface_normal: Sequence[float] | None = None) -> None:
-        require_positive(D, "D")
-        object.__setattr__(self, "D", float(D))
+        object.__setattr__(self, "D", require_finite(D, "D"))
         object.__setattr__(
             self,
             "interface_normal",
@@ -151,7 +150,7 @@ class BulkDMI:
     D: float
 
     def __post_init__(self) -> None:
-        require_positive(self.D, "D")
+        object.__setattr__(self, "D", require_finite(self.D, "D"))
 
     def to_ir(self) -> dict[str, object]:
         return {"kind": "bulk_dmi", "D": self.D}

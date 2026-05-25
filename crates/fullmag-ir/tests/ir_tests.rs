@@ -1294,6 +1294,69 @@ fn validation_rejects_multiple_oersted_terms() {
 }
 
 #[test]
+fn validation_rejects_invalid_dmi_energy_terms() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms = vec![
+        EnergyTermIR::Exchange,
+        EnergyTermIR::InterfacialDmi {
+            d: f64::NAN,
+            interface_normal: Some([0.0, 0.0, 1.0]),
+        },
+        EnergyTermIR::InterfacialDmi {
+            d: 1.0e-3,
+            interface_normal: Some([0.0, f64::INFINITY, 0.0]),
+        },
+        EnergyTermIR::InterfacialDmi {
+            d: 1.0e-3,
+            interface_normal: Some([0.0, 0.0, 0.0]),
+        },
+        EnergyTermIR::BulkDmi { d: f64::INFINITY },
+    ];
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid DMI terms must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("energy_terms[1] interfacial_dmi D must be finite") }));
+    assert!(errors.iter().any(|error| {
+        error
+            .contains("energy_terms[2] interfacial_dmi interface_normal must contain finite values")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.contains("energy_terms[3] interfacial_dmi interface_normal must be non-zero")
+    }));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("energy_terms[4] bulk_dmi D must be finite")));
+}
+
+#[test]
+fn validation_rejects_invalid_material_dmi_values() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].interfacial_dmi = Some(f64::NAN);
+    ir.materials[0].bulk_dmi = Some(f64::INFINITY);
+    ir.materials[0].dind_field = Some(vec![1.0e-3, f64::NEG_INFINITY]);
+    ir.materials[0].dbulk_field = Some(vec![2.0e-3, f64::NAN]);
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid material DMI values must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("material 'Py' interfacial_dmi must be finite")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("material 'Py' bulk_dmi must be finite")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("material 'Py' dind_field must contain finite values")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("material 'Py' dbulk_field must contain finite values")));
+}
+
+#[test]
 fn preset_texture_accepts_preset_params_key() {
     let json = r#"{
         "kind": "preset_texture",
