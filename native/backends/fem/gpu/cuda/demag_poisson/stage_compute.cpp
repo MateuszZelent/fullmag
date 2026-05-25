@@ -132,12 +132,15 @@ bool compute_device_demag_for_device_stage(
         workspace->d_ess_tdofs,
         static_cast<int>(workspace->ess_tdofs.size()),
         stream);
+    // Pass nullptr mask so recovery computes H_demag at all nodes including airbox.
+    // LLG physics at airbox is self-zeroing because M=0 there (dm/dt = M×H = 0).
+    // The energy kernel below still uses magnetic_node_mask for correct energy sums.
     fullmag_cuda_demag_recovery_csr(
         workspace->recovery_x.d_row_offsets,
         workspace->recovery_x.d_col_indices,
         workspace->recovery_x.d_values,
         gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
+        nullptr,
         gpu.fields.h_demag.x,
         static_cast<int>(workspace->recovery_x.rows),
         stream);
@@ -146,7 +149,7 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_y.d_col_indices,
         workspace->recovery_y.d_values,
         gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
+        nullptr,
         gpu.fields.h_demag.y,
         static_cast<int>(workspace->recovery_y.rows),
         stream);
@@ -155,7 +158,7 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_z.d_col_indices,
         workspace->recovery_z.d_values,
         gpu.demag_poisson.poisson_solution,
-        gpu.mesh_regions.magnetic_node_mask,
+        nullptr,
         gpu.fields.h_demag.z,
         static_cast<int>(workspace->recovery_z.rows),
         stream);

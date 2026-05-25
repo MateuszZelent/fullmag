@@ -1062,7 +1062,8 @@ function buildVectorLineSegmentsFromPositions(
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
-    const length = Math.hypot(vx, vy, vz) || 1;
+    const length = Math.hypot(vx, vy, vz);
+    if (length === 0) continue; // skip zero-magnitude nodes (no visible vector)
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;
@@ -1216,7 +1217,8 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
-    const length = Math.hypot(vx, vy, vz) || 1;
+    const length = Math.hypot(vx, vy, vz);
+    if (length === 0) continue; // skip zero-magnitude nodes (no visible vector)
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;

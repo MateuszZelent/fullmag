@@ -1192,6 +1192,26 @@ GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH = (
     / "state"
     / "runtime_coefficients_state.hpp"
 )
+GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "runtime_coefficients_upload.hpp"
+)
+GPU_RUNTIME_COEFFICIENTS_UPLOAD_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "state"
+    / "runtime_coefficients_upload.cpp"
+)
 GPU_RESIDENCY_STATE_HPP_PATH = (
     REPO_ROOT
     / "native"
@@ -1604,6 +1624,28 @@ GPU_MAGNETOELASTIC_STATE_HPP_PATH = (
     / "interactions"
     / "magnetoelastic"
     / "magnetoelastic_state.hpp"
+)
+GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "magnetoelastic"
+    / "magnetoelastic_upload.hpp"
+)
+GPU_MAGNETOELASTIC_UPLOAD_CPP_PATH = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "gpu"
+    / "cuda"
+    / "interactions"
+    / "magnetoelastic"
+    / "magnetoelastic_upload.cpp"
 )
 GPU_LOCAL_INTERACTION_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
@@ -6309,9 +6351,16 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     runtime_coefficients_header = GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH.read_text(
         encoding="utf-8"
     )
+    runtime_coefficients_upload_header = (
+        GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH.read_text(encoding="utf-8")
+    )
+    runtime_coefficients_upload_source = (
+        GPU_RUNTIME_COEFFICIENTS_UPLOAD_CPP_PATH.read_text(encoding="utf-8")
+    )
     material_state_header = GPU_MATERIAL_STATE_HPP_PATH.read_text(encoding="utf-8")
     mesh_metrics_header = GPU_MESH_METRICS_STATE_HPP_PATH.read_text(encoding="utf-8")
     mesh_regions_header = GPU_MESH_REGIONS_STATE_HPP_PATH.read_text(encoding="utf-8")
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
     exchange_source = GPU_EXCHANGE_CPP_PATH.read_text(encoding="utf-8")
     llg_source = GPU_RK_LLG_RHS_DISPATCH_CU_PATH.read_text(encoding="utf-8")
@@ -6323,6 +6372,17 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
 
     assert "gpu_state_upload_runtime_coefficients" in gpu_state_header
     assert "gpu_state_upload_runtime_coefficients" in gpu_state_source
+    assert (
+        "GPU CUDA runtime-coefficients upload module header"
+        in runtime_coefficients_upload_header
+    )
+    assert (
+        "GPU CUDA runtime-coefficients upload source contract"
+        in runtime_coefficients_upload_source
+    )
+    assert "bool gpu_runtime_coefficients_upload(" in runtime_coefficients_upload_header
+    assert "bool gpu_runtime_coefficients_upload(" in runtime_coefficients_upload_source
+    assert "gpu/cuda/state/runtime_coefficients_upload.cpp" in cmake
     assert (
         "GPU CUDA runtime-coefficients readiness device-state module header"
         in runtime_coefficients_header
@@ -6362,23 +6422,49 @@ def test_gpu_state_uploads_runtime_coefficients_outside_hot_loop():
     ):
         assert flat_member not in gpu_state_header
     for member in (
-        "state.mesh_metrics.node_volumes",
-        "state.materials.ms",
-        "state.materials.a",
-        "state.materials.alpha",
-        "state.materials.ku",
-        "state.materials.ku2",
-        "state.materials.dind",
-        "state.materials.dbulk",
-        "state.materials.kc1",
-        "state.materials.kc2",
-        "state.materials.kc3",
-        "state.mesh_regions.magnetic_node_mask",
-        "state.mesh_regions.periodic_reduced_node",
-        "state.mesh_regions.periodic_representative_nodes",
-        "state.runtime_coefficients.uploaded",
+        "mesh_metrics.node_volumes",
+        "materials.ms",
+        "materials.a",
+        "materials.alpha",
+        "materials.ku",
+        "materials.ku2",
+        "materials.dind",
+        "materials.dbulk",
+        "materials.kc1",
+        "materials.kc2",
+        "materials.kc3",
+        "mesh_regions.magnetic_node_mask",
+        "mesh_regions.periodic_reduced_node",
+        "mesh_regions.periodic_representative_nodes",
+        "runtime_coefficients.uploaded",
     ):
-        assert member in gpu_state_source
+        assert member in runtime_coefficients_upload_source
+    for delegated_member in (
+        "gpu_runtime_coefficients_upload(",
+        "state.lifecycle",
+        "state.runtime_coefficients",
+        "state.materials",
+        "state.mesh_metrics",
+        "state.mesh_regions",
+    ):
+        assert delegated_member in gpu_state_source
+    for forbidden_upload_detail in (
+        "cudaMemcpy(state.mesh_metrics.node_volumes",
+        "cudaMemcpy(state.materials.ms",
+        "cudaMemcpy(state.materials.a",
+        "cudaMemcpy(state.materials.alpha",
+        "cudaMemcpy(state.materials.ku",
+        "cudaMemcpy(state.materials.ku2",
+        "cudaMemcpy(state.materials.dind",
+        "cudaMemcpy(state.materials.dbulk",
+        "cudaMemcpy(state.materials.kc1",
+        "cudaMemcpy(state.materials.kc2",
+        "cudaMemcpy(state.materials.kc3",
+        "cudaMemcpy(state.mesh_regions.magnetic_node_mask",
+        "cudaMemcpy(state.mesh_regions.periodic_reduced_node",
+        "cudaMemcpy(state.mesh_regions.periodic_representative_nodes",
+    ):
+        assert forbidden_upload_detail not in gpu_state_source
     assert "state.runtime_coefficients_uploaded" not in gpu_state_source
     for context_member in (
         "ctx.material_fields.Ku_field.data()",
@@ -6538,6 +6624,13 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     magnetoelastic_state_header = GPU_MAGNETOELASTIC_STATE_HPP_PATH.read_text(
         encoding="utf-8"
     )
+    magnetoelastic_upload_header = GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    magnetoelastic_upload_source = GPU_MAGNETOELASTIC_UPLOAD_CPP_PATH.read_text(
+        encoding="utf-8"
+    )
+    cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     rk_plan_source = GPU_RK_CPP_PATH.read_text(encoding="utf-8")
     magnetoelastic_field_source = GPU_RK_MAGNETOELASTIC_FIELD_CU_PATH.read_text(
         encoding="utf-8"
@@ -6554,6 +6647,11 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     assert "double *strain_voigt = nullptr" in magnetoelastic_state_header
     assert "uint64_t strain_voigt_len = 0" in magnetoelastic_state_header
     assert "bool strain_uploaded = false" in magnetoelastic_state_header
+    assert "GPU CUDA magnetoelastic upload module header" in magnetoelastic_upload_header
+    assert "GPU CUDA magnetoelastic upload source contract" in magnetoelastic_upload_source
+    assert "bool gpu_magnetoelastic_upload_strain(" in magnetoelastic_upload_header
+    assert "bool gpu_magnetoelastic_upload_strain(" in magnetoelastic_upload_source
+    assert "gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp" in cmake
     assert (
         '#include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp"'
         in gpu_state_header
@@ -6566,11 +6664,20 @@ def test_gpu_magnetoelastic_strain_device_state_is_owned_by_magnetoelastic_modul
     ):
         assert flat_member not in gpu_state_header
     for state_member in (
+        "gpu_magnetoelastic_upload_strain(",
+        "state.lifecycle",
         "state.magnetoelastic.strain_voigt",
         "state.magnetoelastic.strain_voigt_len",
         "state.magnetoelastic.strain_uploaded",
     ):
         assert state_member in gpu_state_source
+    for upload_member in (
+        "magnetoelastic.strain_voigt",
+        "magnetoelastic.strain_voigt_len",
+        "magnetoelastic.strain_uploaded",
+    ):
+        assert upload_member in magnetoelastic_upload_source
+    assert "cudaMemcpy(state.magnetoelastic.strain_voigt" not in gpu_state_source
     assert "state.mel_strain_voigt" not in gpu_state_source
     assert "ctx.gpu_state.device.magnetoelastic.strain_uploaded" in rk_plan_source
     assert "ctx.gpu_state.device.magnetoelastic.strain_voigt_len" in rk_plan_source

@@ -524,6 +524,10 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
         read_text_file(root / "gpu" / "cuda" / "transfer" / "component_transfer.cpp");
     const std::string runtime_coefficients_header =
         read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_state.hpp");
+    const std::string runtime_coefficients_upload_header =
+        read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_upload.hpp");
+    const std::string runtime_coefficients_upload_source =
+        read_text_file(root / "gpu" / "cuda" / "state" / "runtime_coefficients_upload.cpp");
     const std::string material_state_header =
         read_text_file(root / "gpu" / "cuda" / "materials" / "material_state.hpp");
     const std::string mesh_metrics_header =
@@ -540,6 +544,7 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_exchange_dispatch.cu");
     const std::string exchange_plan_source =
         read_text_file(root / "gpu" / "cuda" / "exchange" / "exchange_plan.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
 
     check(
         runtime_coefficients_header.find("GPU CUDA runtime-coefficients readiness device-state module header") !=
@@ -549,6 +554,18 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
             runtime_coefficients_header.find("bool uploaded = false") !=
                 std::string::npos,
         "GPU CUDA state module must own runtime-coefficients readiness state");
+    check(
+        runtime_coefficients_upload_header.find("GPU CUDA runtime-coefficients upload module header") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("GPU CUDA runtime-coefficients upload source contract") !=
+                std::string::npos &&
+            runtime_coefficients_upload_header.find("bool gpu_runtime_coefficients_upload(") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("bool gpu_runtime_coefficients_upload(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/state/runtime_coefficients_upload.cpp") !=
+                std::string::npos,
+        "GPU CUDA state module must own runtime-coefficients upload/allocation boundary");
     check(
         material_state_header.find("GPU CUDA material device-state module header") !=
                 std::string::npos &&
@@ -599,17 +616,33 @@ void gpu_runtime_coefficients_have_explicit_device_substates() {
                 std::string::npos,
         "FemGpuState must store runtime coefficients and mesh region maps through explicit substates");
     check(
-        gpu_state_source.find("state.materials.ms") != std::string::npos &&
-            gpu_state_source.find("state.materials.alpha") != std::string::npos &&
-            gpu_state_source.find("state.mesh_metrics.node_volumes") !=
+        gpu_state_source.find("gpu_runtime_coefficients_upload(") !=
                 std::string::npos &&
-            gpu_state_source.find("state.mesh_regions.magnetic_node_mask") !=
+            gpu_state_source.find("state.lifecycle") != std::string::npos &&
+            gpu_state_source.find("state.runtime_coefficients") !=
                 std::string::npos &&
-            gpu_state_source.find("state.mesh_regions.periodic_reduced_node") !=
+            gpu_state_source.find("state.materials") != std::string::npos &&
+            gpu_state_source.find("state.mesh_metrics") != std::string::npos &&
+            gpu_state_source.find("state.mesh_regions") != std::string::npos &&
+            runtime_coefficients_upload_source.find("materials.ms") !=
                 std::string::npos &&
-            gpu_state_source.find("state.mesh_regions.periodic_representative_nodes") !=
+            runtime_coefficients_upload_source.find("materials.alpha") !=
                 std::string::npos &&
-            gpu_state_source.find("state.runtime_coefficients.uploaded") !=
+            runtime_coefficients_upload_source.find("mesh_metrics.node_volumes") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("mesh_regions.magnetic_node_mask") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("mesh_regions.periodic_reduced_node") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("mesh_regions.periodic_representative_nodes") !=
+                std::string::npos &&
+            runtime_coefficients_upload_source.find("runtime_coefficients.uploaded") !=
+                std::string::npos &&
+            gpu_state_source.find("cudaMemcpy(state.mesh_metrics.node_volumes") ==
+                std::string::npos &&
+            gpu_state_source.find("cudaMemcpy(state.materials.ms") ==
+                std::string::npos &&
+            gpu_state_source.find("cudaMemcpy(state.mesh_regions.magnetic_node_mask") ==
                 std::string::npos &&
             gpu_state_source.find("state.runtime_coefficients_uploaded") ==
                 std::string::npos &&
@@ -1169,6 +1202,11 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
         read_text_file(root / "gpu" / "cuda" / "state" / "gpu_state.cpp");
     const std::string magnetoelastic_state_header =
         read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_state.hpp");
+    const std::string magnetoelastic_upload_header =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_upload.hpp");
+    const std::string magnetoelastic_upload_source =
+        read_text_file(root / "gpu" / "cuda" / "interactions" / "magnetoelastic" / "magnetoelastic_upload.cpp");
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string rk_plan_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_plan.cpp");
     const std::string magnetoelastic_field_source =
@@ -1189,6 +1227,18 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
                 std::string::npos,
         "GPU CUDA magnetoelastic module must own per-node prescribed strain device state");
     check(
+        magnetoelastic_upload_header.find("GPU CUDA magnetoelastic upload module header") !=
+                std::string::npos &&
+            magnetoelastic_upload_source.find("GPU CUDA magnetoelastic upload source contract") !=
+                std::string::npos &&
+            magnetoelastic_upload_header.find("bool gpu_magnetoelastic_upload_strain(") !=
+                std::string::npos &&
+            magnetoelastic_upload_source.find("bool gpu_magnetoelastic_upload_strain(") !=
+                std::string::npos &&
+            cmake.find("gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp") !=
+                std::string::npos,
+        "GPU CUDA magnetoelastic module must own prescribed strain upload");
+    check(
         gpu_state_header.find("#include \"gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp\"") !=
                 std::string::npos &&
             gpu_state_header.find("FemGpuMagnetoelasticDeviceState magnetoelastic{}") !=
@@ -1201,7 +1251,17 @@ void gpu_magnetoelastic_strain_is_owned_by_cuda_magnetoelastic_module() {
                 std::string::npos,
         "FemGpuState must store magnetoelastic strain through an explicit magnetoelastic substate");
     check(
-        gpu_state_source.find("state.magnetoelastic.strain_voigt") !=
+        gpu_state_source.find("gpu_magnetoelastic_upload_strain(") !=
+                std::string::npos &&
+            gpu_state_source.find("state.lifecycle") != std::string::npos &&
+            gpu_state_source.find("state.magnetoelastic") != std::string::npos &&
+            magnetoelastic_upload_source.find("magnetoelastic.strain_voigt") !=
+                std::string::npos &&
+            magnetoelastic_upload_source.find("magnetoelastic.strain_voigt_len") !=
+                std::string::npos &&
+            magnetoelastic_upload_source.find("magnetoelastic.strain_uploaded") !=
+                std::string::npos &&
+            gpu_state_source.find("cudaMemcpy(state.magnetoelastic.strain_voigt") ==
                 std::string::npos &&
             gpu_state_source.find("state.magnetoelastic.strain_voigt_len") !=
                 std::string::npos &&

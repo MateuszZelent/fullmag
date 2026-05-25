@@ -3769,6 +3769,27 @@ fn execute_native_fem(
     });
     ensure_fem_object_scalars(&mut final_stats, plan);
 
+    // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
+    // regardless of whether the last loop iteration had preview_due = true.
+    if let Some(live) = live.as_mut() {
+        if let Some(display_selection) = live.display_selection.map(|get| get()) {
+            if let Some(cached) =
+                build_fem_cached_preview_fields(&backend, &display_selection, plan, node_count)
+            {
+                let _ = (live.on_step)(StepUpdate {
+                    stats: final_stats.clone(),
+                    grid: live.grid,
+                    fem_mesh: None,
+                    magnetization: None,
+                    preview_field: None,
+                    cached_preview_fields: Some(cached),
+                    scalar_row_due: false,
+                    finished: false,
+                });
+            }
+        }
+    }
+
     for schedule in &mut field_schedules {
         let values = match schedule.name.as_str() {
             "m" => backend.copy_m(node_count)?,

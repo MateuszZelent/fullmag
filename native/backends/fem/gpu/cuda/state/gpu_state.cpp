@@ -12,8 +12,10 @@
 
 #include "context.hpp"
 #include "gpu/cuda/exchange/exchange_upload.hpp"
+#include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp"
 #include "gpu/cuda/mesh/mesh_geometry_upload.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
+#include "gpu/cuda/state/runtime_coefficients_upload.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -25,26 +27,11 @@
 #include <limits>
 #include <vector>
 
-#if FULLMAG_HAS_CUDA_RUNTIME
-#include <cuda_runtime.h>
-#endif
-
 namespace fullmag::fem {
 
 namespace {
 
 constexpr uint32_t kCudaBlockSize = 256;
-
-#if FULLMAG_HAS_CUDA_RUNTIME
-bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
-{
-    if (rc == cudaSuccess) {
-        return true;
-    }
-    error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
-    return false;
-}
-#endif
 
 void reset_metadata(FemGpuState &state)
 {
@@ -260,40 +247,13 @@ bool gpu_state_upload_magnetoelastic_strain(
     TransferAudit &audit,
     std::string &error)
 {
-    state.magnetoelastic.strain_voigt_len = 0;
-    state.magnetoelastic.strain_uploaded = false;
-    if (!state.lifecycle.allocated) {
-        return true;
-    }
-    const uint64_t expected_len = state.lifecycle.node_count * 6ull;
-    if (strain_voigt == nullptr || strain_len != expected_len) {
-        error = "FemGpuState magnetoelastic strain upload requires 6 Voigt values per node";
-        return false;
-    }
-    if (state.magnetoelastic.strain_voigt == nullptr) {
-        error = "FemGpuState magnetoelastic strain upload requires allocated device buffer";
-        return false;
-    }
-
-#if FULLMAG_HAS_CUDA_RUNTIME
-    if (strain_len > std::numeric_limits<size_t>::max() / sizeof(double)) {
-        error = "FemGpuState magnetoelastic strain buffer is too large for upload";
-        return false;
-    }
-    const size_t bytes = static_cast<size_t>(strain_len) * sizeof(double);
-    if (!cuda_ok(cudaMemcpy(state.magnetoelastic.strain_voigt, strain_voigt, bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState magnetoelastic.strain_voigt host->device", error)) {
-        return false;
-    }
-    record_host_to_device(audit, static_cast<uint64_t>(bytes));
-    state.magnetoelastic.strain_voigt_len = strain_len;
-    state.magnetoelastic.strain_uploaded = true;
-    return true;
-#else
-    (void)audit;
-    error = "FemGpuState was marked allocated but fullmag_fem was built without CUDA runtime support";
-    return false;
-#endif
+    return gpu_magnetoelastic_upload_strain(
+        state.lifecycle,
+        state.magnetoelastic,
+        strain_voigt,
+        strain_len,
+        audit,
+        error);
 }
 
 bool gpu_state_upload_mesh_geometry(
@@ -356,138 +316,45 @@ bool gpu_state_upload_runtime_coefficients(
     TransferAudit &audit,
     std::string &error)
 {
-    if (!state.lifecycle.allocated) {
-        return true;
-    }
-
-#if FULLMAG_HAS_CUDA_RUNTIME
-    const size_t node_count = static_cast<size_t>(state.lifecycle.node_count);
-    const size_t double_bytes = node_count * sizeof(double);
-    const size_t u8_bytes = node_count * sizeof(uint8_t);
-    const size_t u32_bytes = node_count * sizeof(uint32_t);
-
-    auto scalar_values = [node_count](const double *field, uint64_t len, double fallback) {
-        std::vector<double> values(node_count, fallback);
-        if (field != nullptr && len == static_cast<uint64_t>(node_count)) {
-            std::copy(field, field + node_count, values.begin());
-        }
-        return values;
-    };
-
-    const auto node_volume_values = scalar_values(node_volumes, node_volumes_len, 0.0);
-    const auto ms_values = scalar_values(ms_field, ms_field_len, uniform_ms);
-    const auto a_values = scalar_values(a_field, a_field_len, uniform_a);
-    const auto alpha_values = scalar_values(alpha_field, alpha_field_len, uniform_alpha);
-    const auto ku_values = scalar_values(ku_field, ku_field_len, 0.0);
-    const auto ku2_values = scalar_values(ku2_field, ku2_field_len, 0.0);
-    const auto dind_values = scalar_values(dind_field, dind_field_len, 0.0);
-    const auto dbulk_values = scalar_values(dbulk_field, dbulk_field_len, 0.0);
-    const auto kc1_values = scalar_values(kc1_field, kc1_field_len, 0.0);
-    const auto kc2_values = scalar_values(kc2_field, kc2_field_len, 0.0);
-    const auto kc3_values = scalar_values(kc3_field, kc3_field_len, 0.0);
-
-    std::vector<uint8_t> magnetic_mask(node_count, 1u);
-    if (magnetic_node_mask != nullptr &&
-        magnetic_node_mask_len == static_cast<uint64_t>(node_count)) {
-        std::copy(magnetic_node_mask, magnetic_node_mask + node_count, magnetic_mask.begin());
-    }
-
-    std::vector<uint32_t> reduced_node(node_count);
-    std::vector<uint32_t> representative_node(node_count);
-    for (size_t node = 0; node < node_count; ++node) {
-        reduced_node[node] = static_cast<uint32_t>(node);
-        representative_node[node] = static_cast<uint32_t>(node);
-    }
-    if (periodic_reduced_node != nullptr &&
-        periodic_reduced_node_len == static_cast<uint64_t>(node_count)) {
-        std::copy(periodic_reduced_node, periodic_reduced_node + node_count, reduced_node.begin());
-        if (periodic_representative_nodes != nullptr) {
-            for (size_t node = 0; node < node_count; ++node) {
-                const uint32_t reduced = reduced_node[node];
-                if (reduced < periodic_representative_nodes_len) {
-                    representative_node[node] =
-                        periodic_representative_nodes[static_cast<size_t>(reduced)];
-                }
-            }
-        }
-    }
-
-    if (!cuda_ok(cudaMemcpy(state.mesh_metrics.node_volumes, node_volume_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState node_volumes host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.ms, ms_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState ms host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.a, a_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState a host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.alpha, alpha_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState alpha host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.ku, ku_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState ku host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.ku2, ku2_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState ku2 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.dind, dind_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState dind host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.dbulk, dbulk_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState dbulk host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.kc1, kc1_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState kc1 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.kc2, kc2_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState kc2 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.materials.kc3, kc3_values.data(), double_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState kc3 host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.mesh_regions.magnetic_node_mask, magnetic_mask.data(), u8_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState magnetic_node_mask host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.mesh_regions.periodic_reduced_node, reduced_node.data(), u32_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState periodic_reduced_node host->device", error) ||
-        !cuda_ok(cudaMemcpy(state.mesh_regions.periodic_representative_nodes, representative_node.data(), u32_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState periodic_representative_nodes host->device", error)) {
-        return false;
-    }
-    record_host_to_device(
+    return gpu_runtime_coefficients_upload(
+        state.lifecycle,
+        state.runtime_coefficients,
+        state.materials,
+        state.mesh_metrics,
+        state.mesh_regions,
+        node_volumes,
+        node_volumes_len,
+        ms_field,
+        ms_field_len,
+        uniform_ms,
+        a_field,
+        a_field_len,
+        uniform_a,
+        alpha_field,
+        alpha_field_len,
+        uniform_alpha,
+        ku_field,
+        ku_field_len,
+        ku2_field,
+        ku2_field_len,
+        dind_field,
+        dind_field_len,
+        dbulk_field,
+        dbulk_field_len,
+        kc1_field,
+        kc1_field_len,
+        kc2_field,
+        kc2_field_len,
+        kc3_field,
+        kc3_field_len,
+        magnetic_node_mask,
+        magnetic_node_mask_len,
+        periodic_reduced_node,
+        periodic_reduced_node_len,
+        periodic_representative_nodes,
+        periodic_representative_nodes_len,
         audit,
-        static_cast<uint64_t>(double_bytes) * 11ull +
-            static_cast<uint64_t>(u8_bytes) +
-            static_cast<uint64_t>(u32_bytes) * 2ull);
-    state.mesh_metrics.node_count = static_cast<uint64_t>(node_count);
-    state.materials.node_count = static_cast<uint64_t>(node_count);
-    state.mesh_regions.node_count = static_cast<uint64_t>(node_count);
-    state.runtime_coefficients.uploaded = true;
-    return true;
-#else
-    (void)node_volumes;
-    (void)node_volumes_len;
-    (void)ms_field;
-    (void)ms_field_len;
-    (void)uniform_ms;
-    (void)a_field;
-    (void)a_field_len;
-    (void)uniform_a;
-    (void)alpha_field;
-    (void)alpha_field_len;
-    (void)uniform_alpha;
-    (void)ku_field;
-    (void)ku_field_len;
-    (void)ku2_field;
-    (void)ku2_field_len;
-    (void)dind_field;
-    (void)dind_field_len;
-    (void)dbulk_field;
-    (void)dbulk_field_len;
-    (void)kc1_field;
-    (void)kc1_field_len;
-    (void)kc2_field;
-    (void)kc2_field_len;
-    (void)kc3_field;
-    (void)kc3_field_len;
-    (void)magnetic_node_mask;
-    (void)magnetic_node_mask_len;
-    (void)periodic_reduced_node;
-    (void)periodic_reduced_node_len;
-    (void)periodic_representative_nodes;
-    (void)periodic_representative_nodes_len;
-    (void)audit;
-    error = "FemGpuState was marked allocated but fullmag_fem was built without CUDA runtime support";
-    return false;
-#endif
+        error);
 }
 
 bool gpu_state_upload_exchange_legacy_sparse(
