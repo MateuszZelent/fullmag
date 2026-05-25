@@ -113,7 +113,11 @@ function measureFdmCuboidUpload(name: string, startMark: string | null): void {
 
   const endMark = `${name}:end:${Date.now()}:${Math.random()}`;
   target.mark(endMark);
-  target.measure(name, startMark, endMark);
+  try {
+    target.measure(name, startMark, endMark);
+  } catch {
+    // Gracefully ignore measurement errors
+  }
 }
 
 export function buildFdmCuboidInstanceModel(

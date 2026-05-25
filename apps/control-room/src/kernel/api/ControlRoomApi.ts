@@ -1262,7 +1262,11 @@ async function measureControlRoomApiPerformance<T>(
     return await task();
   } finally {
     performanceTarget.mark(endMark);
-    performanceTarget.measure(name, startMark, endMark);
+    try {
+      performanceTarget.measure(name, startMark, endMark);
+    } catch {
+      // Gracefully ignore measurement errors to prevent crashing the API
+    }
     performanceTarget.clearMarks?.(startMark);
     performanceTarget.clearMarks?.(endMark);
   }

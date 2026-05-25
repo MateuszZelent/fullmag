@@ -853,7 +853,11 @@ function measureViewport3DModelBuild<T>(name: string, build: () => T): T {
     return build();
   } finally {
     performanceTarget.mark(endMark);
-    performanceTarget.measure(name, startMark, endMark);
+    try {
+      performanceTarget.measure(name, startMark, endMark);
+    } catch {
+      // Gracefully ignore measurement errors to prevent crashing the UI
+    }
     performanceTarget.clearMarks?.(startMark);
     performanceTarget.clearMarks?.(endMark);
   }
