@@ -56,16 +56,16 @@ bool gpu_rk_prepare_step_preflight(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    result.n = static_cast<int>(ctx.mesh.n_nodes);
+    result.n = static_cast<int>(gpu.lifecycle.node_count);
     result.blocks = (result.n + kBlockSize - 1) / kBlockSize;
     result.stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
 
-    if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH &&
-        gpu.device_state == FemGpuSyncState::DeviceClean &&
-        gpu.host_state == FemGpuSyncState::HostClean) {
-        gpu.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    if (gpu.residency.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH &&
+        gpu.residency.device_state == FemGpuSyncState::DeviceClean &&
+        gpu.residency.host_state == FemGpuSyncState::HostClean) {
+        gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     }
-    if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH) {
+    if (gpu.residency.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH) {
         reason = "GPU RK device-resident step requires FemGpuState device source of truth";
         return false;
     }

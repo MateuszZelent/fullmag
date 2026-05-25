@@ -911,6 +911,83 @@ describe("viewport3dRenderModel", () => {
     expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(28);
   });
 
+  it("builds airbox vector glyphs from scoped field data at global topology positions", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array([4, 5, 6, 5, 6, 7]),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 2,
+        elementMarkers: new Uint32Array([1, 0]),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          4, 5, 6, 7,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          10, 0, 0,
+          11, 0, 0,
+          10, 1, 0,
+          10, 0, 1,
+        ]),
+      },
+      [],
+      [
+        {
+          boundary_face_count: 2,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          nodeCount: 4,
+          nodeStart: 4,
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        pointCount: 4,
+        values: new Float64Array(12),
+      },
+      0.5,
+      {
+        partFieldVectors: new Map([
+          [
+            "airbox",
+            {
+              dtype: "float64",
+              grid: [4, 1, 1],
+              nComp: 3,
+              pointCount: 4,
+              quantityId: "H_demag",
+              valueCount: 12,
+              values: new Float64Array([
+                1, 0, 0,
+                0, 1, 0,
+                0, 0, 1,
+                -1, 0, 0,
+              ]),
+            },
+          ],
+        ]),
+        partVectorBudgets: new Map([["airbox", 4]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const segments = fieldModel?.partVectorSegments.get("airbox");
+    expect(segments?.length).toBe(28);
+    expect(segments?.[0]).toBeCloseTo(9.75);
+    expect(segments?.[3]).toBeCloseTo(10.25);
+  });
+
   it("uses an explicit global vector budget instead of per-part fixed budgets", () => {
     const budgets = distributeVectorGlyphBudget(
       [

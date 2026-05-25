@@ -49,9 +49,9 @@ bool gpu_rk_compute_llg_rhs(
     auto &gpu = ctx.gpu_state.device;
     fullmag_cuda_llg_rhs_fused(
         m.x, m.y, m.z,
-        gpu.h_eff.x, gpu.h_eff.y, gpu.h_eff.z,
+        gpu.fields.h_eff.x, gpu.fields.h_eff.y, gpu.fields.h_eff.z,
         rhs.x, rhs.y, rhs.z,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         gpu.materials.alpha,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,

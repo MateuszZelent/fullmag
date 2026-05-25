@@ -31,13 +31,13 @@ bool gpu_rk_compute_rk23_adaptive_k3(
 
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
-            gpu.m,
-            gpu.k[3],
+            gpu.magnetization.m,
+            gpu.rk.k[3],
             stream,
             n,
             "launch GPU RK23 BS23 k3 for adaptive error estimate",
             reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;

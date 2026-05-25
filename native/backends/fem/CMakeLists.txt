@@ -18,12 +18,16 @@ set(FEM_SOURCES
     core/fem_plan_fields.cpp
     core/fem_state.cpp
     gpu/cuda/exchange/exchange_plan.cpp
+    gpu/cuda/exchange/exchange_upload.cpp
     gpu/cuda/integrators/rk/rk_fsal_policy.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
+    gpu/cuda/mesh/mesh_geometry_upload.cpp
+    gpu/cuda/state/device_memory.cpp
     gpu/cuda/state/gpu_state.cpp
+    gpu/cuda/transfer/component_transfer.cpp
     gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp

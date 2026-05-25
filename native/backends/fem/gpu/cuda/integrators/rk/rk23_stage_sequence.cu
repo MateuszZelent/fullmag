@@ -54,34 +54,34 @@ bool gpu_rk_run_rk23_stage_sequence(
     auto &gpu = ctx.gpu_state.device;
 
     fullmag_cuda_euler_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         0.75 * active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK23 midpoint/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
-            gpu.m_stage,
-            gpu.k[2],
+            gpu.rk.m_stage,
+            gpu.rk.k[2],
             stream,
             n,
             "launch GPU RK stage-2 h_eff accumulation",
             reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_bs23_accept(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
         active_dt,
         n,
         stream);

@@ -56,7 +56,7 @@ bool gpu_rk_compute_thermal_field_contribution(
         return false;
     }
     if (gpu.materials.ms == nullptr || gpu.materials.alpha == nullptr || gpu.mesh_metrics.node_volumes == nullptr ||
-        gpu.h_therm.x == nullptr || gpu.h_therm.y == nullptr || gpu.h_therm.z == nullptr) {
+        gpu.fields.h_therm.x == nullptr || gpu.fields.h_therm.y == nullptr || gpu.fields.h_therm.z == nullptr) {
         reason = "GPU RK thermal field requires device-resident Ms, alpha, node volumes, and H_therm buffers";
         return false;
     }
@@ -65,10 +65,10 @@ bool gpu_rk_compute_thermal_field_contribution(
         gpu.materials.alpha,
         gpu.mesh_metrics.node_volumes,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_therm.x,
-        gpu.h_therm.y,
-        gpu.h_therm.z,
-        gpu.scalar_reduce_workspace,
+        gpu.fields.h_therm.x,
+        gpu.fields.h_therm.y,
+        gpu.fields.h_therm.z,
+        gpu.reductions.scalar_workspace,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,
         ctx.thermal_brown.temperature,

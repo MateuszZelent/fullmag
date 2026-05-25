@@ -138,6 +138,22 @@ export function resolveViewport3DFieldVectorResourceKey(
   return suffix ? `${path}?${suffix}` : path;
 }
 
+export function resolveViewport3DAirboxFieldVectorResourceKeys(
+  quantityId: string,
+  airboxParts: readonly { id: string }[],
+): Map<string, string> {
+  return new Map(
+    airboxParts.map((part) => [
+      part.id,
+      resolveViewport3DFieldVectorResourceKey(quantityId, {
+        component: "full",
+        scope_id: part.id,
+        scope_kind: "airbox",
+      }),
+    ]),
+  );
+}
+
 export function useViewport3DDomainMeta() {
   const { api } = useKernel();
   const load = useCallback(
@@ -206,6 +222,68 @@ export function useViewport3DFieldVector(
 
   return useResource({
     enabled,
+    load,
+    resolveRevision,
+    resourceKey,
+  });
+}
+
+export function useViewport3DAirboxFieldVectors(
+  quantityId: string,
+  airboxParts: readonly { id: string }[],
+  enabled = true,
+) {
+  const { api } = useKernel();
+  const resourceKeys = useMemo(
+    () => resolveViewport3DAirboxFieldVectorResourceKeys(quantityId, airboxParts),
+    [airboxParts, quantityId],
+  );
+  const resourceKey = useMemo(() => {
+    const suffix = Array.from(resourceKeys.values()).join("|");
+    return suffix
+      ? `viewport-3d:airbox-field-vectors:${suffix}`
+      : "viewport-3d:airbox-field-vectors:none";
+  }, [resourceKeys]);
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      const entries = await Promise.all(
+        Array.from(resourceKeys, async ([partId, key]) => {
+          const data = await loadCachedBinaryResource(
+            fieldVectorCache,
+            key,
+            (etag) =>
+              api.data.fields.vector(
+                quantityId,
+                {
+                  component: "full",
+                  scope_id: partId,
+                  scope_kind: "airbox",
+                },
+                { etag, signal },
+              ),
+          );
+          return [partId, data] as const;
+        }),
+      );
+
+      return new Map(
+        entries.filter(
+          (entry): entry is readonly [string, DecodedFieldVector] =>
+            entry[1] !== null,
+        ),
+      );
+    },
+    [api, quantityId, resourceKeys],
+  );
+  const resolveRevision = useCallback(() => {
+    const revisions = Array.from(resourceKeys.values()).map(
+      (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
+    );
+    return revisions.length > 0 ? revisions.join("|") : null;
+  }, [resourceKeys]);
+
+  return useResource({
+    enabled: enabled && resourceKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,

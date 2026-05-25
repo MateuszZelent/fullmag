@@ -183,6 +183,11 @@ import type { RequestDiagnosticsController } from "./RequestDiagnosticsControlle
 type FetchLike = typeof fetch;
 type PathParams = Record<string, string | number>;
 type QueryParams = Record<string, unknown>;
+type BinaryOpenApiTransportResult = {
+  data?: unknown;
+  error?: unknown;
+  response: Response;
+};
 
 interface ControlRoomApiOptions {
   baseUrl?: string;
@@ -930,22 +935,25 @@ export class ControlRoomApi {
           headers["if-none-match"] = options.etag;
         }
 
-        let lastResponse: any = null;
-        let result: any;
+        const requestState: { lastResponse: Response | null } = {
+          lastResponse: null,
+        };
+        let result: BinaryOpenApiTransportResult | null = null;
         try {
           result = await this.transport.GET(path as never, {
             cache: "no-store",
             fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
               const resp = await this.executeBinaryOpenApiFetch(input, init);
-              lastResponse = resp;
+              requestState.lastResponse = resp;
               return resp;
             },
             headers,
             params: { path: pathParams, query },
             parseAs: "arrayBuffer",
             signal: options.signal,
-          } as never);
+          } as never) as unknown as BinaryOpenApiTransportResult;
         } catch (error) {
+          const lastResponse = requestState.lastResponse;
           if (lastResponse && !lastResponse.ok) {
             throw new ControlRoomApiError(
               `Request failed with status ${lastResponse.status}`,
@@ -953,6 +961,9 @@ export class ControlRoomApi {
             );
           }
           throw error;
+        }
+        if (!result) {
+          throw new ControlRoomApiError("Binary resource request did not return a response", 0);
         }
         const response = result.response;
         const etag = response.headers.get("etag");

@@ -51,21 +51,21 @@ bool gpu_rk_reduce_final_exchange_energy_terms(
         gpu.legacy_exchange.csr_row_offsets,
         gpu.legacy_exchange.csr_col_indices,
         gpu.legacy_exchange.csr_values,
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.scalar_reduce_workspace,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.reductions.scalar_workspace,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK exchange energy blocks", reason)) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::ExchangeEnergy),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK exchange energy reduction", reason)) {

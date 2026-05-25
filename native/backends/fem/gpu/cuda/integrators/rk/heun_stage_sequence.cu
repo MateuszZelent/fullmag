@@ -27,9 +27,9 @@ void gpu_rk_run_heun_stage_sequence(
     auto &gpu = ctx.gpu_state.device;
 
     fullmag_cuda_heun_accept(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
         active_dt,
         n,
         stream);

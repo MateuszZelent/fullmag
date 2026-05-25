@@ -36,7 +36,7 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     }
 #if FULLMAG_HAS_MFEM_STACK
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
+    if (gpu.fields.h_demag.x == nullptr || gpu.fields.h_demag.y == nullptr || gpu.fields.h_demag.z == nullptr) {
         reason = "GPU RK hybrid CPU demag requires allocated device H_demag buffers";
         return false;
     }

@@ -54,30 +54,30 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             gpu.mesh_geometry.nodes_xyz == nullptr || gpu.mesh_geometry.elements == nullptr ||
             gpu.mesh_geometry.magnetic_element_mask == nullptr ||
             gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-            gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
-            gpu.zhang_li_rhs.z == nullptr) {
+            gpu.local_interactions.vector.x == nullptr || gpu.local_interactions.vector.y == nullptr ||
+            gpu.local_interactions.vector.z == nullptr) {
             reason = "GPU RK DMI energy requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
             return false;
         }
-        FemGpuComponentField &field = bulk_mode ? gpu.h_bulk_dmi : gpu.h_dmi;
+        FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi : gpu.fields.h_dmi;
         fullmag_cuda_dmi_field_energy(
             gpu.mesh_geometry.nodes_xyz,
             gpu.mesh_geometry.elements,
             gpu.mesh_geometry.magnetic_element_mask,
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
             gpu.materials.ms,
             bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
             gpu.mesh_metrics.lumped_mass,
             gpu.mesh_regions.magnetic_node_mask,
-            gpu.zhang_li_rhs.x,
-            gpu.zhang_li_rhs.y,
-            gpu.zhang_li_rhs.z,
+            gpu.local_interactions.vector.x,
+            gpu.local_interactions.vector.y,
+            gpu.local_interactions.vector.z,
             field.x,
             field.y,
             field.z,
-            gpu.scalar_reduce_workspace,
+            gpu.reductions.scalar_workspace,
             ctx.material_fields.material.saturation_magnetisation,
             bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
             ctx.dmi.interface_normal[0],
@@ -94,12 +94,12 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
                 reason)) {
             return false;
         }
-        size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
         fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
+            gpu.reductions.scalar_workspace,
             1,
             gpu_rk_final_scalar_result(gpu, slot),
-            gpu.scalar_reduce_temp_storage,
+            gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
         if (!cuda_launch_ok(

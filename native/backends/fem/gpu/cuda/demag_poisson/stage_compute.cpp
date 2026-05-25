@@ -60,7 +60,7 @@ bool compute_device_demag_for_device_stage(
         return false;
     }
     if (gpu.demag_poisson.poisson_rhs == nullptr || gpu.demag_poisson.poisson_solution == nullptr ||
-        gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
+        gpu.fields.h_demag.x == nullptr || gpu.fields.h_demag.y == nullptr || gpu.fields.h_demag.z == nullptr) {
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
@@ -138,7 +138,7 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_x.d_values,
         gpu.demag_poisson.poisson_solution,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_demag.x,
+        gpu.fields.h_demag.x,
         static_cast<int>(workspace->recovery_x.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
@@ -147,7 +147,7 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_y.d_values,
         gpu.demag_poisson.poisson_solution,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_demag.y,
+        gpu.fields.h_demag.y,
         static_cast<int>(workspace->recovery_y.rows),
         stream);
     fullmag_cuda_demag_recovery_csr(
@@ -156,37 +156,37 @@ bool compute_device_demag_for_device_stage(
         workspace->recovery_z.d_values,
         gpu.demag_poisson.poisson_solution,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_demag.z,
+        gpu.fields.h_demag.z,
         static_cast<int>(workspace->recovery_z.rows),
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
         return false;
     }
 
-    const int n = static_cast<int>(gpu.node_count);
+    const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + 255) / 256;
     fullmag_cuda_demag_energy_blocks(
         m.x,
         m.y,
         m.z,
-        gpu.h_demag.x,
-        gpu.h_demag.y,
-        gpu.h_demag.z,
+        gpu.fields.h_demag.x,
+        gpu.fields.h_demag.y,
+        gpu.fields.h_demag.z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         n,
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy blocks", reason)) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         std::max(1, blocks),
-        gpu.scalar_reduce_result,
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.scalar_result,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
@@ -218,8 +218,8 @@ bool reduce_device_demag_robin_boundary_energy(
         workspace->robin_boundary_mass.d_col_indices == nullptr ||
         workspace->robin_boundary_mass.d_values == nullptr ||
         gpu.demag_poisson.poisson_solution == nullptr ||
-        gpu.scalar_reduce_workspace == nullptr ||
-        gpu.scalar_reduce_temp_storage == nullptr ||
+        gpu.reductions.scalar_workspace == nullptr ||
+        gpu.reductions.temp_storage == nullptr ||
         result == nullptr) {
         reason = "GPU Poisson-Robin demag energy requires device Robin boundary mass, potential, and reduction buffers";
         return false;
@@ -233,18 +233,18 @@ bool reduce_device_demag_robin_boundary_energy(
         workspace->robin_boundary_mass.d_values,
         gpu.demag_poisson.poisson_solution,
         0.5 * kMu0 * ctx.poisson_demag.robin_effective_beta,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         rows,
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson-Robin demag boundary energy blocks", reason)) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         std::max(1, (rows + kDemagCudaBlockSize - 1) / kDemagCudaBlockSize),
         result,
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     return cuda_ok(

@@ -47,40 +47,40 @@ bool gpu_rk_accumulate_effective_field(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    fullmag_cuda_accumulate_heff(gpu.h_ex.x, gpu.h_demag.x, gpu.h_ext.x, gpu.h_eff.x, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.h_ex.y, gpu.h_demag.y, gpu.h_ext.y, gpu.h_eff.y, n, true, stream);
-    fullmag_cuda_accumulate_heff(gpu.h_ex.z, gpu.h_demag.z, gpu.h_ext.z, gpu.h_eff.z, n, true, stream);
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.x, gpu.fields.h_demag.x, gpu.fields.h_ext.x, gpu.fields.h_eff.x, n, true, stream);
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.y, gpu.fields.h_demag.y, gpu.fields.h_ext.y, gpu.fields.h_eff.y, n, true, stream);
+    fullmag_cuda_accumulate_heff(gpu.fields.h_ex.z, gpu.fields.h_demag.z, gpu.fields.h_ext.z, gpu.fields.h_eff.z, n, true, stream);
     if (!cuda_launch_ok(base_label, reason)) {
         return false;
     }
     if (ctx.anisotropy.uniaxial_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_ani.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_ani.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_ani.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_ani.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_ani.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_ani.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy h_eff accumulation", reason)) {
             return false;
         }
     }
     if (ctx.anisotropy.cubic_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_cubic_ani.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_cubic_ani.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_cubic_ani.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_cubic_ani.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK cubic anisotropy h_eff accumulation", reason)) {
             return false;
         }
     }
     if (ctx.dmi.interfacial_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_dmi.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_dmi.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK interfacial DMI h_eff accumulation", reason)) {
             return false;
         }
     }
     if (ctx.dmi.bulk_enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_bulk_dmi.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_bulk_dmi.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_bulk_dmi.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_bulk_dmi.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK bulk DMI h_eff accumulation", reason)) {
             return false;
         }
@@ -89,17 +89,17 @@ bool gpu_rk_accumulate_effective_field(
         return false;
     }
     if (ctx.magnetoelastic.enabled) {
-        fullmag_cuda_add_field_inplace(gpu.h_mel.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_mel.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_mel.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_mel.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_mel.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_mel.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK magnetoelastic h_eff accumulation", reason)) {
             return false;
         }
     }
     if (ctx.thermal_brown.temperature > 0.0) {
-        fullmag_cuda_add_field_inplace(gpu.h_therm.x, gpu.h_eff.x, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_therm.y, gpu.h_eff.y, n, stream);
-        fullmag_cuda_add_field_inplace(gpu.h_therm.z, gpu.h_eff.z, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_therm.x, gpu.fields.h_eff.x, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_therm.y, gpu.fields.h_eff.y, n, stream);
+        fullmag_cuda_add_field_inplace(gpu.fields.h_therm.z, gpu.fields.h_eff.z, n, stream);
         if (!cuda_launch_ok("launch GPU RK thermal h_eff accumulation", reason)) {
             return false;
         }

@@ -75,14 +75,14 @@ bool gpu_rk_accumulate_oersted_field(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.h_oe.x == nullptr || gpu.h_oe.y == nullptr || gpu.h_oe.z == nullptr) {
+    if (gpu.fields.h_oe.x == nullptr || gpu.fields.h_oe.y == nullptr || gpu.fields.h_oe.z == nullptr) {
         reason = "GPU RK Oersted field requires device-resident H_oe buffers";
         return false;
     }
     const double scale = gpu_rk_oersted_scale(ctx);
-    fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.x, gpu.h_eff.x, scale, n, stream);
-    fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.y, gpu.h_eff.y, scale, n, stream);
-    fullmag_cuda_add_scaled_field_inplace(gpu.h_oe.z, gpu.h_eff.z, scale, n, stream);
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.x, gpu.fields.h_eff.x, scale, n, stream);
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.y, gpu.fields.h_eff.y, scale, n, stream);
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.z, gpu.fields.h_eff.z, scale, n, stream);
     return cuda_launch_ok("launch GPU RK Oersted h_eff accumulation", reason);
 }
 

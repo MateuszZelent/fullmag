@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -304,8 +307,6 @@ describe("flattenVisibleExplorerRows", () => {
   });
 
   it("styles completed explorer rows with the success token", () => {
-    const { readFileSync } = require("node:fs");
-    const { fileURLToPath } = require("node:url");
     const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
     const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
     expect(css).toContain('.fm-explorer-tree-row[data-status="completed"]');

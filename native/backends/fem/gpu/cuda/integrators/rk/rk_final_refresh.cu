@@ -61,47 +61,47 @@ bool gpu_rk_finalize_accepted_step(
     auto &gpu = ctx.gpu_state.device;
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
-            gpu.m,
-            gpu.error,
+            gpu.magnetization.m,
+            gpu.rk.error,
             stream,
             n,
             "launch GPU RK final h_eff accumulation",
             reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     if (fsal_method) {
         if (!gpu_rk_copy_component_device(
-                gpu.error,
-                gpu.k[0],
-                gpu.node_count,
+                gpu.rk.error,
+                gpu.rk.k[0],
+                gpu.lifecycle.node_count,
                 stream,
                 "cudaMemcpyAsync GPU RK FSAL k0 device copy",
                 reason)) {
-            gpu.fsal_valid = false;
+            gpu.rk.fsal_valid = false;
             return false;
         }
-        gpu.fsal_valid = true;
+        gpu.rk.fsal_valid = true;
     } else {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
     }
 
-    if (gpu.scalar_reduce_temp_storage == nullptr ||
-        gpu.scalar_reduce_temp_storage_bytes == 0) {
+    if (gpu.reductions.temp_storage == nullptr ||
+        gpu.reductions.temp_storage_bytes == 0) {
         reason = "GPU RK device max requires preallocated CUB reduction temp storage";
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         std::max(1, blocks),
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK device max query", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
 
@@ -115,9 +115,9 @@ bool gpu_rk_finalize_accepted_step(
     stats.rejected_attempts = rejected_attempts;
     stats.rhs_evaluations = total_stage_rhs_evaluations + 1;
     stats.fsal_reused = fsal_reused ? 1 : 0;
-    gpu.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.device_state = FemGpuSyncState::DeviceDirty;
-    gpu.host_state = FemGpuSyncState::HostStale;
+    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
+    gpu.residency.host_state = FemGpuSyncState::HostStale;
     reason.clear();
     return true;
 }

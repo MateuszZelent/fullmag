@@ -220,6 +220,8 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.cpp");
     const std::string transfer_kernels =
         read_text_file(root / "gpu" / "cuda" / "transfer" / "transfer_kernels.cu");
+    const std::string component_transfer =
+        read_text_file(root / "gpu" / "cuda" / "transfer" / "component_transfer.cpp");
 
     const std::string initialize_body =
         extract_function_body(gpu_state, "bool gpu_state_initialize(");
@@ -238,13 +240,13 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
     const std::string download_m_body =
         extract_function_body(gpu_state, "bool gpu_state_download_magnetization_aos(");
     const std::string upload_component_body =
-        extract_function_body(gpu_state, "bool gpu_state_upload_component_aos(");
+        extract_function_body(component_transfer, "bool gpu_component_upload_aos(");
     const std::string upload_optional_component_body =
-        extract_function_body(gpu_state, "bool gpu_state_upload_optional_component_aos(");
+        extract_function_body(component_transfer, "bool gpu_component_upload_optional_aos(");
     const std::string download_component_body =
-        extract_function_body(gpu_state, "bool gpu_state_download_component_aos(");
+        extract_function_body(component_transfer, "bool gpu_component_download_aos(");
     const std::string zero_component_body =
-        extract_function_body(gpu_state, "bool gpu_state_zero_component_device(");
+        extract_function_body(component_transfer, "bool gpu_component_zero_device(");
     check(
         upload_m_body.find("std::vector<double> mx") == std::string::npos &&
             upload_m_body.find("std::vector<double> my") == std::string::npos &&
@@ -256,6 +258,22 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
             download_m_body.find("std::vector<double> mz") == std::string::npos,
         "GPU magnetization download must not allocate host SoA-to-AoS component vectors");
     check(
+        upload_m_body.find("gpu_component_upload_aos(") != std::string::npos &&
+            upload_m_body.find("state.lifecycle") !=
+                std::string::npos &&
+            upload_m_body.find("state.magnetization.m") !=
+                std::string::npos &&
+            upload_m_body.find("fullmag_cuda_upload_aos_to_soa") == std::string::npos,
+        "GPU magnetization upload must delegate generic AoS/SoA transfer to component-transfer module");
+    check(
+        download_m_body.find("gpu_component_download_aos(") != std::string::npos &&
+            download_m_body.find("state.lifecycle") !=
+                std::string::npos &&
+            download_m_body.find("state.magnetization.m") !=
+                std::string::npos &&
+            download_m_body.find("fullmag_cuda_download_soa_to_aos") == std::string::npos,
+        "GPU magnetization download must delegate generic AoS/SoA transfer to component-transfer module");
+    check(
         upload_component_body.find("std::vector<double> x") == std::string::npos &&
             upload_component_body.find("std::vector<double> y") == std::string::npos &&
             upload_component_body.find("std::vector<double> z") == std::string::npos,
@@ -264,18 +282,16 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         upload_optional_component_body.find("std::vector<double> zeros") == std::string::npos,
         "GPU optional component upload must not heap-allocate host zero vectors");
     check(
-        gpu_state.find("gpu_state_zero_component_device(") != std::string::npos &&
-            upload_optional_component_body.find("gpu_state_zero_component_device(") !=
+        component_transfer.find("gpu_component_zero_device(") != std::string::npos &&
+            upload_optional_component_body.find("gpu_component_zero_device(") !=
                 std::string::npos,
         "GPU optional component upload must zero device components directly when the host field is absent");
     check(
-        (upload_m_body.find("cudaMemcpy2D") != std::string::npos ||
-            upload_m_body.find("fullmag_cuda_upload_aos_to_soa") != std::string::npos) &&
-            (upload_component_body.find("cudaMemcpy2D") != std::string::npos ||
+        (upload_component_body.find("cudaMemcpy2D") != std::string::npos ||
                 upload_component_body.find("fullmag_cuda_upload_aos_to_soa") != std::string::npos) &&
-            (download_m_body.find("cudaMemcpy2D") != std::string::npos ||
-                download_m_body.find("fullmag_cuda_download_soa_to_aos") != std::string::npos),
-        "GPU state transfers must use cudaMemcpy2D or device-side AoS/SoA transpose helpers");
+            (download_component_body.find("cudaMemcpy2D") != std::string::npos ||
+                download_component_body.find("fullmag_cuda_download_soa_to_aos") != std::string::npos),
+        "GPU component transfers must use cudaMemcpy2D or device-side AoS/SoA transpose helpers");
     check(
         transfer_kernels.find("cudaError_t fullmag_cuda_upload_aos_to_soa(") != std::string::npos &&
             transfer_kernels.find("cudaError_t fullmag_cuda_download_soa_to_aos(") !=
@@ -349,11 +365,11 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
     check(
         fullmag::fem::initialize_context_gpu_state(ctx, error),
         "host-resident GPU-state bootstrap should succeed without CUDA allocation");
-    check(ctx.gpu_state.device.initialized, "GPU-state metadata must be initialized");
-    check(!ctx.gpu_state.device.allocated, "no-CUDA host bootstrap must not allocate device state");
-    check(ctx.gpu_state.device.node_count == 4, "GPU-state node count mismatch");
-    check(ctx.gpu_state.device.dof_len == 12, "GPU-state DOF length mismatch");
-    check(ctx.gpu_state.device.stage_count == 7, "GPU-state stage count mismatch");
+    check(ctx.gpu_state.device.lifecycle.initialized, "GPU-state metadata must be initialized");
+    check(!ctx.gpu_state.device.lifecycle.allocated, "no-CUDA host bootstrap must not allocate device state");
+    check(ctx.gpu_state.device.lifecycle.node_count == 4, "GPU-state node count mismatch");
+    check(ctx.gpu_state.device.lifecycle.dof_len == 12, "GPU-state DOF length mismatch");
+    check(ctx.gpu_state.device.lifecycle.stage_count == 7, "GPU-state stage count mismatch");
 #endif
 }
 

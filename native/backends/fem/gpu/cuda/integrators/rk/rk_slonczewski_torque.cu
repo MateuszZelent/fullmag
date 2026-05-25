@@ -77,7 +77,7 @@ bool gpu_rk_add_slonczewski_torque(
         rhs.x,
         rhs.y,
         rhs.z,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         gpu_rk_current_density_magnitude(ctx),
         ctx.stt.current_sign,
         slonczewski_thickness,

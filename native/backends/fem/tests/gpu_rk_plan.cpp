@@ -183,9 +183,9 @@ int main() {
                 audit,
                 sync_error),
             "FemGpuState test allocation failed");
-        gpu.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-        gpu.host_state = fullmag::fem::FemGpuSyncState::HostStale;
-        gpu.device_state = fullmag::fem::FemGpuSyncState::DeviceDirty;
+        gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+        gpu.residency.host_state = fullmag::fem::FemGpuSyncState::HostStale;
+        gpu.residency.device_state = fullmag::fem::FemGpuSyncState::DeviceDirty;
 
         std::vector<double> downloaded;
         check(
@@ -202,10 +202,10 @@ int main() {
                 "downloaded magnetization component mismatch");
         }
         check(
-            gpu.host_state == fullmag::fem::FemGpuSyncState::HostClean,
+            gpu.residency.host_state == fullmag::fem::FemGpuSyncState::HostClean,
             "readback should mark host magnetization clean");
         check(
-            gpu.source_of_truth == FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
+            gpu.residency.source_of_truth == FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
             "readback must preserve device source of truth");
         fullmag::fem::gpu_state_destroy(gpu);
     }
@@ -216,10 +216,10 @@ int main() {
     ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     ctx.exchange.enabled = true;
     ctx.demag.enabled = false;
-    ctx.gpu_state.device.initialized = true;
-    ctx.gpu_state.device.node_count = 8;
-    ctx.gpu_state.device.dof_len = 24;
-    ctx.gpu_state.device.stage_count = 2;
+    ctx.gpu_state.device.lifecycle.initialized = true;
+    ctx.gpu_state.device.lifecycle.node_count = 8;
+    ctx.gpu_state.device.lifecycle.dof_len = 24;
+    ctx.gpu_state.device.lifecycle.stage_count = 2;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;
     ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
@@ -228,7 +228,7 @@ int main() {
     check(!no_allocation.enabled, "GPU RK must not enable without allocated FemGpuState");
     check(reason.find("FemGpuState") != std::string::npos, "missing FemGpuState rejection reason");
 
-    ctx.gpu_state.device.allocated = true;
+    ctx.gpu_state.device.lifecycle.allocated = true;
     ctx.demag.enabled = true;
     reason.clear();
     const auto with_demag = fullmag::fem::gpu_rk_plan_device_resident(ctx, reason);
@@ -243,11 +243,11 @@ int main() {
                                const char *message) {
         reason.clear();
         auto ready_ctx = blocked_ctx;
-        ready_ctx.gpu_state.device.initialized = true;
-        ready_ctx.gpu_state.device.allocated = true;
-        ready_ctx.gpu_state.device.node_count = ctx.mesh.n_nodes;
-        ready_ctx.gpu_state.device.dof_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
-        ready_ctx.gpu_state.device.stage_count = fullmag::fem::gpu_rk_stage_count(ready_ctx.base_plan.integrator);
+        ready_ctx.gpu_state.device.lifecycle.initialized = true;
+        ready_ctx.gpu_state.device.lifecycle.allocated = true;
+        ready_ctx.gpu_state.device.lifecycle.node_count = ctx.mesh.n_nodes;
+        ready_ctx.gpu_state.device.lifecycle.dof_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
+        ready_ctx.gpu_state.device.lifecycle.stage_count = fullmag::fem::gpu_rk_stage_count(ready_ctx.base_plan.integrator);
         const auto blocked = fullmag::fem::gpu_rk_plan_device_resident(ready_ctx, reason);
         check(!blocked.enabled, message);
         if (reason.find(reason_fragment) == std::string::npos) {
@@ -438,8 +438,8 @@ int main() {
         blocked.magnetoelastic.enabled = true;
         blocked.magnetoelastic.uniform_strain = false;
         blocked.magnetoelastic.strain_voigt.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 6u, 0.0);
-        blocked.gpu_state.device.mel_strain_uploaded = true;
-        blocked.gpu_state.device.mel_strain_voigt_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
+        blocked.gpu_state.device.magnetoelastic.strain_uploaded = true;
+        blocked.gpu_state.device.magnetoelastic.strain_voigt_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 6ull;
         reason.clear();
         const auto mel_plan = fullmag::fem::gpu_rk_plan_device_resident(blocked, reason);
         check(
@@ -610,7 +610,7 @@ int main() {
         reason.find("runtime coefficients") != std::string::npos,
         "MFEM+CUDA build must require runtime coefficients before GPU exchange");
 
-    ctx.gpu_state.device.runtime_coefficients_uploaded = true;
+    ctx.gpu_state.device.runtime_coefficients.uploaded = true;
     reason.clear();
     const auto upload_blocked_plan = fullmag::fem::gpu_exchange_plan_stage_exchange(ctx, reason);
     check(

@@ -45,7 +45,7 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
         reason = "stage H_ex device-resident exchange requires captured lumped mass metadata";
         return plan;
     }
-    if (!ctx.gpu_state.device.runtime_coefficients_uploaded) {
+    if (!ctx.gpu_state.device.runtime_coefficients.uploaded) {
         reason =
             "stage H_ex device-resident exchange requires device-resident "
             "runtime coefficients";
@@ -55,8 +55,8 @@ GpuExchangePlan gpu_exchange_plan_stage_exchange(const Context &ctx, std::string
         reason = "stage H_ex device-resident exchange requires device-resident CSR/mass upload";
         return plan;
     }
-    if (ctx.gpu_state.device.legacy_exchange.rows != ctx.gpu_state.device.node_count ||
-        ctx.gpu_state.device.legacy_exchange.cols != ctx.gpu_state.device.node_count) {
+    if (ctx.gpu_state.device.legacy_exchange.rows != ctx.gpu_state.device.lifecycle.node_count ||
+        ctx.gpu_state.device.legacy_exchange.cols != ctx.gpu_state.device.lifecycle.node_count) {
         reason =
             "stage H_ex device-resident exchange requires legacy sparse CSR "
             "dimensions to match FemGpuState node_count";

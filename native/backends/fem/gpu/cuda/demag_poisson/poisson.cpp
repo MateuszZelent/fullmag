@@ -44,10 +44,10 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     if (!ctx.demag.enabled || ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
         return true;
     }
-    if (!ctx.gpu_state.device.allocated ||
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
         ctx.gpu_state.device.demag_poisson.poisson_rhs == nullptr ||
         ctx.gpu_state.device.demag_poisson.poisson_solution == nullptr ||
-        ctx.gpu_state.device.h_demag.x == nullptr) {
+        ctx.gpu_state.device.fields.h_demag.x == nullptr) {
         error = "GPU Poisson demag requires allocated FemGpuState demag buffers";
         return false;
     }
@@ -85,7 +85,7 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
     ctx.poisson_demag.gpu_workspace = workspace.release();
     ctx.poisson_demag.gpu_workspace_ready = true;
     ctx.poisson_demag.gpu_workspace_device_bytes = device_bytes;
-    ctx.gpu_state.device.device_bytes += device_bytes;
+    ctx.gpu_state.device.lifecycle.device_bytes += device_bytes;
     return true;
 #else
     (void)ctx;
@@ -112,8 +112,8 @@ void gpu_demag_poisson_destroy(Context &ctx)
         workspace->hypre_done_event = nullptr;
     }
 #endif
-    if (workspace->device_bytes <= ctx.gpu_state.device.device_bytes) {
-        ctx.gpu_state.device.device_bytes -= workspace->device_bytes;
+    if (workspace->device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
+        ctx.gpu_state.device.lifecycle.device_bytes -= workspace->device_bytes;
     }
     delete workspace;
     ctx.poisson_demag.gpu_workspace = nullptr;

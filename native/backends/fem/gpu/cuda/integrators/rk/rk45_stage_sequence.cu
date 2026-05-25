@@ -52,140 +52,140 @@ bool gpu_rk_run_rk45_stage_sequence(
     auto &gpu = ctx.gpu_state.device;
 
     fullmag_cuda_rk45_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0,
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK45 stage-2/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
-            ctx, gpu.m_stage, gpu.k[2], stream, n,
+            ctx, gpu.rk.m_stage, gpu.rk.k[2], stream, n,
             "launch GPU RK45 stage-2 h_eff accumulation", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_rk45_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0,
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK45 stage-3/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
-            ctx, gpu.m_stage, gpu.k[3], stream, n,
+            ctx, gpu.rk.m_stage, gpu.rk.k[3], stream, n,
             "launch GPU RK45 stage-3 h_eff accumulation", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_rk45_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         19372.0 / 6561.0, -25360.0 / 2187.0, 64448.0 / 6561.0,
         -212.0 / 729.0, 0.0, 0.0,
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK45 stage-4/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
-            ctx, gpu.m_stage, gpu.k[4], stream, n,
+            ctx, gpu.rk.m_stage, gpu.rk.k[4], stream, n,
             "launch GPU RK45 stage-4 h_eff accumulation", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_rk45_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         9017.0 / 3168.0, -355.0 / 33.0, 46732.0 / 5247.0,
         49.0 / 176.0, -5103.0 / 18656.0, 0.0,
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK45 stage-5/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
-            ctx, gpu.m_stage, gpu.k[5], stream, n,
+            ctx, gpu.rk.m_stage, gpu.rk.k[5], stream, n,
             "launch GPU RK45 stage-5 h_eff accumulation", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_rk45_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[1].x, gpu.k[1].y, gpu.k[1].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         35.0 / 384.0, 0.0, 500.0 / 1113.0,
         125.0 / 192.0, -2187.0 / 6784.0, 11.0 / 84.0,
         active_dt,
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK45 stage-6/normalize", reason)) {
         return false;
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
-            ctx, gpu.m_stage, gpu.k[6], stream, n,
+            ctx, gpu.rk.m_stage, gpu.rk.k[6], stream, n,
             "launch GPU RK45 stage-6 h_eff accumulation", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;
 
     fullmag_cuda_dp54_accept(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.k[2].x, gpu.k[2].y, gpu.k[2].z,
-        gpu.k[3].x, gpu.k[3].y, gpu.k[3].z,
-        gpu.k[4].x, gpu.k[4].y, gpu.k[4].z,
-        gpu.k[5].x, gpu.k[5].y, gpu.k[5].z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
+        gpu.rk.k[3].x, gpu.rk.k[3].y, gpu.rk.k[3].z,
+        gpu.rk.k[4].x, gpu.rk.k[4].y, gpu.rk.k[4].z,
+        gpu.rk.k[5].x, gpu.rk.k[5].y, gpu.rk.k[5].z,
         active_dt,
         n,
         stream);

@@ -63,8 +63,8 @@ bool gpu_rk_download_component_device_to_aos(
         reason = std::string(operation) + " requires allocated source component buffers";
         return false;
     }
-    out_xyz.resize(static_cast<size_t>(gpu.dof_len));
-    const size_t node_count = static_cast<size_t>(gpu.node_count);
+    out_xyz.resize(static_cast<size_t>(gpu.lifecycle.dof_len));
+    const size_t node_count = static_cast<size_t>(gpu.lifecycle.node_count);
     const size_t host_pitch = 3u * sizeof(double);
     const size_t component_bytes = node_count * sizeof(double);
     if (!cuda_ok(cudaMemcpy2DAsync(

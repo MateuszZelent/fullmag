@@ -26,7 +26,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
     mfem::SparseMatrix &exchange_spmat,
     std::string &error)
 {
-    if (!ctx.gpu_state.device.allocated) {
+    if (!ctx.gpu_state.device.lifecycle.allocated) {
         return true;
     }
     const int height = exchange_spmat.Height();

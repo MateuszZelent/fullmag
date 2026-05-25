@@ -50,24 +50,24 @@ bool gpu_rk_snapshot_current_state(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu.allocated || gpu.m.x == nullptr || gpu.k[0].x == nullptr) {
+    if (!gpu.lifecycle.allocated || gpu.magnetization.m.x == nullptr || gpu.rk.k[0].x == nullptr) {
         reason = "GPU snapshot requires allocated FemGpuState magnetization and RHS buffers";
         return false;
     }
-    if (gpu.node_count == 0 || gpu.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    if (gpu.lifecycle.node_count == 0 || gpu.lifecycle.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         reason = "GPU snapshot node count is outside CUDA kernel range";
         return false;
     }
-    if (gpu.scalar_reduce_temp_storage == nullptr ||
-        gpu.scalar_reduce_temp_storage_bytes == 0 ||
-        gpu.scalar_reduce_result == nullptr ||
-        gpu.scalar_reduce_workspace == nullptr) {
+    if (gpu.reductions.temp_storage == nullptr ||
+        gpu.reductions.temp_storage_bytes == 0 ||
+        gpu.reductions.scalar_result == nullptr ||
+        gpu.reductions.scalar_workspace == nullptr) {
         reason = "GPU snapshot requires preallocated scalar reduction workspace";
         return false;
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
-    const int n = static_cast<int>(gpu.node_count);
+    const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = std::max(1, (n + kBlockSize - 1) / kBlockSize);
 
     ctx.adaptive_dt.current_dt = ctx.adaptive_dt.current_dt > 0.0
@@ -75,8 +75,8 @@ bool gpu_rk_snapshot_current_state(
         : ctx.base_plan.dt_seconds;
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
-            gpu.m,
-            gpu.k[0],
+            gpu.magnetization.m,
+            gpu.rk.k[0],
             stream,
             n,
             "launch GPU snapshot h_eff accumulation",
@@ -84,12 +84,12 @@ bool gpu_rk_snapshot_current_state(
         return false;
     }
 
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU snapshot max RHS reduction", reason)) {
@@ -100,8 +100,8 @@ bool gpu_rk_snapshot_current_state(
     stats.step = ctx.state.step_count;
     stats.time_seconds = ctx.state.current_time;
     stats.dt_seconds = 0.0;
-    gpu.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.device_state = FemGpuSyncState::DeviceClean;
+    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    gpu.residency.device_state = FemGpuSyncState::DeviceClean;
     if (!gpu_rk_finalize_step_stats(ctx, stats, reason)) {
         return false;
     }

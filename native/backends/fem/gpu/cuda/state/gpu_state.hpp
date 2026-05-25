@@ -10,14 +10,22 @@
 #include "fullmag_fem.h"
 #include "gpu/cuda/demag_poisson/demag_state.hpp"
 #include "gpu/cuda/exchange/exchange_state.hpp"
+#include "gpu/cuda/fields/field_buffer_state.hpp"
+#include "gpu/cuda/integrators/rk/rk_workspace_state.hpp"
+#include "gpu/cuda/interactions/local_interaction_workspace_state.hpp"
+#include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp"
 #include "gpu/cuda/materials/material_state.hpp"
 #include "gpu/cuda/mesh/mesh_geometry_state.hpp"
 #include "gpu/cuda/mesh/mesh_metrics_state.hpp"
 #include "gpu/cuda/mesh/mesh_regions_state.hpp"
+#include "gpu/cuda/reductions/reduction_workspace_state.hpp"
 #include "gpu/cuda/state/component_field.hpp"
+#include "gpu/cuda/state/lifecycle_state.hpp"
+#include "gpu/cuda/state/magnetization_state.hpp"
+#include "gpu/cuda/state/residency_state.hpp"
+#include "gpu/cuda/state/runtime_coefficients_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
-#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -26,67 +34,24 @@ namespace fullmag::fem {
 
 struct Context;
 
-static constexpr uint32_t FEM_GPU_MAX_RK_STAGES = 7;
-static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 17;
-
-enum class FemGpuSyncState {
-    HostClean,
-    HostDirty,
-    HostStale,
-    DeviceClean,
-    DeviceDirty,
-};
-
 struct FemGpuState {
-    bool initialized = false;
-    bool allocated = false;
-    uint64_t node_count = 0;
-    uint64_t dof_len = 0;
-    uint32_t stage_count = 0;
-    uint64_t device_bytes = 0;
-    uint64_t reduction_workspace_bytes = 0;
-    fullmag_fem_data_residency source_of_truth =
-        FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
+    FemGpuLifecycleDeviceState lifecycle{};
+    FemGpuResidencyDeviceState residency{};
 
-    FemGpuSyncState host_state = FemGpuSyncState::HostClean;
-    FemGpuSyncState device_state = FemGpuSyncState::HostStale;
-
-    FemGpuComponentField m;
-    FemGpuComponentField h_ex;
-    FemGpuComponentField h_demag;
-    FemGpuComponentField h_ext;
-    FemGpuComponentField h_ani;
-    FemGpuComponentField h_cubic_ani;
-    FemGpuComponentField h_dmi;
-    FemGpuComponentField h_bulk_dmi;
-    FemGpuComponentField h_oe;
-    FemGpuComponentField h_therm;
-    FemGpuComponentField h_mel;
-    FemGpuComponentField h_eff;
-    FemGpuComponentField m_backup;
-    FemGpuComponentField m_stage;
-    FemGpuComponentField error;
-    FemGpuComponentField zhang_li_rhs;
-    std::array<FemGpuComponentField, FEM_GPU_MAX_RK_STAGES> k{};
-    bool fsal_valid = false;
-
-    double *scalar_reduce_workspace = nullptr;
-    double *scalar_reduce_result = nullptr;
-    double *zhang_li_node_weight = nullptr;
-    void *scalar_reduce_temp_storage = nullptr;
-    uint64_t scalar_reduce_temp_storage_bytes = 0;
-
-    double *mel_strain_voigt = nullptr;
-    uint64_t mel_strain_voigt_len = 0;
-    bool mel_strain_uploaded = false;
-    bool runtime_coefficients_uploaded = false;
+    FemGpuMagnetizationDeviceState magnetization{};
+    FemGpuRuntimeCoefficientDeviceState runtime_coefficients{};
 
     FemGpuDemagPoissonDeviceState demag_poisson{};
     LegacyGpuExchangeDeviceState legacy_exchange{};
+    FemGpuFieldBufferDeviceState fields{};
+    FemGpuRkWorkspaceDeviceState rk{};
+    FemGpuLocalInteractionWorkspaceDeviceState local_interactions{};
+    FemGpuMagnetoelasticDeviceState magnetoelastic{};
     FemGpuMaterialDeviceState materials{};
     FemGpuMeshGeometryDeviceState mesh_geometry{};
     FemGpuMeshMetricsDeviceState mesh_metrics{};
     FemGpuMeshRegionDeviceState mesh_regions{};
+    FemGpuReductionWorkspaceDeviceState reductions{};
 };
 
 uint32_t gpu_state_stage_count(fullmag_fem_integrator integrator);

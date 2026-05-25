@@ -30,7 +30,7 @@ constexpr int kBlockSize = 256;
 
 double *gpu_rk_final_scalar_result(FemGpuState &gpu, GpuFinalScalarSlot slot)
 {
-    return gpu.scalar_reduce_result + static_cast<int>(slot);
+    return gpu.reductions.scalar_result + static_cast<int>(slot);
 }
 
 bool gpu_rk_finalize_step_stats(
@@ -39,16 +39,16 @@ bool gpu_rk_finalize_step_stats(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
-        gpu.scalar_reduce_result == nullptr ||
-        gpu.scalar_reduce_temp_storage == nullptr) {
+    if (gpu.residency.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
+        gpu.reductions.scalar_result == nullptr ||
+        gpu.reductions.temp_storage == nullptr) {
         return true;
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     std::array<double, kGpuFinalScalarSlots> scalars{};
 
-    const int n = static_cast<int>(gpu.node_count);
+    const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
     if (blocks <= 0) {
         return true;

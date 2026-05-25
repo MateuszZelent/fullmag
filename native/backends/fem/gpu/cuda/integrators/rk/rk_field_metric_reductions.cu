@@ -49,27 +49,27 @@ bool gpu_rk_reduce_final_field_metric_terms(
     auto &gpu = ctx.gpu_state.device;
 
     fullmag_cuda_field_metric_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.h_eff.x,
-        gpu.h_eff.y,
-        gpu.h_eff.z,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.fields.h_eff.x,
+        gpu.fields.h_eff.y,
+        gpu.fields.h_eff.z,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
-        gpu.error.x,
+        gpu.reductions.scalar_workspace,
+        gpu.rk.error.x,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK field metric blocks", reason)) {
         return false;
     }
 
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxHEff),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK max H_eff reduction", reason)) {
@@ -77,29 +77,29 @@ bool gpu_rk_reduce_final_field_metric_terms(
     }
 
     if (ctx.demag.enabled) {
-        // Use gpu.error.y as a scratch target for block_max_torque; gpu.error.x
+        // Use gpu.rk.error.y as a scratch target for block_max_torque; gpu.rk.error.x
         // still holds per-block H_eff torque values for MaxTorque below.
         fullmag_cuda_field_metric_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
-            gpu.h_demag.x,
-            gpu.h_demag.y,
-            gpu.h_demag.z,
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.fields.h_demag.x,
+            gpu.fields.h_demag.y,
+            gpu.fields.h_demag.z,
             gpu.mesh_regions.magnetic_node_mask,
-            gpu.scalar_reduce_workspace,
-            gpu.error.y,
+            gpu.reductions.scalar_workspace,
+            gpu.rk.error.y,
             n,
             stream);
         if (!cuda_launch_ok("launch GPU RK demag field metric blocks", reason)) {
             return false;
         }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
         fullmag_cuda_device_max(
-            gpu.scalar_reduce_workspace,
+            gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxHDemag),
-            gpu.scalar_reduce_temp_storage,
+            gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
         if (!cuda_launch_ok("launch GPU RK max H_demag reduction", reason)) {
@@ -107,12 +107,12 @@ bool gpu_rk_reduce_final_field_metric_terms(
         }
     }
 
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(
-        gpu.error.x,
+        gpu.rk.error.x,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxTorque),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     return cuda_launch_ok("launch GPU RK max torque reduction", reason);

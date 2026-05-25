@@ -78,12 +78,12 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
-    if (!ctx.gpu_state.device.allocated) {
+    if (!ctx.gpu_state.device.lifecycle.allocated) {
         reason = "GPU RK device-resident path requires allocated FemGpuState";
         return plan;
     }
-    if (ctx.gpu_state.device.node_count != ctx.mesh.n_nodes ||
-        ctx.gpu_state.device.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
+    if (ctx.gpu_state.device.lifecycle.node_count != ctx.mesh.n_nodes ||
+        ctx.gpu_state.device.lifecycle.dof_len != static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull) {
         reason = "GPU RK device-resident path requires FemGpuState dimensions to match Context";
         return plan;
     }
@@ -109,8 +109,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
             return plan;
         }
         if (!ctx.magnetoelastic.uniform_strain &&
-            (!ctx.gpu_state.device.mel_strain_uploaded ||
-                ctx.gpu_state.device.mel_strain_voigt_len != per_node_strain_len)) {
+            (!ctx.gpu_state.device.magnetoelastic.strain_uploaded ||
+                ctx.gpu_state.device.magnetoelastic.strain_voigt_len != per_node_strain_len)) {
             reason = "GPU RK device-resident path requires device-resident per-node magnetoelastic strain";
             return plan;
         }

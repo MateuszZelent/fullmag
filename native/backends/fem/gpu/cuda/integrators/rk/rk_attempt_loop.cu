@@ -85,7 +85,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                     n,
                     blocks,
                     reason)) {
-                gpu.fsal_valid = false;
+                gpu.rk.fsal_valid = false;
                 return false;
             }
             GpuAdaptiveDecisionReadback adaptive_decision{};
@@ -94,7 +94,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                     stream,
                     adaptive_decision,
                     reason)) {
-                gpu.fsal_valid = false;
+                gpu.rk.fsal_valid = false;
                 return false;
             }
             error_estimate = adaptive_decision.error_norm;
@@ -115,7 +115,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                         format_scientific(error_estimate) +
                         ", dt=" + format_scientific(active_dt) +
                         ", dt_min=" + format_scientific(ctx.adaptive_dt.dt_min);
-                    gpu.fsal_valid = false;
+                    gpu.rk.fsal_valid = false;
                     return false;
                 }
                 continue;

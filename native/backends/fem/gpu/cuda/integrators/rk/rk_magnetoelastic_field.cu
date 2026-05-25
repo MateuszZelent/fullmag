@@ -61,13 +61,13 @@ bool gpu_rk_compute_magnetoelastic_field_contribution(
         return false;
     }
     if (use_per_node_strain &&
-        (gpu.mel_strain_voigt == nullptr || !gpu.mel_strain_uploaded ||
-            gpu.mel_strain_voigt_len != per_node_strain_len)) {
+        (gpu.magnetoelastic.strain_voigt == nullptr || !gpu.magnetoelastic.strain_uploaded ||
+            gpu.magnetoelastic.strain_voigt_len != per_node_strain_len)) {
         reason = "GPU RK magnetoelastic field requires device-resident per-node strain";
         return false;
     }
     if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-        gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
+        gpu.fields.h_mel.x == nullptr || gpu.fields.h_mel.y == nullptr || gpu.fields.h_mel.z == nullptr) {
         reason = "GPU RK magnetoelastic field requires device-resident Ms, lumped mass, and H_mel buffers";
         return false;
     }
@@ -79,11 +79,11 @@ bool gpu_rk_compute_magnetoelastic_field_contribution(
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
-        gpu.h_mel.x,
-        gpu.h_mel.y,
-        gpu.h_mel.z,
-        gpu.scalar_reduce_workspace,
+        use_per_node_strain ? gpu.magnetoelastic.strain_voigt : nullptr,
+        gpu.fields.h_mel.x,
+        gpu.fields.h_mel.y,
+        gpu.fields.h_mel.z,
+        gpu.reductions.scalar_workspace,
         ctx.magnetoelastic.b1,
         ctx.magnetoelastic.b2,
         eps[0],

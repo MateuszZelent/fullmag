@@ -34,7 +34,7 @@ bool gpu_rk_read_scalar_result(
     if (!cuda_ok(
             cudaMemcpyAsync(
                 &value,
-                gpu.scalar_reduce_result,
+                gpu.reductions.scalar_result,
                 sizeof(double),
                 cudaMemcpyDeviceToHost,
                 stream),
@@ -64,7 +64,7 @@ bool gpu_rk_read_scalar_results(
     if (!cuda_ok(
             cudaMemcpyAsync(
                 values,
-                gpu.scalar_reduce_result,
+                gpu.reductions.scalar_result,
                 count * sizeof(double),
                 cudaMemcpyDeviceToHost,
                 stream),

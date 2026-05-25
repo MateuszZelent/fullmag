@@ -84,9 +84,9 @@ bool gpu_rk_run_stage_attempt(
     } else {
         gpu_rk_run_heun_stage_sequence(ctx, stream, n, active_dt);
     }
-    fullmag_cuda_normalize_vectors(gpu.m.x, gpu.m.y, gpu.m.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK accept/normalize", reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
 

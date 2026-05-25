@@ -5,6 +5,7 @@ import { ResourceCache } from "@/kernel/resources/ResourceCache";
 
 import {
   loadCachedBinaryResource,
+  resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
 } from "./viewport3dResources";
 
@@ -18,6 +19,26 @@ describe("viewport3dResources", () => {
       }),
     ).toBe(
       `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_id=part-1&scope_kind=part`,
+    );
+  });
+
+  it("builds scoped airbox field vector resource keys per mesh part", () => {
+    expect(
+      resolveViewport3DAirboxFieldVectorResourceKeys("H_demag", [
+        { id: "airbox" },
+        { id: "airbox-shell" },
+      ]),
+    ).toEqual(
+      new Map([
+        [
+          "airbox",
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&scope_id=airbox&scope_kind=airbox`,
+        ],
+        [
+          "airbox-shell",
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&scope_id=airbox-shell&scope_kind=airbox`,
+        ],
+      ]),
     );
   });
 

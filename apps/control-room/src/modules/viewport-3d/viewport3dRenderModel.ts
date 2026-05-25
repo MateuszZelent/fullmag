@@ -73,6 +73,7 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
   fullVectorSurfaceOffsetScale?: number;
+  partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScales?: ReadonlyMap<string, number>;
@@ -107,6 +108,11 @@ interface Viewport3DPositionSource {
   nodeCount: number;
   positions: ArrayLike<number>;
 }
+
+type Viewport3DVectorFieldValueResolver = (
+  globalNodeIndex: number,
+  selectedOffset: number,
+) => number | null;
 
 const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 
@@ -286,12 +292,17 @@ export function buildViewport3DFieldRenderModel(
     const partScale = options.partVectorScales?.get(partId) ?? 1;
     const surfaceOffsetScale =
       options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
+    const partFieldVector = options.partFieldVectors?.get(partId) ?? fieldVector;
+    const fieldValueResolver =
+      partFieldVector && partFieldVector !== fieldVector
+        ? buildScopedPartFieldValueResolver(partModel.part, topology)
+        : null;
     partVectorSegments.set(
       partId,
       buildCachedPartVectorSegments(
         partModel,
         topology,
-        fieldVector,
+        partFieldVector,
         vectorSelection,
         vectorScope,
         scale * partScale,
@@ -302,6 +313,7 @@ export function buildViewport3DFieldRenderModel(
           surfaceTriangleIndices:
             surfaceOffsetScale > 0 ? partModel.surfaceIndices : null,
         },
+        fieldValueResolver,
       ),
     );
   }
@@ -384,16 +396,18 @@ function buildCachedPartVectorSegments(
   scale: number,
   budget: number,
   vectorOptions: Viewport3DVectorSegmentOptions = {},
+  fieldValueResolver: Viewport3DVectorFieldValueResolver | null = null,
 ): Float32Array | null {
   if (!fieldVector || budget <= 0) return null;
 
   const anchorMode = vectorOptions.anchorMode ?? "center";
   const surfaceOffsetScale = vectorOptions.surfaceOffsetScale ?? 0;
+  const fieldValueMode = fieldValueResolver ? "scoped" : "full";
   return getCachedNestedFieldValue(
     partVectorSegmentCache,
     partModel,
     fieldVector,
-    `${vectorScope}:${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
+    `${vectorScope}:${fieldValueMode}:${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsForNodeSelectionFromPositions(
         topology,
@@ -402,6 +416,7 @@ function buildCachedPartVectorSegments(
         scale,
         budget,
         vectorOptions,
+        fieldValueResolver,
       ),
   );
 }
@@ -1112,6 +1127,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
   scale: number,
   maxVectors = 2048,
   options: Viewport3DVectorSegmentOptions = {},
+  fieldValueResolver: Viewport3DVectorFieldValueResolver | null = null,
 ): Float32Array | null {
   if (
     !fieldVector ||
@@ -1129,13 +1145,40 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
 
   const vectorCount = Math.min(totalSelectedNodes, maxVectors);
   const stride = Math.max(1, Math.floor(totalSelectedNodes / vectorCount));
+  const samples: Array<{
+    pointIndex: number;
+    valuePointIndex: number;
+  }> = [];
+
+  for (let vector = 0; vector < vectorCount; vector += 1) {
+    const selectedOffset = vector * stride;
+    const pointIndex = resolveNodeSelectionIndex(
+      nodeSelection,
+      selectedOffset,
+    );
+    if (pointIndex === null || pointIndex >= topology.nodeCount) {
+      continue;
+    }
+    const valuePointIndex = fieldValueResolver
+      ? fieldValueResolver(pointIndex, selectedOffset)
+      : pointIndex;
+    if (valuePointIndex === null) {
+      continue;
+    }
+    if (valuePointIndex < 0 || valuePointIndex >= fieldVector.pointCount) {
+      continue;
+    }
+    samples.push({ pointIndex, valuePointIndex });
+  }
+
+  if (samples.length === 0) {
+    return null;
+  }
 
   // First pass: compute maximum magnitude for relative-magnitude channel.
   let maxMag = 0;
-  for (let vector = 0; vector < vectorCount; vector += 1) {
-    const pointIndex = resolveNodeSelectionIndex(nodeSelection, vector * stride);
-    if (pointIndex === null || pointIndex >= fieldVector.pointCount) continue;
-    const valueOffset = pointIndex * fieldVector.nComp;
+  for (const sample of samples) {
+    const valueOffset = sample.valuePointIndex * fieldVector.nComp;
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
@@ -1159,23 +1202,13 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
       : null;
   const surfaceOffsetDistance = effectiveScale * surfaceOffsetScale;
 
-  const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
+  const segments = new Float32Array(samples.length * VECTOR_SEGMENT_STRIDE);
 
-  for (let vector = 0; vector < vectorCount; vector += 1) {
-    const pointIndex = resolveNodeSelectionIndex(
-      nodeSelection,
-      vector * stride,
-    );
-    if (
-      pointIndex === null ||
-      pointIndex >= topology.nodeCount ||
-      pointIndex >= fieldVector.pointCount
-    ) {
-      continue;
-    }
-
-    const positionOffset = pointIndex * 3;
-    const valueOffset = pointIndex * fieldVector.nComp;
+  for (let vector = 0; vector < samples.length; vector += 1) {
+    const sample = samples[vector];
+    if (!sample) continue;
+    const positionOffset = sample.pointIndex * 3;
+    const valueOffset = sample.valuePointIndex * fieldVector.nComp;
     const target = vector * VECTOR_SEGMENT_STRIDE;
     const x = topology.positions[positionOffset] ?? 0;
     const y = topology.positions[positionOffset + 1] ?? 0;
@@ -1192,7 +1225,7 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
       x,
       y,
       z,
-      pointIndex,
+      sample.pointIndex,
       surfaceNormals,
       surfaceOffsetDistance,
     );
@@ -1475,6 +1508,27 @@ function uniqueSortedIndices(indices: Uint32Array): number[] {
     unique.add(indices[index] ?? 0);
   }
   return Array.from(unique).toSorted((left, right) => left - right);
+}
+
+function buildScopedPartFieldValueResolver(
+  partSelection: Viewport3DNodeSelection,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
+): Viewport3DVectorFieldValueResolver {
+  const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
+  const localIndexByGlobalNode = new Map<number, number>();
+  for (let localIndex = 0; localIndex < selectedNodeCount; localIndex += 1) {
+    const globalNodeIndex = resolveNodeSelectionIndex(partSelection, localIndex);
+    if (
+      globalNodeIndex === null ||
+      globalNodeIndex < 0 ||
+      globalNodeIndex >= topology.nodeCount
+    ) {
+      continue;
+    }
+    localIndexByGlobalNode.set(globalNodeIndex, localIndex);
+  }
+
+  return (globalNodeIndex) => localIndexByGlobalNode.get(globalNodeIndex) ?? null;
 }
 
 export function resolveNodeSelectionCount(

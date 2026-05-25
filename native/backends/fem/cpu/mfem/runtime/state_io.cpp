@@ -25,7 +25,7 @@ namespace {
 #if FULLMAG_HAS_MFEM_STACK
 bool strict_gpu_demag_upload_path(const Context &ctx)
 {
-    return ctx.gpu_state.device.allocated &&
+    return ctx.gpu_state.device.lifecycle.allocated &&
         ctx.poisson_demag.gpu_demag_mode ==
             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
 }
@@ -35,9 +35,9 @@ bool strict_gpu_demag_upload_path(const Context &ctx)
 
 bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
 {
-    if (!ctx.gpu_state.device.allocated ||
-        ctx.gpu_state.device.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
-        ctx.gpu_state.device.host_state != FemGpuSyncState::HostStale) {
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
+        ctx.gpu_state.device.residency.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
+        ctx.gpu_state.device.residency.host_state != FemGpuSyncState::HostStale) {
         return true;
     }
     if (!gpu_state_download_magnetization_aos(
@@ -160,7 +160,7 @@ int context_upload_magnetization_f64(
     }
 
     ctx.state.m_xyz.assign(m_xyz, m_xyz + static_cast<size_t>(len));
-    if (ctx.gpu_state.device.allocated) {
+    if (ctx.gpu_state.device.lifecycle.allocated) {
         if (!gpu_state_upload_magnetization_aos(
                 ctx.gpu_state.device,
                 ctx.state.m_xyz.data(),

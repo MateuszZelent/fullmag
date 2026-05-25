@@ -47,28 +47,28 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
 
     if (ctx.anisotropy.uniaxial_enabled) {
         if (gpu.materials.ms == nullptr || gpu.materials.ku == nullptr || gpu.materials.ku2 == nullptr ||
             gpu.mesh_metrics.lumped_mass == nullptr ||
-            gpu.h_ani.x == nullptr || gpu.h_ani.y == nullptr || gpu.h_ani.z == nullptr) {
+            gpu.fields.h_ani.x == nullptr || gpu.fields.h_ani.y == nullptr || gpu.fields.h_ani.z == nullptr) {
             reason = "GPU RK uniaxial anisotropy energy requires device-resident Ms, Ku, Ku2, lumped mass, and H_ani buffers";
             return false;
         }
         fullmag_cuda_uniaxial_anisotropy_field_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
             gpu.materials.ms,
             gpu.materials.ku,
             gpu.materials.ku2,
             gpu.mesh_metrics.lumped_mass,
             gpu.mesh_regions.magnetic_node_mask,
-            gpu.h_ani.x,
-            gpu.h_ani.y,
-            gpu.h_ani.z,
-            gpu.scalar_reduce_workspace,
+            gpu.fields.h_ani.x,
+            gpu.fields.h_ani.y,
+            gpu.fields.h_ani.z,
+            gpu.reductions.scalar_workspace,
             ctx.anisotropy.uniaxial_Ku,
             ctx.anisotropy.uniaxial_Ku2,
             ctx.anisotropy.uniaxial_axis[0],
@@ -81,12 +81,12 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy blocks", reason)) {
             return false;
         }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
         fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
+            gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::AnisotropyEnergy),
-            gpu.scalar_reduce_temp_storage,
+            gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
         if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy reduction", reason)) {
@@ -97,25 +97,25 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
     if (ctx.anisotropy.cubic_enabled) {
         if (gpu.materials.ms == nullptr || gpu.materials.kc1 == nullptr || gpu.materials.kc2 == nullptr ||
             gpu.materials.kc3 == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-            gpu.h_cubic_ani.x == nullptr || gpu.h_cubic_ani.y == nullptr ||
-            gpu.h_cubic_ani.z == nullptr) {
+            gpu.fields.h_cubic_ani.x == nullptr || gpu.fields.h_cubic_ani.y == nullptr ||
+            gpu.fields.h_cubic_ani.z == nullptr) {
             reason = "GPU RK cubic anisotropy energy requires device-resident Ms, Kc1/Kc2/Kc3, lumped mass, and H_cubic buffers";
             return false;
         }
         fullmag_cuda_cubic_anisotropy_field_energy_blocks(
-            gpu.m.x,
-            gpu.m.y,
-            gpu.m.z,
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
             gpu.materials.ms,
             gpu.materials.kc1,
             gpu.materials.kc2,
             gpu.materials.kc3,
             gpu.mesh_metrics.lumped_mass,
             gpu.mesh_regions.magnetic_node_mask,
-            gpu.h_cubic_ani.x,
-            gpu.h_cubic_ani.y,
-            gpu.h_cubic_ani.z,
-            gpu.scalar_reduce_workspace,
+            gpu.fields.h_cubic_ani.x,
+            gpu.fields.h_cubic_ani.y,
+            gpu.fields.h_cubic_ani.z,
+            gpu.reductions.scalar_workspace,
             ctx.anisotropy.cubic_Kc1,
             ctx.anisotropy.cubic_Kc2,
             ctx.anisotropy.cubic_Kc3,
@@ -133,12 +133,12 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
         if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy blocks", reason)) {
             return false;
         }
-        reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+        reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
         fullmag_cuda_device_sum(
-            gpu.scalar_reduce_workspace,
+            gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::CubicAnisotropyEnergy),
-            gpu.scalar_reduce_temp_storage,
+            gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
         if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy reduction", reason)) {

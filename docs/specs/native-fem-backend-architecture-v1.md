@@ -214,7 +214,9 @@ GPU ownership migration has started with behavior-preserving source moves under
 energy CUDA wrappers are owned by `gpu/cuda/exchange/exchange_kernels.hpp/.cu`;
 legacy sparse exchange device-side CSR, dimensions, readiness, and byte
 accounting are owned by `gpu/cuda/exchange/exchange_state.hpp` and embedded in
-`FemGpuState` as the `legacy_exchange` substate. Shared GPU integration metrics
+`FemGpuState` as the `legacy_exchange` substate; validation, reset, allocation,
+and host-to-device CSR upload are owned by
+`gpu/cuda/exchange/exchange_upload.hpp/.cpp`. Shared GPU integration metrics
 such as node volumes, lumped mass, and inverse lumped mass are owned by
 `gpu/cuda/mesh/mesh_metrics_state.hpp` and embedded in `FemGpuState` as the
 `mesh_metrics` substate. GPU material coefficients (`Ms`, exchange stiffness,
@@ -222,17 +224,51 @@ damping, anisotropy, DMI, and cubic-anisotropy fields) are owned by
 `gpu/cuda/materials/material_state.hpp` and embedded in `FemGpuState` as the
 `materials` substate. GPU mesh-region masks and periodic node maps are owned by
 `gpu/cuda/mesh/mesh_regions_state.hpp` and embedded in `FemGpuState` as the
-`mesh_regions` substate. Uploaded GPU mesh geometry (`nodes_xyz`, tetrahedral
+`mesh_regions` substate. Runtime-coefficients readiness spanning material
+fields, mesh metrics, and mesh-region maps is owned by
+`gpu/cuda/state/runtime_coefficients_state.hpp` and embedded in `FemGpuState`
+as the `runtime_coefficients` substate. GPU data-residency source-of-truth and
+host/device sync state are owned by `gpu/cuda/state/residency_state.hpp` and
+embedded in `FemGpuState` as the `residency` substate. GPU lifecycle and
+allocation metadata (`initialized`, `allocated`, `node_count`, `dof_len`,
+`stage_count`, aggregate device bytes, and reduction workspace bytes) is owned
+by `gpu/cuda/state/lifecycle_state.hpp` and embedded in `FemGpuState` as the
+`lifecycle` substate. Uploaded GPU mesh geometry (`nodes_xyz`, tetrahedral
 connectivity, and magnetic element masks) is owned by
 `gpu/cuda/mesh/mesh_geometry_state.hpp` and embedded in `FemGpuState` as the
-`mesh_geometry` substate. GPU Poisson demag device buffers and transitional
+`mesh_geometry` substate; validation, allocation, and host-to-device upload are
+owned by `gpu/cuda/mesh/mesh_geometry_upload.hpp/.cpp`. GPU Poisson demag
+device buffers and transitional
 hybrid CPU-Poisson compatibility buffers are owned by
 `gpu/cuda/demag_poisson/demag_state.hpp` and embedded in `FemGpuState` as the
-`demag_poisson` substate. `FemGpuState` allocation/transfer/device metadata is
-owned by `gpu/cuda/state/gpu_state.hpp/.cpp`, and transfer-audit scope tracking
-is owned by `gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
+`demag_poisson` substate. GPU effective-field and interaction field buffers
+(`H_ex`, `H_demag`, `H_ext`, local interaction fields, and `H_eff`) are owned by
+`gpu/cuda/fields/field_buffer_state.hpp` and embedded in `FemGpuState` as the
+`fields` substate. Shared local-interaction projected-vector and nodal
+weight workspace used by DMI and Zhang-Li STT is owned by
+`gpu/cuda/interactions/local_interaction_workspace_state.hpp` and embedded in
+`FemGpuState` as the `local_interactions` substate. GPU magnetoelastic per-node
+prescribed-strain device data is owned by
+`gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp` and embedded in
+`FemGpuState` as the `magnetoelastic` substate. Shared scalar-reduction
+workspace, scalar result slots, and CUB temporary storage are owned by
+`gpu/cuda/reductions/reduction_workspace_state.hpp` and embedded in
+`FemGpuState` as the `reductions` substate. The current device-resident
+magnetization solution state is owned by
+`gpu/cuda/state/magnetization_state.hpp` and embedded in `FemGpuState` as the
+`magnetization` substate. Device-resident explicit RK scratch
+state (`m_backup`, `m_stage`, embedded-error buffer, stage RHS buffers, and
+FSAL validity) is owned by `gpu/cuda/integrators/rk/rk_workspace_state.hpp` and
+embedded in `FemGpuState` as the `rk` substate. `FemGpuState`
+allocation lifecycle, transfers, and device metadata are owned by
+`gpu/cuda/state/gpu_state.hpp/.cpp`, while low-level device allocation/free
+helpers are owned by `gpu/cuda/state/device_memory.hpp/.cpp`.
+Transfer-audit scope tracking is owned by
+`gpu/cuda/transfer/transfer_audit.hpp/.cpp`. AoS/SoA
 host-device CUDA transfer wrappers are owned by
-`gpu/cuda/transfer/transfer_kernels.hpp/.cu`. GPU-state
+`gpu/cuda/transfer/transfer_kernels.hpp/.cu`, while generic component-field
+upload/download/zero-fill helpers are owned by
+`gpu/cuda/transfer/component_transfer.hpp/.cpp`. GPU-state
 runtime bootstrap and CUDA stream/snapshot metadata are owned by
 `gpu/cuda/runtime/gpu_state_runtime.hpp/.cpp`. The legacy empty
 `src/gpu_exchange.cpp`, `src/gpu_rk.cpp`, `src/gpu_state.cpp`, and

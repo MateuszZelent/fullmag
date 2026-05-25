@@ -49,59 +49,59 @@ bool gpu_rk_reduce_final_magnetization_terms(
     auto &gpu = ctx.gpu_state.device;
 
     fullmag_cuda_magnetization_sum_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
-        gpu.error.x,
-        gpu.error.y,
-        gpu.error.z,
+        gpu.reductions.scalar_workspace,
+        gpu.rk.error.x,
+        gpu.rk.error.y,
+        gpu.rk.error.z,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK magnetization average blocks", reason)) {
         return false;
     }
 
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MxSum),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK mx average reduction", reason)) {
         return false;
     }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.error.x,
+        gpu.rk.error.x,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MySum),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK my average reduction", reason)) {
         return false;
     }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.error.y,
+        gpu.rk.error.y,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MzSum),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK mz average reduction", reason)) {
         return false;
     }
-    reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.error.z,
+        gpu.rk.error.z,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MagneticCount),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     return cuda_launch_ok("launch GPU RK magnetic count reduction", reason);

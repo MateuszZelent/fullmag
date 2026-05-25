@@ -56,54 +56,54 @@ bool gpu_rk_prepare_stage_attempt(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    fsal_reused = fsal_method && gpu.fsal_valid;
+    fsal_reused = fsal_method && gpu.rk.fsal_valid;
 
     if (!gpu_rk_copy_component_device(
-            gpu.m,
-            gpu.m_backup,
-            gpu.node_count,
+            gpu.magnetization.m,
+            gpu.rk.m_backup,
+            gpu.lifecycle.node_count,
             stream,
             "cudaMemcpyAsync GPU RK backup magnetization device copy",
             reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     if (!fsal_reused) {
         if (!gpu_rk_compute_rhs_for_magnetization(
                 ctx,
-                gpu.m,
-                gpu.k[0],
+                gpu.magnetization.m,
+                gpu.rk.k[0],
                 stream,
                 n,
                 "launch GPU RK stage-0 h_eff accumulation",
                 reason)) {
-            gpu.fsal_valid = false;
+            gpu.rk.fsal_valid = false;
             return false;
         }
         stage_rhs_evaluations += 1;
     }
 
     fullmag_cuda_euler_stage(
-        gpu.m.x, gpu.m.y, gpu.m.z,
-        gpu.k[0].x, gpu.k[0].y, gpu.k[0].z,
-        gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z,
+        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
         is_heun ? active_dt : (is_rk45 ? 0.2 * active_dt : 0.5 * active_dt),
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.m_stage.x, gpu.m_stage.y, gpu.m_stage.z, n, stream);
+    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
     if (!cuda_launch_ok("launch GPU RK predictor/normalize", reason)) {
         return false;
     }
 
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,
-            gpu.m_stage,
-            gpu.k[1],
+            gpu.rk.m_stage,
+            gpu.rk.k[1],
             stream,
             n,
             "launch GPU RK stage-1 h_eff accumulation",
             reason)) {
-        gpu.fsal_valid = false;
+        gpu.rk.fsal_valid = false;
         return false;
     }
     stage_rhs_evaluations += 1;

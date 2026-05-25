@@ -52,14 +52,14 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         reason = "GPU legacy sparse exchange requires uploaded CSR/mass device buffers";
         return false;
     }
-    if (gpu.legacy_exchange.rows != gpu.node_count ||
-        gpu.legacy_exchange.cols != gpu.node_count ||
-        gpu.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    if (gpu.legacy_exchange.rows != gpu.lifecycle.node_count ||
+        gpu.legacy_exchange.cols != gpu.lifecycle.node_count ||
+        gpu.lifecycle.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
         reason = "GPU legacy sparse exchange dimensions do not match RK node_count";
         return false;
     }
 
-    const int rows = static_cast<int>(gpu.node_count);
+    const int rows = static_cast<int>(gpu.lifecycle.node_count);
     fullmag_cuda_legacy_sparse_exchange(
         gpu.legacy_exchange.csr_row_offsets,
         gpu.legacy_exchange.csr_col_indices,
@@ -68,7 +68,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_ex.x,
+        gpu.fields.h_ex.x,
         rows,
         stream);
     fullmag_cuda_legacy_sparse_exchange(
@@ -79,7 +79,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_ex.y,
+        gpu.fields.h_ex.y,
         rows,
         stream);
     fullmag_cuda_legacy_sparse_exchange(
@@ -90,7 +90,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
         gpu.materials.ms,
         gpu.mesh_metrics.inv_lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.h_ex.z,
+        gpu.fields.h_ex.z,
         rows,
         stream);
     return cuda_launch_ok("launch GPU legacy sparse exchange", reason);

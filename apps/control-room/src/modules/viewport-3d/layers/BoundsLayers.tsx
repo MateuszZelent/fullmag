@@ -272,12 +272,6 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
   };
-  const wireframePrimitive = resolveAirboxWireframePrimitive(
-    resolvedSettings.wireframeVisible,
-    Boolean(edgeGeometry),
-    resolvedSettings.geometryScope,
-  );
-
   if (!geometry) {
     return (
       <group onPointerDown={handlePointerDown}>
@@ -514,6 +508,7 @@ export function resolveAirboxWireframePrimitive(
   geometryScope: VisualizationTargetSettings["geometryScope"] = "surface",
 ): "bounds" | "lines" | null {
   if (!wireframeVisible) return null;
+  if (geometryScope === "full" && hasEdgeGeometry) return "lines";
   return hasEdgeGeometry ? "lines" : "bounds";
 }
 

@@ -52,7 +52,7 @@ bool upload_magnetoelastic_strain(
         strain_voigt,
         strain_voigt + static_cast<size_t>(len));
 
-    if (ctx.gpu_state.device.allocated && !ctx.magnetoelastic.uniform_strain) {
+    if (ctx.gpu_state.device.lifecycle.allocated && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
                 ctx.gpu_state.device,
                 ctx.magnetoelastic.strain_voigt.data(),

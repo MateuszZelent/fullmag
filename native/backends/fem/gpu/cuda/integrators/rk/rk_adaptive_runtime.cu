@@ -45,11 +45,11 @@ bool gpu_rk_restore_adaptive_reject_magnetization_device(
     cudaStream_t stream,
     std::string &reason)
 {
-    gpu.fsal_valid = false;
+    gpu.rk.fsal_valid = false;
     return gpu_rk_copy_component_device(
-        gpu.m_backup,
-        gpu.m,
-        gpu.node_count,
+        gpu.rk.m_backup,
+        gpu.magnetization.m,
+        gpu.lifecycle.node_count,
         stream,
         "cudaMemcpyAsync GPU RK restore rejected adaptive magnetization device copy",
         reason);

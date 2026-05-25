@@ -53,32 +53,32 @@ bool gpu_rk_reduce_final_demag_energy_terms(
 
     auto &gpu = ctx.gpu_state.device;
     if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-        gpu.h_demag.x == nullptr || gpu.h_demag.y == nullptr || gpu.h_demag.z == nullptr) {
+        gpu.fields.h_demag.x == nullptr || gpu.fields.h_demag.y == nullptr || gpu.fields.h_demag.z == nullptr) {
         reason = "GPU RK demag energy requires device-resident Ms, lumped mass, and H_demag";
         return false;
     }
     fullmag_cuda_demag_energy_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
-        gpu.h_demag.x,
-        gpu.h_demag.y,
-        gpu.h_demag.z,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.fields.h_demag.x,
+        gpu.fields.h_demag.y,
+        gpu.fields.h_demag.z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU RK demag energy blocks", reason)) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::DemagEnergy),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK demag energy reduction", reason)) {

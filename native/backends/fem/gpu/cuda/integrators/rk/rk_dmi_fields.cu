@@ -50,12 +50,12 @@ bool gpu_rk_compute_one_dmi_field(
         gpu.mesh_geometry.nodes_xyz == nullptr || gpu.mesh_geometry.elements == nullptr ||
         gpu.mesh_geometry.magnetic_element_mask == nullptr ||
         gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-        gpu.zhang_li_rhs.x == nullptr || gpu.zhang_li_rhs.y == nullptr ||
-        gpu.zhang_li_rhs.z == nullptr) {
+        gpu.local_interactions.vector.x == nullptr || gpu.local_interactions.vector.y == nullptr ||
+        gpu.local_interactions.vector.z == nullptr) {
         reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
         return false;
     }
-    FemGpuComponentField &field = bulk_mode ? gpu.h_bulk_dmi : gpu.h_dmi;
+    FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi : gpu.fields.h_dmi;
     if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
         reason = "GPU RK DMI requires device-resident H_dmi buffers";
         return false;
@@ -71,13 +71,13 @@ bool gpu_rk_compute_one_dmi_field(
         bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.zhang_li_rhs.x,
-        gpu.zhang_li_rhs.y,
-        gpu.zhang_li_rhs.z,
+        gpu.local_interactions.vector.x,
+        gpu.local_interactions.vector.y,
+        gpu.local_interactions.vector.z,
         field.x,
         field.y,
         field.z,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         ctx.material_fields.material.saturation_magnetisation,
         bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
         ctx.dmi.interface_normal[0],

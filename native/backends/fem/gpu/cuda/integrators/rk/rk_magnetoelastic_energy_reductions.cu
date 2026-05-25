@@ -64,29 +64,29 @@ bool gpu_rk_reduce_final_magnetoelastic_energy_terms(
         return false;
     }
     if (use_per_node_strain &&
-        (gpu.mel_strain_voigt == nullptr || !gpu.mel_strain_uploaded ||
-            gpu.mel_strain_voigt_len != per_node_strain_len)) {
+        (gpu.magnetoelastic.strain_voigt == nullptr || !gpu.magnetoelastic.strain_uploaded ||
+            gpu.magnetoelastic.strain_voigt_len != per_node_strain_len)) {
         reason = "GPU RK magnetoelastic energy requires device-resident per-node strain";
         return false;
     }
     if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-        gpu.h_mel.x == nullptr || gpu.h_mel.y == nullptr || gpu.h_mel.z == nullptr) {
+        gpu.fields.h_mel.x == nullptr || gpu.fields.h_mel.y == nullptr || gpu.fields.h_mel.z == nullptr) {
         reason = "GPU RK magnetoelastic energy requires device-resident Ms, lumped mass, and H_mel buffers";
         return false;
     }
     const double *eps = ctx.magnetoelastic.strain_voigt.data();
     fullmag_cuda_magnetoelastic_field_energy_blocks(
-        gpu.m.x,
-        gpu.m.y,
-        gpu.m.z,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
-        use_per_node_strain ? gpu.mel_strain_voigt : nullptr,
-        gpu.h_mel.x,
-        gpu.h_mel.y,
-        gpu.h_mel.z,
-        gpu.scalar_reduce_workspace,
+        use_per_node_strain ? gpu.magnetoelastic.strain_voigt : nullptr,
+        gpu.fields.h_mel.x,
+        gpu.fields.h_mel.y,
+        gpu.fields.h_mel.z,
+        gpu.reductions.scalar_workspace,
         ctx.magnetoelastic.b1,
         ctx.magnetoelastic.b2,
         eps[0],
@@ -101,12 +101,12 @@ bool gpu_rk_reduce_final_magnetoelastic_energy_terms(
     if (!cuda_launch_ok("launch GPU RK magnetoelastic energy blocks", reason)) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.scalar_reduce_temp_storage_bytes);
+    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_sum(
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MagnetoelasticEnergy),
-        gpu.scalar_reduce_temp_storage,
+        gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK magnetoelastic energy reduction", reason)) {

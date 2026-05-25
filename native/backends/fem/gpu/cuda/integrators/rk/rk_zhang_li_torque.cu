@@ -57,9 +57,9 @@ bool gpu_rk_add_zhang_li_torque(
         reason = "GPU RK Zhang-Li STT requires device-resident mesh geometry";
         return false;
     }
-    if (gpu.materials.ms == nullptr || gpu.zhang_li_rhs.x == nullptr ||
-        gpu.zhang_li_rhs.y == nullptr || gpu.zhang_li_rhs.z == nullptr ||
-        gpu.zhang_li_node_weight == nullptr) {
+    if (gpu.materials.ms == nullptr || gpu.local_interactions.vector.x == nullptr ||
+        gpu.local_interactions.vector.y == nullptr || gpu.local_interactions.vector.z == nullptr ||
+        gpu.local_interactions.node_weight == nullptr) {
         reason = "GPU RK Zhang-Li STT requires device-resident Ms and Zhang-Li work buffers";
         return false;
     }
@@ -72,14 +72,14 @@ bool gpu_rk_add_zhang_li_torque(
         m.z,
         gpu.materials.ms,
         gpu.mesh_regions.magnetic_node_mask,
-        gpu.zhang_li_rhs.x,
-        gpu.zhang_li_rhs.y,
-        gpu.zhang_li_rhs.z,
-        gpu.zhang_li_node_weight,
+        gpu.local_interactions.vector.x,
+        gpu.local_interactions.vector.y,
+        gpu.local_interactions.vector.z,
+        gpu.local_interactions.node_weight,
         rhs.x,
         rhs.y,
         rhs.z,
-        gpu.scalar_reduce_workspace,
+        gpu.reductions.scalar_workspace,
         ctx.stt.current_density_am2[0],
         ctx.stt.current_density_am2[1],
         ctx.stt.current_density_am2[2],
