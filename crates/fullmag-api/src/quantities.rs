@@ -56,6 +56,10 @@ pub(crate) fn build_quantities(
                         || live_state
                             .and_then(|state| state.latest_step.preview_field.as_ref())
                             .is_some_and(|field| field.quantity == spec.id.as_str())
+                        || (spec.id.as_str() == "m"
+                            && live_state
+                                .and_then(|state| state.latest_step.magnetization.as_ref())
+                                .is_some_and(|mag| !mag.is_empty()))
                 }
                 QuantityShape::GlobalScalar => spec.scalar_metric_key.is_some_and(|metric_key| {
                     scalar_metric_is_active(execution_plan.as_ref(), metric_key)
@@ -174,7 +178,7 @@ mod tests {
     };
 
     #[test]
-    fn magnetization_is_not_marked_available_from_legacy_inline_field() {
+    fn magnetization_is_marked_available_from_live_step_magnetization() {
         let live_state = LiveState {
             status: "running".to_string(),
             updated_at_unix_ms: 1,
@@ -218,7 +222,7 @@ mod tests {
             .find(|quantity| quantity.id == "m")
             .expect("missing magnetization descriptor");
 
-        assert!(!magnetization.available);
+        assert!(magnetization.available);
     }
 
     #[test]

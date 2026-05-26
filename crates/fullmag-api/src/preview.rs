@@ -44,6 +44,29 @@ pub(crate) fn current_vector_field(
     current: &SessionStateResponse,
     quantity: &str,
 ) -> Option<(Vec<[f64; 3]>, [usize; 3])> {
+    if quantity == "m" {
+        if let Some(ls) = current.live_state.as_ref() {
+            if let Some(mag) = ls.latest_step.magnetization.as_deref() {
+                if !mag.is_empty() && mag.len() % 3 == 0 {
+                    let grid = if ls.latest_step.grid.iter().any(|v| *v > 0) {
+                        [
+                            ls.latest_step.grid[0] as usize,
+                            ls.latest_step.grid[1] as usize,
+                            ls.latest_step.grid[2] as usize,
+                        ]
+                    } else {
+                        [mag.len() / 3, 1, 1]
+                    };
+                    let vectors = mag
+                        .chunks_exact(3)
+                        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                        .collect::<Vec<_>>();
+                    return Some((vectors, grid));
+                }
+            }
+        }
+    }
+
     current
         .latest_fields
         .get(quantity)
