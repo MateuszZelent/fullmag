@@ -110,6 +110,12 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HAni
                 | QuantityId::HDmi
                 | QuantityId::HEff
+                | QuantityId::EdenEx
+                | QuantityId::EdenDemag
+                | QuantityId::EdenExt
+                | QuantityId::EdenAni
+                | QuantityId::EdenDmi
+                | QuantityId::EdenTotal
         ),
         FdmEngine::CudaFdm => matches!(
             id,
@@ -141,6 +147,14 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HTherm => plan
             .temperature
             .is_some_and(|temperature| temperature > 0.0),
+        QuantityId::EdenEx => plan.enable_exchange,
+        QuantityId::EdenDemag => plan.enable_demag,
+        QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenAni => {
+            fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
+        }
+        QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenTotal => true,
         QuantityId::HAnt
         | QuantityId::U
         | QuantityId::Eps
@@ -158,12 +172,6 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::ModeReal
         | QuantityId::ModeImag
         | QuantityId::ModePhase
-        | QuantityId::EdenEx
-        | QuantityId::EdenDemag
-        | QuantityId::EdenExt
-        | QuantityId::EdenAni
-        | QuantityId::EdenDmi
-        | QuantityId::EdenTotal
         | QuantityId::DmDt
         | QuantityId::TorqueStt
         | QuantityId::TorqueSot => false,
@@ -420,6 +428,45 @@ mod tests {
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff"]
+        );
+    }
+
+    #[test]
+    fn fdm_cpu_energy_density_quantities_follow_active_energy_terms() {
+        let mut plan = fdm_plan();
+        plan.external_field = Some([0.0, 0.0, 1.0]);
+        let quantities = [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ];
+
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
+            vec!["eden_ex", "eden_ext", "eden_total"]
+        );
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
+            Vec::<&'static str>::new()
+        );
+
+        plan.enable_demag = true;
+        plan.material.uniaxial_anisotropy_ku1 = Some(1.0e5);
+        plan.interfacial_dmi = Some(1.0e-3);
+
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
+            vec![
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_total"
+            ]
         );
     }
 

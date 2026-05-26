@@ -107,6 +107,7 @@ For every task:
 - After two failed corrections on the same issue, stop. Summarize what you learned and ask the user to reset the session with a sharper prompt.
 - Use subagents (Claude Code: "use subagents to investigate X") for exploration tasks that would otherwise pollute the main context with dozens of file reads.
 - When committing, write descriptive commit messages (subject under 72 chars, body explains the why). No "update file" or "fix bug" commits. No "Co-Authored-By: Claude" attribution unless the project explicitly wants it.
+- For code review, PR preparation, review comments, or reviewer feedback, use `.agents/skills/google-eng-review-practices/SKILL.md`.
 
 ---
 

@@ -121,7 +121,10 @@ pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{mesh_preview_active_mask, quantity_spatial_domain, AIR_OBJECT_SEGMENT_ID};
+    use super::{
+        mesh_preview_active_mask, quantity_spatial_domain, sampled_flat_grid_scalar_2d,
+        AIR_OBJECT_SEGMENT_ID,
+    };
     use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 
     fn test_mesh(
@@ -157,6 +160,21 @@ mod tests {
         assert_eq!(quantity_spatial_domain("H_ex"), "magnetic_only");
         assert_eq!(quantity_spatial_domain("H_ani"), "magnetic_only");
         assert_eq!(quantity_spatial_domain("H_dmi"), "magnetic_only");
+    }
+
+    #[test]
+    fn flat_grid_scalar_preview_preserves_scalar_values_as_heatmap_points() {
+        let sampled = sampled_flat_grid_scalar_2d(&[1.0, 2.0, 3.0, 4.0], [2, 2, 1]);
+
+        assert_eq!(
+            sampled,
+            vec![
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 2.0],
+                [0.0, 1.0, 3.0],
+                [1.0, 1.0, 4.0]
+            ]
+        );
     }
 
     #[test]
@@ -602,6 +620,21 @@ pub(crate) fn sampled_grid_scalar_2d(
                 .get(index)
                 .map(|vector| vector[component_index])
                 .unwrap_or(0.0);
+            out.push([px as f64, py as f64, value]);
+        }
+    }
+    out
+}
+
+pub(crate) fn sampled_flat_grid_scalar_2d(
+    values: &[f64],
+    preview_grid: [usize; 3],
+) -> Vec<[f64; 3]> {
+    let mut out = Vec::with_capacity(preview_grid[0] * preview_grid[1]);
+    for py in 0..preview_grid[1] {
+        for px in 0..preview_grid[0] {
+            let index = py * preview_grid[0] + px;
+            let value = values.get(index).copied().unwrap_or(0.0);
             out.push([px as f64, py as f64, value]);
         }
     }

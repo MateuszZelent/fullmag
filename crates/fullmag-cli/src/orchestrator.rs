@@ -4189,16 +4189,79 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // ── visualization quantity hint ──────────────────────────────────────
     // If the script declared `fm.visualization(active_quantity_id="...")`, push a
     // synthetic display-sync so the control room opens on that quantity.
-    if let Some(qty) = stages[0]
+    // If airbox or geometry hints are present, patch visualization overrides once.
+    if let Some(viz_hint) = stages[0]
         .ir
         .problem_meta
         .runtime_metadata
         .get("visualization_hint")
-        .and_then(|v| v.get("active_quantity_id"))
-        .and_then(|v| v.as_str())
     {
-        if !qty.is_empty() {
-            display_selection_handle.set_quantity_hint(qty);
+        if let Some(qty) = viz_hint
+            .get("active_quantity_id")
+            .and_then(|v| v.as_str())
+        {
+            if !qty.is_empty() {
+                display_selection_handle.set_quantity_hint(qty);
+            }
+        }
+
+        // Build VisualizationOverrideState entries for airbox and per-geometry hints.
+        let mut overrides: Vec<serde_json::Value> = Vec::new();
+
+        if let Some(airbox_hint) = viz_hint.get("airbox") {
+            let show = airbox_hint
+                .get("show")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mode = airbox_hint
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mut display = serde_json::json!({ "visible": show });
+            if mode == "vectors" {
+                display["vectors"] = serde_json::json!({ "visible": true });
+            }
+            overrides.push(serde_json::json!({
+                "scope": "airbox",
+                "scope_id": "airbox",
+                "visible": show,
+                "display": display,
+            }));
+        }
+
+        if let Some(geom_hints) = viz_hint
+            .get("geometry_hints")
+            .and_then(|v| v.as_object())
+        {
+            for (geom_name, geom_hint) in geom_hints {
+                let show = geom_hint
+                    .get("show")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let mode = geom_hint
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let mut display = serde_json::json!({ "visible": show });
+                if mode == "vectors" {
+                    display["vectors"] = serde_json::json!({ "visible": true });
+                }
+                overrides.push(serde_json::json!({
+                    "scope": "object",
+                    "scope_id": geom_name,
+                    "visible": show,
+                    "display": display,
+                }));
+            }
+        }
+
+        if !args.headless && !overrides.is_empty() {
+            if let Err(e) = sync_initial_visualization_overrides(serde_json::Value::Array(overrides)) {
+                eprintln!(
+                    "[fullmag-host] failed to apply initial visualization overrides: {}",
+                    e
+                );
+            }
         }
     }
 

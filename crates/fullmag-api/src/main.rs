@@ -3104,6 +3104,68 @@ fn build_preview_state_from_live_field(
         field.original_grid[1] as usize,
         field.original_grid[2] as usize,
     ];
+    let n_comp = quantity_spec(&field.quantity)
+        .map(|spec| spec.n_comp as usize)
+        .unwrap_or(3);
+    if n_comp == 1 && field.spatial_kind == "grid" {
+        let scalar_field = sampled_flat_grid_scalar_2d(&field.vector_field_values, preview_grid);
+        let (min, max) = scalar_min_max(&scalar_field);
+        let x_possible_sizes = if original_grid[0] > 0 {
+            candidate_preview_sizes(original_grid[0])
+        } else {
+            Vec::new()
+        };
+        let y_possible_sizes = if original_grid[1] > 0 {
+            candidate_preview_sizes(original_grid[1])
+        } else {
+            Vec::new()
+        };
+        return Some(PreviewState::Spatial(SpatialPreviewState {
+            display_kind: display_kind_for_quantity(&field.quantity).to_string(),
+            config_revision: field.config_revision,
+            source_step,
+            source_time,
+            spatial_kind: "grid".to_string(),
+            quantity: field.quantity.clone(),
+            unit: field.unit.clone(),
+            quantity_domain: field.quantity_domain.clone(),
+            component: if component == "3D" {
+                "magnitude"
+            } else {
+                component
+            }
+            .to_string(),
+            layer: display_selection
+                .selection
+                .layer
+                .min(field.original_grid[2].saturating_sub(1)) as usize,
+            all_layers: display_selection.selection.all_layers,
+            view_type: "2D".to_string(),
+            vector_payload_id: None,
+            vector_field_values: None,
+            scalar_field,
+            min,
+            max,
+            n_comp: 1,
+            max_points: config.max_points as usize,
+            data_points_count: preview_grid.iter().product(),
+            x_possible_sizes,
+            y_possible_sizes,
+            x_chosen_size: field.x_chosen_size as usize,
+            y_chosen_size: field.y_chosen_size as usize,
+            applied_x_chosen_size: field.applied_x_chosen_size as usize,
+            applied_y_chosen_size: field.applied_y_chosen_size as usize,
+            applied_layer_stride: field.applied_layer_stride as usize,
+            auto_scale_enabled: config.auto_scale_enabled,
+            auto_downscaled: field.auto_downscaled,
+            auto_downscale_message: field.auto_downscale_message.clone(),
+            preview_grid,
+            fem_mesh: None,
+            original_node_count: None,
+            original_face_count: None,
+            active_mask: field.active_mask.clone(),
+        }));
+    }
     let vectors = field
         .vector_field_values
         .chunks_exact(3)

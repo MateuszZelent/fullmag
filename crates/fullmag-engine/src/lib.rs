@@ -2322,6 +2322,36 @@ mod tests {
     }
 
     #[test]
+    fn fdm_energy_density_integrates_to_matching_scalar_energy() {
+        let problem = zeeman_problem([0.0, 0.0, 2.0]);
+        let state = problem
+            .new_state(vec![[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+            .expect("state should build");
+        let observables = problem.observe(&state).expect("observables");
+
+        let ext_density = problem
+            .external_energy_density(&state)
+            .expect("external energy density");
+        let total_density = problem
+            .total_energy_density(&state)
+            .expect("total energy density");
+        let cell_volume = problem.cell_size.volume();
+
+        let ext_integral: f64 = ext_density
+            .iter()
+            .map(|density| density * cell_volume)
+            .sum();
+        let total_integral: f64 = total_density
+            .iter()
+            .map(|density| density * cell_volume)
+            .sum();
+
+        assert_eq!(ext_density.len(), problem.grid.cell_count());
+        assert!((ext_integral - observables.external_energy_joules).abs() <= 1e-18);
+        assert!((total_integral - observables.total_energy_joules).abs() <= 1e-18);
+    }
+
+    #[test]
     fn step_with_buffers_minimal_evaluation_skips_energy_decomposition() {
         let problem = zeeman_problem([0.0, 0.0, 1.0]);
         let mut state = problem

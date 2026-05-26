@@ -96,7 +96,7 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
-  geometryScope: "full",
+  geometryScope: "surface",
   opacityPercent: 100,
   pointsVisible: false,
   renderMode: "surface+edges",

@@ -243,6 +243,7 @@ function sceneObjectSnapshot(
     physicsInteractions: sceneObjectPhysicsInteractions(
       object.physics_stack,
       materialHasDind(material),
+      materialHasDbulk(material),
     ),
     region: stringValue(object.region_name),
     regionId,
@@ -270,13 +271,17 @@ function regionOverrideMagnetizationRef(
 
 function sceneObjectPhysicsInteractions(
   value: unknown,
-  materialDmiEnabled: boolean,
+  materialDindEnabled: boolean,
+  materialDbulkEnabled: boolean,
 ): ModelTreePhysicsInteractionSnapshot[] {
   const byKind = new Map<string, { enabledCount: number; objectCount: number }>();
   byKind.set("exchange", { enabledCount: 1, objectCount: 1 });
   byKind.set("demag", { enabledCount: 1, objectCount: 1 });
-  if (materialDmiEnabled) {
+  if (materialDindEnabled) {
     byKind.set("interfacial_dmi", { enabledCount: 1, objectCount: 1 });
+  }
+  if (materialDbulkEnabled) {
+    byKind.set("bulk_dmi", { enabledCount: 1, objectCount: 1 });
   }
 
   if (Array.isArray(value)) {
@@ -312,6 +317,7 @@ const interactionOrder = [
   "exchange",
   "demag",
   "interfacial_dmi",
+  "bulk_dmi",
   "uniaxial_anisotropy",
 ] as const;
 
@@ -320,6 +326,14 @@ function materialHasDind(
 ): boolean {
   return Boolean(
     material?.propertyKeys.some((key) => key.toLowerCase() === "dind"),
+  );
+}
+
+function materialHasDbulk(
+  material: ModelTreeMaterialSnapshot | undefined,
+): boolean {
+  return Boolean(
+    material?.propertyKeys.some((key) => key.toLowerCase() === "dbulk"),
   );
 }
 

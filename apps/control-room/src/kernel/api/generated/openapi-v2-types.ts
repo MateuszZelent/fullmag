@@ -2945,6 +2945,7 @@ export interface components {
         };
         MaterialPropertiesPatchRequest: {
             Aex?: null | components["schemas"]["NullableF64PatchValue"];
+            Dbulk?: null | components["schemas"]["NullableF64PatchValue"];
             Dind?: null | components["schemas"]["NullableF64PatchValue"];
             Ms?: null | components["schemas"]["NullableF64PatchValue"];
             /** Format: double */
@@ -2953,6 +2954,8 @@ export interface components {
         MaterialPropertiesResource: {
             /** Format: double */
             Aex?: number | null;
+            /** Format: double */
+            Dbulk?: number | null;
             /** Format: double */
             Dind?: number | null;
             /** Format: double */

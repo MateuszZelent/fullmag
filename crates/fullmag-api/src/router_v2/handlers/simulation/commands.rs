@@ -643,7 +643,10 @@ fn initial_magnetization_for_object(
         return InitialMagnetizationIR::Uniform { value };
     }
     if asset.kind == "preset_texture" {
-        let preset_kind = asset.preset_kind.clone().unwrap_or_else(|| "uniform".to_string());
+        let preset_kind = asset
+            .preset_kind
+            .clone()
+            .unwrap_or_else(|| "uniform".to_string());
         if preset_kind == "uniform" {
             if let Some(value) = asset
                 .preset_params

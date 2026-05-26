@@ -1193,6 +1193,7 @@ mod tests {
                     aex: Some(13e-12),
                     alpha: 0.02,
                     dind: None,
+                    dbulk: None,
                 },
                 magnetization: fullmag_authoring::ScriptBuilderMagnetizationState {
                     kind: "preset_texture".to_string(),

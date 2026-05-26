@@ -130,6 +130,16 @@ describe("ribbon structure", () => {
     expect(source).toContain("var(--fm-accent)");
   });
 
+  it("uses canonical energy-density quantity ids in result menus", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/modules/ribbon/ribbonContributions.tsx"),
+      "utf8",
+    );
+
+    expect(source).not.toContain('"energy_density"');
+    expect(source).toContain('"eden_total"');
+  });
+
   it("normalizes legacy utility icon colors to design tokens", () => {
     expect(resolveRibbonIconColor("text-emerald-400")).toBe("var(--fm-success)");
     expect(resolveRibbonIconColor("text-sky-300")).toBe("var(--fm-accent)");

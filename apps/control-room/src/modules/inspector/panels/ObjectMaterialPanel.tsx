@@ -11,8 +11,10 @@ import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   resolveMaterialResourceKey,
+  resolveObjectInteractionResourceKey,
   SCENE_RESOURCE_KEY,
   useMaterialResource,
+  useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { Accordion } from "@/shared/ui/Accordion";
@@ -36,6 +38,29 @@ import {
 interface DraftState {
   draft: MagneticParametersDraft;
   key: string;
+}
+
+interface AnisotropyDraft {
+  present: boolean;
+  ku1: string;
+  axisX: string;
+  axisY: string;
+  axisZ: string;
+}
+
+function anisotropyDraftFromParams(
+  present: boolean,
+  params: unknown,
+): AnisotropyDraft {
+  const p = params && typeof params === "object" ? (params as Record<string, unknown>) : {};
+  const axis = Array.isArray(p["axis"]) ? (p["axis"] as unknown[]) : [0, 0, 1];
+  return {
+    present,
+    ku1: typeof p["ku1"] === "number" ? String(p["ku1"]) : "",
+    axisX: typeof axis[0] === "number" ? String(axis[0]) : "0",
+    axisY: typeof axis[1] === "number" ? String(axis[1]) : "0",
+    axisZ: typeof axis[2] === "number" ? String(axis[2]) : "1",
+  };
 }
 
 type Feedback =
@@ -74,6 +99,31 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
   const object = resolveGeometryObjectDraft(selection, scene.data);
   const materialId = normalizeMaterialRef(object.material);
   const material = useMaterialResource(materialId);
+  const anisotropyInteraction = useObjectInteractionResource(
+    object.objectId || null,
+    "uniaxial_anisotropy",
+  );
+  const baseAnisotropyDraft = useMemo(
+    () =>
+      anisotropyDraftFromParams(
+        anisotropyInteraction.data?.present ?? false,
+        anisotropyInteraction.data?.params ?? {},
+      ),
+    [anisotropyInteraction.data],
+  );
+  const [anisotropyDraftState, setAnisotropyDraftState] = useState<{
+    draft: AnisotropyDraft;
+    key: string;
+  }>({ draft: baseAnisotropyDraft, key: "" });
+  const anisotropyDraftKey = [
+    object.objectId,
+    String(anisotropyInteraction.data?.present ?? false),
+    String(anisotropyInteraction.data?.params ? JSON.stringify(anisotropyInteraction.data.params) : ""),
+  ].join(":");
+  const anisotropyDraft =
+    anisotropyDraftState.key === anisotropyDraftKey
+      ? anisotropyDraftState.draft
+      : baseAnisotropyDraft;
   const baseDraft = useMemo(
     () =>
       magneticParametersDraftFromResource(
@@ -101,6 +151,53 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const draftMaterialId = normalizeMaterialRef(draft.materialRef);
   const parametersTargetChanged = draftMaterialId !== materialId;
+
+  function updateAnisotropyDraft(patch: Partial<AnisotropyDraft>): void {
+    setAnisotropyDraftState((current) => ({
+      draft: {
+        ...(current.key === anisotropyDraftKey ? current.draft : baseAnisotropyDraft),
+        ...patch,
+      },
+      key: anisotropyDraftKey,
+    }));
+  }
+
+  async function applyAnisotropy(): Promise<void> {
+    if (!object.objectId || object.mode !== "committed") {
+      setFeedback({ kind: "error", message: "No committed scene object." });
+      return;
+    }
+    const ku1 = Number(anisotropyDraft.ku1);
+    if (!Number.isFinite(ku1)) {
+      setFeedback({ kind: "error", message: "Ku1 must be a finite number." });
+      return;
+    }
+    const axisX = Number(anisotropyDraft.axisX);
+    const axisY = Number(anisotropyDraft.axisY);
+    const axisZ = Number(anisotropyDraft.axisZ);
+    if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || !Number.isFinite(axisZ)) {
+      setFeedback({ kind: "error", message: "Anisotropy axis components must be finite numbers." });
+      return;
+    }
+    setPending(true);
+    try {
+      await api.model.patchObjectInteraction(object.objectId, "uniaxial_anisotropy", {
+        present: anisotropyDraft.present,
+        params: { ku1, axis: [axisX, axisY, axisZ] },
+      });
+      const revision = nextLocalRevision(object.baseRevision);
+      resources.invalidate(
+        resolveObjectInteractionResourceKey(object.objectId, "uniaxial_anisotropy"),
+        revision,
+      );
+      invalidateMagneticParameterResources(revision);
+      setFeedback({ kind: "success", message: "Uniaxial anisotropy updated." });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setPending(false);
+    }
+  }
 
   function updateDraft(patch: Partial<MagneticParametersDraft>): void {
     setDraftState((current) => ({
@@ -191,7 +288,7 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["parameters", "assignment", "material-parameters", "actions"]}
+      defaultValue={["parameters", "assignment", "uniaxial-anisotropy", "material-parameters", "actions"]}
     >
       <InspectorSection value="parameters" title="Magnetic Parameters" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={object.objectId} />
@@ -216,6 +313,46 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
           type="text"
           value={draft.materialRef}
           onChange={(event) => updateDraft({ materialRef: event.target.value })}
+        />
+      </InspectorSection>
+
+      <InspectorSection value="uniaxial-anisotropy" title="Uniaxial Anisotropy">
+        <FormField
+          label="Present"
+          type="checkbox"
+          checked={anisotropyDraft.present}
+          onChange={(event) =>
+            updateAnisotropyDraft({ present: (event.target as HTMLInputElement).checked })
+          }
+        />
+        <FormField
+          label="Ku1"
+          type="number"
+          unit="J/m³"
+          disabled={!anisotropyDraft.present}
+          value={anisotropyDraft.ku1}
+          onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
+        />
+        <FormField
+          label="Axis X"
+          type="number"
+          disabled={!anisotropyDraft.present}
+          value={anisotropyDraft.axisX}
+          onChange={(event) => updateAnisotropyDraft({ axisX: event.target.value })}
+        />
+        <FormField
+          label="Axis Y"
+          type="number"
+          disabled={!anisotropyDraft.present}
+          value={anisotropyDraft.axisY}
+          onChange={(event) => updateAnisotropyDraft({ axisY: event.target.value })}
+        />
+        <FormField
+          label="Axis Z"
+          type="number"
+          disabled={!anisotropyDraft.present}
+          value={anisotropyDraft.axisZ}
+          onChange={(event) => updateAnisotropyDraft({ axisZ: event.target.value })}
         />
       </InspectorSection>
 
@@ -290,12 +427,22 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
             Apply Parameters
           </Button>
           <Button
+            disabled={pending || object.mode !== "committed"}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={() => void applyAnisotropy()}
+          >
+            Apply Anisotropy
+          </Button>
+          <Button
             disabled={pending}
             size="sm"
             type="button"
             variant="ghost"
             onClick={() => {
               setDraftState({ draft: baseDraft, key: draftKey });
+              setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
               setFeedback(null);
             }}
           >

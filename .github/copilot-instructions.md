@@ -19,6 +19,7 @@
 - Requested execution intent and resolved execution reality must stay explicit across user surfaces, planning, and provenance.
 - Treat `docs/specs/fullmag-application-architecture-v2.md`, `docs/specs/resource-first-control-room-api-v1.md`, `docs/specs/control-room-api-endpoint-reference-v1.md`, `docs/specs/session-run-api-v1.md`, `docs/specs/runtime-distribution-and-managed-backends-v1.md`, `docs/physics/`, and ADRs as canonical architecture references.
 - Assume container-first verification and prefer canonical `just` workflows over ad-hoc commands.
+- For code review, PR descriptions, review comments, and reviewer-feedback handling, follow `.agents/skills/google-eng-review-practices/SKILL.md` together with the relevant Fullmag domain instructions.
 - Prefer `justfile` as the primary build/run task layer:
   - `just build fullmag`
   - `just build fem-gpu-runtime-host`

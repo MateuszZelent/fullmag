@@ -176,6 +176,40 @@ pub(crate) fn resample_grid_vectors(values: &[[f64; 3]], plan: &GridPreviewPlan)
     out
 }
 
+pub(crate) fn resample_grid_scalars(values: &[f64], plan: &GridPreviewPlan) -> Vec<f64> {
+    let [full_x, full_y, full_z] = plan.original_grid.map(|value| value.max(1) as usize);
+    let [preview_x, preview_y, preview_z] = plan.preview_grid.map(|value| value.max(1) as usize);
+    let z_stride = plan.applied_layer_stride.max(1) as usize;
+    let z_origin = plan.z_origin as usize;
+    let mut out = Vec::with_capacity(preview_x * preview_y * preview_z);
+    for pz in 0..preview_z {
+        let z_start = (z_origin + pz * z_stride).min(full_z.saturating_sub(1));
+        let z_end = (z_origin + (pz + 1) * z_stride)
+            .min(full_z)
+            .max(z_start + 1);
+        for py in 0..preview_y {
+            let y_start = py * full_y / preview_y;
+            let y_end = ((py + 1) * full_y / preview_y).max(y_start + 1).min(full_y);
+            for px in 0..preview_x {
+                let x_start = px * full_x / preview_x;
+                let x_end = ((px + 1) * full_x / preview_x).max(x_start + 1).min(full_x);
+                let mut accum = 0.0;
+                let mut count = 0.0;
+                for z in z_start..z_end {
+                    for y in y_start..y_end {
+                        for x in x_start..x_end {
+                            accum += values[(z * full_y + y) * full_x + x];
+                            count += 1.0;
+                        }
+                    }
+                }
+                out.push(accum / count);
+            }
+        }
+    }
+    out
+}
+
 /// Resample a full-grid boolean mask to preview-grid dimensions.
 /// A preview cell is active if ANY original cell in its block is active.
 pub(crate) fn resample_grid_mask(mask: &[bool], plan: &GridPreviewPlan) -> Vec<bool> {
@@ -225,6 +259,29 @@ pub(crate) fn build_grid_preview_field(
     let sampled = resample_grid_vectors(values, &plan);
     let resampled_mask = active_mask.map(|mask| resample_grid_mask(mask, &plan));
     build_grid_preview_field_from_plan(request, &plan, &sampled, quantity, resampled_mask)
+}
+
+pub(crate) fn build_grid_scalar_preview_field(
+    request: &LivePreviewRequest,
+    values: &[f64],
+    original_grid: [u32; 3],
+    active_mask: Option<&[bool]>,
+) -> LivePreviewField {
+    let mut scalar_request = request.clone();
+    if scalar_request.component == "3D" {
+        scalar_request.component = "magnitude".to_string();
+    }
+    let quantity = normalized_quantity_name(&scalar_request.quantity).unwrap_or("m");
+    let plan = plan_grid_preview(&scalar_request, original_grid);
+    let sampled = resample_grid_scalars(values, &plan);
+    let resampled_mask = active_mask.map(|mask| resample_grid_mask(mask, &plan));
+    build_grid_preview_field_from_flat_plan(
+        &scalar_request,
+        &plan,
+        sampled,
+        quantity,
+        resampled_mask,
+    )
 }
 
 pub(crate) fn build_grid_preview_field_from_plan(

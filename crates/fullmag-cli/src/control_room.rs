@@ -848,6 +848,25 @@ pub(crate) fn sync_current_live_delta(
     Ok(())
 }
 
+/// Apply initial visualization overrides derived from the script's `visualization_hint`.
+///
+/// This is a one-time startup call that PATCHes `visualization_overrides` in the API
+/// server's `DisplayPresentationState` before the first control-room frame is painted.
+/// Errors are non-fatal — the control room opens with defaults if the PATCH fails.
+pub(crate) fn sync_initial_visualization_overrides(overrides: serde_json::Value) -> Result<()> {
+    current_live_api_client()
+        .patch(format!(
+            "{}/v2/sessions/current/visualization/state",
+            api_base_url()
+        ))
+        .json(&serde_json::json!({ "overrides": overrides }))
+        .send()
+        .context("failed to apply initial visualization overrides")?
+        .error_for_status()
+        .context("visualization state patch endpoint returned error")?;
+    Ok(())
+}
+
 pub(crate) fn spawn_fullmag_api(
     root: &Path,
     self_exe: &Path,

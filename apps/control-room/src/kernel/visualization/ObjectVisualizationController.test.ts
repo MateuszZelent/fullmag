@@ -22,7 +22,7 @@ import {
 describe("ObjectVisualizationController", () => {
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
-      geometryScope: "full",
+      geometryScope: "surface",
       opacityPercent: 100,
       renderMode: "surface+edges",
       shaderColorMode: "orientation",

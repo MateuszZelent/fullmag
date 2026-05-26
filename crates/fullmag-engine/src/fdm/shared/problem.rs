@@ -195,6 +195,62 @@ impl ExchangeLlgProblem {
         })
     }
 
+    pub fn exchange_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        if !self.terms.exchange {
+            return Ok(vec![0.0; self.grid.cell_count()]);
+        }
+        let field = self.exchange_field_from_vectors(state.magnetization());
+        Ok(self.exchange_energy_density_from_field(state.magnetization(), &field))
+    }
+
+    pub fn demag_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        if !self.terms.demag {
+            return Ok(vec![0.0; self.grid.cell_count()]);
+        }
+        let mut ws = self.create_workspace();
+        let field = self.demag_field_from_vectors_ws(state.magnetization(), &mut ws);
+        Ok(self.demag_energy_density_from_fields(state.magnetization(), &field))
+    }
+
+    pub fn external_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        if self.terms.external_field.is_none() {
+            return Ok(vec![0.0; self.grid.cell_count()]);
+        }
+        let field = self.external_field_vectors();
+        Ok(self.external_energy_density_from_fields(state.magnetization(), &field))
+    }
+
+    pub fn anisotropy_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        let field = self.anisotropy_field(state.magnetization());
+        Ok(self.anisotropy_energy_density_from_field(state.magnetization(), &field))
+    }
+
+    pub fn dmi_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(self.dmi_energy_density_from_vectors(state.magnetization()))
+    }
+
+    pub fn total_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
+        self.ensure_state_matches_grid(state)?;
+        let mut total = vec![0.0; self.grid.cell_count()];
+        for density in [
+            self.exchange_energy_density(state)?,
+            self.demag_energy_density(state)?,
+            self.external_energy_density(state)?,
+            self.anisotropy_energy_density(state)?,
+            self.dmi_energy_density(state)?,
+        ] {
+            for (accum, value) in total.iter_mut().zip(density) {
+                *accum += value;
+            }
+        }
+        Ok(total)
+    }
+
     pub fn observe(&self, state: &ExchangeLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.observe_vectors(state.magnetization()))

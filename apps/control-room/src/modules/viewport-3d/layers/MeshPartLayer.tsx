@@ -218,7 +218,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           />
         </lineSegments>
       ) : null}
-      {settings.wireframeVisible && settings.shaderVisible && edgeGeometry ? (
+      {settings.wireframeVisible && settings.shaderVisible && settings.geometryScope !== "full" && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder}

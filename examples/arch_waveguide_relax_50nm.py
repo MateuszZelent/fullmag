@@ -23,17 +23,17 @@ HEIGHT = 20e-9
 ARCH_HEIGHT = 50e-9
 Z0 = -ARCH_HEIGHT / 2.0
 
-B_EXT_T = 1e-2
+B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 G_FACTOR = 2.115
 GAMMA = MU0 * G_FACTOR * MU_B / HBAR
 
-MS = 956e3
-AEX = 10e-12
+MS = 7.7e5
+AEX = 1e-11
 ALPHA = 0.1
-KU1 = 0.8e6
-DIND = 1e-3
+KU1 = 470e3
+DIND = -1e-3
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
@@ -47,6 +47,7 @@ study.device("cpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 study.visualization(active_quantity_id="h_eff")
+study.airbox.visualization(show=True, mode="vectors")
 
 study.universe(
     mode="auto",
@@ -67,7 +68,7 @@ waveguide = study.geometry(
         length=LENGTH,
         width=WIDTH,
         height=HEIGHT,
-        arch_height=ARCH_HEIGHT,
+        arch_height=0e-9,
         z0=Z0,
         name="arch_waveguide",
     ),
@@ -80,7 +81,8 @@ waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U    
 waveguide.dind = DIND
 waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
-waveguide.m = fm.texture.bloch_skyrmion(100e-9,20e-9,1,"xy")
+waveguide.m = fm.texture.bloch_skyrmion(300e-9,40e-9,-1,1,"xy")
+waveguide.visualization(show=True, mode="surface")
 # waveguide.m = fm.texture.random(1)
 waveguide.mesh(
     maximum_element_size=6e-9,

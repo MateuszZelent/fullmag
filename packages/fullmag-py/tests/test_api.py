@@ -4347,6 +4347,86 @@ class ProblemApiTests(unittest.TestCase):
         exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('visualization(active_quantity_id="exchange_field")', exported)
 
+    def test_airbox_visualization_hint_sets_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        s = fm.study().engine("fdm")
+        s.airbox.visualization(show=True, mode="vectors")
+        s.relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_airbox_viz.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint", {})
+        self.assertEqual(hint.get("airbox"), {"show": True, "mode": "vectors"})
+
+    def test_geometry_visualization_hint_sets_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        waveguide = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="waveguide")
+        waveguide.Ms = 800e3
+        waveguide.Aex = 13e-12
+        waveguide.alpha = 0.1
+        waveguide.m = fm.texture.uniform(1, 0, 0)
+        waveguide.visualization(show=True, mode="surface")
+        fm.study().engine("fdm").relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_geom_viz.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint", {})
+        geom_hints = hint.get("geometry_hints", {})
+        self.assertEqual(geom_hints.get("waveguide"), {"show": True, "mode": "surface"})
+
+    def test_visualization_hints_round_trip_through_script_export(self) -> None:
+        script = """
+        import fullmag as fm
+
+        waveguide = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="waveguide")
+        waveguide.Ms = 800e3
+        waveguide.Aex = 13e-12
+        waveguide.alpha = 0.1
+        waveguide.m = fm.texture.uniform(1, 0, 0)
+        waveguide.visualization(show=True, mode="surface")
+        s = fm.study().engine("fdm")
+        s.airbox.visualization(show=True, mode="vectors")
+        s.relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_full_viz_roundtrip.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('waveguide.visualization(show=True, mode="surface")', exported)
+        self.assertIn('study.airbox.visualization(show=True, mode="vectors")', exported)
+
     def test_llg_requires_supported_integrator_and_positive_timestep(self) -> None:
         with self.assertRaisesRegex(ValueError, "integrator must be one of"):
             fm.LLG(integrator="bogus")

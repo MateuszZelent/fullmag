@@ -4189,6 +4189,16 @@
               }
             ]
           },
+          "Dbulk": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NullableF64PatchValue"
+              }
+            ]
+          },
           "Dind": {
             "oneOf": [
               {
@@ -4222,6 +4232,13 @@
       "MaterialPropertiesResource": {
         "properties": {
           "Aex": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dbulk": {
             "format": "double",
             "type": [
               "number",

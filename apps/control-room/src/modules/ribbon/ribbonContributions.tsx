@@ -267,8 +267,13 @@ const QUANTITY_ITEMS = [
   { value: "H_eff",         label: "Effective field / H_eff" },
   { value: "H_demag",       label: "Demag field / H_demag" },
   { value: "H_ex",          label: "Exchange field / H_ex" },
-  { value: "H_anis",        label: "Anisotropy field / H_anis" },
-  { value: "energy_density",label: "Energy density" },
+  { value: "H_ani",         label: "Anisotropy field / H_ani" },
+  { value: "eden_total",    label: "Total energy density / ε_total" },
+  { value: "eden_ex",       label: "Exchange energy density / ε_ex" },
+  { value: "eden_demag",    label: "Demag energy density / ε_demag" },
+  { value: "eden_ext",      label: "Zeeman energy density / ε_ext" },
+  { value: "eden_ani",      label: "Anisotropy energy density / ε_ani" },
+  { value: "eden_dmi",      label: "DMI energy density / ε_dmi" },
 ];
 
 const VECTOR_COLOR_ITEMS: Array<{
@@ -1481,7 +1486,7 @@ const resultsTab: RibbonTabContent = {
       subtitle: "resources",
       tone: "neutral",
       actions: [
-        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_anis", "H_anis"], ["energy_density", "Energy density"]]) },
+        { id: "res-m",          icon: icon(Magnet),    label: "M",         active: true, iconColor: "text-pink-400",    menu: radioMenu("results-quantity", "Result quantity", "m", [["m", "Magnetization / m"], ["H_eff", "H_eff"], ["H_demag", "H_demag"], ["H_ex", "H_ex"], ["H_ani", "H_ani"], ["eden_total", "ε_total"], ["eden_ex", "ε_ex"], ["eden_demag", "ε_demag"], ["eden_ext", "ε_ext"], ["eden_ani", "ε_ani"], ["eden_dmi", "ε_dmi"]]) },
         { id: "res-heff",       icon: icon(Zap),       label: "H_eff",                   iconColor: "text-yellow-400" },
         { id: "res-demag",      icon: icon(Sigma),     label: "H_demag",                 iconColor: "text-violet-300" },
         { id: "res-exchange",   icon: icon(Zap),       label: "H_ex",                    iconColor: "text-amber-400" },

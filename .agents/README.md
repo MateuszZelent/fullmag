@@ -52,6 +52,11 @@ Rules:
 When a repository-level `justfile` recipe exists for a build/run/package task, agents should use it
 as the default entrypoint instead of inventing lower-level command sequences.
 
+## Review rule
+
+For code review, PR preparation, review comments, or reviewer feedback, agents should use
+`skills/google-eng-review-practices/SKILL.md` alongside the relevant Fullmag domain skills.
+
 ## Structure
 
 - `skills/` - canonical agent skills

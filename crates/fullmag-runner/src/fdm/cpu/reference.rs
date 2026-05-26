@@ -19,7 +19,9 @@ use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
-use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
+use crate::preview::{
+    build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
+};
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
@@ -271,12 +273,14 @@ pub(crate) fn snapshot_preview_from_state(
 ) -> Result<crate::LivePreviewField, RunError> {
     let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
     if let Some(values) = select_direct_preview_values(&mut direct_fields, &request.quantity)? {
-        return Ok(build_grid_preview_field(
-            request,
-            &values,
-            grid,
-            active_mask,
-        ));
+        return Ok(match values {
+            DirectPreviewValues::Vector(values) => {
+                build_grid_preview_field(request, &values, grid, active_mask)
+            }
+            DirectPreviewValues::Scalar(values) => {
+                build_grid_scalar_preview_field(request, &values, grid, active_mask)
+            }
+        });
     }
 
     let observables = observe_state(problem, state)?;
@@ -327,21 +331,28 @@ pub(crate) fn snapshot_vector_fields_from_state(
         }
         let mut preview_request = request.clone();
         preview_request.quantity = quantity.to_string();
-        let values =
-            if let Some(values) = select_direct_preview_values(&mut direct_fields, quantity)? {
-                values
-            } else {
-                if observables.is_none() {
-                    observables = Some(observe_state(problem, state)?);
+        if let Some(values) = select_direct_preview_values(&mut direct_fields, quantity)? {
+            cached.push(match values {
+                DirectPreviewValues::Vector(values) => {
+                    build_grid_preview_field(&preview_request, &values, grid, active_mask)
                 }
-                select_observables(observables.as_ref().expect("observables"), quantity)?.to_vec()
-            };
-        cached.push(build_grid_preview_field(
-            &preview_request,
-            &values,
-            grid,
-            active_mask,
-        ));
+                DirectPreviewValues::Scalar(values) => {
+                    build_grid_scalar_preview_field(&preview_request, &values, grid, active_mask)
+                }
+            });
+        } else {
+            if observables.is_none() {
+                observables = Some(observe_state(problem, state)?);
+            }
+            let values =
+                select_observables(observables.as_ref().expect("observables"), quantity)?.to_vec();
+            cached.push(build_grid_preview_field(
+                &preview_request,
+                &values,
+                grid,
+                active_mask,
+            ));
+        }
     }
 
     Ok(cached)
@@ -358,23 +369,39 @@ fn build_direct_preview_field_if_available(
     let Some(values) = select_direct_preview_values(&mut direct_fields, &request.quantity)? else {
         return Ok(None);
     };
-    Ok(Some(build_grid_preview_field(
-        request,
-        &values,
-        grid,
-        active_mask,
-    )))
+    Ok(Some(match values {
+        DirectPreviewValues::Vector(values) => {
+            build_grid_preview_field(request, &values, grid, active_mask)
+        }
+        DirectPreviewValues::Scalar(values) => {
+            build_grid_scalar_preview_field(request, &values, grid, active_mask)
+        }
+    }))
+}
+
+enum DirectPreviewValues {
+    Vector(Vec<Vector3>),
+    Scalar(Vec<f64>),
 }
 
 fn select_direct_preview_values(
     direct_fields: &mut DirectFieldSnapshotCache<'_>,
     quantity: &str,
-) -> Result<Option<Vec<Vector3>>, RunError> {
+) -> Result<Option<DirectPreviewValues>, RunError> {
     let quantity = normalized_quantity_name(quantity)?;
-    if !direct_field_values_available(quantity) {
-        return Ok(None);
+    if direct_field_values_available(quantity) {
+        return direct_fields
+            .select(quantity)
+            .map(DirectPreviewValues::Vector)
+            .map(Some);
     }
-    direct_fields.select(quantity).map(Some)
+    if direct_scalar_values_available(quantity) {
+        return direct_fields
+            .select_scalar(quantity)
+            .map(DirectPreviewValues::Scalar)
+            .map(Some);
+    }
+    Ok(None)
 }
 
 pub(crate) fn build_snapshot_problem_and_state(
@@ -1461,6 +1488,13 @@ fn direct_field_values_available(name: &str) -> bool {
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
 }
 
+fn direct_scalar_values_available(name: &str) -> bool {
+    matches!(
+        name,
+        "eden_ex" | "eden_demag" | "eden_ext" | "eden_ani" | "eden_dmi" | "eden_total"
+    )
+}
+
 struct DirectFieldSnapshotCache<'a> {
     problem: &'a ExchangeLlgProblem,
     state: &'a ExchangeLlgState,
@@ -1499,6 +1533,58 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         };
         let values = self.base_values(base, name)?;
         project_component(values, component, name)
+    }
+
+    fn select_scalar(&mut self, name: &str) -> Result<Vec<f64>, RunError> {
+        match name {
+            "eden_ex" => {
+                let magnetization = self.base_values("m", name)?.to_vec();
+                let field = self.base_values("H_ex", name)?.to_vec();
+                Ok(self
+                    .problem
+                    .exchange_energy_density_from_field(&magnetization, &field))
+            }
+            "eden_demag" => {
+                let magnetization = self.base_values("m", name)?.to_vec();
+                let field = self.base_values("H_demag", name)?.to_vec();
+                Ok(self
+                    .problem
+                    .demag_energy_density_from_fields(&magnetization, &field))
+            }
+            "eden_ext" => {
+                let magnetization = self.base_values("m", name)?.to_vec();
+                let field = self.base_values("H_ext", name)?.to_vec();
+                Ok(self
+                    .problem
+                    .external_energy_density_from_fields(&magnetization, &field))
+            }
+            "eden_ani" => {
+                let magnetization = self.base_values("m", name)?.to_vec();
+                let field = self.base_values("H_ani", name)?.to_vec();
+                Ok(self
+                    .problem
+                    .anisotropy_energy_density_from_field(&magnetization, &field))
+            }
+            "eden_dmi" => self
+                .problem
+                .dmi_energy_density(self.state)
+                .map_err(|error| RunError {
+                    message: format!("CPU FDM snapshot '{}': DMI energy density: {}", name, error),
+                }),
+            "eden_total" => {
+                let mut total = vec![0.0; self.state.magnetization().len()];
+                for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
+                    let values = self.select_scalar(quantity)?;
+                    for (accum, value) in total.iter_mut().zip(values) {
+                        *accum += value;
+                    }
+                }
+                Ok(total)
+            }
+            _ => Err(RunError {
+                message: format!("snapshot '{}': scalar quantity not available", name),
+            }),
+        }
     }
 
     fn base_values(&mut self, base: &str, name: &str) -> Result<&[Vector3], RunError> {

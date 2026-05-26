@@ -196,7 +196,7 @@ def render_loaded_problem_as_script(
         )
     )
     geom_viz_lines = _render_geometry_visualization_hints(
-        base_problem, magnet_vars, base_problem.meta.runtime_metadata
+        base_problem, magnet_vars, base_problem.runtime_metadata
     )
     if geom_viz_lines:
         lines.extend(geom_viz_lines)
@@ -663,7 +663,7 @@ def _render_visualization_hint_kwargs(hint: dict[str, object]) -> str:
     """Render kwargs string for a visualization hint dict (show=, mode=)."""
     parts: list[str] = []
     if "show" in hint:
-        parts.append(f"show={_py_repr(hint['show'])}")
+        parts.append(f"show={_py_literal(hint['show'])}")
     if "mode" in hint and isinstance(hint["mode"], str) and hint["mode"].strip():
         parts.append(f"mode={_py_repr(hint['mode'])}")
     return ", ".join(parts)

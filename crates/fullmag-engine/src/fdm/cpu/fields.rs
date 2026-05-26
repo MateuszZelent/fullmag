@@ -415,13 +415,21 @@ impl ExchangeLlgProblem {
         ani_field: &[Vector3],
     ) -> f64 {
         let cell_volume = self.cell_size.volume();
-        let ms = self.material.saturation_magnetisation;
-        (0..magnetization.len())
-            .map(|i| -0.5 * MU0 * ms * dot(magnetization[i], ani_field[i]) * cell_volume)
+        self.anisotropy_energy_density_from_field(magnetization, ani_field)
+            .into_iter()
+            .map(|density| density * cell_volume)
             .sum()
     }
 
     pub(crate) fn dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let cell_volume = self.cell_size.volume();
+        self.dmi_energy_density_from_vectors(magnetization)
+            .into_iter()
+            .map(|density| density * cell_volume)
+            .sum()
+    }
+
+    pub fn dmi_energy_density_from_vectors(&self, magnetization: &[Vector3]) -> Vec<f64> {
         let interfacial_dmi = match self.terms.interfacial_dmi {
             Some(d) if d.abs() > 0.0 => Some(d),
             _ => None,
@@ -431,14 +439,13 @@ impl ExchangeLlgProblem {
             _ => None,
         };
         if interfacial_dmi.is_none() && bulk_dmi.is_none() {
-            return 0.0;
+            return vec![0.0; self.grid.cell_count()];
         }
 
         let grid = self.grid;
         let dx = self.cell_size.dx;
         let dy = self.cell_size.dy;
         let dz = self.cell_size.dz;
-        let cell_volume = self.cell_size.volume();
         let bpx = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
         let bpy = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
         let bpz = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
@@ -482,16 +489,19 @@ impl ExchangeLlgProblem {
                     - (magnetization[yp][0] - magnetization[ym][0]) / (2.0 * dy);
                 energy += d * (m[0] * curl_x + m[1] * curl_y + m[2] * curl_z);
             }
-            energy * cell_volume
+            energy
         };
 
         #[cfg(feature = "parallel")]
         {
-            (0..grid.cell_count()).into_par_iter().map(compute).sum()
+            (0..grid.cell_count())
+                .into_par_iter()
+                .map(compute)
+                .collect()
         }
         #[cfg(not(feature = "parallel"))]
         {
-            (0..grid.cell_count()).map(compute).sum()
+            (0..grid.cell_count()).map(compute).collect()
         }
     }
 
@@ -3368,17 +3378,18 @@ impl ExchangeLlgProblem {
         exchange_field: &[Vector3],
     ) -> f64 {
         let cell_volume = self.cell_size.volume();
-        let ms = self.material.saturation_magnetisation;
-        let compute =
-            |i: usize| -0.5 * MU0 * ms * dot(magnetization[i], exchange_field[i]) * cell_volume;
-        #[cfg(feature = "parallel")]
-        {
-            (0..magnetization.len()).into_par_iter().map(compute).sum()
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            (0..magnetization.len()).map(compute).sum()
-        }
+        self.exchange_energy_density_from_field(magnetization, exchange_field)
+            .into_iter()
+            .map(|density| density * cell_volume)
+            .sum()
+    }
+
+    pub fn exchange_energy_density_from_field(
+        &self,
+        magnetization: &[Vector3],
+        exchange_field: &[Vector3],
+    ) -> Vec<f64> {
+        self.field_dot_energy_density(magnetization, exchange_field, -0.5)
     }
 
     pub(crate) fn demag_energy_from_fields(
@@ -3387,17 +3398,18 @@ impl ExchangeLlgProblem {
         demag_field: &[Vector3],
     ) -> f64 {
         let cell_volume = self.cell_size.volume();
-        let ms = self.material.saturation_magnetisation;
-        let compute =
-            |i: usize| -0.5 * MU0 * ms * dot(magnetization[i], demag_field[i]) * cell_volume;
-        #[cfg(feature = "parallel")]
-        {
-            (0..magnetization.len()).into_par_iter().map(compute).sum()
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            (0..magnetization.len()).map(compute).sum()
-        }
+        self.demag_energy_density_from_fields(magnetization, demag_field)
+            .into_iter()
+            .map(|density| density * cell_volume)
+            .sum()
+    }
+
+    pub fn demag_energy_density_from_fields(
+        &self,
+        magnetization: &[Vector3],
+        demag_field: &[Vector3],
+    ) -> Vec<f64> {
+        self.field_dot_energy_density(magnetization, demag_field, -0.5)
     }
 
     pub(crate) fn external_energy_from_fields(
@@ -3406,15 +3418,52 @@ impl ExchangeLlgProblem {
         external_field: &[Vector3],
     ) -> f64 {
         let cell_volume = self.cell_size.volume();
+        self.external_energy_density_from_fields(magnetization, external_field)
+            .into_iter()
+            .map(|density| density * cell_volume)
+            .sum()
+    }
+
+    pub fn external_energy_density_from_fields(
+        &self,
+        magnetization: &[Vector3],
+        external_field: &[Vector3],
+    ) -> Vec<f64> {
+        self.field_dot_energy_density(magnetization, external_field, -1.0)
+    }
+
+    pub fn anisotropy_energy_density_from_field(
+        &self,
+        magnetization: &[Vector3],
+        ani_field: &[Vector3],
+    ) -> Vec<f64> {
+        self.field_dot_energy_density(magnetization, ani_field, -0.5)
+    }
+
+    fn field_dot_energy_density(
+        &self,
+        magnetization: &[Vector3],
+        field: &[Vector3],
+        prefactor: f64,
+    ) -> Vec<f64> {
         let ms = self.material.saturation_magnetisation;
-        let compute = |i: usize| -MU0 * ms * dot(magnetization[i], external_field[i]) * cell_volume;
+        let compute = |i: usize| {
+            if self.is_active(i) {
+                prefactor * MU0 * ms * dot(magnetization[i], field[i])
+            } else {
+                0.0
+            }
+        };
         #[cfg(feature = "parallel")]
         {
-            (0..magnetization.len()).into_par_iter().map(compute).sum()
+            (0..magnetization.len())
+                .into_par_iter()
+                .map(compute)
+                .collect()
         }
         #[cfg(not(feature = "parallel"))]
         {
-            (0..magnetization.len()).map(compute).sum()
+            (0..magnetization.len()).map(compute).collect()
         }
     }
 }
