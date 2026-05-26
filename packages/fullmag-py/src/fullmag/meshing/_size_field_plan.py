@@ -844,6 +844,7 @@ def _mesh_options_from_runtime_metadata(
     default_hmax: float,
     bounds_by_name: dict[str, tuple] | None = None,
     component_aware: bool = False,
+    per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
 ) -> MeshOptions:
     raw_mesh_options = (
         mesh_workflow.get("mesh_options")
@@ -879,6 +880,52 @@ def _mesh_options_from_runtime_metadata(
                 return value
         return None
 
+    def _recipe_value(*keys: str, reducer: str = "unique") -> object | None:
+        if not per_object_recipes:
+            return None
+        values: list[object] = []
+        for geometry in geometries:
+            recipe = _lookup_geometry_name_alias(
+                per_object_recipes,
+                geometry.geometry_name,
+            )
+            if not isinstance(recipe, PerObjectMeshRecipe):
+                continue
+            recipe_payload = recipe.to_ir()
+            for key in keys:
+                value = recipe_payload.get(key)
+                if value is None:
+                    continue
+                values.append(value)
+                break
+        if not values:
+            return None
+        if reducer == "min":
+            numeric_values = [
+                float(value)
+                for value in values
+                if isinstance(value, (int, float))
+            ]
+            return min(numeric_values) if numeric_values else None
+        first = values[0]
+        if any(value != first for value in values[1:]):
+            raise ValueError(f"per-object {keys[0]} values must match for shared-domain meshing")
+        return first
+
+    def _mesh_option_value(*keys: str, reducer: str = "unique") -> object | None:
+        value = _recipe_value(*keys, reducer=reducer)
+        if value is not None:
+            return value
+        for key in keys:
+            value = raw_mesh_options.get(key)
+            if value is not None:
+                return value
+        for key in keys:
+            value = _single_geometry_value(key)
+            if value is not None:
+                return value
+        return None
+
     def _shared_per_geometry_value(key: str) -> object | None:
         values = _per_geometry_values(key)
         if not values:
@@ -909,7 +956,7 @@ def _mesh_options_from_runtime_metadata(
             component_aware=component_aware,
         )
     )
-    optimize = raw_mesh_options.get("optimize")
+    optimize = _mesh_option_value("optimize")
     raw_mesh_strategy = raw_mesh_options.get("mesh_strategy") or _single_geometry_value("mesh_strategy")
     raw_through_thickness_elements = (
         raw_mesh_options.get("through_thickness_elements")
@@ -961,6 +1008,8 @@ def _mesh_options_from_runtime_metadata(
         raw_mesh_options.get("boundary_layer_target_curve_selectors"),
         _merged_per_geometry_list("boundary_layer_target_curve_selectors"),
     )
+    raw_compute_quality = _mesh_option_value("compute_quality")
+    raw_per_element_quality = _mesh_option_value("per_element_quality")
 
     def _int_list(value: object) -> list[int] | None:
         if not isinstance(value, list):
@@ -973,33 +1022,45 @@ def _mesh_options_from_runtime_metadata(
         return [dict(item) for item in value if isinstance(item, Mapping)]
 
     return MeshOptions(
-        algorithm_2d=int(raw_mesh_options.get("algorithm_2d", 6)),
-        algorithm_3d=int(raw_mesh_options.get("algorithm_3d", 1)),
-        hmin=_coerce_positive_float(raw_mesh_options.get("hmin")),
+        algorithm_2d=int(_mesh_option_value("algorithm_2d") or 6),
+        algorithm_3d=int(_mesh_option_value("algorithm_3d") or 1),
+        hmin=_coerce_positive_float(
+            _mesh_option_value("hmin", "minimum_element_size", reducer="min")
+        ),
         calibrate_for=(
-            str(raw_mesh_options.get("calibrate_for"))
-            if isinstance(raw_mesh_options.get("calibrate_for"), str)
+            str(_mesh_option_value("calibrate_for"))
+            if isinstance(_mesh_option_value("calibrate_for"), str)
             else None
         ),
         size_preset=(
-            str(raw_mesh_options.get("size_preset"))
-            if isinstance(raw_mesh_options.get("size_preset"), str)
+            str(_mesh_option_value("size_preset"))
+            if isinstance(_mesh_option_value("size_preset"), str)
             else None
         ),
-        size_factor=float(raw_mesh_options.get("size_factor", 1.0)),
-        size_from_curvature=int(raw_mesh_options.get("size_from_curvature", 0)),
-        curvature_factor=_coerce_positive_float(raw_mesh_options.get("curvature_factor")),
-        growth_rate=_coerce_positive_float(raw_mesh_options.get("growth_rate")),
-        narrow_regions=int(raw_mesh_options.get("narrow_regions", 0)),
-        narrow_region_resolution=_coerce_positive_float(
-            raw_mesh_options.get("narrow_region_resolution")
+        size_factor=float(_mesh_option_value("size_factor") or 1.0),
+        size_from_curvature=int(_mesh_option_value("size_from_curvature") or 0),
+        curvature_factor=_coerce_positive_float(
+            _mesh_option_value("curvature_factor")
         ),
-        smoothing_steps=int(raw_mesh_options.get("smoothing_steps", 1)),
+        growth_rate=_coerce_positive_float(
+            _mesh_option_value("growth_rate", "maximum_element_growth_rate")
+        ),
+        narrow_regions=int(_mesh_option_value("narrow_regions") or 0),
+        narrow_region_resolution=_coerce_positive_float(
+            _mesh_option_value("narrow_region_resolution")
+        ),
+        smoothing_steps=int(_mesh_option_value("smoothing_steps") or 1),
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
-        optimize_iters=int(raw_mesh_options.get("optimize_iterations", 1)),
+        optimize_iters=int(
+            _mesh_option_value("optimize_iterations", "optimize_iters") or 1
+        ),
         size_fields=size_fields,
-        compute_quality=bool(raw_mesh_options.get("compute_quality", True)),
-        per_element_quality=bool(raw_mesh_options.get("per_element_quality", True)),
+        compute_quality=(
+            bool(raw_compute_quality) if raw_compute_quality is not None else True
+        ),
+        per_element_quality=(
+            bool(raw_per_element_quality) if raw_per_element_quality is not None else True
+        ),
         mesh_strategy=(
             str(raw_mesh_strategy)
             if isinstance(raw_mesh_strategy, str) and raw_mesh_strategy.strip()

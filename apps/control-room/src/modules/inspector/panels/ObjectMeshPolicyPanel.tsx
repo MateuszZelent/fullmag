@@ -175,6 +175,7 @@ function ObjectMeshSizeSemanticsSection({
       <FormField disabled={!draft.present} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
       <FormField disabled={!draft.present} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
       <FormField disabled={!draft.present} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
+      <FormField disabled={!draft.present} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -213,6 +214,8 @@ function ObjectMeshSweepStrategySection({
         <option value="triangular">Triangular</option>
         <option value="quadrilateral">Quadrilateral</option>
       </FormField>
+      <FormField disabled={!draft.present} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
+      <FormField disabled={!draft.present} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -272,6 +275,8 @@ function ObjectMeshBackendParametersSection({
       <FormField disabled={!draft.present} label="Boundary-layer stretching" type="number" value={draft.boundaryLayerStretching} onChange={(event) => updateDraft({ boundaryLayerStretching: event.target.value })} />
       <FormField disabled={!draft.present} label="Boundary-layer surface tags" type="text" value={draft.boundaryLayerTargetSurfaceTags} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceTags: event.target.value })} />
       <FormField disabled={!draft.present} label="Boundary-layer curve tags" type="text" value={draft.boundaryLayerTargetCurveTags} onChange={(event) => updateDraft({ boundaryLayerTargetCurveTags: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer surface selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetSurfaceSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceSelectors: event.target.value })} />
+      <FormField disabled={!draft.present} label="Boundary-layer curve selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetCurveSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetCurveSelectors: event.target.value })} />
       <MeshResourceFields
         fields={[
           { label: "Size-field count", value: String(sizeFieldsLength) },

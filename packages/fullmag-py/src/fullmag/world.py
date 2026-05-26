@@ -446,6 +446,8 @@ class _MeshSpecState:
     # Quality
     compute_quality: bool = False
     per_element_quality: bool = False
+    compute_quality_configured: bool = False
+    per_element_quality_configured: bool = False
     # Swept mesh / through-thickness control
     mesh_strategy: str | None = None
     through_thickness_elements: int | None = None
@@ -488,6 +490,8 @@ class _MeshSpecState:
             or self.boundary_layer_target_curve_tags is not None
             or self.boundary_layer_target_surface_selectors is not None
             or self.boundary_layer_target_curve_selectors is not None
+            or self.compute_quality_configured
+            or self.per_element_quality_configured
             or self.compute_quality
             or self.per_element_quality
             or bool(self.size_fields)
@@ -922,8 +926,10 @@ class GeometryMeshHandle:
             )
         if compute_quality is not None:
             spec.compute_quality = compute_quality
+            spec.compute_quality_configured = True
         if per_element_quality is not None:
             spec.per_element_quality = per_element_quality
+            spec.per_element_quality_configured = True
         if mesh_strategy is not None:
             spec.mesh_strategy = mesh_strategy
         if through_thickness_elements is not None:
@@ -3759,9 +3765,13 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["boundary_layer_target_curve_selectors"] = [
             dict(selector) for selector in spec.boundary_layer_target_curve_selectors
         ]
-    if spec.compute_quality:
+    if spec.compute_quality_configured:
+        payload["compute_quality"] = bool(spec.compute_quality)
+    elif spec.compute_quality:
         payload["compute_quality"] = True
-    if spec.per_element_quality:
+    if spec.per_element_quality_configured:
+        payload["per_element_quality"] = bool(spec.per_element_quality)
+    elif spec.per_element_quality:
         payload["per_element_quality"] = True
     if spec.size_fields:
         payload["size_fields"] = list(spec.size_fields)
@@ -3862,9 +3872,13 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["narrow_regions"] = primary_spec.narrow_regions
     if primary_spec.narrow_region_resolution is not None:
         mesh_options["narrow_region_resolution"] = primary_spec.narrow_region_resolution
-    if primary_spec.compute_quality:
+    if primary_spec.compute_quality_configured:
+        mesh_options["compute_quality"] = bool(primary_spec.compute_quality)
+    elif primary_spec.compute_quality:
         mesh_options["compute_quality"] = True
-    if primary_spec.per_element_quality:
+    if primary_spec.per_element_quality_configured:
+        mesh_options["per_element_quality"] = bool(primary_spec.per_element_quality)
+    elif primary_spec.per_element_quality:
         mesh_options["per_element_quality"] = True
     if primary_spec.size_fields:
         mesh_options["size_fields"] = list(primary_spec.size_fields)

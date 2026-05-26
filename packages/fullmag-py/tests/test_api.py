@@ -911,31 +911,26 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(per_geometry), 1)
         arch_mesh = per_geometry[0]
         self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
-        self.assertEqual(arch_mesh["maximum_element_size"], 6e-9)
-        self.assertEqual(arch_mesh["minimum_element_size"], 1.8e-9)
-        self.assertEqual(arch_mesh["maximum_element_growth_rate"], 1.22)
-        self.assertEqual(arch_mesh["mesh_strategy"], "swept_prism")
-        self.assertEqual(arch_mesh["through_thickness_elements"], 1)
-        self.assertEqual(arch_mesh["through_thickness_distribution"], "fixed")
-        self.assertEqual(arch_mesh["sweep_face_meshing"], "triangular")
-        size_fields = arch_mesh["size_fields"]
-        self.assertEqual(len(size_fields), 1)
-        self.assertEqual(size_fields[0]["kind"], "ObjectCoreRelaxation")
-        params = size_fields[0]["params"]
-        self.assertEqual(params["GeometryName"], "arch_waveguide")
-        self.assertEqual(params["core_maximum_element_size"], 6e-9)
-        self.assertEqual(params["surface_maximum_element_size"], 2e-9)
-        self.assertEqual(params["edge_maximum_element_size"], 1.8e-9)
+        self.assertEqual(arch_mesh["maximum_element_size"], 5e-9)
+        self.assertEqual(arch_mesh["minimum_element_size"], 2e-9)
+        self.assertEqual(arch_mesh["maximum_element_growth_rate"], 1.3)
+        self.assertEqual(arch_mesh["algorithm_3d"], 10)
+        self.assertEqual(arch_mesh["optimize"], "Netgen")
+        self.assertEqual(arch_mesh["optimize_iterations"], 4)
+        self.assertEqual(arch_mesh["smoothing_steps"], 4)
+        self.assertTrue(arch_mesh["compute_quality"])
+        self.assertFalse(arch_mesh["per_element_quality"])
+        self.assertNotIn("size_fields", arch_mesh)
         demag_solver = loaded.problem.discretization.fem.demag_solver_policy
         self.assertIsNotNone(demag_solver)
         self.assertEqual(demag_solver.print_level, 0)
         draft = export_builder_draft(loaded)
         scene = build_scene_document_from_builder(draft)
         object_mesh = scene["objects"][0]["object_mesh"]
-        self.assertEqual(object_mesh["mesh_strategy"], "swept_prism")
-        self.assertEqual(object_mesh["through_thickness_elements"], 1)
-        self.assertEqual(object_mesh["through_thickness_distribution"], "fixed")
-        self.assertEqual(object_mesh["sweep_face_meshing"], "triangular")
+        self.assertEqual(object_mesh["mesh_strategy"], None)
+        self.assertEqual(object_mesh["algorithm_3d"], 10)
+        self.assertEqual(object_mesh["hmin"], "2e-09")
+        self.assertFalse(object_mesh["per_element_quality"])
 
     def test_arch_skyrmion_example_uses_skyrmion_texture_and_gpu_ready_relax(self) -> None:
         example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_skyrmion_relax_50nm.py"

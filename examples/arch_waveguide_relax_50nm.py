@@ -55,14 +55,21 @@ study.universe(
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
+# minimum_element_size on universe = element size at the body-airbox interface.
+# Must match body resolution (5nm ≈ lex) for a smooth transition.  Geometric
+# grading then grows from 5nm → 150nm across the airbox depth.
 study.universe.mesh(
-    maximum_element_size=200e-9,
-    minimum_element_size=20e-9,
-    maximum_element_growth_rate=2.5,
+    maximum_element_size=150e-9,
+    minimum_element_size=5e-9,
+    maximum_element_growth_rate=1.5,
     grading="geometric",
 )
 
 # Geometry & material
+# NOTE: arch_height=0 makes this effectively a flat rectangular body.
+# ArchWaveguide creates 66 OCC loft faces for a flat shape, which causes
+# algorithm_3d=1 (Delaunay) to fail in Gmsh 4.15. Use algorithm_3d=10 (HXT)
+# directly to skip the failed attempt + fallback overhead.
 waveguide = study.geometry(
     fm.ArchWaveguide(
         length=LENGTH,
@@ -84,38 +91,33 @@ waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
 waveguide.m = fm.texture.bloch_skyrmion(300e-9,40e-9,-1,1,"xy")
 waveguide.visualization(show=True, mode="surface")
 # waveguide.m = fm.texture.random(1)
+# Exchange length lex = sqrt(2*Aex/(μ0·Ms²)) ≈ 5.2 nm.
+# Uniform 5nm elements (≈ 1 lex) throughout the body is physically sufficient
+# and gives ~4 elements through the 20nm thickness.
+#
+# object_core_relaxation is intentionally NOT used here because:
+#   - STL → classifySurfaces(40°) creates ~31 artificial surface patches with
+#     many false internal edges.  EdgeDistanceThreshold would refine around
+#     every false edge, inflating the mesh by 3-5× for no physical benefit.
+#   - For a 20nm thin film, surface_distance > thickness/4 puts the entire
+#     interior in the "surface" zone, negating the core/surface split.
+#   - Uniform 5nm = 1 lex is the correct resolution for this exchange length.
+#
+# algorithm_3d=10 (HXT) is the only reliable algorithm for lofted/imported
+# surfaces in Gmsh 4.15 — avoids the Delaunay fallback overhead.
 waveguide.mesh(
-    maximum_element_size=6e-9,
-    minimum_element_size=1.8e-9,
-    transition_distance=80e-9,
-    mesh_strategy="swept_prism",
-    through_thickness_elements=1,
-    through_thickness_distribution="fixed",
-    sweep_face_meshing="triangular",
+    maximum_element_size=5e-9,
+    minimum_element_size=2e-9,
     order=1,
     algorithm_2d=6,
-    algorithm_3d=1,
-    size_from_curvature=16,
-    smoothing_steps=8,
+    algorithm_3d=10,
+    smoothing_steps=4,
     optimize="Netgen",
-    optimize_iterations=8,
-    curvature_factor=0.35,
-    maximum_element_growth_rate=1.22,
-    narrow_regions=2,
-    narrow_region_resolution=1.0,
-    transition_growth=1.18,
+    optimize_iterations=4,
+    maximum_element_growth_rate=1.3,
     compute_quality=True,
-    per_element_quality=True,
+    per_element_quality=False,
 )
-core_relaxation = fm.mesh.object_core_relaxation(
-    "arch_waveguide",
-    maximum_element_size=6e-9,
-    surface_maximum_element_size=2e-9,
-    surface_distance=80e-9,
-    edge_maximum_element_size=1.8e-9,
-    edge_distance=50e-9,
-)
-waveguide.mesh.size_field(core_relaxation["kind"], **core_relaxation["params"])
 # Energy terms
 study.b_ext(B_EXT_T, 0.0, 0.0)
 study.demag(realization="poisson_robin")
@@ -124,7 +126,7 @@ study.demag(realization="poisson_robin")
 # (max_torque[T] < 1e-4). The public RelaxStop threshold is in A/m.
 # Keep interactive terminals quiet by default; set FULLMAG_DEMAG_PRINT_LEVEL=1
 # to inspect per-solve Hypre/PCG convergence.
-fm.fem_demag_solver(rtol=1e-6, max_iterations=200, print_level=DEMAG_PRINT_LEVEL)
+fm.fem_demag_solver(rtol=1e-6, max_iterations=1000, print_level=DEMAG_PRINT_LEVEL)
 
 study.build_domain_mesh()
 

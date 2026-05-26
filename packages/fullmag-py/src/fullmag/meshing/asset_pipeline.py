@@ -935,6 +935,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             default_hmax=float(hints.hmax),
             bounds_by_name=bounds_by_name,
             component_aware=not single_geometry_occ_direct,
+            per_object_recipes=per_object_recipes,
         )
         if per_object_recipes:
             _policy = assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
@@ -1061,6 +1062,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                         default_hmax=float(hints.hmax),
                         bounds_by_name=bounds_by_name,
                         component_aware=False,
+                        per_object_recipes=per_object_recipes,
                     )
                     if per_object_recipes:
                         _policy = (

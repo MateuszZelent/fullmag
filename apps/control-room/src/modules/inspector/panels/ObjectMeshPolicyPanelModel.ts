@@ -17,7 +17,9 @@ export interface ObjectMeshPolicyDraft {
   algorithm3d: string;
   boundaryLayerCount: string;
   boundaryLayerStretching: string;
+  boundaryLayerTargetCurveSelectors: string;
   boundaryLayerTargetCurveTags: string;
+  boundaryLayerTargetSurfaceSelectors: string;
   boundaryLayerTargetSurfaceTags: string;
   boundaryLayerThickness: string;
   computeQuality: string;
@@ -59,8 +61,11 @@ export interface ObjectMeshPolicyDraft {
   optimizeIterations: string;
   perElementQuality: string;
   present: boolean;
+  source: string;
   smoothingSteps: string;
   sweepFaceMeshing: string;
+  sweepDestination: string;
+  sweepSource: string;
   calibrateFor: string;
   sizePreset: string;
   sizeFactor: string;
@@ -92,8 +97,14 @@ export function draftFromObjectMeshPolicyResource(
     algorithm3d: readNumberText(config.algorithm_3d),
     boundaryLayerCount: readNumberText(config.boundary_layer_count),
     boundaryLayerStretching: readNumberText(config.boundary_layer_stretching),
+    boundaryLayerTargetCurveSelectors: readJsonArrayText(
+      config.boundary_layer_target_curve_selectors,
+    ),
     boundaryLayerTargetCurveTags: readIntegerListText(
       config.boundary_layer_target_curve_tags,
+    ),
+    boundaryLayerTargetSurfaceSelectors: readJsonArrayText(
+      config.boundary_layer_target_surface_selectors,
     ),
     boundaryLayerTargetSurfaceTags: readIntegerListText(
       config.boundary_layer_target_surface_tags,
@@ -144,11 +155,14 @@ export function draftFromObjectMeshPolicyResource(
     optimizeIterations: readNumberText(config.optimize_iterations),
     perElementQuality: readBooleanText(config.per_element_quality),
     present: resource.config !== null && resource.config !== undefined,
+    source: readStringText(config.source),
     sizeFactor: readNumberText(config.size_factor),
     sizeFromCurvature: readNumberText(config.size_from_curvature),
     sizePreset: readStringText(config.size_preset),
     smoothingSteps: readNumberText(config.smoothing_steps),
     sweepFaceMeshing: readStringText(config.sweep_face_meshing),
+    sweepDestination: readStringText(config.sweep_destination),
+    sweepSource: readStringText(config.sweep_source),
     throughThicknessDistribution: readStringText(
       config.through_thickness_distribution,
     ),
@@ -180,7 +194,9 @@ export function buildObjectMeshPolicyReplaceRequest({
   algorithm3d,
   boundaryLayerCount,
   boundaryLayerStretching,
+  boundaryLayerTargetCurveSelectors,
   boundaryLayerTargetCurveTags,
+  boundaryLayerTargetSurfaceSelectors,
   boundaryLayerTargetSurfaceTags,
   boundaryLayerThickness,
   computeQuality,
@@ -220,12 +236,15 @@ export function buildObjectMeshPolicyReplaceRequest({
   optimizeIterations,
   perElementQuality,
   present,
+  source,
   smoothingSteps,
   calibrateFor,
   sizePreset,
   sizeFactor,
   sizeFromCurvature,
   sweepFaceMeshing,
+  sweepDestination,
+  sweepSource,
   throughThicknessDistribution,
   throughThicknessElementRatio,
   throughThicknessElements,
@@ -311,12 +330,15 @@ export function buildObjectMeshPolicyReplaceRequest({
 
   applyOptionalString(value, "mesh_strategy", meshStrategy);
   applyOptionalString(value, "optimize", optimize);
+  applyOptionalString(value, "source", source);
   applyOptionalString(
     value,
     "through_thickness_distribution",
     throughThicknessDistribution,
   );
   applyOptionalString(value, "sweep_face_meshing", sweepFaceMeshing);
+  applyOptionalString(value, "sweep_source", sweepSource);
+  applyOptionalString(value, "sweep_destination", sweepDestination);
   applyOptionalString(value, "calibrate_for", calibrateFor);
   applyOptionalString(value, "size_preset", sizePreset);
   applyOptionalBoolean(
@@ -338,6 +360,26 @@ export function buildObjectMeshPolicyReplaceRequest({
   );
   if (!curveTags.ok) return { error: curveTags.error };
   applyOptionalList(value, "boundary_layer_target_curve_tags", curveTags.value);
+  const surfaceSelectors = parseOptionalJsonArray(
+    boundaryLayerTargetSurfaceSelectors,
+    "Boundary-layer surface selectors",
+  );
+  if (!surfaceSelectors.ok) return { error: surfaceSelectors.error };
+  applyOptionalJsonArray(
+    value,
+    "boundary_layer_target_surface_selectors",
+    surfaceSelectors.value,
+  );
+  const curveSelectors = parseOptionalJsonArray(
+    boundaryLayerTargetCurveSelectors,
+    "Boundary-layer curve selectors",
+  );
+  if (!curveSelectors.ok) return { error: curveSelectors.error };
+  applyOptionalJsonArray(
+    value,
+    "boundary_layer_target_curve_selectors",
+    curveSelectors.value,
+  );
   const manualBox = applyManualBoxSizeField(value, {
     enabled: manualBoxSizeFieldEnabled,
     source: manualBoxSizeFieldSource,
@@ -764,6 +806,10 @@ function readIntegerListText(value: unknown): string {
   return integers.length === value.length ? integers.join(", ") : "";
 }
 
+function readJsonArrayText(value: unknown): string {
+  return Array.isArray(value) ? JSON.stringify(value, null, 2) : "";
+}
+
 function parsePositiveNumber(
   value: string,
   label: string,
@@ -860,6 +906,23 @@ function parseIntegerList(
   return { ok: true, value: parsed };
 }
 
+function parseOptionalJsonArray(
+  value: string,
+  label: string,
+): { ok: true; value: JsonValue[] | null } | { error: string; ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: null };
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) {
+      return { error: `${label} must be a JSON array.`, ok: false };
+    }
+    return { ok: true, value: parsed as JsonValue[] };
+  } catch {
+    return { error: `${label} must be a JSON array.`, ok: false };
+  }
+}
+
 function applyOptionalNumber(
   config: JsonObject,
   key: string,
@@ -877,6 +940,19 @@ function applyOptionalList(
   config: JsonObject,
   key: string,
   value: number[] | null,
+): void {
+  if (value === null) {
+    delete config[key];
+    return;
+  }
+
+  config[key] = value;
+}
+
+function applyOptionalJsonArray(
+  config: JsonObject,
+  key: string,
+  value: JsonValue[] | null,
 ): void {
   if (value === null) {
     delete config[key];

@@ -769,10 +769,12 @@ def _build_stl_volume_model(
     gmsh.merge(str(path))
     angle = 40.0 * math.pi / 180.0
     emit_progress("Gmsh: classifying STL surfaces")
+    # Gmsh reparametrization fragments thin lofted STL surfaces into artificial
+    # patches; keep physical facet classification for edge-distance fields.
     gmsh.model.mesh.classifySurfaces(
         angle,
         boundary=True,
-        forReparametrization=True,
+        forReparametrization=False,
         curveAngle=math.pi,
     )
     emit_progress("Gmsh: creating geometry from classified surfaces")
@@ -893,22 +895,26 @@ def _build_stl_volume_model_for_component(
     """
     from collections import defaultdict
 
+    existing_surfs = {tag for _, tag in gmsh.model.getEntities(2)}
+
     gmsh.merge(str(path))
     angle = 40.0 * math.pi / 180.0
+    # Gmsh reparametrization fragments thin lofted STL surfaces into artificial
+    # patches; keep physical facet classification for edge-distance fields.
     gmsh.model.mesh.classifySurfaces(
         angle,
         boundary=True,
-        forReparametrization=True,
+        forReparametrization=False,
         curveAngle=math.pi,
     )
     gmsh.model.mesh.createGeometry()
     surfaces = gmsh.model.getEntities(2)
     if not surfaces:
         raise ValueError(f"failed to recover closed surfaces from STL: {path}")
-    surface_tags = [tag for _, tag in surfaces]
+    surface_tags = [tag for _, tag in surfaces if tag not in existing_surfs]
 
     edge_to_surfs: dict[int, set[int]] = defaultdict(set)
-    for _, stag in surfaces:
+    for stag in surface_tags:
         edges = gmsh.model.getBoundary([(2, stag)], oriented=False)
         for _, etag in edges:
             edge_to_surfs[abs(etag)].add(stag)

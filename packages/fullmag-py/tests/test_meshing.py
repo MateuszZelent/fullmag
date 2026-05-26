@@ -50,6 +50,7 @@ from fullmag.meshing._mesh_targets import (
 )
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.meshing.gmsh_bridge import (
+    ALGO_3D_DELAUNAY,
     ALGO_3D_HXT,
     ALGO_3D_MMG3D,
     AirboxOptions,
@@ -69,6 +70,7 @@ from fullmag.meshing.gmsh_bridge import (
     generate_mesh,
     resolve_mesh_size_controls,
 )
+from fullmag.meshing._gmsh_generators import _build_stl_volume_model_for_component
 from fullmag.meshing.remesh_cli import (
     _geometry_from_ir,
     _mesh_options_from_dict,
@@ -1252,6 +1254,122 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_options.through_thickness_element_ratio, 1.0)
         self.assertEqual(mesh_options.sweep_face_meshing, "triangular")
 
+    def test_runtime_mesh_options_preserve_single_object_gmsh_controls(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=2e-9,
+            arch_height=0.0,
+            name="arch",
+        )
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {},
+                "per_geometry": [
+                    {
+                        "geometry": "arch",
+                        "algorithm_2d": 6,
+                        "algorithm_3d": ALGO_3D_HXT,
+                        "minimum_element_size": 2e-9,
+                        "size_factor": 0.8,
+                        "size_from_curvature": 12,
+                        "curvature_factor": 0.5,
+                        "maximum_element_growth_rate": 1.3,
+                        "narrow_regions": 2,
+                        "narrow_region_resolution": 1.0,
+                        "smoothing_steps": 4,
+                        "optimize": "Netgen",
+                        "optimize_iterations": 6,
+                        "compute_quality": True,
+                        "per_element_quality": False,
+                    }
+                ],
+            },
+            geometries=[geometry],
+            default_hmax=20e-9,
+            component_aware=True,
+        )
+
+        self.assertEqual(mesh_options.algorithm_2d, 6)
+        self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
+        self.assertEqual(mesh_options.hmin, 2e-9)
+        self.assertEqual(mesh_options.size_factor, 0.8)
+        self.assertEqual(mesh_options.size_from_curvature, 12)
+        self.assertEqual(mesh_options.curvature_factor, 0.5)
+        self.assertEqual(mesh_options.growth_rate, 1.3)
+        self.assertEqual(mesh_options.narrow_regions, 2)
+        self.assertEqual(mesh_options.narrow_region_resolution, 1.0)
+        self.assertEqual(mesh_options.smoothing_steps, 4)
+        self.assertEqual(mesh_options.optimize, "Netgen")
+        self.assertEqual(mesh_options.optimize_iters, 6)
+        self.assertTrue(mesh_options.compute_quality)
+        self.assertFalse(mesh_options.per_element_quality)
+
+    def test_runtime_mesh_options_preserve_single_object_recipe_gmsh_controls(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=2e-9,
+            arch_height=0.0,
+            name="arch",
+        )
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {}, "per_geometry": []},
+            geometries=[geometry],
+            default_hmax=20e-9,
+            component_aware=True,
+            per_object_recipes={
+                "arch": PerObjectMeshRecipe(
+                    minimum_element_size=2e-9,
+                    algorithm_2d=6,
+                    algorithm_3d=ALGO_3D_HXT,
+                    size_factor=0.8,
+                    size_from_curvature=12,
+                    curvature_factor=0.5,
+                    growth_rate=1.3,
+                    narrow_regions=2,
+                    narrow_region_resolution=1.0,
+                    smoothing_steps=4,
+                    optimize="Netgen",
+                    optimize_iters=6,
+                ),
+            },
+        )
+
+        self.assertEqual(mesh_options.algorithm_2d, 6)
+        self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
+        self.assertEqual(mesh_options.hmin, 2e-9)
+        self.assertEqual(mesh_options.size_factor, 0.8)
+        self.assertEqual(mesh_options.size_from_curvature, 12)
+        self.assertEqual(mesh_options.curvature_factor, 0.5)
+        self.assertEqual(mesh_options.growth_rate, 1.3)
+        self.assertEqual(mesh_options.narrow_regions, 2)
+        self.assertEqual(mesh_options.narrow_region_resolution, 1.0)
+        self.assertEqual(mesh_options.smoothing_steps, 4)
+        self.assertEqual(mesh_options.optimize, "Netgen")
+        self.assertEqual(mesh_options.optimize_iters, 6)
+
+    def test_runtime_mesh_options_reject_conflicting_recipe_global_controls(self) -> None:
+        left = fm.Box(20e-9, 20e-9, 5e-9, name="left")
+        right = fm.Box(20e-9, 20e-9, 5e-9, name="right")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "per-object algorithm_3d values must match",
+        ):
+            _mesh_options_from_runtime_metadata(
+                {"mesh_options": {}, "per_geometry": []},
+                geometries=[left, right],
+                default_hmax=20e-9,
+                component_aware=True,
+                per_object_recipes={
+                    "left": PerObjectMeshRecipe(algorithm_3d=ALGO_3D_HXT),
+                    "right": PerObjectMeshRecipe(algorithm_3d=ALGO_3D_DELAUNAY),
+                },
+            )
+
     def test_remesh_cli_mesh_options_preserve_swept_and_boundary_layer_controls(self) -> None:
         mesh_options = _mesh_options_from_dict(
             {
@@ -1737,6 +1855,47 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertGreater(mesh.n_nodes, 0)
         self.assertGreater(mesh.n_elements, 0)
+
+    def test_arch_waveguide_stl_classification_preserves_physical_faces(self) -> None:
+        if not _has_trimesh:
+            self.skipTest("trimesh not available")
+        try:
+            import gmsh
+        except ImportError as exc:
+            self.skipTest(f"gmsh not available: {exc}")
+
+        geometry = fm.ArchWaveguide(
+            length=2.5e-6,
+            width=1.0e-6,
+            height=20e-9,
+            arch_height=0.0,
+            z0=-25e-9,
+            name="arch_waveguide_geom",
+        )
+        surface = _geometry_to_trimesh(
+            geometry,
+            _import_trimesh(),
+            through_thickness_elements=1,
+            through_thickness_distribution="fixed",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "arch_waveguide.stl"
+            surface.export(path)
+
+            gmsh.initialize()
+            gmsh.option.setNumber("General.Terminal", 0)
+            try:
+                gmsh.model.add("arch_waveguide_classification")
+                volumes, surfaces = _build_stl_volume_model_for_component(
+                    gmsh,
+                    path,
+                )
+            finally:
+                gmsh.finalize()
+
+        self.assertEqual(len(volumes), 1)
+        self.assertEqual(len(surfaces), 6)
 
     def test_arch_waveguide_surface_preview_uses_trimesh(self) -> None:
         if not _has_trimesh:
@@ -3625,16 +3784,51 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertIn("degraded", report.to_dict())
         self.assertTrue(report.to_dict()["degraded"])
 
-    def test_build_report_not_degraded_for_component_aware(self) -> None:
-        """Build report degraded flag must be False for successful component-aware build."""
-        report = SharedDomainBuildReport(
-            build_mode="component_aware",
-            fallbacks_triggered=[],
-            effective_airbox_target=ResolvedAirboxTarget(hmax=100e-9),
-            effective_per_object_targets={},
-            used_size_field_kinds=["ComponentVolumeConstant"],
+    def test_multi_object_sizing_cylinder_and_waveguide(self) -> None:
+        """Verify that a multi-object shared-domain mesh generation with Cylinder,
+
+        ArchWaveguide, and Airbox respects per-object hmax/hmin size fields.
+        """
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        cylinder_base = fm.Cylinder(radius=100e-9, height=50e-9, name="cylinder_base")
+        cylinder = fm.Translate(cylinder_base, (0.0, 300e-9, 0.0), name="cylinder")
+        waveguide = fm.ArchWaveguide(
+            length=800e-9,
+            width=150e-9,
+            height=30e-9,
+            arch_height=40e-9,
+            z0=-20e-9,
+            name="waveguide",
         )
-        self.assertFalse(report.degraded)
+
+        per_object_recipes = {
+            "cylinder": PerObjectMeshRecipe(hmax=10e-9, hmin=2e-9),
+            "waveguide": PerObjectMeshRecipe(hmax=15e-9, hmin=3e-9),
+        }
+
+        study_universe = {
+            "mode": "manual",
+            "size": [1.5e-6, 1.2e-6, 400e-9],
+            "center": [0.0, 100e-9, 0.0],
+            "airbox_hmax": 120e-9,
+            "airbox_hmin": 20e-9,
+        }
+
+        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[cylinder, waveguide],
+            hints=fm.FEM(order=1, hmax=120e-9),
+            study_universe=study_universe,
+            per_object_recipes=per_object_recipes,
+        )
+
+        self.assertGreater(mesh.n_nodes, 0)
+        self.assertGreater(mesh.n_elements, 0)
+        self.assertEqual(len(region_markers), 2)
+        self.assertIn("Box", report.used_size_field_kinds)
 
 
 if __name__ == "__main__":

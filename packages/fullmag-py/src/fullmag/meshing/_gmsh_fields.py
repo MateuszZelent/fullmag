@@ -15,6 +15,7 @@ from ._gmsh_types import (
     resolve_mesh_size_controls,
 )
 from ._gmsh_selectors import resolve_entity_selectors
+from ._mesh_targets import _geometry_name_aliases
 
 @dataclass(frozen=True, slots=True)
 class BoundaryLayerResult:
@@ -466,13 +467,25 @@ def _match_surfaces_within_bounds(
     return matched
 
 
+def _resolve_tags_from_aliases(
+    geometry_name: str,
+    tag_dict: dict[str, list[int]],
+) -> list[int]:
+    """Look up component tags by geometry_name, trying canonical aliases."""
+    for alias in _geometry_name_aliases(geometry_name):
+        tags = tag_dict.get(alias)
+        if tags:
+            return [int(tag) for tag in tags]
+    return []
+
+
 def _component_surface_tags_for_geometry(
     geometry_name: str,
     component_surface_tags: dict[str, list[int]] | None,
 ) -> list[int]:
     if not component_surface_tags:
         return []
-    return [int(tag) for tag in component_surface_tags.get(geometry_name, [])]
+    return _resolve_tags_from_aliases(geometry_name, component_surface_tags)
 
 
 def _component_volume_tags_for_geometry(
@@ -481,7 +494,7 @@ def _component_volume_tags_for_geometry(
 ) -> list[int]:
     if not component_volume_tags:
         return []
-    return [int(tag) for tag in component_volume_tags.get(geometry_name, [])]
+    return _resolve_tags_from_aliases(geometry_name, component_volume_tags)
 
 
 def _add_surface_threshold_field(

@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ._mesh_targets import _geometry_name_aliases
+
 
 def _selector_point(selector: Mapping[str, object]) -> tuple[float, float, float]:
     raw_point = selector.get("point")
@@ -46,6 +48,18 @@ def _curve_tags_from_surfaces(gmsh: Any, surface_tags: Sequence[int]) -> list[in
     return sorted({int(tag) for dim, tag in boundary if int(dim) == 1})
 
 
+def _resolve_surface_tags_from_aliases(
+    geometry_name: str,
+    component_surface_tags: dict[str, list[int]],
+) -> list[int]:
+    """Look up component surface tags by geometry_name, trying canonical aliases."""
+    for alias in _geometry_name_aliases(geometry_name):
+        tags = component_surface_tags.get(alias)
+        if tags:
+            return [int(tag) for tag in tags]
+    return []
+
+
 def _candidate_entities(
     gmsh: Any,
     *,
@@ -55,7 +69,7 @@ def _candidate_entities(
 ) -> list[tuple[int, int]]:
     geometry = _geometry_name(selector)
     if geometry and component_surface_tags:
-        surface_tags = [int(tag) for tag in component_surface_tags.get(geometry, [])]
+        surface_tags = _resolve_surface_tags_from_aliases(geometry, component_surface_tags)
         if dimension == 2:
             return [(2, tag) for tag in surface_tags]
         if dimension == 1:
