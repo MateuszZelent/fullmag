@@ -8,8 +8,13 @@ import {
   type ComponentProps,
 } from "react";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  LiveStatusResource,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { CameraRegistrySnapshot } from "@/kernel/visualization/CameraRegistryController";
 import {
@@ -87,6 +92,7 @@ import {
   useViewport3DSharedDomainManifest,
   useViewport3DUniverse,
 } from "../viewport3dResources";
+import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
 import {
   isViewport3DTopologyCurrent,
   resolveViewport3DTopologyFreshnessLabel,
@@ -116,6 +122,12 @@ export interface Viewport3DFieldDataIssue {
   quantityId: string;
   resourceKey: string;
   retry: () => void;
+}
+
+function selectViewport3DComputeRunning(
+  status: ResourceResult<LiveStatusResource>,
+): boolean {
+  return status.data?.solver.state === "running";
 }
 
 function resolveSelectionMeshQualityMetric(
@@ -272,6 +284,7 @@ export function useViewport3DSceneModel({
   const visualizationState = useVisualizationStateResource();
   const cameraRegistrySnapshot = useCameraRegistrySnapshot();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
+  const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
   const renderingState = visualizationState.data;
   const cameraView = resolveViewport3DSceneCameraView({
     cameraRegistrySnapshot,
@@ -719,19 +732,19 @@ export function useViewport3DSceneModel({
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
+  const fieldVectorResourceKey = useMemo(
+    () => resolveViewport3DFieldVectorResourceKey(quantityId, FULL_FIELD_QUERY),
+    [quantityId],
+  );
   const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
     if (!(fieldVectorEnabled && fieldVector.error)) return null;
     const message =
       fieldVector.error.message.trim() || "Field vector resource failed to load.";
-    const resourceKey = resolveViewport3DFieldVectorResourceKey(
-      quantityId,
-      FULL_FIELD_QUERY,
-    );
     return {
-      key: `${resourceKey}:${fieldVector.revision ?? "none"}:${message}`,
+      key: `${fieldVectorResourceKey}:${fieldVector.revision ?? "none"}:${message}`,
       message,
       quantityId,
-      resourceKey,
+      resourceKey: fieldVectorResourceKey,
       retry: fieldVector.refetch,
     };
   }, [
@@ -739,8 +752,26 @@ export function useViewport3DSceneModel({
     fieldVector.refetch,
     fieldVector.revision,
     fieldVectorEnabled,
+    fieldVectorResourceKey,
     quantityId,
   ]);
+  const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
+    () => ({
+      enabled: computeRunning && fieldVectorEnabled,
+      quantityId,
+      resourceKey: fieldVectorResourceKey,
+      revision: fieldVector.revision,
+      status: fieldVector.status,
+    }),
+    [
+      computeRunning,
+      fieldVector.revision,
+      fieldVector.status,
+      fieldVectorEnabled,
+      fieldVectorResourceKey,
+      quantityId,
+    ],
+  );
   const fdmFieldVector =
     fdmSettings.activeQuantityId === quantityId
       ? fieldVector.data
@@ -927,6 +958,7 @@ export function useViewport3DSceneModel({
     fdmSurfaceColors,
     femDomain,
     fieldDataIssue,
+    fieldRefresh,
     fieldModel: fieldRenderModel,
     fieldVector: fieldVector.data,
     getObjectSettings,

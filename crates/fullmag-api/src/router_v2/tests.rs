@@ -30,6 +30,7 @@ use crate::types::{
     StepUpdateView, TrackedCommandRecord,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
+use fullmag_runner::LivePreviewField;
 
 use super::build_v2_router;
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -9539,6 +9540,90 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+}
+
+#[tokio::test]
+async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 25;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 4,
+            quantity: "m".to_string(),
+            unit: "1".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 9,
+                time: 3.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]);
 }
 
 #[tokio::test]

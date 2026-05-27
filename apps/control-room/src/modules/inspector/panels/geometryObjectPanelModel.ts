@@ -530,11 +530,11 @@ export function resolveGeometryObjectPanelModel(
 }
 
 function formatScientific(value: number, unit: string): string {
-  return `${value.toExponential(3)} ${unit}`;
+  return `${value.toExponential(6)} ${unit}`;
 }
 
 function formatMagnetization(value: ObjectMetricsResource["magnetization_average"]): string {
-  return `(${value.mx.toFixed(3)}, ${value.my.toFixed(3)}, ${value.mz.toFixed(3)})`;
+  return `(${value.mx.toFixed(6)}, ${value.my.toFixed(6)}, ${value.mz.toFixed(6)})`;
 }
 
 export function resolveObjectMetricsPanelModel(
@@ -561,7 +561,7 @@ export function resolveObjectMetricsPanelModel(
     dmi: formatScientific(metrics.energies.dmi, "J"),
     exchange: formatScientific(metrics.energies.exchange, "J"),
     magnetization: formatMagnetization(metrics.magnetization_average),
-    sample: `step ${metrics.step} @ ${metrics.time_seconds.toExponential(3)} s`,
+    sample: `step ${metrics.step} @ ${metrics.time_seconds.toExponential(6)} s`,
     source: metrics.source,
     status: metrics.has_solver_sample ? "computed" : "initial",
     total: formatScientific(metrics.energies.total, "J"),

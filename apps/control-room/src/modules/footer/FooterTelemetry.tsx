@@ -37,7 +37,7 @@ import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
-  maximumFractionDigits: 3,
+  maximumFractionDigits: 6,
 });
 
 export function FooterTelemetry() {
@@ -251,7 +251,7 @@ export function buildFooterTelemetryModel(
         icon: <Hash size={13} aria-hidden="true" />,
         id: "step",
         label: "Step",
-        subdetail: `t=${formatScientific(objectMetrics?.time_seconds ?? runTimeSeconds, "0.000e+0")} s`,
+        subdetail: `t=${formatScientific(objectMetrics?.time_seconds ?? runTimeSeconds, "0.000000e+0")} s`,
         value: formatInteger(objectMetrics?.step ?? totalSteps),
       },
       {
@@ -261,7 +261,7 @@ export function buildFooterTelemetryModel(
         label: "dt",
         subdetail: `State: ${runtimeStateLabel}`,
         unit: "s",
-        value: formatScientific(dt, "0.000e+0"),
+        value: formatScientific(dt, "0.000000e+0"),
       },
       {
         detail: "Peak Load",
@@ -277,7 +277,7 @@ export function buildFooterTelemetryModel(
         id: "avg-mx",
         label: "avg mx",
         subdetail: objectMetrics?.source ?? "No object sample",
-        value: formatFixed(magnetization?.mx, 3, "0.000"),
+        value: formatFixed(magnetization?.mx, 6, "0.000000"),
       },
       {
         detail: "Average magnetization",
@@ -285,7 +285,7 @@ export function buildFooterTelemetryModel(
         id: "avg-my",
         label: "avg my",
         subdetail: objectMetrics?.source ?? "No object sample",
-        value: formatFixed(magnetization?.my, 3, "0.000"),
+        value: formatFixed(magnetization?.my, 6, "0.000000"),
       },
       {
         detail: "Average magnetization",
@@ -293,7 +293,7 @@ export function buildFooterTelemetryModel(
         id: "avg-mz",
         label: "avg mz",
         subdetail: objectMetrics?.source ?? "No object sample",
-        value: formatFixed(magnetization?.mz, 3, "0.000"),
+        value: formatFixed(magnetization?.mz, 6, "0.000000"),
       },
       {
         detail: "Average magnetization",
@@ -301,7 +301,7 @@ export function buildFooterTelemetryModel(
         id: "avg-m",
         label: "|avg m|",
         subdetail: objectMetrics?.has_solver_sample ? "Solver sample" : "Initial state",
-        value: formatFixed(magnetizationMagnitude, 3, "0.000"),
+        value: formatFixed(magnetizationMagnitude, 6, "0.000000"),
       },
       {
         detail: "Total",
@@ -310,7 +310,7 @@ export function buildFooterTelemetryModel(
         label: "Energy",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(totalEnergy, "0.000e+0"),
+        value: formatScientific(totalEnergy, "0.000000e+0"),
       },
       {
         detail: "Exchange",
@@ -319,7 +319,7 @@ export function buildFooterTelemetryModel(
         label: "Exchange",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.exchange ?? status?.energies?.exchange, "0.000e+0"),
+        value: formatScientific(objectMetrics?.energies.exchange ?? status?.energies?.exchange, "0.000000e+0"),
       },
       {
         detail: "Demag",
@@ -328,7 +328,7 @@ export function buildFooterTelemetryModel(
         label: "Demag",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.demag ?? status?.energies?.demag, "0.000e+0"),
+        value: formatScientific(objectMetrics?.energies.demag ?? status?.energies?.demag, "0.000000e+0"),
       },
       {
         detail: "Zeeman",
@@ -337,7 +337,7 @@ export function buildFooterTelemetryModel(
         label: "Zeeman",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.zeeman ?? status?.energies?.zeeman, "0.000e+0"),
+        value: formatScientific(objectMetrics?.energies.zeeman ?? status?.energies?.zeeman, "0.000000e+0"),
       },
       {
         detail: "Anisotropy",
@@ -346,7 +346,7 @@ export function buildFooterTelemetryModel(
         label: "Anisotropy",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.anisotropy ?? status?.energies?.anisotropy, "0.000e+0"),
+        value: formatScientific(objectMetrics?.energies.anisotropy ?? status?.energies?.anisotropy, "0.000000e+0"),
       },
       {
         detail: "DMI",
@@ -355,7 +355,7 @@ export function buildFooterTelemetryModel(
         label: "DMI",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.dmi ?? status?.energies?.dmi, "0.000e+0"),
+        value: formatScientific(objectMetrics?.energies.dmi ?? status?.energies?.dmi, "0.000000e+0"),
       },
     ] satisfies FooterTelemetryMetric[],
     onlineDetail: status ? "Live session channel" : "Awaiting session",
@@ -484,13 +484,13 @@ function formatScientific(
   if (Math.abs(value) >= 1e-2 && Math.abs(value) < 1e4) {
     return COMPACT_DECIMAL_FORMAT.format(value);
   }
-  return value.toExponential(3);
+  return value.toExponential(6);
 }
 
 function formatTorqueTelemetry(valueT: number | null | undefined): string {
   return typeof valueT === "number" && Number.isFinite(valueT)
     ? formatTorqueT(valueT)
-    : "0.000e+0 T";
+    : "0.000000e+0 T";
 }
 
 function formatBoolean(value: boolean | null | undefined): string {

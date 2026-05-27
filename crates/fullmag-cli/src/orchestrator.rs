@@ -467,7 +467,9 @@ fn apply_live_step_update_to_workspace_state(
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
     let previous_step = state.live_state.latest_step.clone();
     state.live_state = live_state_manifest_from_update(update);
-    if state.live_state.latest_step.magnetization.is_none() {
+    if state.live_state.latest_step.magnetization.is_none()
+        && !step_update_has_magnetization_preview(update)
+    {
         state.live_state.latest_step.magnetization = previous_step.magnetization;
     }
     if state.live_state.latest_step.fem_mesh.is_none() {
@@ -477,6 +479,17 @@ fn apply_live_step_update_to_workspace_state(
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, update);
     }
+}
+
+fn step_update_has_magnetization_preview(update: &fullmag_runner::StepUpdate) -> bool {
+    update
+        .preview_field
+        .as_ref()
+        .is_some_and(|field| field.quantity == "m")
+        || update
+            .cached_preview_fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field.quantity == "m"))
 }
 
 fn saturating_nanos_u64(duration: Duration) -> u64 {
@@ -7346,6 +7359,33 @@ mod tests {
         assert_eq!(
             state.live_state.latest_step.magnetization,
             Some(vec![1.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn publish_live_step_update_does_not_shadow_fresh_m_preview_with_previous_magnetization() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
+
+        let mut update = test_step_update(14);
+        update.preview_field = Some(test_preview_field("m", 2, -1.0));
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            true,
+        );
+
+        assert_eq!(state.live_state.latest_step.magnetization, None);
+        assert_eq!(
+            state
+                .preview_fields
+                .to_vec()
+                .first()
+                .map(|field| field.vector_field_values.as_slice()),
+            Some(&[0.0, 0.0, -1.0][..])
         );
     }
 

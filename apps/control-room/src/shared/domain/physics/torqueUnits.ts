@@ -11,7 +11,7 @@ export function teslaFromApm(valueApm: number): number {
 }
 
 export function formatScientific(value: number): string {
-  return value.toExponential(3).replace("e+", "e");
+  return value.toExponential(6).replace("e+", "e");
 }
 
 export function formatTorqueT(valueT: number): string {

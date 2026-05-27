@@ -8,6 +8,7 @@ import {
   useState,
   memo,
   type ComponentProps,
+  type CSSProperties,
   type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -68,6 +69,12 @@ import {
 } from "./viewport3dPrimitiveModel";
 import { toCameraTuple } from "./viewport3dCameraModel";
 import {
+  EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+  resolveViewport3DRefreshCountdownDisplay,
+  updateViewport3DRefreshSample,
+  type Viewport3DFieldRefreshState,
+} from "./viewport3dRefreshCountdown";
+import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
   useViewport3DCommandState,
@@ -121,6 +128,7 @@ interface Viewport3DFrameProps
   diagnostics: string;
   domainSummary: string;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
+  fieldRefresh: Viewport3DFieldRefreshState;
   kernel: ModuleProps["kernel"];
   meshQualityMetric: MeshQualityColorMetric;
   meshQualityRange: MeshQualityRange | null;
@@ -321,6 +329,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   diagnostics,
   domainSummary,
   fieldDataIssue,
+  fieldRefresh,
   kernel,
   meshQualityMetric,
   meshQualityRange,
@@ -466,6 +475,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <span>{domainSummary}</span>
         {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
         <span>{status}</span>
+        <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         <span>{diagnostics}</span>
       </div>
       {clientReady && colors ? (
@@ -537,6 +547,94 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     </section>
   );
 });
+
+const VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS = 100;
+
+const Viewport3DFieldRefreshCountdown = memo(
+  function Viewport3DFieldRefreshCountdown({
+    refresh,
+  }: {
+    refresh: Viewport3DFieldRefreshState;
+  }) {
+    const [countdown, setCountdown] = useState(() => ({
+      nowMs: 0,
+      sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+    }));
+
+    useEffect(() => {
+      if (!refresh.enabled) {
+        const timeoutId = window.setTimeout(() => {
+          setCountdown({
+            nowMs: 0,
+            sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+          });
+        }, 0);
+        return () => window.clearTimeout(timeoutId);
+      }
+
+      const tick = () => {
+        const nowMs = Date.now();
+        setCountdown((current) => ({
+          nowMs,
+          sample: updateViewport3DRefreshSample(current.sample, {
+            nowMs,
+            revision: refresh.revision,
+            status: refresh.status,
+          }),
+        }));
+      };
+      const timeoutId = window.setTimeout(tick, 0);
+      const intervalId = window.setInterval(
+        tick,
+        VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS,
+      );
+      return () => {
+        window.clearInterval(intervalId);
+        window.clearTimeout(timeoutId);
+      };
+    }, [refresh.enabled, refresh.revision, refresh.status]);
+
+    const display = resolveViewport3DRefreshCountdownDisplay({
+      enabled: refresh.enabled,
+      nowMs: countdown.nowMs,
+      sample: countdown.sample,
+      status: refresh.status,
+    });
+    if (!display) return null;
+
+    const progressDegrees = `${Math.round(display.progress * 360)}deg`;
+    const style = {
+      "--fm-refresh-progress": progressDegrees,
+    } as CSSProperties;
+
+    return (
+      <span
+        aria-label={`${display.ariaLabel} for ${refresh.quantityId}`}
+        className="fm-viewport-3d__refresh-countdown"
+        data-pulse-id={countdown.sample.pulseId}
+        data-refresh-state={display.state}
+        data-resource-key={refresh.resourceKey}
+        data-revision={refresh.revision ?? "none"}
+        style={style}
+      >
+        <span
+          aria-hidden="true"
+          className="fm-viewport-3d__refresh-countdown-ring"
+        >
+          <span className="fm-viewport-3d__refresh-countdown-core" />
+        </span>
+        <span className="fm-viewport-3d__refresh-countdown-copy">
+          <span className="fm-viewport-3d__refresh-countdown-title">
+            {display.title}
+          </span>
+          <span className="fm-viewport-3d__refresh-countdown-detail">
+            {display.detail}
+          </span>
+        </span>
+      </span>
+    );
+  },
+);
 
 function Viewport3DResourceIssueDialog({
   issue,

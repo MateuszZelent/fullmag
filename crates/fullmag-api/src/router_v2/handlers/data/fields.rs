@@ -639,12 +639,7 @@ pub async fn get_field_vector(
     let gen_id: u64 = gen_id_str.parse().unwrap_or(0);
 
     // Collect raw values under the lock, then drop the lock before any heavy work
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = (if quantity_id == "m" {
-        live_magnetization_values(snapshot)
-    } else {
-        None
-    })
-    .or_else(|| {
+    let latest_field_values = || {
         if let Some(raw) = snapshot.latest_fields.get(&quantity_id) {
             let values = flatten_json_field_values(raw);
             if !field_values_match_current_domain(snapshot, &quantity_id, n_comp, &values) {
@@ -657,7 +652,12 @@ pub async fn get_field_vector(
             };
             let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
             Some((values, grid))
-        } else if let Some(field) = snapshot.preview_cache.get(&quantity_id) {
+        } else {
+            None
+        }
+    };
+    let preview_field_values = || {
+        if let Some(field) = snapshot.preview_cache.get(&quantity_id) {
             if !field_values_match_current_domain(
                 snapshot,
                 &quantity_id,
@@ -670,7 +670,14 @@ pub async fn get_field_vector(
         } else {
             None
         }
-    });
+    };
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if quantity_id == "m" {
+        live_magnetization_values(snapshot)
+            .or_else(preview_field_values)
+            .or_else(latest_field_values)
+    } else {
+        latest_field_values().or_else(preview_field_values)
+    };
 
     let (raw_values, grid) = raw_values_opt.ok_or_else(|| {
         ApiError::not_found(format!("field '{}' not available in memory", quantity_id))

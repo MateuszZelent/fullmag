@@ -27,7 +27,7 @@ WAVEGUIDE_BULK_HMAX = 20e-9
 WAVEGUIDE_LOCAL_HMAX = 12e-9
 WAVEGUIDE_HMIN = 4e-9
 
-B_EXT_T = 2.0
+B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 G_FACTOR = 2.115
@@ -55,7 +55,7 @@ study.airbox.visualization(show=True, mode="vectors")
 
 study.universe(
     mode="auto",
-    size=(4000e-9, 2200e-9, 50e-9),
+    size=(3500e-9, 2000e-9, 120e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )

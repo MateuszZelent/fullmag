@@ -873,12 +873,33 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
-    if let Some(live_state) = frame.live_state {
+    if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
         if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
             apply_fem_mesh_update(current, fem_mesh);
+        }
+        // Preserve heavy payload fields from the previous state when the
+        // incoming frame does not carry them.  The CLI only sends
+        // magnetization every `field_every_n` steps (typically 50) but
+        // publishes scalar progress every ~5 s.  Without this carry-forward
+        // the API-side cached state loses magnetization on intermediate
+        // frames, causing the control-room 3D viewport to show stale /
+        // static textures and vectors.
+        if let Some(prev) = current.live_state.as_ref() {
+            if live_state.latest_step.magnetization.is_none() {
+                live_state.latest_step.magnetization =
+                    prev.latest_step.magnetization.clone();
+            }
+            if live_state.latest_step.fem_mesh.is_none() {
+                live_state.latest_step.fem_mesh =
+                    prev.latest_step.fem_mesh.clone();
+            }
+            if live_state.latest_step.preview_field.is_none() {
+                live_state.latest_step.preview_field =
+                    prev.latest_step.preview_field.clone();
+            }
         }
         current.live_state = Some(live_state);
     }

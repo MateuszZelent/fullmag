@@ -251,9 +251,10 @@ fn preserve_pending_live_step_payload(
     existing: &LiveStepView,
     incoming: &mut LiveStepView,
     allow_previous_preview: bool,
+    incoming_has_magnetization_preview: bool,
     current_fem_mesh_counts: Option<FemMeshPointCounts>,
 ) {
-    if incoming.magnetization.is_none() {
+    if incoming.magnetization.is_none() && !incoming_has_magnetization_preview {
         incoming.magnetization = existing
             .magnetization
             .as_ref()
@@ -281,33 +282,50 @@ fn merge_pending_publish_payload(
     } else {
         incoming.preview_fields.clone()
     };
+    let incoming_has_magnetization_preview = incoming
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.preview_field.as_ref())
+        .is_some_and(|field| field.quantity == "m")
+        || incoming
+            .preview_fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field.quantity == "m"));
     let clear_preview_cache =
         (should_merge_pending && slot.clear_preview_cache) || incoming.clear_preview_cache;
+
+    // Always carry forward heavy payload fields (magnetization, fem_mesh)
+    // from the slot even when `should_merge_pending` is false.  The CLI
+    // only attaches magnetization every `field_every_n` steps; without
+    // unconditional carry-forward, intermediate cadence publishes wipe the
+    // pending slot and the API server receives frames with None
+    // magnetization, making the 3D viewport appear frozen.
+    if let (Some(existing_state), Some(incoming_state)) =
+        (slot.live_state.as_ref(), incoming.live_state.as_mut())
+    {
+        let current_fem_mesh_counts = incoming_state
+            .latest_step
+            .fem_mesh
+            .as_ref()
+            .or(incoming.fem_mesh.as_ref())
+            .or(existing_state.latest_step.fem_mesh.as_ref())
+            .map(fem_mesh_point_counts);
+        preserve_pending_live_step_payload(
+            &existing_state.latest_step,
+            &mut incoming_state.latest_step,
+            allow_previous_preview,
+            incoming_has_magnetization_preview,
+            current_fem_mesh_counts,
+        );
+    } else if let (Some(existing_state), None) =
+        (slot.live_state.as_ref(), incoming.live_state.as_ref())
+    {
+        incoming.live_state = Some(existing_state.clone());
+    }
 
     if should_merge_pending {
         if incoming.fem_mesh.is_none() {
             incoming.fem_mesh = slot.fem_mesh.clone();
-        }
-        match (slot.live_state.as_ref(), incoming.live_state.as_mut()) {
-            (Some(existing_state), Some(incoming_state)) => {
-                let current_fem_mesh_counts = incoming_state
-                    .latest_step
-                    .fem_mesh
-                    .as_ref()
-                    .or(incoming.fem_mesh.as_ref())
-                    .or(existing_state.latest_step.fem_mesh.as_ref())
-                    .map(fem_mesh_point_counts);
-                preserve_pending_live_step_payload(
-                    &existing_state.latest_step,
-                    &mut incoming_state.latest_step,
-                    allow_previous_preview,
-                    current_fem_mesh_counts,
-                );
-            }
-            (Some(existing_state), None) => {
-                incoming.live_state = Some(existing_state.clone());
-            }
-            _ => {}
         }
     }
 
@@ -701,6 +719,34 @@ mod tests {
         assert_eq!(
             slot.preview_fields.as_ref().map(|fields| fields.len()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn merge_pending_publish_payload_does_not_preserve_magnetization_over_fresh_m_preview() {
+        let mut slot = payload_with_live_step(1, None, Some(vec![0.0, 0.0, 1.0]), None, None);
+        let incoming = payload_with_live_step(
+            2,
+            Some(preview_field("m", 8, -1.0)),
+            None,
+            None,
+            Some(vec![preview_field("m", 8, -1.0)]),
+        );
+
+        merge_pending_publish_payload(&mut slot, incoming, true);
+
+        let live_state = slot.live_state.as_ref().expect("live state preserved");
+        assert_eq!(live_state.latest_step.step, 2);
+        assert!(
+            live_state.latest_step.magnetization.is_none(),
+            "fresh m preview/cache must not be shadowed by a preserved old full-field payload"
+        );
+        assert_eq!(
+            slot.preview_fields
+                .as_ref()
+                .and_then(|fields| fields.first())
+                .map(|field| field.vector_field_values.as_slice()),
+            Some(&[0.0, 0.0, -1.0][..])
         );
     }
 
