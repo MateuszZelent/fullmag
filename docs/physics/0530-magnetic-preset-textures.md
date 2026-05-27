@@ -29,6 +29,51 @@ For each sample point:
 - `helical`
 - `conical`
 
+## Skyrmion Preset Equations
+For `bloch_skyrmion` and `neel_skyrmion`, evaluate in the selected plane-local
+basis `(e_u, e_v, e_n)`. Let
+
+- `u, v` be the in-plane coordinates,
+- `rho = sqrt(u^2 + v^2)`,
+- `phi = atan2(v, u)`,
+- `theta(rho) = 2 atan(exp((radius - rho) / wall_width))`.
+
+The magnetization is:
+
+```text
+m = sin(theta) * (cos(psi) e_u + sin(psi) e_v)
+  + core_polarity * cos(theta) e_n
+```
+
+The existing public `core_polarity` convention is retained: with this profile,
+the far field tends to `core_polarity * e_n` and the center tends to
+`-core_polarity * e_n`.
+
+Chirality changes the helicity of the in-plane component. It must not multiply
+`phi`, because multiplying `phi` changes the winding number and turns the
+texture into a mirrored or antiskyrmion-like field.
+
+For `chirality >= 0`:
+
+```text
+neel_skyrmion:  psi = phi
+bloch_skyrmion: psi = phi + pi/2
+```
+
+For `chirality < 0`:
+
+```text
+neel_skyrmion:  psi = phi + pi
+bloch_skyrmion: psi = phi - pi/2
+```
+
+In the `xy` plane this means, at `rho = radius`:
+
+- Bloch `chirality=+1`: `x+ -> y+`, `y+ -> x-`;
+- Bloch `chirality=-1`: `x+ -> y-`, `y+ -> x+`;
+- Neel `chirality=+1`: radially outward;
+- Neel `chirality=-1`: radially inward.
+
 ## FEM/FDM Contract
 - Planner performs sampling during lowering (`preset_texture` is executable directly).
 - Runtime receives explicit vectors (`Vec<[f64; 3]>`) as initial state.
@@ -38,4 +83,6 @@ For each sample point:
 - All outputs must be finite and normalized.
 - Missing required preset params fail planning.
 - Inactive points (FDM mask) are forced to `[0,0,0]`.
-
+- Skyrmion regression tests must cover cardinal in-plane wall directions for
+  both Bloch and Neel chirality, and must prove that chirality flips helicity
+  without flipping the azimuthal winding.

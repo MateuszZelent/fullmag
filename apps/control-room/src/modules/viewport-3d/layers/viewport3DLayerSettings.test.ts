@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  resolveMeshPartSurfaceMaterialColor,
   surfaceMaterialColorFromSettings,
   VERTEX_COLOR_MATERIAL_COLOR,
 } from "./viewport3DLayerSettings";
@@ -11,6 +12,7 @@ function settings(
   patch: Partial<VisualizationTargetSettings> = {},
 ): VisualizationTargetSettings {
   return {
+    activeQuantityId: "m",
     boundsVisible: false,
     geometryScope: "full",
     opacityPercent: 100,
@@ -57,5 +59,18 @@ describe("surfaceMaterialColorFromSettings", () => {
         false,
       ),
     ).toBe("#abcdef");
+  });
+});
+
+describe("resolveMeshPartSurfaceMaterialColor", () => {
+  it("uses neutral mesh color instead of magnetization preview when field colors are missing", () => {
+    expect(
+      resolveMeshPartSurfaceMaterialColor(
+        settings({ surfaceColorSource: "orientation" }),
+        "#313244",
+        "#c255f0",
+        false,
+      ),
+    ).toBe("#313244");
   });
 });

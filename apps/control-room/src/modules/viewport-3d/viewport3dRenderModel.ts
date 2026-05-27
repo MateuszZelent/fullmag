@@ -8,6 +8,7 @@ import type {
 } from "@/kernel/api/codecs";
 
 import {
+  buildMappedVertexScalarColors,
   buildVertexScalarColors,
   type ScalarColorBuffer,
 } from "./viewport3dFieldMapping";
@@ -66,6 +67,7 @@ export interface Viewport3DFieldRenderModel {
   fullVectorSegments: Float32Array | null;
   partVectorSegments: Map<string, Float32Array | null>;
   scalarColors: ScalarColorBuffer | null;
+  scalarColorsByPartAndMode: Map<string, Map<string, ScalarColorBuffer | null>>;
   scalarColorsByMode: Map<string, ScalarColorBuffer | null>;
 }
 
@@ -80,6 +82,7 @@ export interface Viewport3DFieldRenderOptions {
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
   partVectorSurfaceOffsetScales?: ReadonlyMap<string, number>;
   scalarColorModes?: ReadonlySet<string>;
+  scalarColorPalette?: string;
   scalarColorsVisible?: boolean;
   vectorColorMode?: string;
 }
@@ -119,6 +122,14 @@ const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 const scalarColorCache = new WeakMap<
   DecodedFieldVector,
   Map<string, ScalarColorBuffer | null>
+>();
+const partScalarColorCache = new WeakMap<
+  Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  WeakMap<DecodedFieldVector, Map<string, ScalarColorBuffer | null>>
+>();
+const mappedScalarColorCache = new WeakMap<
+  Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  WeakMap<DecodedFieldVector, Map<string, ScalarColorBuffer | null>>
 >();
 const fullVectorSegmentCache = new WeakMap<
   Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
@@ -253,6 +264,22 @@ export function buildViewport3DFieldRenderModel(
   options: Viewport3DFieldRenderOptions = {},
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
+  const fullFieldVector = isFullTopologyFieldVector(
+    fieldVector,
+    topology.nodeCount,
+  )
+    ? fieldVector
+    : null;
+  const magneticFieldNodeIndices =
+    !fullFieldVector && fieldVector
+      ? buildMagneticFieldNodeIndices(topology, fieldVector.pointCount)
+      : null;
+  const magneticFieldValueResolver = magneticFieldNodeIndices
+    ? buildNodeIndexFieldValueResolver(
+        magneticFieldNodeIndices,
+        topology.nodeCount,
+      )
+    : null;
 
   const requestedScalarColorModes = new Set(
     options.scalarColorModes && options.scalarColorModes.size > 0
@@ -267,17 +294,31 @@ export function buildViewport3DFieldRenderModel(
       : new Map(
           [...requestedScalarColorModes].map((colorMode) => [
             colorMode,
-            buildCachedVertexScalarColors(
-              fieldVector,
-              topology.nodeCount,
-              colorMode,
-            ),
+            fullFieldVector
+              ? buildCachedVertexScalarColors(
+                  fullFieldVector,
+                  topology.nodeCount,
+                  colorMode,
+                  options.scalarColorPalette,
+                )
+              : buildCachedMappedVertexScalarColors(
+                  topology,
+                  fieldVector,
+                  magneticFieldNodeIndices,
+                  colorMode,
+                  options.scalarColorPalette,
+                ),
           ]),
         );
   const scalarColors =
     scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
   const partVectorSegments = new Map<string, Float32Array | null>();
+  const scalarColorsByPartAndMode = new Map<
+    string,
+    Map<string, ScalarColorBuffer | null>
+  >();
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
+  const magneticPartSet = new Set(topology.magneticParts);
 
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
@@ -292,17 +333,46 @@ export function buildViewport3DFieldRenderModel(
     const partScale = options.partVectorScales?.get(partId) ?? 1;
     const surfaceOffsetScale =
       options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
-    const partFieldVector = options.partFieldVectors?.get(partId) ?? fieldVector;
+    const explicitPartFieldVector =
+      options.partFieldVectors?.get(partId) ?? null;
+    const partUsesMagneticOnlyField = Boolean(
+      !explicitPartFieldVector &&
+        !fullFieldVector &&
+        magneticFieldValueResolver &&
+        magneticPartSet.has(partModel),
+    );
+    const partFieldVector =
+      explicitPartFieldVector ??
+      (partUsesMagneticOnlyField ? fieldVector : fullFieldVector);
+    if (partFieldVector && partFieldVector !== fieldVector) {
+      scalarColorsByPartAndMode.set(
+        partId,
+        new Map(
+          [...requestedScalarColorModes].map((colorMode) => [
+            colorMode,
+            buildCachedPartVertexScalarColors(
+              partModel,
+              topology,
+              partFieldVector,
+              colorMode,
+              options.scalarColorPalette,
+            ),
+          ]),
+        ),
+      );
+    }
     // Only build a scoped resolver when the part field data is genuinely scoped (fewer points
     // than the full topology). When the API returns full-domain data for a scoped request
     // (e.g. scope_kind=airbox returning all 18701 nodes), applying the resolver would read
     // field values at the wrong (local) indices instead of the correct global node indices.
     const fieldValueResolver =
       partFieldVector &&
-      partFieldVector !== fieldVector &&
-      partFieldVector.pointCount < topology.nodeCount
-        ? buildScopedPartFieldValueResolver(partModel.part, topology)
-        : null;
+      (partUsesMagneticOnlyField
+        ? magneticFieldValueResolver
+        : partFieldVector !== fieldVector &&
+            partFieldVector.pointCount < topology.nodeCount
+          ? buildScopedPartFieldValueResolver(partModel.part, topology)
+          : null);
     partVectorSegments.set(
       partId,
       buildCachedPartVectorSegments(
@@ -330,7 +400,7 @@ export function buildViewport3DFieldRenderModel(
   return {
     fullVectorSegments: buildCachedFullVectorSegments(
       topology,
-      fieldVector,
+      fullFieldVector,
       scale,
       fullVectorBudget,
       {
@@ -341,29 +411,170 @@ export function buildViewport3DFieldRenderModel(
     ),
     partVectorSegments,
     scalarColors,
+    scalarColorsByPartAndMode,
     scalarColorsByMode,
   };
+}
+
+function isFullTopologyFieldVector(
+  fieldVector: DecodedFieldVector | null | undefined,
+  nodeCount: number,
+): fieldVector is DecodedFieldVector {
+  return Boolean(fieldVector) && fieldVector!.pointCount === nodeCount;
+}
+
+function buildCachedMappedVertexScalarColors(
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  targetNodeIndices: Uint32Array | null | undefined,
+  colorMode: string | undefined,
+  colorPalette: string | undefined,
+): ScalarColorBuffer | null {
+  if (!fieldVector || !targetNodeIndices) return null;
+
+  return getCachedNestedFieldValue(
+    mappedScalarColorCache,
+    topology,
+    fieldVector,
+    `${targetNodeIndices.length}:${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:mapped`,
+    () =>
+      buildMappedVertexScalarColors(
+        fieldVector,
+        targetNodeIndices,
+        topology.nodeCount,
+        Number.POSITIVE_INFINITY,
+        colorMode,
+        colorPalette,
+      ),
+  );
 }
 
 function buildCachedVertexScalarColors(
   fieldVector: DecodedFieldVector | null | undefined,
   vertexCount: number,
   colorMode: string | undefined,
+  colorPalette: string | undefined,
 ): ScalarColorBuffer | null {
   if (!fieldVector) return null;
 
   return getCachedValue(
     scalarColorCache,
     fieldVector,
-    `${vertexCount}:${colorMode ?? "magnitude"}`,
+    `${vertexCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}`,
     () =>
       buildVertexScalarColors(
         fieldVector,
         vertexCount,
         undefined,
         colorMode,
+        colorPalette,
       ),
   );
+}
+
+function buildMagneticFieldNodeIndices(
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  pointCount: number,
+): Uint32Array | null {
+  if (pointCount <= 0 || pointCount > topology.nodeCount) return null;
+
+  const nodeIndices = new Set<number>();
+  for (const partModel of topology.magneticParts) {
+    const partNodeIndices = buildNodeSelectionIndices(partModel.part, topology);
+    if (!partNodeIndices) continue;
+    for (let index = 0; index < partNodeIndices.length; index += 1) {
+      const nodeIndex = partNodeIndices[index] ?? -1;
+      if (nodeIndex >= 0 && nodeIndex < topology.nodeCount) {
+        nodeIndices.add(nodeIndex);
+      }
+    }
+  }
+
+  if (nodeIndices.size !== pointCount) return null;
+  return Uint32Array.from(
+    [...nodeIndices].toSorted((left, right) => left - right),
+  );
+}
+
+function buildNodeIndexFieldValueResolver(
+  targetNodeIndices: Uint32Array,
+  nodeCount: number,
+): Viewport3DVectorFieldValueResolver {
+  const localIndexByGlobalNode = new Map<number, number>();
+  for (
+    let localIndex = 0;
+    localIndex < targetNodeIndices.length;
+    localIndex += 1
+  ) {
+    const globalNodeIndex = targetNodeIndices[localIndex] ?? -1;
+    if (globalNodeIndex >= 0 && globalNodeIndex < nodeCount) {
+      localIndexByGlobalNode.set(globalNodeIndex, localIndex);
+    }
+  }
+
+  return (globalNodeIndex) => localIndexByGlobalNode.get(globalNodeIndex) ?? null;
+}
+
+function buildCachedPartVertexScalarColors(
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  colorMode: string | undefined,
+  colorPalette: string | undefined,
+): ScalarColorBuffer | null {
+  if (!fieldVector) return null;
+  if (fieldVector.pointCount >= topology.nodeCount) {
+    return buildCachedVertexScalarColors(
+      fieldVector,
+      topology.nodeCount,
+      colorMode,
+      colorPalette,
+    );
+  }
+
+  const targetNodeIndices = buildNodeSelectionIndices(partModel.part, topology);
+  if (!targetNodeIndices || targetNodeIndices.length !== fieldVector.pointCount) {
+    return null;
+  }
+
+  return getCachedNestedFieldValue(
+    partScalarColorCache,
+    partModel,
+    fieldVector,
+    `${topology.nodeCount}:${colorMode ?? "magnitude"}:${colorPalette ?? "viridis"}:scoped`,
+    () =>
+      buildMappedVertexScalarColors(
+        fieldVector,
+        targetNodeIndices,
+        topology.nodeCount,
+        undefined,
+        colorMode,
+        colorPalette,
+      ),
+  );
+}
+
+function buildNodeSelectionIndices(
+  selection: Viewport3DNodeSelection,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
+): Uint32Array | null {
+  const selectedNodeCount = resolveNodeSelectionCount(selection, topology);
+  if (selectedNodeCount <= 0) return null;
+
+  const indices: number[] = [];
+  for (let offset = 0; offset < selectedNodeCount; offset += 1) {
+    const nodeIndex = resolveNodeSelectionIndex(selection, offset);
+    if (
+      nodeIndex !== null &&
+      Number.isInteger(nodeIndex) &&
+      nodeIndex >= 0 &&
+      nodeIndex < topology.nodeCount
+    ) {
+      indices.push(nodeIndex);
+    }
+  }
+
+  return indices.length > 0 ? Uint32Array.from(indices) : null;
 }
 
 function buildCachedFullVectorSegments(
@@ -566,7 +777,7 @@ export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
 
 export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
   const tetraCount = Math.floor(indices.length / 4);
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const edges: number[] = [];
 
   for (let tetra = 0; tetra < tetraCount; tetra += 1) {
@@ -589,21 +800,21 @@ export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
 
 function appendTetraEdge(
   edges: number[],
-  seen: Set<number>,
+  seen: Set<string>,
   first: number,
   second: number,
 ): void {
   if (first === second) return;
   const a = Math.min(first, second);
   const b = Math.max(first, second);
-  const key = szudzikPair(a, b);
+  const key = edgeKey(a, b);
   if (seen.has(key)) return;
   seen.add(key);
   edges.push(a, b);
 }
 
-function szudzikPair(a: number, b: number): number {
-  return a >= b ? a * a + a + b : b * b + a;
+function edgeKey(first: number, second: number): string {
+  return `${first}:${second}`;
 }
 
 export function buildPartSurfaceIndices(
@@ -1556,7 +1767,7 @@ export function resolveNodeSelectionCount(
   );
 }
 
-function resolveNodeSelectionIndex(
+export function resolveNodeSelectionIndex(
   selection: Viewport3DNodeSelection | null | undefined,
   offset: number,
 ): number | null {

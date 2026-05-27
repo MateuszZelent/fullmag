@@ -1,22 +1,42 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useMemo } from "react";
-import {
-  Bar,
-  BarChart,
-  Cell,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 import type {
   MeshQualityHistogramBin,
   MeshQualityMetric,
   MeshSizeDistribution,
 } from "@/shared/domain/mesh/qualityStatistics";
+
+const Bar = dynamic(() => import("recharts").then((module) => module.Bar), {
+  ssr: false,
+});
+const BarChart = dynamic(
+  () => import("recharts").then((module) => module.BarChart),
+  { ssr: false },
+);
+const Cell = dynamic(() => import("recharts").then((module) => module.Cell), {
+  ssr: false,
+});
+const ReferenceLine = dynamic(
+  () => import("recharts").then((module) => module.ReferenceLine),
+  { ssr: false },
+);
+const ResponsiveContainer = dynamic(
+  () => import("recharts").then((module) => module.ResponsiveContainer),
+  { ssr: false },
+);
+const Tooltip = dynamic(
+  () => import("recharts").then((module) => module.Tooltip),
+  { ssr: false },
+);
+const XAxis = dynamic(() => import("recharts").then((module) => module.XAxis), {
+  ssr: false,
+});
+const YAxis = dynamic(() => import("recharts").then((module) => module.YAxis), {
+  ssr: false,
+});
 
 /* ── Theming helpers ── */
 

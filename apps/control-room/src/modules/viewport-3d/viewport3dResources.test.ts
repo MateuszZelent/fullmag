@@ -7,6 +7,7 @@ import {
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
+  resolveViewport3DQuantityFieldVectorResourceKeys,
 } from "./viewport3dResources";
 
 describe("viewport3dResources", () => {
@@ -37,6 +38,23 @@ describe("viewport3dResources", () => {
         [
           "airbox-shell",
           `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&scope_id=airbox-shell&scope_kind=airbox`,
+        ],
+      ]),
+    );
+  });
+
+  it("builds stable full-field keys for target-specific quantities", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceKeys(["h_eff", "m", "h_eff"]),
+    ).toEqual(
+      new Map([
+        [
+          "h_eff",
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "h_eff")}?component=full&scope_kind=full`,
+        ],
+        [
+          "m",
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full`,
         ],
       ]),
     );

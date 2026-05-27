@@ -38,6 +38,15 @@ export function surfaceMaterialColorFromSettings(
     : shaderColorFromSettings(settings, fallback);
 }
 
+export function resolveMeshPartSurfaceMaterialColor(
+  settings: VisualizationTargetSettings,
+  meshColor: ColorRepresentation,
+  _magnetizationTexturePreviewColor: ColorRepresentation | null,
+  hasVertexColors: boolean,
+): ColorRepresentation {
+  return surfaceMaterialColorFromSettings(settings, meshColor, hasVertexColors);
+}
+
 export function shaderUsesVertexColors(
   settings: VisualizationTargetSettings,
 ): boolean {
@@ -82,8 +91,11 @@ export function wireframeOpacityFromSettings(
   settings: VisualizationTargetSettings,
   featureEdges?: Viewport3DMaterialProfile["featureEdges"],
 ): number {
+  const baseOpacity = settings.shaderVisible
+    ? opacityFromSettings(settings)
+    : 1.0;
   const opacity =
-    opacityFromSettings(settings) *
+    baseOpacity *
     percentToUnit(settings.wireframeOpacityPercent);
   return Math.max(0, Math.min(1, opacity * (featureEdges?.opacity ?? 1)));
 }

@@ -10385,6 +10385,16 @@
               }
             ]
           },
+          "quantity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetQuantityOverride"
+              }
+            ]
+          },
           "scope": {
             "$ref": "#/components/schemas/VisualizationScopeKind"
           },
@@ -10417,6 +10427,9 @@
       },
       "VisualizationResolvedTargetSettings": {
         "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          },
           "bounds_visible": {
             "type": "boolean"
           },
@@ -10483,6 +10496,7 @@
           }
         },
         "required": [
+          "active_quantity_id",
           "visible",
           "bounds_visible",
           "geometry_scope",
@@ -11003,6 +11017,17 @@
           "full"
         ],
         "type": "string"
+      },
+      "VisualizationTargetQuantityOverride": {
+        "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active_quantity_id"
+        ],
+        "type": "object"
       },
       "VisualizationTargetRegistryEntry": {
         "properties": {
@@ -11899,6 +11924,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -11911,11 +11948,20 @@
           "204": {
             "description": "Not applicable (FDM)"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial binary FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -14472,6 +14518,18 @@
             }
           },
           {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Canonical scene object id",
             "in": "path",
             "name": "object_id",
@@ -14491,11 +14549,20 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial per-object FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Per-object topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or object mesh"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -14511,6 +14578,18 @@
             "description": "Strong ETag from a previous part-topology response",
             "in": "header",
             "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
             "required": false,
             "schema": {
               "type": [
@@ -14539,11 +14618,20 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial per-part FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Per-part topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or mesh part"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -14726,6 +14814,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -14738,11 +14838,20 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial shared-domain FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Shared-domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [

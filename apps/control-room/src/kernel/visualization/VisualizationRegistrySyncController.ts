@@ -459,9 +459,10 @@ function visualizationPatchSatisfiesPatch(
 
 function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
   if (Array.isArray(patch)) {
-    if (!Array.isArray(value) || value.length !== patch.length) return false;
-    return patch.every((entry, index) =>
-      valueSatisfiesPatch(value[index], entry),
+    if (!Array.isArray(value)) return false;
+    return (
+      patch.length === value.length &&
+      patch.every((entry, index) => valueSatisfiesPatch(value[index], entry))
     );
   }
   if (isPlainObject(patch)) {

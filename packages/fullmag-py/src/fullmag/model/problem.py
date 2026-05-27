@@ -423,83 +423,87 @@ def build_geometry_assets_for_request(
         from fullmag.meshing.gmsh_bridge import MeshData
 
         fem_mesh_cache_dir = _fem_mesh_cache_dir()
+        has_shared_domain_mesh_asset = (
+            explicit_domain_mesh_source is not None or study_universe is not None
+        )
 
-        for geometry in geometries:
-            imported_surface_only = (
-                discretization.fem.mesh is None
-                and isinstance(geometry, ImportedGeometry)
-                and geometry.volume == "surface"
-            )
-            mesh_source = discretization.fem.mesh
-            if mesh_source is None and isinstance(geometry, ImportedGeometry):
-                mesh_source = geometry.source
-            if mesh_source is not None and mesh_source.lower().endswith(".json"):
-                emit_progress(
-                    f"Preparing FEM mesh asset for '{geometry.geometry_name}' from MeshIR JSON"
+        if not has_shared_domain_mesh_asset:
+            for geometry in geometries:
+                imported_surface_only = (
+                    discretization.fem.mesh is None
+                    and isinstance(geometry, ImportedGeometry)
+                    and geometry.volume == "surface"
                 )
-                assets["fem_mesh_assets"].append(
-                    {
-                        "geometry_name": geometry.geometry_name,
-                        "mesh_source": mesh_source,
-                    }
-                )
-            else:
-                mesh_cache_key = _fem_mesh_cache_key(
-                    geometry,
-                    discretization.fem,
-                    study_universe=study_universe,
-                )
-                cache_path = (
-                    fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
-                    if fem_mesh_cache_dir is not None
-                    else None
-                )
-                mesh: MeshData | None = None
-                if cache_path is not None and cache_path.exists():
+                mesh_source = discretization.fem.mesh
+                if mesh_source is None and isinstance(geometry, ImportedGeometry):
+                    mesh_source = geometry.source
+                if mesh_source is not None and mesh_source.lower().endswith(".json"):
                     emit_progress(
-                        f"Reusing cached FEM mesh for '{geometry.geometry_name}'"
+                        f"Preparing FEM mesh asset for '{geometry.geometry_name}' from MeshIR JSON"
                     )
-                    mesh = MeshData.load(cache_path)
+                    assets["fem_mesh_assets"].append(
+                        {
+                            "geometry_name": geometry.geometry_name,
+                            "mesh_source": mesh_source,
+                        }
+                    )
                 else:
-                    emit_progress(
-                        f"Preparing FEM mesh asset for '{geometry.geometry_name}'"
-                    )
-                    mesh = realize_fem_mesh_asset(
+                    mesh_cache_key = _fem_mesh_cache_key(
                         geometry,
                         discretization.fem,
                         study_universe=study_universe,
-                        mesh_workflow=mesh_workflow,
                     )
-                    if cache_path is not None and not imported_surface_only:
-                        mesh.save(cache_path)
+                    cache_path = (
+                        fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
+                        if fem_mesh_cache_dir is not None
+                        else None
+                    )
+                    mesh: MeshData | None = None
+                    if cache_path is not None and cache_path.exists():
                         emit_progress(
-                            f"Cached FEM mesh for '{geometry.geometry_name}'"
+                            f"Reusing cached FEM mesh for '{geometry.geometry_name}'"
                         )
-                if imported_surface_only:
-                    raise ValueError(
-                        f"geometry '{geometry.geometry_name}' uses "
-                        "ImportedGeometry(volume='surface'), which is preview-only. "
-                        "The FEM solver requires tetrahedral volume elements. "
-                        "Use volume='full' to build an executable FEM mesh."
+                        mesh = MeshData.load(cache_path)
+                    else:
+                        emit_progress(
+                            f"Preparing FEM mesh asset for '{geometry.geometry_name}'"
+                        )
+                        mesh = realize_fem_mesh_asset(
+                            geometry,
+                            discretization.fem,
+                            study_universe=study_universe,
+                            mesh_workflow=mesh_workflow,
+                        )
+                        if cache_path is not None and not imported_surface_only:
+                            mesh.save(cache_path)
+                            emit_progress(
+                                f"Cached FEM mesh for '{geometry.geometry_name}'"
+                            )
+                    if imported_surface_only:
+                        raise ValueError(
+                            f"geometry '{geometry.geometry_name}' uses "
+                            "ImportedGeometry(volume='surface'), which is preview-only. "
+                            "The FEM solver requires tetrahedral volume elements. "
+                            "Use volume='full' to build an executable FEM mesh."
+                        )
+                    emit_progress(
+                        f"FEM mesh ready for '{geometry.geometry_name}': "
+                        f"{mesh.n_nodes} nodes, {mesh.n_elements} elements, "
+                        f"{mesh.n_boundary_faces} boundary faces"
                     )
-                emit_progress(
-                    f"FEM mesh ready for '{geometry.geometry_name}': "
-                    f"{mesh.n_nodes} nodes, {mesh.n_elements} elements, "
-                    f"{mesh.n_boundary_faces} boundary faces"
-                )
-                mesh_ir = mesh.to_ir(geometry.geometry_name)
-                is_valid = validate_mesh_ir(mesh_ir)
-                if is_valid is False:
-                    raise ValueError(
-                        f"generated mesh asset for '{geometry.geometry_name}' failed Rust validation"
+                    mesh_ir = mesh.to_ir(geometry.geometry_name)
+                    is_valid = validate_mesh_ir(mesh_ir)
+                    if is_valid is False:
+                        raise ValueError(
+                            f"generated mesh asset for '{geometry.geometry_name}' failed Rust validation"
+                        )
+                    assets["fem_mesh_assets"].append(
+                        {
+                            "geometry_name": geometry.geometry_name,
+                            "mesh_source": None,
+                            "mesh": mesh_ir,
+                        }
                     )
-                assets["fem_mesh_assets"].append(
-                    {
-                        "geometry_name": geometry.geometry_name,
-                        "mesh_source": None,
-                        "mesh": mesh_ir,
-                    }
-                )
 
         if explicit_domain_mesh_source is not None:
             assets["fem_domain_mesh_asset"] = {

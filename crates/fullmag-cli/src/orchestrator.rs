@@ -49,6 +49,19 @@ fn interactive_dense_ram_budget_bytes(available_ram: u64) -> u64 {
     }
 }
 
+fn fem_interactive_dense_ram_estimate(fem_plan: &fullmag_ir::FemPlanIR) -> Option<u64> {
+    if !fem_plan.enable_demag {
+        return None;
+    }
+    if fem_plan
+        .demag_realization
+        .is_some_and(|realization| realization.is_poisson())
+    {
+        return None;
+    }
+    Some(estimate_fem_dense_ram(fem_plan.mesh.nodes.len()))
+}
+
 fn current_live_metadata(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
@@ -554,7 +567,10 @@ fn format_stop_reason(completion: Option<&fullmag_ir::StageCompletionIR>) -> Str
         })
         .unwrap_or("?");
     let metric_desc = completion
-        .and_then(|c| c.metric_value.map(|v| (c.metric_name.as_deref(), v, c.threshold)))
+        .and_then(|c| {
+            c.metric_value
+                .map(|v| (c.metric_name.as_deref(), v, c.threshold))
+        })
         .map(|(name, value, threshold)| {
             let name = name.unwrap_or("metric");
             if let Some(thr) = threshold {
@@ -768,6 +784,22 @@ fn fem_mesh_payload_from_backend_plan(
         BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
+}
+
+fn fem_live_mesh_payload_and_initial_magnetization(
+    backend_plan: &BackendPlanIR,
+) -> anyhow::Result<(fullmag_runner::FemMeshPayload, Vec<[f64; 3]>)> {
+    let mesh_payload = fem_mesh_payload_from_backend_plan(backend_plan)
+        .ok_or_else(|| anyhow!("backend plan did not produce a FEM mesh payload"))?;
+    let initial_magnetization = current_stage_magnetization_vectors(None, backend_plan);
+    if mesh_payload.nodes.len() != initial_magnetization.len() {
+        return Err(anyhow!(
+            "FEM live mesh has {} nodes but initial magnetization has {} vectors",
+            mesh_payload.nodes.len(),
+            initial_magnetization.len()
+        ));
+    }
+    Ok((mesh_payload, initial_magnetization))
 }
 
 fn default_domain_region_markers(
@@ -3868,7 +3900,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
             let stdout =
                 String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
-            serde_json::from_str(&stdout)
+            let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
+            serde_json::from_str(json_str)
                 .context("failed to deserialize phase-1 script execution config")
         })
         .context("failed to spawn phase-1 materialization thread")?;
@@ -4196,10 +4229,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .runtime_metadata
         .get("visualization_hint")
     {
-        if let Some(qty) = viz_hint
-            .get("active_quantity_id")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(qty) = viz_hint.get("active_quantity_id").and_then(|v| v.as_str()) {
             if !qty.is_empty() {
                 display_selection_handle.set_quantity_hint(qty);
             }
@@ -4217,46 +4247,60 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .get("mode")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let active_quantity_id = airbox_hint
+                .get("active_quantity_id")
+                .and_then(|v| v.as_str())
+                .filter(|value| !value.is_empty());
             let mut display = serde_json::json!({ "visible": show });
             if mode == "vectors" {
                 display["vectors"] = serde_json::json!({ "visible": true });
             }
-            overrides.push(serde_json::json!({
+            let mut target_override = serde_json::json!({
                 "scope": "airbox",
                 "scope_id": "airbox",
                 "visible": show,
                 "display": display,
-            }));
+            });
+            if let Some(active_quantity_id) = active_quantity_id {
+                target_override["quantity"] =
+                    serde_json::json!({ "active_quantity_id": active_quantity_id });
+            }
+            overrides.push(target_override);
         }
 
-        if let Some(geom_hints) = viz_hint
-            .get("geometry_hints")
-            .and_then(|v| v.as_object())
-        {
+        if let Some(geom_hints) = viz_hint.get("geometry_hints").and_then(|v| v.as_object()) {
             for (geom_name, geom_hint) in geom_hints {
                 let show = geom_hint
                     .get("show")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
-                let mode = geom_hint
-                    .get("mode")
+                let mode = geom_hint.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+                let active_quantity_id = geom_hint
+                    .get("active_quantity_id")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                    .filter(|value| !value.is_empty());
                 let mut display = serde_json::json!({ "visible": show });
                 if mode == "vectors" {
                     display["vectors"] = serde_json::json!({ "visible": true });
                 }
-                overrides.push(serde_json::json!({
+                let mut target_override = serde_json::json!({
                     "scope": "object",
                     "scope_id": geom_name,
                     "visible": show,
                     "display": display,
-                }));
+                });
+                if let Some(active_quantity_id) = active_quantity_id {
+                    target_override["quantity"] =
+                        serde_json::json!({ "active_quantity_id": active_quantity_id });
+                }
+                overrides.push(target_override);
             }
         }
 
         if !args.headless && !overrides.is_empty() {
-            if let Err(e) = sync_initial_visualization_overrides(serde_json::Value::Array(overrides)) {
+            if let Err(e) =
+                sync_initial_visualization_overrides(serde_json::Value::Array(overrides))
+            {
                 eprintln!(
                     "[fullmag-host] failed to apply initial visualization overrides: {}",
                     e
@@ -4308,24 +4352,41 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         if let BackendPlanIR::Fem(fem_plan) = &initial_execution_plan.backend_plan {
             let node_count = fem_plan.mesh.nodes.len();
             let available_ram = available_system_ram_bytes();
-            let required_ram = estimate_fem_dense_ram(node_count);
             let ram_budget = interactive_dense_ram_budget_bytes(available_ram);
-            let ram_msg = format!(
-                "Mesh: {} nodes · Est. RAM: {:.1} GB / {:.1} GB available",
-                node_count,
-                required_ram as f64 / 1e9,
-                available_ram as f64 / 1e9
-            );
+            let dense_ram_estimate = fem_interactive_dense_ram_estimate(fem_plan);
+            let ram_msg = if let Some(required_ram) = dense_ram_estimate {
+                format!(
+                    "Mesh: {} nodes · Est. dense FEM RAM: {:.1} GB / {:.1} GB available",
+                    node_count,
+                    required_ram as f64 / 1e9,
+                    available_ram as f64 / 1e9
+                )
+            } else {
+                let demag_label = fem_plan
+                    .demag_realization
+                    .map(|realization| realization.provenance_name())
+                    .unwrap_or("demag_disabled_or_unspecified");
+                format!(
+                    "Mesh: {} nodes · dense FEM auto-coarsen not applicable ({}) · {:.1} GB available",
+                    node_count,
+                    demag_label,
+                    available_ram as f64 / 1e9
+                )
+            };
             live_workspace.push_log("info", &ram_msg);
             eprintln!("[fullmag] {}", ram_msg);
-            log_fem_gpu_memory_preflight(
-                &live_workspace,
-                &stages[0].ir,
-                &initial_runtime,
-                required_ram,
-            );
+            if let Some(required_ram) = dense_ram_estimate {
+                log_fem_gpu_memory_preflight(
+                    &live_workspace,
+                    &stages[0].ir,
+                    &initial_runtime,
+                    required_ram,
+                );
+            }
 
-            if required_ram > ram_budget {
+            if let Some(required_ram) =
+                dense_ram_estimate.filter(|required_ram| *required_ram > ram_budget)
+            {
                 eprintln!(
                     "[fullmag] mesh too large for interactive dense FEM budget ({} nodes, {:.1} GB required, {:.1} GB budget, {:.1} GB available)",
                     node_count,
@@ -4455,7 +4516,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 }
 
                                 if new_ram <= ram_budget {
-                                    let live_mesh_payload = {
+                                    let (live_mesh_payload, remeshed_magnetization) = {
                                         let mut remeshed_problem = stages[0].ir.clone();
                                         apply_current_fem_overrides(
                                             &mut remeshed_problem,
@@ -4485,20 +4546,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                                 })?
                                                 .region_markers = region_markers;
                                         }
-                                        fem_mesh_payload_from_backend_plan(
-                                            &fullmag_plan::plan(&remeshed_problem)
-                                                .map_err(|error| anyhow!(error.to_string()))?
-                                                .backend_plan,
+                                        let remeshed_plan =
+                                            fullmag_plan::plan(&remeshed_problem)
+                                                .map_err(|error| anyhow!(error.to_string()))?;
+                                        fem_live_mesh_payload_and_initial_magnetization(
+                                            &remeshed_plan.backend_plan,
                                         )
-                                        .ok_or_else(|| {
-                                            anyhow!(
-                                                "auto-coarsen updated backend plan did not produce a FEM mesh payload"
-                                            )
-                                        })?
+                                        .context(
+                                            "auto-coarsen updated backend plan is inconsistent",
+                                        )?
                                     };
                                     live_workspace.update(|state| {
                                         state.live_state.latest_step.fem_mesh =
                                             Some(live_mesh_payload);
+                                        state.live_state.latest_step.magnetization =
+                                            Some(flatten_magnetization(&remeshed_magnetization));
                                         state.mesh_workspace = Some(current_fem_mesh_workspace(
                                             &stages[0].ir,
                                             &new_mesh,
@@ -4521,6 +4583,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                             None,
                                             &current_mesh_history,
                                         ));
+                                        clear_cached_preview_fields(state);
                                     });
                                     live_workspace.push_log(
                                         "success",
@@ -6978,7 +7041,8 @@ mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
-        fem_gpu_memory_preflight_message, fem_mesh_payload_from_backend_plan,
+        fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
+        fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
         has_heavy_live_payload, interactive_session_should_stay_alive,
         mesh_build_pipeline_status_json, scripted_stage_execution_state,
         user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
@@ -7139,6 +7203,27 @@ mod tests {
             message,
             "GPU requested, but native FEM GPU is unavailable: cudaGetDeviceCount failed for fullmag_fem: CUDA driver version is insufficient for CUDA runtime version · visible CUDA devices: 0"
         );
+    }
+
+    #[test]
+    fn fem_interactive_dense_ram_estimate_skips_poisson_airbox_demag() {
+        let mut plan = match tiny_fem_plan() {
+            BackendPlanIR::Fem(plan) => plan,
+            _ => unreachable!("test helper returns a FEM plan"),
+        };
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+
+        assert_eq!(fem_interactive_dense_ram_estimate(&plan), None);
+    }
+
+    #[test]
+    fn fem_interactive_dense_ram_estimate_keeps_legacy_dense_demag_guard() {
+        let plan = match tiny_fem_plan() {
+            BackendPlanIR::Fem(plan) => plan,
+            _ => unreachable!("test helper returns a FEM plan"),
+        };
+
+        assert!(fem_interactive_dense_ram_estimate(&plan).is_some());
     }
 
     #[test]
@@ -7853,6 +7938,16 @@ mod tests {
     }
 
     #[test]
+    fn fem_live_mesh_payload_carries_matching_initial_magnetization() {
+        let (payload, initial_magnetization) =
+            fem_live_mesh_payload_and_initial_magnetization(&tiny_shared_domain_fem_plan())
+                .expect("shared-domain FEM backend plan should yield a live mesh payload");
+
+        assert_eq!(payload.nodes.len(), initial_magnetization.len());
+        assert_eq!(payload.object_segments.len(), 2);
+    }
+
+    #[test]
     fn default_domain_region_markers_follow_geometry_order() {
         let markers = default_domain_region_markers(&[
             GeometryEntryIR::Box {
@@ -7994,13 +8089,21 @@ mod tests {
             metric_value: Some(75.0),
             threshold: Some(80.0),
         };
-        state.mark_current("completed", Some(&completion), Some(1_700_000_001_000), None);
+        state.mark_current(
+            "completed",
+            Some(&completion),
+            Some(1_700_000_001_000),
+            None,
+        );
         let execution = state.completed_stage_execution("completed");
 
         assert_eq!(execution.completed_stage_indexes, vec![0]);
         assert_eq!(execution.stages[0].status, "completed");
         assert_eq!(execution.stages[0].stage_id.as_deref(), Some("stage-000"));
-        assert_eq!(execution.stages[0].metric_name.as_deref(), Some("max_torque_apm"));
+        assert_eq!(
+            execution.stages[0].metric_name.as_deref(),
+            Some("max_torque_apm")
+        );
         assert_eq!(execution.stages[0].metric_value, Some(75.0));
         assert_eq!(execution.stages[0].threshold, Some(80.0));
     }

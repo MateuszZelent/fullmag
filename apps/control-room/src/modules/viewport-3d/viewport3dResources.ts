@@ -10,7 +10,6 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
-  VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
   BinaryResourceResult,
@@ -37,8 +36,6 @@ const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
 
 const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
 const VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY = DATA_DOMAIN_TOPOLOGY_PATH;
-const VIEWPORT_3D_VISUALIZATION_STATE_RESOURCE_KEY =
-  VISUALIZATION_STATE_PATH;
 const VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_MANIFEST_PATH;
 const VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
@@ -48,10 +45,6 @@ const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
 
 function resolveDomainMetaRevision(meta: { generation_id: number }) {
   return meta.generation_id;
-}
-
-function resolveVisualizationStateRevision(state: { revision: number }) {
-  return state.revision;
 }
 
 function resolveSharedDomainManifestRevision(
@@ -154,6 +147,23 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   );
 }
 
+export function resolveViewport3DQuantityFieldVectorResourceKeys(
+  quantityIds: readonly string[],
+): Map<string, string> {
+  return new Map(
+    [...new Set(quantityIds)]
+      .filter((quantityId) => quantityId.trim().length > 0)
+      .sort()
+      .map((quantityId) => [
+        quantityId,
+        resolveViewport3DFieldVectorResourceKey(quantityId, {
+          component: "full",
+          scope_kind: "full",
+        }),
+      ]),
+  );
+}
+
 export function useViewport3DDomainMeta() {
   const { api } = useKernel();
   const load = useCallback(
@@ -175,7 +185,7 @@ export function useViewport3DDomainTopology() {
       loadCachedBinaryResource(
         topologyCache,
         VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY,
-        (etag) => api.data.domain.topology({ etag, signal }),
+        (etag) => api.data.domain.topologyChunked({ etag, signal }),
       ),
     [api],
   );
@@ -290,6 +300,66 @@ export function useViewport3DAirboxFieldVectors(
   });
 }
 
+export function useViewport3DQuantityFieldVectors(
+  quantityIds: readonly string[],
+  enabled = true,
+) {
+  const { api } = useKernel();
+  const resourceKeys = useMemo(
+    () => resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds),
+    [quantityIds],
+  );
+  const resourceKey = useMemo(() => {
+    const suffix = Array.from(resourceKeys.values()).join("|");
+    return suffix
+      ? `viewport-3d:quantity-field-vectors:${suffix}`
+      : "viewport-3d:quantity-field-vectors:none";
+  }, [resourceKeys]);
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      const entries = await Promise.all(
+        Array.from(resourceKeys, async ([quantityId, key]) => {
+          const data = await loadCachedBinaryResource(
+            fieldVectorCache,
+            key,
+            (etag) =>
+              api.data.fields.vector(
+                quantityId,
+                {
+                  component: "full",
+                  scope_kind: "full",
+                },
+                { etag, signal },
+              ),
+          );
+          return [quantityId, data] as const;
+        }),
+      );
+
+      return new Map(
+        entries.filter(
+          (entry): entry is readonly [string, DecodedFieldVector] =>
+            entry[1] !== null,
+        ),
+      );
+    },
+    [api, resourceKeys],
+  );
+  const resolveRevision = useCallback(() => {
+    const revisions = Array.from(resourceKeys.values()).map(
+      (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
+    );
+    return revisions.length > 0 ? revisions.join("|") : null;
+  }, [resourceKeys]);
+
+  return useResource({
+    enabled: enabled && resourceKeys.size > 0,
+    load,
+    resolveRevision,
+    resourceKey,
+  });
+}
+
 export function useViewport3DMeshQualityData(enabled = true) {
   const { api } = useKernel();
   const load = useCallback(
@@ -307,20 +377,6 @@ export function useViewport3DMeshQualityData(enabled = true) {
     load,
     resolveRevision: resolveQualityDataRevision,
     resourceKey: VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
-  });
-}
-
-export function useViewport3DVisualizationState() {
-  const { api } = useKernel();
-  const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) => api.visualization.state({ signal }),
-    [api],
-  );
-
-  return useResource({
-    load,
-    resolveRevision: resolveVisualizationStateRevision,
-    resourceKey: VIEWPORT_3D_VISUALIZATION_STATE_RESOURCE_KEY,
   });
 }
 

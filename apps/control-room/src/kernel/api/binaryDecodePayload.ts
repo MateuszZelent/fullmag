@@ -7,9 +7,14 @@ import {
   type DecodedTopology,
 } from "./codecs";
 
-export type BinaryDecoderKind = "field-vector" | "mesh-quality-data" | "topology";
+export type BinaryDecoderKind =
+  | "field-vector"
+  | "mesh-quality-data"
+  | "raw-bytes"
+  | "topology";
 
 export type BinaryDecodedPayload =
+  | ArrayBuffer
   | DecodedFieldVector
   | DecodedMeshQualityData
   | DecodedTopology;
@@ -23,6 +28,8 @@ export function decodeBinaryPayload(
       return decodeFieldVector(buffer);
     case "mesh-quality-data":
       return decodeMeshQualityData(buffer);
+    case "raw-bytes":
+      return buffer;
     case "topology":
       return decodeTopology(buffer);
   }
@@ -31,6 +38,9 @@ export function decodeBinaryPayload(
 export function transferablesForDecodedPayload(
   payload: BinaryDecodedPayload,
 ): Transferable[] {
+  if (payload instanceof ArrayBuffer) {
+    return [payload];
+  }
   const buffers = new Set<ArrayBuffer>();
   for (const value of Object.values(payload)) {
     if (isTypedArrayWithTransferableBuffer(value)) {

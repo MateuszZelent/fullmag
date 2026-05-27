@@ -93,7 +93,7 @@ function resolveMutationRevision(
     : nextLocalRevision(...fallbacks);
 }
 
-export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
+function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
   const { api, resources } = useKernel();
   const scene = useSceneResource();
   const object = resolveGeometryObjectDraft(selection, scene.data);
@@ -283,6 +283,65 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
     resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
     resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
   }
+
+  return {
+    anisotropyDraft,
+    applyAnisotropy,
+    applyMaterial,
+    applyParameters,
+    baseAnisotropyDraft,
+    baseDraft,
+    draft,
+    draftKey,
+    feedback,
+    material,
+    materialId,
+    object,
+    parametersTargetChanged,
+    pending,
+    scene,
+    setAnisotropyDraftState,
+    setDraftState,
+    setFeedback,
+    updateAnisotropyDraft,
+    updateDraft,
+  } as const;
+}
+
+type ObjectMaterialPanelState = ReturnType<typeof useObjectMaterialPanelState>;
+
+export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
+  const panel = useObjectMaterialPanelState(selection);
+  return <ObjectMaterialPanelView panel={panel} />;
+}
+
+function ObjectMaterialPanelView({
+  panel,
+}: {
+  panel: ObjectMaterialPanelState;
+}) {
+  const {
+    anisotropyDraft,
+    applyAnisotropy,
+    applyMaterial,
+    applyParameters,
+    baseAnisotropyDraft,
+    baseDraft,
+    draft,
+    draftKey,
+    feedback,
+    material,
+    materialId,
+    object,
+    parametersTargetChanged,
+    pending,
+    scene,
+    setAnisotropyDraftState,
+    setDraftState,
+    setFeedback,
+    updateAnisotropyDraft,
+    updateDraft,
+  } = panel;
 
   return (
     <Accordion

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeTopology } from "./topologyCodec";
+import {
+  decodeTopology,
+  decodeTopologyHeader,
+  expectedTopologyByteLength,
+  topologyByteLayout,
+} from "./topologyCodec";
 
 function makeTopologyBuffer(): ArrayBuffer {
   const nodeCount = 4;
@@ -53,6 +58,23 @@ describe("decodeTopology", () => {
     expect(decoded.elementCount).toBe(1);
     expect(Array.from(decoded.indices)).toEqual([0, 1, 2, 3]);
     expect(Array.from(decoded.boundaryMarkers)).toEqual([20]);
+  });
+
+  it("decodes FMMT header and byte layout for chunked topology reads", () => {
+    const buffer = makeTopologyBuffer();
+    const header = decodeTopologyHeader(buffer.slice(0, 32));
+    const layout = topologyByteLayout(header);
+
+    expect(header).toMatchObject({
+      boundaryFaceCount: 1,
+      boundaryMarkerCount: 1,
+      elementCount: 1,
+      elementMarkerCount: 1,
+      nodeCount: 4,
+    });
+    expect(expectedTopologyByteLength(header)).toBe(buffer.byteLength);
+    expect(layout.positions).toEqual({ start: 32, end: 127 });
+    expect(layout.expectedByteLength).toBe(buffer.byteLength);
   });
 
   it("rejects topology buffers with out-of-range indices", () => {

@@ -228,6 +228,7 @@ describe("AirboxLayer", () => {
       fullVectorSegments: null,
       partVectorSegments: new Map(),
       scalarColors: null,
+      scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["x", colorsByComponent]]),
     } satisfies Viewport3DFieldRenderModel;
 

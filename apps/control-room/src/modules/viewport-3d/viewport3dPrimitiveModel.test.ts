@@ -284,7 +284,7 @@ describe("viewport3dPrimitiveModel", () => {
     });
   });
 
-  it("marks previous object mesh as stale when manifest provenance lags scene", () => {
+  it("marks previous object mesh as stale when the object geometry is dirty", () => {
     const manifest: MeshSharedDomainManifestResource = {
       mesh_id: "mesh-1",
       mesh_name: "Mesh",
@@ -317,6 +317,7 @@ describe("viewport3dPrimitiveModel", () => {
             },
             id: "box",
             name: "Box",
+            tags: ["mesh:dirty"],
           },
         ],
         revision: 7,
@@ -326,6 +327,94 @@ describe("viewport3dPrimitiveModel", () => {
 
     expect(model.objects[0]?.meshState).toBe("mesh-stale");
     expect(model.objects[0]?.fallbackLabel).toBe("stale primitive");
+  });
+
+  it("suppresses primitive fallback when only non-mesh scene state changed", () => {
+    const manifest: MeshSharedDomainManifestResource = {
+      mesh_id: "mesh-1",
+      mesh_name: "Mesh",
+      mesh_parts: [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part-box",
+          label: "Box",
+          node_count: 0,
+          node_start: 0,
+          object_id: "box",
+          role: "magnetic",
+        },
+      ],
+      revision: 2,
+      source_scene_revision: 6,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              bounds_max: [1, 1, 1],
+              bounds_min: [-1, -1, -1],
+              geometry_kind: "Sphere",
+            },
+            id: "box",
+            magnetization_ref: "updated-texture",
+            name: "Box",
+          },
+        ],
+        revision: 7,
+      },
+      manifest,
+    );
+
+    expect(model.objects).toHaveLength(1);
+    expect(model.objects[0]?.meshState).toBe("mesh-ready");
+  });
+
+  it("suppresses primitive fallback when mesh manifest maps the geometry id", () => {
+    const manifest: MeshSharedDomainManifestResource = {
+      mesh_id: "mesh-1",
+      mesh_name: "Mesh",
+      mesh_parts: [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          geometry_id: "box_geom",
+          id: "part-box",
+          label: "Box",
+          node_count: 0,
+          node_start: 0,
+          role: "magnetic",
+        },
+      ],
+      revision: 2,
+      source_scene_revision: 7,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "box",
+            name: "Box",
+          },
+        ],
+        revision: 7,
+      },
+      manifest,
+    );
+
+    expect(model.objects).toHaveLength(1);
+    expect(model.objects[0]?.meshState).toBe("mesh-ready");
   });
 
   it("suppresses primitive fallback when object topology matches scene revision", () => {
@@ -364,7 +453,8 @@ describe("viewport3dPrimitiveModel", () => {
       manifest,
     );
 
-    expect(model.objects).toEqual([]);
+    expect(model.objects).toHaveLength(1);
+    expect(model.objects[0]?.meshState).toBe("mesh-ready");
   });
 
   it("suppresses primitive fallback when object has mesh:ready tag even if revision is stale", () => {
@@ -404,7 +494,8 @@ describe("viewport3dPrimitiveModel", () => {
       manifest,
     );
 
-    expect(model.objects).toEqual([]);
+    expect(model.objects).toHaveLength(1);
+    expect(model.objects[0]?.meshState).toBe("mesh-ready");
   });
 
   it("keeps unchanged primitive geometry keys stable across unrelated scene revisions", () => {

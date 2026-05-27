@@ -1349,8 +1349,8 @@ function checkFdmCuboidChunkedUpload() {
 function checkVectorGlyphChunkedUpload() {
   const source = readFileSync(vectorFieldLayerPath, "utf8");
   requireTokens(source, "VectorFieldLayer chunked upload", [
-    "export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
-    "export function buildVectorGlyphUploadBatches",
+    "const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
+    "function buildVectorGlyphUploadBatches",
     "requestVectorGlyphUploadTask",
     "cancelVectorGlyphUploadTask",
     "const batches = buildVectorGlyphUploadBatches(activeGlyphs.count)",

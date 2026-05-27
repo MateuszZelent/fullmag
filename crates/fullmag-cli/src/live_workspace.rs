@@ -251,9 +251,14 @@ fn preserve_pending_live_step_payload(
     existing: &LiveStepView,
     incoming: &mut LiveStepView,
     allow_previous_preview: bool,
+    current_fem_mesh_counts: Option<FemMeshPointCounts>,
 ) {
     if incoming.magnetization.is_none() {
-        incoming.magnetization = existing.magnetization.clone();
+        incoming.magnetization = existing
+            .magnetization
+            .as_ref()
+            .filter(|values| magnetization_matches_fem_mesh(values, current_fem_mesh_counts))
+            .cloned();
     }
     if incoming.fem_mesh.is_none() {
         incoming.fem_mesh = existing.fem_mesh.clone();
@@ -284,11 +289,21 @@ fn merge_pending_publish_payload(
             incoming.fem_mesh = slot.fem_mesh.clone();
         }
         match (slot.live_state.as_ref(), incoming.live_state.as_mut()) {
-            (Some(existing_state), Some(incoming_state)) => preserve_pending_live_step_payload(
-                &existing_state.latest_step,
-                &mut incoming_state.latest_step,
-                allow_previous_preview,
-            ),
+            (Some(existing_state), Some(incoming_state)) => {
+                let current_fem_mesh_counts = incoming_state
+                    .latest_step
+                    .fem_mesh
+                    .as_ref()
+                    .or(incoming.fem_mesh.as_ref())
+                    .or(existing_state.latest_step.fem_mesh.as_ref())
+                    .map(fem_mesh_point_counts);
+                preserve_pending_live_step_payload(
+                    &existing_state.latest_step,
+                    &mut incoming_state.latest_step,
+                    allow_previous_preview,
+                    current_fem_mesh_counts,
+                );
+            }
             (Some(existing_state), None) => {
                 incoming.live_state = Some(existing_state.clone());
             }
@@ -299,6 +314,125 @@ fn merge_pending_publish_payload(
     *slot = incoming;
     slot.preview_fields = merged_preview_fields;
     slot.clear_preview_cache = clear_preview_cache;
+}
+
+#[derive(Clone, Copy)]
+struct FemMeshPointCounts {
+    node_count: usize,
+    element_count: usize,
+    magnetic_node_count: Option<usize>,
+}
+
+fn fem_mesh_point_counts(mesh: &fullmag_runner::FemMeshPayload) -> FemMeshPointCounts {
+    FemMeshPointCounts {
+        node_count: mesh.nodes.len(),
+        element_count: mesh.elements.len(),
+        magnetic_node_count: fem_magnetic_node_count(mesh),
+    }
+}
+
+fn magnetization_matches_fem_mesh(values: &[f64], mesh_counts: Option<FemMeshPointCounts>) -> bool {
+    if values.is_empty() || values.len() % 3 != 0 {
+        return false;
+    }
+    let Some(mesh_counts) = mesh_counts else {
+        return true;
+    };
+    if mesh_counts.node_count == 0 || mesh_counts.element_count == 0 {
+        return false;
+    }
+    let point_count = values.len() / 3;
+    point_count == mesh_counts.node_count
+        || mesh_counts
+            .magnetic_node_count
+            .is_some_and(|count| point_count == count)
+}
+
+fn fem_magnetic_node_count(mesh: &fullmag_runner::FemMeshPayload) -> Option<usize> {
+    let mut active = vec![false; mesh.nodes.len()];
+    if mark_magnetic_mesh_parts(mesh, &mut active) {
+        return count_active_nodes(&active);
+    }
+    if mark_magnetic_object_segments(mesh, &mut active) {
+        return count_active_nodes(&active);
+    }
+    if mark_nonzero_marker_elements(mesh, &mut active) {
+        return count_active_nodes(&active);
+    }
+    None
+}
+
+fn mark_magnetic_mesh_parts(mesh: &fullmag_runner::FemMeshPayload, active: &mut [bool]) -> bool {
+    let mut saw_magnetic_part = false;
+    for part in &mesh.mesh_parts {
+        if part.role != "magnetic_object" {
+            continue;
+        }
+        saw_magnetic_part = true;
+        if !part.node_indices.is_empty() {
+            for node_index in &part.node_indices {
+                if let Some(slot) = active.get_mut(*node_index as usize) {
+                    *slot = true;
+                }
+            }
+            continue;
+        }
+        mark_node_range(active, part.node_start as usize, part.node_count as usize);
+    }
+    saw_magnetic_part
+}
+
+fn mark_magnetic_object_segments(
+    mesh: &fullmag_runner::FemMeshPayload,
+    active: &mut [bool],
+) -> bool {
+    let mut saw_magnetic_segment = false;
+    for segment in &mesh.object_segments {
+        if segment.object_id == "__air__" {
+            continue;
+        }
+        saw_magnetic_segment = true;
+        mark_node_range(
+            active,
+            segment.node_start as usize,
+            segment.node_count as usize,
+        );
+    }
+    saw_magnetic_segment
+}
+
+fn mark_nonzero_marker_elements(
+    mesh: &fullmag_runner::FemMeshPayload,
+    active: &mut [bool],
+) -> bool {
+    if mesh.element_markers.len() != mesh.elements.len() || mesh.elements.is_empty() {
+        return false;
+    }
+    let mut marked = false;
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        if mesh.element_markers[element_index] == 0 {
+            continue;
+        }
+        marked = true;
+        for node_index in element {
+            if let Some(slot) = active.get_mut(*node_index as usize) {
+                *slot = true;
+            }
+        }
+    }
+    marked
+}
+
+fn mark_node_range(active: &mut [bool], start: usize, count: usize) {
+    let end = start.saturating_add(count).min(active.len());
+    if start < end {
+        active[start..end].fill(true);
+    }
+}
+
+fn count_active_nodes(active: &[bool]) -> Option<usize> {
+    let count = active.iter().filter(|value| **value).count();
+    (count > 0).then_some(count)
 }
 
 #[derive(Clone)]
@@ -373,7 +507,12 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLiveSnapshotPayload};
+    use super::{
+        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
+        CurrentLivePublisher, CurrentLiveSnapshotPayload, LocalLiveWorkspace,
+        LocalLiveWorkspaceState,
+    };
+    use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
@@ -414,6 +553,104 @@ mod tests {
             generation_id: Some(generation_id.to_string()),
             per_domain_quality: std::collections::HashMap::new(),
         }
+    }
+
+    fn surface_preview_mesh() -> fullmag_runner::FemMeshPayload {
+        fullmag_runner::FemMeshPayload {
+            mesh_name: "surface-preview".to_string(),
+            mesh_id: "surface-preview-id".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            domain_mesh_mode: None,
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
+
+    fn no_op_publisher() -> CurrentLivePublisher {
+        let (wake_tx, _wake_rx) = std::sync::mpsc::sync_channel(1);
+        CurrentLivePublisher {
+            pending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sending: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fast_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            payload: std::sync::Arc::new(std::sync::Mutex::new(
+                CurrentLiveSnapshotPayload::default(),
+            )),
+            wake_tx,
+        }
+    }
+
+    fn workspace_with_domain_mesh() -> LocalLiveWorkspace {
+        let mut live_state = bootstrap_live_state("running");
+        live_state.latest_step.fem_mesh = Some(fem_mesh("mesh-gen-1"));
+
+        LocalLiveWorkspace::new(
+            LocalLiveWorkspaceState {
+                session: SessionManifest {
+                    session_id: "test-session".to_string(),
+                    run_id: "test-run".to_string(),
+                    status: "running".to_string(),
+                    interactive_session_requested: false,
+                    script_path: "test.py".to_string(),
+                    problem_name: "test".to_string(),
+                    requested_backend: "fem".to_string(),
+                    explicit_selection: true,
+                    requested_device: "cpu".to_string(),
+                    requested_precision: "double".to_string(),
+                    requested_mode: "strict".to_string(),
+                    requested_cpu_threads: None,
+                    execution_mode: "strict".to_string(),
+                    precision: "double".to_string(),
+                    resolved_backend: Some("fem".to_string()),
+                    resolved_device: Some("cpu".to_string()),
+                    resolved_precision: Some("double".to_string()),
+                    resolved_mode: Some("strict".to_string()),
+                    resolved_runtime_family: None,
+                    resolved_engine_id: None,
+                    resolved_worker: None,
+                    resolved_cpu_threads: None,
+                    resolved_fallback: None,
+                    artifact_dir: String::new(),
+                    started_at_unix_ms: 0,
+                    finished_at_unix_ms: 0,
+                    plan_summary: serde_json::json!({}),
+                },
+                run: RunManifest {
+                    run_id: "test-run".to_string(),
+                    session_id: "test-session".to_string(),
+                    status: "running".to_string(),
+                    total_steps: 0,
+                    final_time: None,
+                    final_e_ex: None,
+                    final_e_demag: None,
+                    final_e_ext: None,
+                    final_e_ani: None,
+                    final_e_dmi: None,
+                    final_e_total: None,
+                    artifact_dir: String::new(),
+                },
+                live_state,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                latest_scalar_row: None,
+                latest_fields: Default::default(),
+                preview_fields: Default::default(),
+                pending_preview_fields: Default::default(),
+                clear_preview_cache: false,
+                engine_log: Vec::new(),
+                solver_profile: fullmag_runner::SolverProfileState::default(),
+            },
+            no_op_publisher(),
+        )
     }
 
     fn payload_with_live_step(
@@ -468,6 +705,40 @@ mod tests {
     }
 
     #[test]
+    fn fem_surface_preview_progress_does_not_replace_solver_domain_mesh() {
+        let workspace = workspace_with_domain_mesh();
+
+        apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::FemSurfacePreview {
+                geometry_name: "body".to_string(),
+                fem_mesh: surface_preview_mesh(),
+                message: Some("Surface preview ready".to_string()),
+            },
+        );
+
+        let snapshot = workspace.snapshot();
+        assert_eq!(
+            snapshot
+                .live_state
+                .latest_step
+                .fem_mesh
+                .as_ref()
+                .map(|mesh| mesh.mesh_id.as_str()),
+            Some("mesh-id")
+        );
+        assert_eq!(
+            snapshot
+                .live_state
+                .latest_step
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("mesh-gen-1")
+        );
+    }
+
+    #[test]
     fn merge_pending_publish_payload_respects_preview_cache_clear() {
         let mut slot = payload_with_live_step(
             1,
@@ -489,6 +760,37 @@ mod tests {
         assert_eq!(
             live_state.latest_step.magnetization.as_deref(),
             Some(&[0.0, 0.0, 1.0][..])
+        );
+    }
+
+    #[test]
+    fn merge_pending_publish_payload_does_not_preserve_magnetization_for_new_incompatible_mesh() {
+        let mut slot = payload_with_live_step(
+            1,
+            None,
+            Some(vec![
+                1.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, //
+                0.0, 0.0, 1.0,
+            ]),
+            Some(surface_preview_mesh()),
+            None,
+        );
+        let incoming = payload_with_live_step(2, None, None, Some(fem_mesh("mesh-gen-2")), None);
+
+        merge_pending_publish_payload(&mut slot, incoming, true);
+
+        let live_state = slot.live_state.as_ref().expect("live state preserved");
+        assert_eq!(live_state.latest_step.step, 2);
+        assert!(
+            live_state.latest_step.magnetization.is_none(),
+            "stale magnetization must not be paired with a new solver mesh that has a different point count"
+        );
+        assert_eq!(
+            slot.fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("mesh-gen-2")
         );
     }
 }
@@ -904,14 +1206,18 @@ pub(crate) fn apply_python_progress_event(
         } => {
             live_workspace.update(|state| {
                 state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
-                state.live_state.latest_step.fem_mesh = Some(fem_mesh);
                 if let Some(message) = message {
                     push_engine_log(&mut state.engine_log, "info", message);
                 } else {
                     push_engine_log(
                         &mut state.engine_log,
                         "info",
-                        format!("Surface preview ready for '{}'", geometry_name),
+                        format!(
+                            "Surface preview ready for '{}' ({} vertices, {} faces)",
+                            geometry_name,
+                            fem_mesh.nodes.len(),
+                            fem_mesh.boundary_faces.len()
+                        ),
                     );
                 }
             });

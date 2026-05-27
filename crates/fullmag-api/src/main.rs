@@ -299,7 +299,7 @@ fn current_live_realtime_changes(
     for recommended_fetch in &realtime_state.field_vector_fetches {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
-            revision: realtime_state.revisions.field_revision,
+            revision: realtime_state.revisions.fields_revision,
             resource_id: recommended_fetch
                 .split("/data/fields/")
                 .nth(1)
@@ -398,7 +398,7 @@ fn current_live_realtime_change_revision_changed(
             if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/fields") {
                 previous.field_catalog_revision != change.revision || domain_generation_changed
             } else {
-                previous.field_revision != change.revision || domain_generation_changed
+                previous.fields_revision != change.revision || domain_generation_changed
             }
         }
         RealtimeResourceName::Scalars => previous.scalars_revision != change.revision,
@@ -486,7 +486,7 @@ mod realtime_change_tests {
     #[test]
     fn realtime_changes_since_omits_unchanged_static_resources() {
         let mut current_revisions = revisions();
-        current_revisions.field_revision += 1;
+        current_revisions.fields_revision += 1;
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
@@ -513,6 +513,33 @@ mod realtime_change_tests {
         assert!(!fetches.contains("/v2/sessions/current/data/fields"));
         assert!(!fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(!fetches.contains("/v2/sessions/current/workspace/selection"));
+    }
+
+    #[test]
+    fn realtime_changes_since_refreshes_field_vectors_when_live_field_data_changes() {
+        let mut current_revisions = revisions();
+        current_revisions.fields_revision += 1;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current_revisions,
+            field_vector_fetches: vec![
+                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+                    .to_string(),
+            ],
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let fetches = current_live_realtime_changes_since(&state, Some(&revisions()))
+            .into_iter()
+            .filter_map(|change| change.recommended_fetch)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(fetches.len(), 1);
+        assert!(fetches.contains(
+            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+        ));
+        assert!(!fetches.contains("/v2/sessions/current/data/fields"));
     }
 
     #[test]
@@ -2131,6 +2158,16 @@ fn rebuild_live_scene_magnetization(
             keys
         })
         .collect::<HashMap<_, _>>();
+    let get_owner_fallback = |id: &str| {
+        object_index.get(id).copied().or_else(|| {
+            if id.ends_with("_geom") {
+                object_index.get(&id[..id.len() - 5]).copied()
+            } else {
+                object_index.get(&format!("{}_geom", id)).copied()
+            }
+        })
+    };
+
     let mut node_owner: Vec<Option<usize>> = vec![None; node_count];
 
     for part in &mesh.mesh_parts {
@@ -2145,7 +2182,7 @@ fn rebuild_live_scene_magnetization(
         else {
             continue;
         };
-        let Some(owner_index) = object_index.get(owner_id).copied() else {
+        let Some(owner_index) = get_owner_fallback(owner_id) else {
             continue;
         };
         if !part.node_indices.is_empty() {
@@ -2172,7 +2209,8 @@ fn rebuild_live_scene_magnetization(
         if segment.object_id == "__air__" {
             continue;
         }
-        let Some(owner_index) = object_index.get(segment.object_id.as_str()).copied() else {
+        let seg_id = segment.object_id.as_str();
+        let Some(owner_index) = get_owner_fallback(seg_id) else {
             continue;
         };
         let start = segment.node_start as usize;

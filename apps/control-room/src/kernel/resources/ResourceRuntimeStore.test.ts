@@ -74,6 +74,43 @@ describe("ResourceRuntimeStore", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps warm quantity resources without refetching when switching back", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const loadM = vi.fn(async () => "m-data");
+    const loadH = vi.fn(async () => "h-data");
+
+    await store.ensureLoad({
+      externalRevision: null,
+      load: loadM,
+      resourceKey: "data/fields/m/samples/vector?component=full&scope_kind=full",
+      resolveRevision: () => '"m-etag"',
+    });
+    await store.ensureLoad({
+      externalRevision: null,
+      load: loadH,
+      resourceKey: "data/fields/h_eff/samples/vector?component=full&scope_kind=full",
+      resolveRevision: () => '"h-etag"',
+    });
+    await store.ensureLoad({
+      externalRevision: null,
+      load: loadM,
+      resourceKey: "data/fields/m/samples/vector?component=full&scope_kind=full",
+      resolveRevision: () => '"m-etag"',
+    });
+
+    expect(loadM).toHaveBeenCalledTimes(1);
+    expect(loadH).toHaveBeenCalledTimes(1);
+    expect(
+      store.getSnapshot(
+        "data/fields/m/samples/vector?component=full&scope_kind=full",
+      ),
+    ).toMatchObject({
+      data: "m-data",
+      revision: '"m-etag"',
+      status: "ready",
+    });
+  });
+
   it("queues the latest revision without aborting the active resource load", async () => {
     const store = new ResourceRuntimeStore<string>();
     const first = deferred<string>();
@@ -130,6 +167,29 @@ describe("ResourceRuntimeStore", () => {
     expect(store.getSnapshot("data/fields/m")).toMatchObject({
       data: "new",
       revision: 3,
+      status: "ready",
+    });
+  });
+
+  it("keeps newer locally seeded data when an older in-flight load resolves", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const stale = deferred<string>();
+    const staleLoad = vi.fn(() => stale.promise);
+
+    const staleResult = store.ensureLoad({
+      externalRevision: 10,
+      load: staleLoad,
+      resourceKey: "visualization/state",
+      resolveRevision: () => 10,
+    });
+
+    store.updateData("visualization/state", "fresh-camera", 11);
+    stale.resolve("stale-camera");
+    await staleResult;
+
+    expect(store.getSnapshot("visualization/state")).toMatchObject({
+      data: "fresh-camera",
+      revision: 11,
       status: "ready",
     });
   });

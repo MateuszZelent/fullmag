@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
   resolveEffectiveVisualizationSettings,
@@ -8,12 +9,15 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
+  VISUALIZATION_QUANTITY_ITEMS,
+  visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
 
 describe("ObjectVisualizationPanelModel", () => {
@@ -38,6 +42,26 @@ describe("ObjectVisualizationPanelModel", () => {
       "magnitude",
       "monochrome",
     ]);
+  });
+
+  it("exposes target quantity options for the inspector visualization panel", () => {
+    expect(VISUALIZATION_QUANTITY_ITEMS.map((item) => item.value)).toEqual([
+      "m",
+      "h_eff",
+      "h_demag",
+      "h_ex",
+      "h_ani",
+      "eden_total",
+      "eden_ex",
+      "eden_demag",
+      "eden_ext",
+      "eden_ani",
+      "eden_dmi",
+    ]);
+    expect(visualizationQuantityItems("exchange_field")[0]).toEqual({
+      label: "exchange_field",
+      value: "exchange_field",
+    });
   });
 
   it("keeps color picker input compatible with CSS token defaults", () => {
@@ -84,6 +108,7 @@ describe("ObjectVisualizationPanelModel", () => {
 
     expect(sections.map((section) => section.id)).toEqual([
       "display-passes",
+      "quantity-source",
       "surface-coloring",
       "wireframe",
       "vectors",
@@ -98,6 +123,11 @@ describe("ObjectVisualizationPanelModel", () => {
           expect.objectContaining({ id: "surfaceColorSource" }),
           expect.objectContaining({ id: "shaderMonoColor" }),
         ]),
+      });
+    expect(sections.find((section) => section.id === "quantity-source"))
+      .toMatchObject({
+        disabled: false,
+        fields: [expect.objectContaining({ id: "activeQuantityId" })],
       });
   });
 
@@ -163,6 +193,7 @@ describe("ObjectVisualizationPanelModel", () => {
 
     expect(fieldIds).toEqual(expect.arrayContaining([
       "surfaceColorSource",
+      "activeQuantityId",
       "shaderMonoColor",
       "wireframeColor",
       "wireframeOpacityPercent",
@@ -171,5 +202,54 @@ describe("ObjectVisualizationPanelModel", () => {
       "vectorAlphaPercent",
       "vectorThickness",
     ]));
+  });
+
+  it("explains an airbox Visible request that is still off in backend state", () => {
+    const diagnostic = buildAirboxVisibilityDiagnostic({
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        visible: false,
+        wireframeVisible: true,
+      },
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        visible: false,
+        wireframeVisible: true,
+      },
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "backend-off",
+      title: "Airbox visibility not confirmed",
+    });
+    expect(diagnostic?.message).toContain("layers.airbox.visible=false");
+    expect(diagnostic?.details).toEqual(
+      expect.arrayContaining([
+        { label: "Backend master", value: "off" },
+        { label: "Wireframe pass", value: "on" },
+      ]),
+    );
+  });
+
+  it("confirms when airbox master visibility and a drawable pass are both active", () => {
+    const diagnostic = buildAirboxVisibilityDiagnostic({
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        visible: true,
+        wireframeVisible: true,
+      },
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        visible: true,
+        wireframeVisible: true,
+      },
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "confirmed",
+      title: "Airbox visibility confirmed",
+    });
   });
 });

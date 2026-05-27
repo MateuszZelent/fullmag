@@ -49,6 +49,14 @@ describe("useViewport3DSceneModel", () => {
     expect(sceneModelSource).not.toContain("useViewport3DRemoteCameraSync");
   });
 
+  it("surfaces field-vector load failures as explicit viewport issues", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("fieldDataIssue");
+    expect(source).toContain("fieldVectorEnabled && fieldVector.error");
+    expect(source).toContain("resolveViewport3DFieldVectorResourceKey");
+  });
+
   it("uses the local viewport camera while a camera interaction is active", () => {
     const commandState = {
       camera: {

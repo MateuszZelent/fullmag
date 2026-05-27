@@ -167,9 +167,16 @@ import {
   decodeFieldVector,
   decodeMeshQualityData,
   decodeTopology,
+  decodeTopologyHeader,
+  decodeTopologySections,
+  expectedTopologyByteLength,
+  FMMT_HEADER_LEN,
+  topologyByteLayout,
   type DecodedFieldVector,
   type DecodedMeshQualityData,
   type DecodedTopology,
+  type TopologyHeader,
+  type TopologySections,
 } from "./codecs";
 import {
   createBinaryDecodeScheduler,
@@ -191,6 +198,9 @@ type BinaryOpenApiTransportResult = {
   error?: unknown;
   response: Response;
 };
+
+const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
+const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
 
 interface ControlRoomApiOptions {
   baseUrl?: string;
@@ -263,6 +273,10 @@ export class ControlRoomApi {
         this.requestJson<DomainMetaResource>(DATA_DOMAIN_META_PATH, options),
       topology: (options?: BinaryRequestOptions) =>
         this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),
+      topologyBytes: (options?: BinaryRequestOptions) =>
+        this.requestBinaryBytes(DATA_DOMAIN_TOPOLOGY_PATH, options),
+      topologyChunked: (options?: BinaryRequestOptions) =>
+        this.requestTopologyChunked(DATA_DOMAIN_TOPOLOGY_PATH, options),
     },
     fields: {
       catalog: (options?: RequestOptions) =>
@@ -903,6 +917,168 @@ export class ControlRoomApi {
     );
   }
 
+  private async requestTopologyChunked(
+    path: OpenApiV2Path,
+    options: BinaryRequestOptions = {},
+    pathParams?: PathParams,
+  ): Promise<BinaryResourceResult<DecodedTopology>> {
+    const headerResult = await this.requestBinaryBytes(
+      path,
+      {
+        ...options,
+        range: `bytes=0-${FMMT_HEADER_LEN - 1}`,
+      },
+      pathParams,
+    );
+    if (headerResult.status !== "ready") {
+      return headerResult;
+    }
+
+    const header = decodeTopologyHeader(headerResult.data);
+    const expectedByteLength = expectedTopologyByteLength(header);
+    if (expectedByteLength <= CHUNKED_TOPOLOGY_THRESHOLD_BYTES) {
+      return this.requestBinaryResource(
+        path,
+        "topology",
+        decodeTopology,
+        options,
+        pathParams,
+      );
+    }
+
+    const contentLength =
+      parseContentRangeTotal(headerResult.contentRange) ?? expectedByteLength;
+    if (contentLength !== expectedByteLength) {
+      throw new ControlRoomApiError(
+        `FMMT content length mismatch: expected ${expectedByteLength}, got ${contentLength}`,
+        0,
+      );
+    }
+
+    const data = await this.loadTopologySectionsByRange(
+      path,
+      header,
+      options,
+      pathParams,
+    );
+    return {
+      byteLength: expectedByteLength,
+      data,
+      etag: headerResult.etag,
+      status: "ready",
+    };
+  }
+
+  private async loadTopologySectionsByRange(
+    path: OpenApiV2Path,
+    header: TopologyHeader,
+    options: BinaryRequestOptions,
+    pathParams?: PathParams,
+  ): Promise<DecodedTopology> {
+    const layout = topologyByteLayout(header);
+    const sections: TopologySections = {
+      boundaryFaces: new Uint32Array(header.boundaryFaceCount * 3),
+      boundaryMarkers: new Uint32Array(header.boundaryMarkerCount),
+      elementMarkers: new Uint32Array(header.elementMarkerCount),
+      indices: new Uint32Array(header.elementCount * 4),
+      positions: new Float64Array(header.nodeCount * 3),
+    };
+
+    await Promise.all([
+      this.loadTopologySectionByRange(
+        path,
+        options,
+        pathParams,
+        layout.positions,
+        new Uint8Array(sections.positions.buffer),
+      ),
+      this.loadTopologySectionByRange(
+        path,
+        options,
+        pathParams,
+        layout.indices,
+        new Uint8Array(sections.indices.buffer),
+      ),
+      this.loadTopologySectionByRange(
+        path,
+        options,
+        pathParams,
+        layout.boundaryFaces,
+        new Uint8Array(sections.boundaryFaces.buffer),
+      ),
+      this.loadTopologySectionByRange(
+        path,
+        options,
+        pathParams,
+        layout.elementMarkers,
+        new Uint8Array(sections.elementMarkers.buffer),
+      ),
+      this.loadTopologySectionByRange(
+        path,
+        options,
+        pathParams,
+        layout.boundaryMarkers,
+        new Uint8Array(sections.boundaryMarkers.buffer),
+      ),
+    ]);
+
+    return decodeTopologySections(header, sections);
+  }
+
+  private async loadTopologySectionByRange(
+    path: OpenApiV2Path,
+    options: BinaryRequestOptions,
+    pathParams: PathParams | undefined,
+    range: { end: number; start: number },
+    target: Uint8Array,
+  ): Promise<void> {
+    if (target.byteLength === 0 || range.end < range.start) return;
+
+    let written = 0;
+    for (
+      let start = range.start;
+      start <= range.end;
+      start += TOPOLOGY_RANGE_CHUNK_BYTES
+    ) {
+      const end = Math.min(start + TOPOLOGY_RANGE_CHUNK_BYTES - 1, range.end);
+      const result = await this.requestBinaryBytes(
+        path,
+        {
+          ...options,
+          etag: null,
+          range: `bytes=${start}-${end}`,
+        },
+        pathParams,
+      );
+      if (result.status !== "ready") {
+        throw new ControlRoomApiError(
+          `Expected topology byte range ${start}-${end}, got ${result.status}`,
+          0,
+        );
+      }
+
+      const bytes = new Uint8Array(result.data);
+      target.set(bytes, written);
+      written += bytes.byteLength;
+    }
+  }
+
+  private requestBinaryBytes(
+    path: OpenApiV2Path,
+    options: BinaryRequestOptions = {},
+    pathParams?: PathParams,
+    query?: QueryParams,
+  ): Promise<BinaryResourceResult<ArrayBuffer>> {
+    return this.requestBinaryResource(
+      path,
+      "raw-bytes",
+      (buffer) => buffer,
+      options,
+      pathParams,
+      query,
+    );
+  }
+
   private requestMeshQualityData(
     path: OpenApiV2Path,
     options: BinaryRequestOptions = {},
@@ -945,6 +1121,9 @@ export class ControlRoomApi {
         const headers: Record<string, string> = {};
         if (options.etag) {
           headers["if-none-match"] = options.etag;
+        }
+        if (options.range) {
+          headers.range = options.range;
         }
 
         const requestState: { lastResponse: Response | null } = {
@@ -1002,12 +1181,15 @@ export class ControlRoomApi {
         const byteLength = buffer.byteLength;
 
         const decodeStartedAt = nowMs();
-        const data = await this.binaryDecodeScheduler({
-          buffer,
-          decodeInline: decode,
-          kind: decoderKind,
-          path: path as string,
-        });
+        const data =
+          decoderKind === "raw-bytes"
+            ? decode(buffer)
+            : await this.binaryDecodeScheduler({
+                buffer,
+                decodeInline: decode,
+                kind: decoderKind,
+                path: path as string,
+              });
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
         this.requestDiagnostics?.record({
@@ -1026,6 +1208,7 @@ export class ControlRoomApi {
 
         return {
           byteLength,
+          contentRange: response.headers.get("content-range"),
           data,
           etag,
           status: "ready",
@@ -1230,6 +1413,14 @@ function pathFromUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function parseContentRangeTotal(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const match = /^bytes\s+\d+-\d+\/(\d+)$/i.exec(value.trim());
+  if (!match) return null;
+  const total = Number(match[1]);
+  return Number.isFinite(total) ? total : null;
 }
 
 function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {

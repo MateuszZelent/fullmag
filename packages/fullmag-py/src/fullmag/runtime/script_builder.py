@@ -529,7 +529,7 @@ def _render_runtime(
             f"solver={_py_repr(fem.demag_solver_policy.solver)}, "
             f"preconditioner={_py_repr(fem.demag_solver_policy.preconditioner)}, "
             f"rtol={_py_number(fem.demag_solver_policy.rtol)}, "
-            f"atol={_py_repr(fem.demag_solver_policy.atol)}, "
+            f"atol={_py_literal(fem.demag_solver_policy.atol)}, "
             f"max_iterations={fem.demag_solver_policy.max_iterations}, "
             f"print_level={fem.demag_solver_policy.print_level})"
         )
@@ -660,12 +660,20 @@ def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | Non
 
 
 def _render_visualization_hint_kwargs(hint: dict[str, object]) -> str:
-    """Render kwargs string for a visualization hint dict (show=, mode=)."""
+    """Render kwargs string for a visualization hint dict."""
     parts: list[str] = []
     if "show" in hint:
         parts.append(f"show={_py_literal(hint['show'])}")
     if "mode" in hint and isinstance(hint["mode"], str) and hint["mode"].strip():
         parts.append(f"mode={_py_repr(hint['mode'])}")
+    if (
+        "active_quantity_id" in hint
+        and isinstance(hint["active_quantity_id"], str)
+        and hint["active_quantity_id"].strip()
+    ):
+        parts.append(
+            f"active_quantity_id={_py_repr(hint['active_quantity_id'])}"
+        )
     return ", ".join(parts)
 
 

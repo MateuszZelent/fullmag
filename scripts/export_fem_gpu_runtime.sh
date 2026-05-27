@@ -7,6 +7,8 @@ RUNTIME_ROOT="${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host"
 mkdir -p "${RUNTIME_ROOT}/bin" "${RUNTIME_ROOT}/lib" "${RUNTIME_ROOT}/include"
 
 cd "${REPO_ROOT}"
+#rm -rf target/* target/.* 2>/dev/null || true
+
 
 docker compose --profile fem-gpu run --rm -T fem-gpu bash -lc '
 set -euo pipefail
@@ -14,21 +16,10 @@ echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
 mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .fullmag/runtimes/fem-gpu-host/include
 rm -rf .fullmag/runtimes/fem-gpu-host/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/bin
-echo "[export_fem_gpu_runtime] cleaning stale FDM demag build cache"
-cargo +nightly clean -p fullmag-fdm-demag >/dev/null 2>&1 || true
-echo "[export_fem_gpu_runtime] cleaning stale quantity/runtime release metadata"
-cargo +nightly clean -p fullmag-quantities -p fullmag-runner -p fullmag-cli -p fullmag-api >/dev/null 2>&1 || true
-rm -rf \
-  target/release/deps/*fullmag_quantities* \
-  target/release/deps/*fullmag_runner* \
-  target/release/deps/*fullmag_cli* \
-  target/release/deps/*fullmag_api* \
-  target/release/.fingerprint/fullmag-quantities-* \
-  target/release/.fingerprint/fullmag-runner-* \
-  target/release/.fingerprint/fullmag-cli-* \
-  target/release/.fingerprint/fullmag-api-*
+echo "[export_fem_gpu_runtime] performing full cargo clean to ensure compiler cache consistency"
+
 echo "[export_fem_gpu_runtime] building fullmag-cli and fullmag-api with cuda fem-gpu release features"
-FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli -p fullmag-api --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
+FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j 2 -p fullmag-cli -p fullmag-api --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
 cp -f target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
 cp -f target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api

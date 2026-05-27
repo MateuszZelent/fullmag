@@ -17,6 +17,7 @@ const EMPTY_FIELD_RENDER_OPTIONS: Viewport3DFieldRenderOptions = {
   fullVectorBudget: 0,
   partVectorBudgets: new Map(),
   scalarColorModes: new Set(),
+  scalarColorPalette: "viridis",
   scalarColorsVisible: false,
 };
 const fieldRenderOptionsCache = new WeakMap<
@@ -28,6 +29,7 @@ export function useViewport3DFieldRenderOptions({
   airboxSettings,
   fallbackSettings,
   getPartSettings,
+  scalarColorPalette,
   topologyRenderModel,
   vectorColorMode,
   vectorDomain,
@@ -35,6 +37,7 @@ export function useViewport3DFieldRenderOptions({
   airboxSettings: VisualizationTargetSettings;
   fallbackSettings: VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  scalarColorPalette: string;
   topologyRenderModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
   vectorDomain: string;
@@ -161,6 +164,7 @@ export function useViewport3DFieldRenderOptions({
           ? partVectorSurfaceOffsetScales
           : undefined,
       scalarColorModes,
+      scalarColorPalette,
       scalarColorsVisible,
       vectorColorMode,
     });
@@ -184,6 +188,7 @@ export function useViewport3DFieldRenderOptions({
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,
+    scalarColorPalette,
     topologyRenderModel,
     vectorColorMode,
     vectorDomain,
@@ -212,6 +217,8 @@ export function sameViewport3DFieldRenderOptions(
     (left.fullVectorSurfaceOffsetScale ?? 0) ===
       (right.fullVectorSurfaceOffsetScale ?? 0) &&
     Boolean(left.scalarColorsVisible) === Boolean(right.scalarColorsVisible) &&
+    (left.scalarColorPalette ?? "viridis") ===
+      (right.scalarColorPalette ?? "viridis") &&
     (left.vectorColorMode ?? "") === (right.vectorColorMode ?? "") &&
     sameStringMap(left.partVectorAnchorModes, right.partVectorAnchorModes) &&
     sameNumberMap(left.partVectorBudgets, right.partVectorBudgets) &&

@@ -53,8 +53,22 @@ import {
 } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
+import { Button } from "@/shared/ui/Button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/Dialog";
 
 import { buildRibbonTabContent } from "./ribbonContributions";
+import {
+  RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+  type ApplyGlobalQuantityInput,
+} from "./ribbonCommands";
 import { ribbonTabNeedsRuntimeResources } from "./ribbonResourcePolicy";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
 import { RibbonTabStrip } from "./RibbonTabStrip";
@@ -123,6 +137,8 @@ function ribbonRuntimeStatusEquals(
 
 export default function RibbonModule({ kernel }: ModuleProps) {
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const [pendingGlobalQuantity, setPendingGlobalQuantity] =
+    useState<ApplyGlobalQuantityInput | null>(null);
   const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const { setActiveTab } = useLayoutActions();
   const selection = useSelectionSelector((currentSelection) =>
@@ -285,7 +301,28 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const groups = tabContent?.groups ?? [];
 
   function handleAction(actionId: string, input?: unknown): void {
+    if (
+      actionId === RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND &&
+      isGlobalQuantityConfirmationInput(input)
+    ) {
+      setPendingGlobalQuantity(input);
+      return;
+    }
     void kernel.commands.execute(actionId, commandContext, input);
+  }
+
+  function confirmGlobalQuantity(): void {
+    if (!pendingGlobalQuantity) return;
+    const input: ApplyGlobalQuantityInput = {
+      ...pendingGlobalQuantity,
+      requiresConfirmation: false,
+    };
+    setPendingGlobalQuantity(null);
+    void kernel.commands.execute(
+      RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+      commandContext,
+      input,
+    );
   }
 
   return (
@@ -308,7 +345,48 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           if (!open) setSelectedCommandId(null);
         }}
       />
+      <Dialog
+        open={pendingGlobalQuantity !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingGlobalQuantity(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Apply Global Quantity</DialogTitle>
+            <DialogDescription>
+              This will replace per-target quantity choices with{" "}
+              {pendingGlobalQuantity?.activeQuantityId ?? "the selected quantity"}.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="fm-dialog__description">
+            {pendingGlobalQuantity?.targetQuantityOverrideCount ?? 0} target
+            quantities are currently different from the global quantity.
+          </p>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="button" variant="primary" onClick={confirmGlobalQuantity}>
+              Apply Globally
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </div>
     </WorkspaceRenderProfiler>
+  );
+}
+
+function isGlobalQuantityConfirmationInput(
+  input: unknown,
+): input is ApplyGlobalQuantityInput {
+  return (
+    Boolean(input) &&
+    typeof input === "object" &&
+    (input as ApplyGlobalQuantityInput).requiresConfirmation === true &&
+    typeof (input as ApplyGlobalQuantityInput).activeQuantityId === "string"
   );
 }

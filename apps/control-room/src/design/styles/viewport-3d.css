@@ -74,7 +74,7 @@
 .fm-viewport-3d__method-badge {
   position: absolute;
   z-index: 2;
-  right: var(--fm-space-3);
+  left: var(--fm-space-3);
   bottom: var(--fm-space-3);
   border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 50%, transparent);
   border-radius: var(--fm-radius-sm);
@@ -108,7 +108,7 @@
 .fm-viewport-3d__orbit-debug {
   position: absolute;
   z-index: 3;
-  top: var(--fm-space-3);
+  bottom: var(--fm-space-3);
   right: var(--fm-space-3);
   display: grid;
   width: min(18rem, calc(100% - var(--fm-space-6)));

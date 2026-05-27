@@ -29,6 +29,8 @@ import {
 
 export const RIBBON_VISUALIZATION_PATCH_STATE_COMMAND =
   "ribbon.visualization.patch-state";
+export const RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND =
+  "ribbon.visualization.apply-global-quantity";
 export const RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND =
   "ribbon.visualization.patch-defaults";
 export const RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND =
@@ -54,10 +56,31 @@ interface PatchTargetInput {
   target: VisualizationTargetRef;
 }
 
+export interface ApplyGlobalQuantityInput {
+  activeQuantityId: string;
+  clearTargetQuantities?: boolean;
+  requiresConfirmation?: boolean;
+  targetQuantityOverrideCount?: number;
+}
+
 export function visualizationStateCommandInput(
   patch: VisualizationStatePatch,
 ): VisualizationStatePatch {
   return patch;
+}
+
+export function globalQuantityCommandInput(
+  activeQuantityId: string,
+  clearTargetQuantities = false,
+  requiresConfirmation = false,
+  targetQuantityOverrideCount = 0,
+): ApplyGlobalQuantityInput {
+  return {
+    activeQuantityId,
+    clearTargetQuantities,
+    requiresConfirmation,
+    targetQuantityOverrideCount,
+  };
 }
 
 export function visualizationDefaultsCommandInput(
@@ -91,6 +114,17 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     disabledReason: (context) =>
       context.api ? null : "Control Room API is not available.",
     run: patchVisualizationStateFromCommand,
+  },
+  {
+    id: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+    title: "Apply Global Visualization Quantity",
+    group: "ribbon-visualization",
+    category: "View",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.api),
+    disabledReason: (context) =>
+      context.api ? null : "Control Room API is not available.",
+    run: applyGlobalQuantityFromCommand,
   },
   {
     id: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
@@ -165,6 +199,39 @@ async function patchVisualizationStateFromCommand(
   const patch = asRecord(context.input) as VisualizationStatePatch | null;
   if (!patch) {
     return { message: "Visualization state patch is missing.", status: "failed" };
+  }
+
+  await patchVisualizationState(context, patch);
+  return { status: "completed" };
+}
+
+async function applyGlobalQuantityFromCommand(
+  context: CommandContext,
+): Promise<CommandResult> {
+  if (!context.visualizationSync && !context.api) {
+    return { message: "Control Room API is not available.", status: "failed" };
+  }
+  const input = asApplyGlobalQuantityInput(context.input);
+  if (!input) {
+    return {
+      message: "Global quantity input is missing.",
+      status: "failed",
+    };
+  }
+
+  const patch: VisualizationStatePatch = {
+    active_quantity_id: input.activeQuantityId,
+    quantity: { active_quantity_id: input.activeQuantityId },
+  };
+  const state = visualizationStateFromContext(context);
+  if (input.clearTargetQuantities && state) {
+    patch.overrides = [];
+    for (const entry of state.overrides ?? []) {
+      const nextEntry = clearTargetQuantityOverride(entry);
+      if (nextEntry) {
+        patch.overrides.push(nextEntry);
+      }
+    }
   }
 
   await patchVisualizationState(context, patch);
@@ -319,17 +386,11 @@ async function patchAirboxVisualization(
     context.visualization?.patchTarget(AIRBOX_VISUALIZATION_TARGET, localPatch);
   }
 
-  const statePatch = airboxVisualizationStatePatchFromTargetPatch(patch);
-  if (patch.geometryScope !== undefined) {
-    const state = visualizationStateFromContext(context);
-    if (state) {
-      statePatch.overrides = mergeVisualizationStateTargetOverride(
-        state.overrides ?? [],
-        AIRBOX_VISUALIZATION_TARGET,
-        { geometryScope: patch.geometryScope },
-      );
-    }
-  }
+  const state = visualizationStateFromContext(context);
+  const statePatch = airboxVisualizationStatePatchFromTargetPatch(
+    patch,
+    state ? state.overrides ?? [] : undefined,
+  );
   if (!hasVisualizationStatePatch(statePatch)) {
     return { status: "completed" };
   }
@@ -425,6 +486,43 @@ function asPatchTargetInput(value: unknown): PatchTargetInput | null {
   const target = asVisualizationTargetRef(record.target);
   const patch = asRecord(record.patch) as VisualizationTargetPatch | null;
   return target && patch ? { patch, target } : null;
+}
+
+function asApplyGlobalQuantityInput(
+  value: unknown,
+): ApplyGlobalQuantityInput | null {
+  const record = asRecord(value);
+  const activeQuantityId =
+    typeof record?.activeQuantityId === "string"
+      ? record.activeQuantityId.trim()
+      : "";
+  if (!record || !activeQuantityId) return null;
+  return {
+    activeQuantityId,
+    clearTargetQuantities: Boolean(record.clearTargetQuantities),
+    requiresConfirmation: Boolean(record.requiresConfirmation),
+    targetQuantityOverrideCount:
+      typeof record.targetQuantityOverrideCount === "number"
+        ? record.targetQuantityOverrideCount
+        : 0,
+  };
+}
+
+function clearTargetQuantityOverride(
+  override: VisualizationStateResource["overrides"][number],
+): VisualizationStateResource["overrides"][number] | null {
+  if (!override.quantity) return override;
+  const next: VisualizationStateResource["overrides"][number] = {
+    scope: override.scope,
+    scope_id: override.scope_id,
+    ...(override.visible === undefined ? {} : { visible: override.visible }),
+    ...(override.display ? { display: override.display } : {}),
+    ...(override.style ? { style: override.style } : {}),
+  };
+  if (next.visible !== undefined || next.display || next.style) {
+    return next;
+  }
+  return null;
 }
 
 function asVisualizationTargetRef(value: unknown): VisualizationTargetRef | null {

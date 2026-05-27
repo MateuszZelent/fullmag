@@ -36,12 +36,16 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
 
   const kind = view.getUint8(5);
   if (kind !== KIND_F64) {
-    throw new Error(`Unsupported FMVP value kind: expected ${KIND_F64}, got ${kind}`);
+    throw new Error(
+      `Unsupported FMVP value kind: expected ${KIND_F64}, got ${kind}`,
+    );
   }
 
   const nComp = view.getUint8(6);
-  if (nComp < 1 || nComp > 3) {
-    throw new Error(`Unsupported FMVP component count: expected 1-3, got ${nComp}`);
+  if (nComp < 1) {
+    throw new Error(
+      `Unsupported FMVP component count: expected at least 1, got ${nComp}`,
+    );
   }
 
   const valueCount = view.getUint32(12, true);

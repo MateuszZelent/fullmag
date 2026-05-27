@@ -19,6 +19,7 @@ describe("useViewport3DChunkedScalarColors", () => {
       fullVectorSegments: null,
       partVectorSegments: new Map(),
       scalarColors: sync,
+      scalarColorsByPartAndMode: new Map(),
       scalarColorsByMode: new Map([["orientation", sync]]),
     };
 

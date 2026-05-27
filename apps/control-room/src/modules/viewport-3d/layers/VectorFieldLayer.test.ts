@@ -34,10 +34,10 @@ import {
 describe("VectorFieldLayer performance contracts", () => {
   it("routes glyph matrix uploads through cancellable bounded batches", () => {
     expect(vectorFieldLayerSource).toContain(
-      "export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
+      "const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
     );
     expect(vectorFieldLayerSource).toContain(
-      "export function buildVectorGlyphUploadBatches",
+      "function buildVectorGlyphUploadBatches",
     );
     expect(vectorFieldLayerSource).toContain("requestVectorGlyphUploadTask");
     expect(vectorFieldLayerSource).toContain("cancelVectorGlyphUploadTask");

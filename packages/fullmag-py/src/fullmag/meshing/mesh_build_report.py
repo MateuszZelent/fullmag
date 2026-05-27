@@ -66,7 +66,7 @@ def _build_shared_domain_build_report(
             )
     # degraded = True when a fallback was triggered or size fields had to be
     # simplified (component identity lost).
-    degraded = bool(fallbacks_triggered) or build_mode != "component_aware"
+    degraded = bool(fallbacks_triggered) or build_mode == "concatenated_stl_fallback"
     operation_statuses = _build_mesh_operation_statuses(
         geometries,
         mesh_options,

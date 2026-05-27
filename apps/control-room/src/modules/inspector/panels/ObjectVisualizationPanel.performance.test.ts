@@ -40,4 +40,10 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("objectVisualizationPanelSnapshotEquals");
     expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
   });
+
+  it("renders target quantity selection inside the visualization inspector", () => {
+    expect(panelSource).toContain("VisualizationQuantitySection");
+    expect(panelSource).toContain('label="Quantity source"');
+    expect(panelSource).toContain("activeQuantityId: event.target.value");
+  });
 });

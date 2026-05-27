@@ -24,9 +24,9 @@ use crate::schemas::visualization_state::{
     VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
     VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
     VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
-    VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
-    VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
-    DEFAULT_AIRBOX_VECTOR_BUDGET,
+    VisualizationTargetDisplayOverride, VisualizationTargetGeometryScope,
+    VisualizationTargetRegistryEntry, VisualizationTargetRegistryState,
+    VisualizationTargetRenderMode, VisualizationTargetSource, DEFAULT_AIRBOX_VECTOR_BUDGET,
 };
 use crate::types::{
     AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
@@ -509,6 +509,14 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
                     )));
                 }
             }
+            if matches!(
+                target_override.quantity.as_ref(),
+                Some(quantity) if quantity.active_quantity_id.trim().is_empty()
+            ) {
+                return Err(ApiError::bad_request(format!(
+                    "overrides[{index}].quantity.active_quantity_id must not be empty"
+                )));
+            }
         }
     }
     Ok(())
@@ -605,7 +613,7 @@ fn default_visualization_layers(
             visible: false,
             bounds: basic_layer(false, 1.0),
             surface: basic_layer(false, 0.18),
-            wireframe: basic_layer(false, 1.0),
+            wireframe: basic_layer(true, 1.0),
             points: basic_layer(false, 1.0),
             vectors: VectorLayerState {
                 visible: false,
@@ -1158,7 +1166,102 @@ fn apply_visualization_presentation_patch(
     if let Some(overrides) = &update.overrides {
         presentation.visualization_overrides = Some(overrides.clone());
     }
+    if let Some(airbox_patch) = update
+        .layers
+        .as_ref()
+        .and_then(|layers| layers.airbox.as_ref())
+    {
+        sync_airbox_override_with_layer_patch(presentation, airbox_patch);
+    }
     Ok(())
+}
+
+fn sync_airbox_override_with_layer_patch(
+    presentation: &mut DisplayPresentationState,
+    airbox_patch: &AirboxLayerPatch,
+) {
+    let Some(overrides) = presentation.visualization_overrides.as_mut() else {
+        return;
+    };
+
+    for override_state in overrides
+        .iter_mut()
+        .filter(|entry| entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox")
+    {
+        if let Some(visible) = airbox_patch.visible {
+            override_state.visible = Some(visible);
+            override_display(override_state).visible = Some(visible);
+        }
+        if let Some(bounds) = &airbox_patch.bounds {
+            sync_basic_override_layer(&mut override_display(override_state).bounds, bounds);
+        }
+        if let Some(surface) = &airbox_patch.surface {
+            sync_basic_override_layer(&mut override_display(override_state).surface, surface);
+        }
+        if let Some(wireframe) = &airbox_patch.wireframe {
+            sync_basic_override_layer(&mut override_display(override_state).wireframe, wireframe);
+        }
+        if let Some(points) = &airbox_patch.points {
+            sync_basic_override_layer(&mut override_display(override_state).points, points);
+        }
+        if let Some(vectors) = &airbox_patch.vectors {
+            sync_vector_override_layer(&mut override_display(override_state).vectors, vectors);
+        }
+        if let Some(opacity) = airbox_patch.opacity {
+            override_display(override_state).opacity = Some(opacity);
+        }
+    }
+}
+
+fn override_display(
+    override_state: &mut VisualizationOverrideState,
+) -> &mut VisualizationTargetDisplayOverride {
+    override_state
+        .display
+        .get_or_insert_with(empty_visualization_target_display_override)
+}
+
+fn empty_visualization_target_display_override() -> VisualizationTargetDisplayOverride {
+    VisualizationTargetDisplayOverride {
+        visible: None,
+        bounds: None,
+        surface: None,
+        wireframe: None,
+        points: None,
+        vectors: None,
+        opacity: None,
+        geometry_scope: None,
+    }
+}
+
+fn sync_basic_override_layer(target: &mut Option<BasicLayerPatch>, patch: &BasicLayerPatch) {
+    if patch.visible.is_none() && patch.opacity.is_none() {
+        return;
+    }
+    let target = target.get_or_insert(BasicLayerPatch {
+        visible: None,
+        opacity: None,
+    });
+    if let Some(visible) = patch.visible {
+        target.visible = Some(visible);
+    }
+    if let Some(opacity) = patch.opacity {
+        target.opacity = Some(opacity);
+    }
+}
+
+fn sync_vector_override_layer(target: &mut Option<VectorLayerPatch>, patch: &VectorLayerPatch) {
+    if patch.visible.is_none() {
+        return;
+    }
+    let target = target.get_or_insert(VectorLayerPatch {
+        visible: None,
+        density: None,
+        domain: None,
+    });
+    if let Some(visible) = patch.visible {
+        target.visible = Some(visible);
+    }
 }
 
 fn apply_camera_patch(camera: &mut VisualizationCameraState, patch: &VisualizationCameraPatch) {
@@ -1512,12 +1615,17 @@ pub(crate) fn build_visualization_state_response(
         .visualization_overrides
         .clone()
         .unwrap_or_default();
-    let targets =
-        build_visualization_target_registry(&layers, &vector_style, &overrides, live_snapshot);
+    let targets = build_visualization_target_registry(
+        &quantity.active_quantity_id,
+        &layers,
+        &vector_style,
+        &overrides,
+        live_snapshot,
+    );
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 4,
+        schema_version: 5,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1570,6 +1678,7 @@ pub(crate) fn build_visualization_state_response(
 }
 
 fn build_visualization_target_registry(
+    active_quantity_id: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
     overrides: &[VisualizationOverrideState],
@@ -1581,7 +1690,7 @@ fn build_visualization_target_registry(
             "airbox",
             "Airbox",
             VisualizationTargetSource::Airbox,
-            airbox_target_settings(layers, vector_style),
+            airbox_target_settings(active_quantity_id, layers, vector_style),
             overrides,
         ),
         objects: live_snapshot
@@ -1596,7 +1705,7 @@ fn build_visualization_target_registry(
                             &object.id,
                             &object.name,
                             VisualizationTargetSource::SceneObject,
-                            object_target_settings(layers, vector_style),
+                            object_target_settings(active_quantity_id, layers, vector_style),
                             overrides,
                         )
                     })
@@ -1614,7 +1723,7 @@ fn build_visualization_target_registry(
                             &part.id,
                             &part.label,
                             VisualizationTargetSource::MeshPart,
-                            object_target_settings(layers, vector_style),
+                            object_target_settings(active_quantity_id, layers, vector_style),
                             overrides,
                         )
                     })
@@ -1652,10 +1761,12 @@ fn visualization_target_registry_entry(
 }
 
 fn object_target_settings(
+    active_quantity_id: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
 ) -> VisualizationResolvedTargetSettings {
     let mut settings = VisualizationResolvedTargetSettings {
+        active_quantity_id: active_quantity_id.to_string(),
         visible: true,
         bounds_visible: layers.bounds.visible,
         geometry_scope: VisualizationTargetGeometryScope::Full,
@@ -1681,10 +1792,12 @@ fn object_target_settings(
 }
 
 fn airbox_target_settings(
+    active_quantity_id: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
 ) -> VisualizationResolvedTargetSettings {
     let mut settings = VisualizationResolvedTargetSettings {
+        active_quantity_id: active_quantity_id.to_string(),
         visible: layers.airbox.visible,
         bounds_visible: layers.airbox.bounds.visible,
         geometry_scope: VisualizationTargetGeometryScope::Full,
@@ -1786,6 +1899,9 @@ fn apply_visualization_target_override(
         if let Some(wireframe_color) = &style.wireframe_color {
             settings.wireframe_color = wireframe_color.clone();
         }
+    }
+    if let Some(quantity) = &override_state.quantity {
+        settings.active_quantity_id = quantity.active_quantity_id.clone();
     }
     settings.render_mode = visualization_target_render_mode(&settings);
     settings

@@ -47,13 +47,3 @@ export function useObjectVisualizationSelector<T>(
 export function useObjectVisualizationController(): ObjectVisualizationController {
   return useKernel().visualization;
 }
-
-export function useObjectVisualizationRegistry() {
-  const visualization = useObjectVisualizationController();
-  const snapshot = useObjectVisualizationSelector((currentSnapshot) => currentSnapshot);
-
-  return {
-    snapshot,
-    visualization,
-  } as const;
-}

@@ -279,6 +279,19 @@ fn skyrmion_theta(radius: f64, r: f64, wall_width: f64) -> f64 {
     2.0 * ((radius - r) / wall_width.max(1e-30)).exp().atan()
 }
 
+fn skyrmion_phase(phi: f64, chirality: i64, helicity: f64) -> f64 {
+    if helicity.abs() <= f64::EPSILON {
+        if chirality < 0 {
+            phi + std::f64::consts::PI
+        } else {
+            phi
+        }
+    } else {
+        let chirality_sign = if chirality < 0 { -1.0 } else { 1.0 };
+        phi + chirality_sign * helicity
+    }
+}
+
 fn eval_skyrmion(
     params: &BTreeMap<String, Value>,
     point: [f64; 3],
@@ -293,7 +306,7 @@ fn eval_skyrmion(
     let r = (p[0] * p[0] + p[1] * p[1]).sqrt();
     let phi = p[1].atan2(p[0]);
     let theta = skyrmion_theta(radius, r, wall_width);
-    let phase = (chirality as f64) * phi + helicity;
+    let phase = skyrmion_phase(phi, chirality, helicity);
     let sin_t = theta.sin();
     let mu = sin_t * phase.cos();
     let mv = sin_t * phase.sin();
@@ -509,5 +522,75 @@ mod tests {
             dot12 < 0.999,
             "last two random vectors are nearly identical: {dot12}"
         );
+    }
+
+    #[test]
+    fn bloch_skyrmion_chirality_flips_helicity_not_winding() {
+        let mapping = TextureMappingIR::default();
+        let transform = TextureTransform3DIR::default();
+        let mut params = BTreeMap::new();
+        params.insert("radius".to_string(), Value::from(10e-9));
+        params.insert("wall_width".to_string(), Value::from(2e-9));
+        params.insert("core_polarity".to_string(), Value::from(-1));
+        params.insert("chirality".to_string(), Value::from(-1));
+        params.insert("plane".to_string(), Value::from("xy"));
+
+        let values = sample_preset_texture(
+            "bloch_skyrmion",
+            &params,
+            &mapping,
+            &transform,
+            &[
+                TextureSamplePoint {
+                    position_world: [10e-9, 0.0, 0.0],
+                    position_object: [10e-9, 0.0, 0.0],
+                    active: true,
+                },
+                TextureSamplePoint {
+                    position_world: [0.0, 10e-9, 0.0],
+                    position_object: [0.0, 10e-9, 0.0],
+                    active: true,
+                },
+            ],
+        )
+        .expect("bloch skyrmion sampling should succeed");
+
+        assert!(values[0][1] < -0.99, "x+ wall tangent should point y-");
+        assert!(values[1][0] > 0.99, "y+ wall tangent should point x+");
+    }
+
+    #[test]
+    fn neel_skyrmion_negative_chirality_points_radially_inward() {
+        let mapping = TextureMappingIR::default();
+        let transform = TextureTransform3DIR::default();
+        let mut params = BTreeMap::new();
+        params.insert("radius".to_string(), Value::from(10e-9));
+        params.insert("wall_width".to_string(), Value::from(2e-9));
+        params.insert("core_polarity".to_string(), Value::from(-1));
+        params.insert("chirality".to_string(), Value::from(-1));
+        params.insert("plane".to_string(), Value::from("xy"));
+
+        let values = sample_preset_texture(
+            "neel_skyrmion",
+            &params,
+            &mapping,
+            &transform,
+            &[
+                TextureSamplePoint {
+                    position_world: [10e-9, 0.0, 0.0],
+                    position_object: [10e-9, 0.0, 0.0],
+                    active: true,
+                },
+                TextureSamplePoint {
+                    position_world: [0.0, 10e-9, 0.0],
+                    position_object: [0.0, 10e-9, 0.0],
+                    active: true,
+                },
+            ],
+        )
+        .expect("neel skyrmion sampling should succeed");
+
+        assert!(values[0][0] < -0.99, "x+ wall direction should point x-");
+        assert!(values[1][1] < -0.99, "y+ wall direction should point y-");
     }
 }

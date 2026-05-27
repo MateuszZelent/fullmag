@@ -27,9 +27,22 @@ import {
   useVisualizationClientAck,
   useVisualizationClientAckSender,
 } from "@/kernel/visualization/useVisualizationClientAck";
+import { Button } from "@/shared/ui/Button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/Dialog";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
-import { useViewport3DSceneModel } from "./hooks/useViewport3DSceneModel";
+import {
+  useViewport3DSceneModel,
+  type Viewport3DFieldDataIssue,
+} from "./hooks/useViewport3DSceneModel";
 import {
   resolveViewport3DCameraFit,
   normalizeViewport3DOrbitDebugAngles,
@@ -107,7 +120,7 @@ interface Viewport3DFrameProps
   captureRevision: number;
   diagnostics: string;
   domainSummary: string;
-  effectAntialias: boolean;
+  fieldDataIssue: Viewport3DFieldDataIssue | null;
   kernel: ModuleProps["kernel"];
   meshQualityMetric: MeshQualityColorMetric;
   meshQualityRange: MeshQualityRange | null;
@@ -227,7 +240,6 @@ export default function Viewport3DModule({
       cameraDialogState={commandState.camera}
       dimensionFrameDensity={commandState.widgets.dimensionFrameDensity}
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
-      effectAntialias={commandState.widgets.effectAntialias}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
       onCameraPatch={patchCameraState}
@@ -308,7 +320,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   colors,
   diagnostics,
   domainSummary,
-  effectAntialias,
+  fieldDataIssue,
   kernel,
   meshQualityMetric,
   meshQualityRange,
@@ -335,16 +347,15 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
     profile: visualProfile,
   });
-  const canvasGlOptions = resolveViewport3DCanvasGlOptions(
-    visualProfile,
-    effectAntialias,
-  );
+  const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
   const [orbitDebugAngles, setOrbitDebugAngles] =
     useState<Viewport3DOrbitDebugAngles>(() =>
       normalizeViewport3DOrbitDebugAngles(null),
     );
   const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
+  const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
+    useState<string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const discretizationKind = sceneProps.fdmDomain
@@ -381,6 +392,19 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     status: visualizationError ? "failed" : "applied",
     viewportId: slotId,
   });
+  const resourceIssueOpen = Boolean(
+    fieldDataIssue && dismissedResourceIssueKey !== fieldDataIssue.key,
+  );
+  const setResourceIssueOpen = useCallback(
+    (open: boolean) => {
+      if (open) {
+        setDismissedResourceIssueKey(null);
+        return;
+      }
+      setDismissedResourceIssueKey(fieldDataIssue?.key ?? null);
+    },
+    [fieldDataIssue?.key],
+  );
   useEffect(() => {
     if (captureRevision <= 0 || typeof window === "undefined") return;
     let disposed = false;
@@ -432,6 +456,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-camera-target={sceneProps.cameraState.target.join(" ")}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
+      data-topology-freshness={sceneProps.topologyFreshness}
       data-visual-profile-id={sceneProps.visualProfileId}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
@@ -457,7 +482,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           events={createViewport3DEventManager}
           frameloop={VIEWPORT_3D_FRAMELOOP}
           gl={canvasGlOptions}
-          key={`viewport-3d-canvas-${visualProfile.id}-${effectAntialias ? "aa" : "no-aa"}`}
+          key={`viewport-3d-canvas-${visualProfile.id}`}
           onCreated={({ gl }) => {
             canvasRef.current = gl.domElement;
             configureViewport3DRenderer(gl, visualProfile);
@@ -504,9 +529,65 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         open={cameraDialogOpen}
       />
       <Viewport3DSettingsDialog />
+      <Viewport3DResourceIssueDialog
+        issue={fieldDataIssue}
+        open={Boolean(fieldDataIssue && resourceIssueOpen)}
+        onOpenChange={setResourceIssueOpen}
+      />
     </section>
   );
 });
+
+function Viewport3DResourceIssueDialog({
+  issue,
+  onOpenChange,
+  open,
+}: {
+  issue: Viewport3DFieldDataIssue | null;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-describedby="fm-viewport-field-data-issue-description">
+        <DialogHeader>
+          <DialogTitle>Magnetic field data unavailable</DialogTitle>
+          <DialogDescription id="fm-viewport-field-data-issue-description">
+            {issue
+              ? `Quantity ${issue.quantityId} cannot be rendered because ${issue.message}`
+              : "The active field resource cannot be rendered."}
+          </DialogDescription>
+        </DialogHeader>
+        {issue ? (
+          <div className="fm-dialog__body">
+            <dl className="fm-dialog__details">
+              <div className="fm-dialog__details-row">
+                <dt className="fm-dialog__details-label">Resource</dt>
+                <dd className="fm-dialog__details-value">{issue.resourceKey}</dd>
+              </div>
+              <div className="fm-dialog__details-row">
+                <dt className="fm-dialog__details-label">Reason</dt>
+                <dd className="fm-dialog__details-value">{issue.message}</dd>
+              </div>
+            </dl>
+          </div>
+        ) : null}
+        <DialogFooter>
+          {issue ? (
+            <Button type="button" variant="secondary" onClick={issue.retry}>
+              Retry
+            </Button>
+          ) : null}
+          <DialogClose asChild>
+            <Button type="button" variant="primary">
+              Close
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function Viewport3DOrbitDebugPanel({
   angles,

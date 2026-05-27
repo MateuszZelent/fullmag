@@ -806,9 +806,17 @@ fn latest_object_scalars<'a>(
     object_name: &str,
 ) -> Option<&'a HashMap<String, f64>> {
     let per_object = &snapshot.live_state.as_ref()?.latest_step.per_object_scalars;
-    per_object
-        .get(object_id)
-        .or_else(|| per_object.get(object_name))
+    let get_fallback = |id: &str| {
+        per_object.get(id).or_else(|| {
+            if id.ends_with("_geom") {
+                per_object.get(&id[..id.len() - 5])
+            } else {
+                per_object.get(&format!("{}_geom", id))
+            }
+        })
+    };
+    get_fallback(object_id)
+        .or_else(|| get_fallback(object_name))
         .or_else(|| {
             if per_object.len() == 1 {
                 per_object.values().next()
@@ -871,6 +879,15 @@ fn value_array3(value: &Value) -> Option<[f64; 3]> {
     out.iter().all(|value| value.is_finite()).then_some(out)
 }
 
+fn runtime_object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
 fn latest_magnetization_average(
     snapshot: &SessionStateResponse,
     object_id: &str,
@@ -884,7 +901,7 @@ fn latest_magnetization_average(
     if let Some(segment) = live_state.latest_step.fem_mesh.as_ref().and_then(|mesh| {
         mesh.object_segments
             .iter()
-            .find(|segment| segment.object_id == object_id)
+            .find(|segment| runtime_object_ids_match(&segment.object_id, object_id))
     }) {
         return average_flat_magnetization(
             values,

@@ -2,7 +2,7 @@ import type { BinaryDecodedPayload, BinaryDecoderKind } from "./binaryDecodePayl
 
 export type { BinaryDecoderKind } from "./binaryDecodePayload";
 
-export interface BinaryDecodeTask<TData> {
+interface BinaryDecodeTask<TData> {
   buffer: ArrayBuffer;
   decodeInline: (buffer: ArrayBuffer) => TData;
   kind: BinaryDecoderKind;

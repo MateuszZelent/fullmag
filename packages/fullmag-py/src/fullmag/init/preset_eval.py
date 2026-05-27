@@ -91,6 +91,13 @@ def _skyrmion_theta(radius: float, r: float, wall_width: float) -> float:
     return 2.0 * math.atan(math.exp((radius - r) / wall_width))
 
 
+def _skyrmion_phase(phi: float, chirality: int, helicity: float) -> float:
+    if abs(helicity) <= 1e-30:
+        return phi + math.pi if chirality < 0 else phi
+    chirality_sign = -1.0 if chirality < 0 else 1.0
+    return phi + chirality_sign * helicity
+
+
 def _vortex(point: Sequence[float], params: Mapping[str, object], anti: bool = False) -> Vec3:
     plane = str(params.get("plane", "xy"))
     pu, pv, _pn = _plane_coords(point, plane)
@@ -117,7 +124,7 @@ def _skyrmion(point: Sequence[float], params: Mapping[str, object], helicity: fl
     r = math.hypot(pu, pv)
     phi = math.atan2(pv, pu)
     theta = _skyrmion_theta(radius, r, wall_width)
-    phase = chirality * phi + helicity
+    phase = _skyrmion_phase(phi, chirality, helicity)
     sin_t = math.sin(theta)
     mu = sin_t * math.cos(phase)
     mv = sin_t * math.sin(phase)

@@ -147,7 +147,7 @@ describe("CameraControls", () => {
     );
     const frameBlock = source.slice(
       source.indexOf("useFrame((_, deltaSeconds) => {"),
-      source.indexOf("const handleChange = useCallback"),
+      source.indexOf("const recordOrbitControlFrame = useCallback"),
     );
 
     expect(requestBlock).not.toContain("commitOrbitCameraEnd");
@@ -161,7 +161,7 @@ describe("CameraControls", () => {
       "utf8",
     );
     const changeBlock = source.slice(
-      source.indexOf("const handleChange = useCallback"),
+      source.indexOf("const recordOrbitControlFrame = useCallback"),
       source.indexOf("const handleStart = useCallback"),
     );
 

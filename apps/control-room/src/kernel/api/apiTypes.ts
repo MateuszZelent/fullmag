@@ -274,6 +274,7 @@ export type VisualizationClientAckResource =
 export type BinaryResourceResult<TData> =
   | {
       byteLength: number;
+      contentRange?: string | null;
       data: TData;
       etag: string | null;
       status: "ready";
@@ -293,6 +294,7 @@ export interface RequestOptions {
 
 export interface BinaryRequestOptions extends RequestOptions {
   etag?: string | null;
+  range?: string | null;
 }
 
 export function isOptionalObjectInteractionKind(

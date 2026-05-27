@@ -73,11 +73,31 @@ export function TopologyMeshLayer({
               colors={colors}
               fieldModel={resolvedFieldModel}
               key={partModel.part.id}
-              magnetizationTexturePreview={
-                partModel.part.object_id
-                  ? (magnetizationTexturePreviews.get(partModel.part.object_id) ?? null)
-                  : null
-              }
+              magnetizationTexturePreview={(() => {
+                const objectId = partModel.part.object_id;
+                const geometryId = partModel.part.geometry_id;
+                if (objectId) {
+                  const direct = magnetizationTexturePreviews.get(objectId);
+                  if (direct) return direct;
+                  const withGeom = magnetizationTexturePreviews.get(`${objectId}_geom`);
+                  if (withGeom) return withGeom;
+                  if (objectId.endsWith("_geom")) {
+                    const withoutGeom = magnetizationTexturePreviews.get(objectId.slice(0, -5));
+                    if (withoutGeom) return withoutGeom;
+                  }
+                }
+                if (geometryId) {
+                  const direct = magnetizationTexturePreviews.get(geometryId);
+                  if (direct) return direct;
+                  const withGeom = magnetizationTexturePreviews.get(`${geometryId}_geom`);
+                  if (withGeom) return withGeom;
+                  if (geometryId.endsWith("_geom")) {
+                    const withoutGeom = magnetizationTexturePreviews.get(geometryId.slice(0, -5));
+                    if (withoutGeom) return withoutGeom;
+                  }
+                }
+                return null;
+              })()}
               materialProfile={materialProfile}
               meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
               onSelectPart={onSelectPart}

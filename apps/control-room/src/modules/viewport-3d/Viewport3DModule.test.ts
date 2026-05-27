@@ -75,6 +75,16 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("scaleUnitMode={commandState.widgets.scaleUnitMode}");
   });
 
+  it("does not remount the native canvas when postprocessing antialiasing changes", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("key={`viewport-3d-canvas-${visualProfile.id}`}");
+    expect(source).not.toContain("${effectAntialias ? \"aa\" : \"no-aa\"}");
+  });
+
   it("exposes camera diagnostics for browser smoke checks", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
@@ -88,6 +98,17 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain(
       'data-camera-target={sceneProps.cameraState.target.join(" ")}',
     );
+  });
+
+  it("mounts an explicit field-data issue dialog for missing shader or vector data", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("Viewport3DResourceIssueDialog");
+    expect(source).toContain("fieldDataIssue");
+    expect(source).toContain("Magnetic field data unavailable");
   });
 
   it("mounts the temporary azimuth and polar controls beside the existing R3F canvas", () => {

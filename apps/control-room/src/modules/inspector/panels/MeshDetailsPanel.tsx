@@ -527,9 +527,12 @@ function sizeFieldParamSummary(params: unknown): string | null {
     "distance",
     "growth_rate",
   ];
-  const entries = preferredKeys
-    .filter((key) => record[key] !== undefined)
-    .map((key) => formatSizeFieldParam(key, record[key]));
+  const entries: string[] = [];
+  for (const key of preferredKeys) {
+    if (record[key] !== undefined) {
+      entries.push(formatSizeFieldParam(key, record[key]));
+    }
+  }
   if (entries.length > 0) return entries.slice(0, 4).join(" / ");
   return Object.entries(record)
     .slice(0, 4)

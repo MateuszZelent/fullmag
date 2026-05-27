@@ -200,6 +200,15 @@ fn geometry_to_object_id_map(
         .collect()
 }
 
+fn plan_object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
 fn remap_segment_object_ids(
     segments: &[fullmag_ir::FemObjectSegmentIR],
     geometry_to_object_id: &BTreeMap<&str, &str>,
@@ -210,7 +219,12 @@ fn remap_segment_object_ids(
             if segment.object_id == AIR_OBJECT_SEGMENT_ID {
                 return Ok(segment.clone());
             }
-            let Some(mapped_object_id) = geometry_to_object_id.get(segment.object_id.as_str())
+            let seg_id = segment.object_id.as_str();
+            let mut mapped_object_id = geometry_to_object_id.get(seg_id).copied();
+            if mapped_object_id.is_none() && seg_id.ends_with("_geom") {
+                mapped_object_id = geometry_to_object_id.get(&seg_id[..seg_id.len() - 5]).copied();
+            }
+            let Some(mapped_object_id) = mapped_object_id
             else {
                 return Err(PlanError {
                     reasons: vec![format!(
@@ -220,7 +234,7 @@ fn remap_segment_object_ids(
                 });
             };
             Ok(fullmag_ir::FemObjectSegmentIR {
-                object_id: (*mapped_object_id).to_string(),
+                object_id: mapped_object_id.to_string(),
                 geometry_id: segment
                     .geometry_id
                     .clone()
@@ -244,8 +258,8 @@ fn segment_node_indices_from_parts(
         .iter()
         .find(|part| {
             part.role == fullmag_ir::FemMeshPartRole::MagneticObject
-                && (part.object_id.as_deref() == Some(segment.object_id.as_str())
-                    || part.geometry_id.as_deref() == segment.geometry_id.as_deref())
+                && (part.object_id.as_deref().map(|id| plan_object_ids_match(id, segment.object_id.as_str())).unwrap_or(false)
+                    || part.geometry_id.as_deref().map(|id| segment.geometry_id.as_deref().map(|g_id| plan_object_ids_match(id, g_id)).unwrap_or(false)).unwrap_or(false))
                 && !part.node_indices.is_empty()
         })
         .map(|part| {
@@ -342,21 +356,39 @@ fn assign_material_ids_to_mesh_parts(
         };
         let matches_object = magnet_entries
             .iter()
-            .any(|entry| entry.magnet_name == candidate_object_id);
+            .any(|entry| plan_object_ids_match(&entry.magnet_name, candidate_object_id));
         let matches_geometry = part
             .geometry_id
             .as_deref()
-            .and_then(|geometry_id| geometry_to_magnet.get(geometry_id))
+            .and_then(|geometry_id| {
+                geometry_to_magnet.get(geometry_id)
+                    .copied()
+                    .or_else(|| {
+                        let clean_geo = geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
+                        geometry_to_magnet.get(clean_geo).copied()
+                    })
+            })
             .is_some();
         if matches_object || matches_geometry {
             let material_name = magnet_materials
                 .get(candidate_object_id)
+                .or_else(|| {
+                    let clean_candidate = candidate_object_id.strip_suffix("_geom").unwrap_or(candidate_object_id);
+                    magnet_materials.get(clean_candidate)
+                })
                 .map(|material| material.name.clone())
                 .or_else(|| {
                     part.geometry_id
                         .as_deref()
-                        .and_then(|geometry_id| geometry_to_magnet.get(geometry_id))
-                        .and_then(|magnet_name| magnet_materials.get(*magnet_name))
+                        .and_then(|geometry_id| {
+                            geometry_to_magnet.get(geometry_id)
+                                .copied()
+                                .or_else(|| {
+                                    let clean_geo = geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
+                                    geometry_to_magnet.get(clean_geo).copied()
+                                })
+                        })
+                        .and_then(|magnet_name| magnet_materials.get(magnet_name))
                         .map(|material| material.name.clone())
                 });
             part.material_id = material_name;
@@ -927,7 +959,7 @@ pub(crate) fn plan_fem(
                 let Some(segment) = domain_asset
                     .object_segments
                     .iter()
-                    .find(|segment| segment.object_id == entry.geometry_name)
+                    .find(|segment| plan_object_ids_match(&segment.object_id, &entry.geometry_name))
                 else {
                     return Err(PlanError {
                         reasons: vec![format!(
@@ -1014,7 +1046,11 @@ pub(crate) fn plan_fem(
         // instead of "nanoflower_left_geom").
         for part in &mut parts {
             if let Some(ref geo_id) = part.object_id.clone() {
-                if let Some(&mapped) = geometry_to_object_id.get(geo_id.as_str()) {
+                let mut mapped = geometry_to_object_id.get(geo_id.as_str()).copied();
+                if mapped.is_none() && geo_id.ends_with("_geom") {
+                    mapped = geometry_to_object_id.get(&geo_id[..geo_id.len() - 5]).copied();
+                }
+                if let Some(mapped) = mapped {
                     part.object_id = Some(mapped.to_string());
                 }
             }
@@ -1757,7 +1793,7 @@ pub(crate) fn plan_fem_eigen(
                 let Some(segment) = domain_asset
                     .object_segments
                     .iter()
-                    .find(|segment| segment.object_id == entry.geometry_name)
+                    .find(|segment| plan_object_ids_match(&segment.object_id, &entry.geometry_name))
                 else {
                     return Err(PlanError {
                         reasons: vec![format!(

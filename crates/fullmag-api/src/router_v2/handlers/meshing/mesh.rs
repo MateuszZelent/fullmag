@@ -867,11 +867,14 @@ pub async fn get_mesh_shared_domain_manifest(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/topology",
     params(
-        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous shared-domain topology response")
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous shared-domain topology response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads")
     ),
     responses(
         (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial shared-domain FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
+        (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace"),
     ),
@@ -1107,11 +1110,14 @@ pub async fn get_mesh_object_size_field(
     path = "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
     params(
         ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous object-topology response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads"),
         ("object_id" = String, Path, description = "Canonical scene object id")
     ),
     responses(
         (status = 200, description = "Binary per-object FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial per-object FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-object topology not modified for the supplied ETag"),
+        (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or object mesh"),
     ),
@@ -1149,11 +1155,14 @@ pub async fn get_mesh_object_topology(
     path = "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
     params(
         ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous part-topology response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads"),
         ("part_id" = String, Path, description = "Stable FEM mesh part id, for example an airbox part")
     ),
     responses(
         (status = 200, description = "Binary per-part FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial per-part FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Per-part topology not modified for the supplied ETag"),
+        (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "No FEM mesh available"),
         (status = 404, description = "No active workspace or mesh part"),
     ),
@@ -2019,19 +2028,31 @@ fn max_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
 }
 
+fn object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
 fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshPayload> {
-    if let Some(part) = mesh
-        .mesh_parts
-        .iter()
-        .find(|part| part.role == "magnetic_object" && part.object_id.as_deref() == Some(object_id))
-    {
+    if let Some(part) = mesh.mesh_parts.iter().find(|part| {
+        part.role == "magnetic_object"
+            && part
+                .object_id
+                .as_deref()
+                .map(|id| object_ids_match(id, object_id))
+                .unwrap_or(false)
+    }) {
         return subset_part_mesh(mesh, &part.id);
     }
 
     let segment = mesh
         .object_segments
         .iter()
-        .find(|segment| segment.object_id == object_id)?;
+        .find(|segment| object_ids_match(&segment.object_id, object_id))?;
     let node_start = segment.node_start as usize;
     let node_end = node_start.saturating_add(segment.node_count as usize);
     let element_start = segment.element_start as usize;

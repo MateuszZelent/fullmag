@@ -5,7 +5,7 @@ import { useCallback } from "react";
 import type { LiveStatusResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
-import { useResource, useResourceSelector } from "./useResource";
+import { useResourceSelector } from "./useResource";
 import type { ResourceResult } from "./resourceTypes";
 
 export const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -29,26 +29,15 @@ const SESSION_STATUS_REVISION_RESOURCE_KEYS: Array<
 export function resolveSessionStatusRevision(
   status: LiveStatusResource,
 ): number | null {
-  const revisions = SESSION_STATUS_REVISION_RESOURCE_KEYS.map(
-    (key) => status.resources[key],
-  ).filter((revision): revision is number => typeof revision === "number");
+  const revisions: number[] = [];
+  for (const key of SESSION_STATUS_REVISION_RESOURCE_KEYS) {
+    const revision = status.resources[key];
+    if (typeof revision === "number") {
+      revisions.push(revision);
+    }
+  }
 
   return revisions.length > 0 ? Math.max(...revisions) : null;
-}
-
-export function useSessionStatus() {
-  const { api } = useKernel();
-  const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.sessions.current.status({ signal }),
-    [api],
-  );
-
-  return useResource({
-    load,
-    resolveRevision: resolveSessionStatusRevision,
-    resourceKey: SESSION_STATUS_RESOURCE_KEY,
-  });
 }
 
 export function useSessionStatusSelector<TSelected>(

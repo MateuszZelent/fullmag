@@ -907,19 +907,31 @@ class ProblemApiTests(unittest.TestCase):
             1e-4 / 1.2566e-6,
         )
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
+        study_universe = loaded.problem.runtime_metadata["study_universe"]
+        self.assertEqual(study_universe["airbox_hmax"], 100e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 20e-9)
+        self.assertEqual(mesh_workflow["fem"]["hmax"], 5e-9)
+        mesh_options = mesh_workflow["mesh_options"]
+        self.assertEqual(mesh_options["algorithm_2d"], 6)
+        self.assertEqual(mesh_options["algorithm_3d"], 10)
+        self.assertEqual(mesh_options["maximum_element_growth_rate"], 1.3)
+        self.assertEqual(mesh_options["optimize"], "Netgen")
+        self.assertEqual(mesh_options["optimize_iterations"], 4)
+        self.assertEqual(mesh_options["smoothing_steps"], 4)
+        self.assertTrue(mesh_options["compute_quality"])
         per_geometry = mesh_workflow["per_geometry"]
         self.assertEqual(len(per_geometry), 1)
         arch_mesh = per_geometry[0]
         self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
         self.assertEqual(arch_mesh["maximum_element_size"], 5e-9)
         self.assertEqual(arch_mesh["minimum_element_size"], 2e-9)
-        self.assertEqual(arch_mesh["maximum_element_growth_rate"], 1.3)
-        self.assertEqual(arch_mesh["algorithm_3d"], 10)
-        self.assertEqual(arch_mesh["optimize"], "Netgen")
-        self.assertEqual(arch_mesh["optimize_iterations"], 4)
-        self.assertEqual(arch_mesh["smoothing_steps"], 4)
-        self.assertTrue(arch_mesh["compute_quality"])
-        self.assertFalse(arch_mesh["per_element_quality"])
+        self.assertEqual(arch_mesh["interface_hmax"], 2e-9)
+        self.assertEqual(arch_mesh["interface_thickness"], 4e-9)
+        self.assertEqual(arch_mesh["transition_distance"], 80e-9)
+        self.assertEqual(arch_mesh["edge_hmax"], 2e-9)
+        self.assertEqual(arch_mesh["edge_thickness"], 25e-9)
+        self.assertNotIn("algorithm_3d", arch_mesh)
+        self.assertNotIn("optimize", arch_mesh)
         self.assertNotIn("size_fields", arch_mesh)
         demag_solver = loaded.problem.discretization.fem.demag_solver_policy
         self.assertIsNotNone(demag_solver)
@@ -928,9 +940,10 @@ class ProblemApiTests(unittest.TestCase):
         scene = build_scene_document_from_builder(draft)
         object_mesh = scene["objects"][0]["object_mesh"]
         self.assertEqual(object_mesh["mesh_strategy"], None)
-        self.assertEqual(object_mesh["algorithm_3d"], 10)
+        self.assertIsNone(object_mesh["algorithm_3d"])
         self.assertEqual(object_mesh["hmin"], "2e-09")
-        self.assertFalse(object_mesh["per_element_quality"])
+        self.assertEqual(object_mesh["edge_maximum_element_size"], "2e-09")
+        self.assertEqual(object_mesh["interface_maximum_element_size"], "2e-09")
 
     def test_arch_skyrmion_example_uses_skyrmion_texture_and_gpu_ready_relax(self) -> None:
         example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_skyrmion_relax_50nm.py"
@@ -1344,7 +1357,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(materialize_workflow["per_geometry"][0]["hmax"], 4e-9)
         self.assertEqual(materialize_workflow["per_geometry"][0]["order"], 2)
 
-    def test_study_build_domain_mesh_uses_airbox_hmax_as_shared_domain_default(self) -> None:
+    def test_study_build_domain_mesh_keeps_airbox_hmax_out_of_object_base(self) -> None:
         script = """
         import fullmag as fm
 
@@ -1368,7 +1381,8 @@ class ProblemApiTests(unittest.TestCase):
             loaded = fm.load_problem_from_script(path, lightweight_assets=True)
 
         workflow = loaded.problem.runtime_metadata["mesh_workflow"]
-        self.assertEqual(workflow["fem"]["hmax"], 80e-9)
+        self.assertEqual(workflow["fem"]["hmax"], 25e-9)
+        self.assertEqual(loaded.problem.runtime_metadata["study_universe"]["airbox_hmax"], 80e-9)
         self.assertEqual(workflow["per_geometry"][0]["hmax"], 25e-9)
 
     def test_study_build_domain_mesh_requires_explicit_airbox_hmax(self) -> None:
@@ -2125,7 +2139,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(assets[0]["geometry_name"], "box")
         self.assertEqual(assets[0]["mesh"]["mesh_name"], "box")
 
-    def test_fem_backend_forwards_study_universe_to_mesh_asset_realization(self) -> None:
+    def test_fem_backend_forwards_study_universe_to_shared_domain_realization(self) -> None:
         fm.reset()
         study = fm.study("fem_universe_forwarding")
         study.engine("fem")
@@ -2166,22 +2180,20 @@ class ProblemApiTests(unittest.TestCase):
             "fullmag.meshing.realize_fem_mesh_asset", return_value=mesh
         ) as mocked_mesh, patch(
             "fullmag.meshing.realize_fem_domain_mesh_asset_from_components",
-            return_value=(mesh, [{"geometry_name": "box", "marker": 1}]),
+            return_value=(mesh, [{"geometry_name": "box_geom", "marker": 1}]),
         ) as mocked_domain, patch("fullmag._core.validate_mesh_ir", return_value=True):
             problem.to_ir(requested_backend=fm.BackendTarget.FEM)
 
-        self.assertEqual(mocked_mesh.call_count, 1)
+        self.assertEqual(mocked_mesh.call_count, 0)
         self.assertEqual(mocked_domain.call_count, 1)
-        forwarded_universe = mocked_mesh.call_args.kwargs["study_universe"]
         forwarded_domain_universe = mocked_domain.call_args.kwargs["study_universe"]
-        self.assertIsNotNone(forwarded_universe)
-        self.assertEqual(forwarded_universe["mode"], "manual")
-        self.assertEqual(forwarded_universe["size"], [80e-9, 60e-9, 40e-9])
-        self.assertEqual(forwarded_universe["center"], [5e-9, -2e-9, 1e-9])
-        self.assertEqual(forwarded_universe["airbox_hmin"], 12e-9)
-        self.assertEqual(forwarded_universe["airbox_growth_rate"], 1.25)
-        self.assertEqual(forwarded_universe["airbox_grading"], "linear")
-        self.assertEqual(forwarded_domain_universe, forwarded_universe)
+        self.assertIsNotNone(forwarded_domain_universe)
+        self.assertEqual(forwarded_domain_universe["mode"], "manual")
+        self.assertEqual(forwarded_domain_universe["size"], [80e-9, 60e-9, 40e-9])
+        self.assertEqual(forwarded_domain_universe["center"], [5e-9, -2e-9, 1e-9])
+        self.assertEqual(forwarded_domain_universe["airbox_hmin"], 12e-9)
+        self.assertEqual(forwarded_domain_universe["airbox_growth_rate"], 1.25)
+        self.assertEqual(forwarded_domain_universe["airbox_grading"], "linear")
 
     def test_fem_backend_emits_shared_domain_mesh_asset_for_manual_universe(self) -> None:
         fm.reset()
@@ -4370,6 +4382,38 @@ class ProblemApiTests(unittest.TestCase):
         hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint", {})
         self.assertEqual(hint.get("airbox"), {"show": True, "mode": "vectors"})
 
+    def test_airbox_visualization_hint_sets_per_target_quantity(self) -> None:
+        script = """
+        import fullmag as fm
+
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        s = fm.study().engine("fdm")
+        s.airbox.visualization(active_quantity_id="h_eff")
+        s.airbox.visualization(show=False, mode="vectors")
+        s.relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_airbox_viz_quantity.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint", {})
+        self.assertEqual(
+            hint.get("airbox"),
+            {"show": False, "mode": "vectors", "active_quantity_id": "h_eff"},
+        )
+
     def test_geometry_visualization_hint_sets_runtime_metadata(self) -> None:
         script = """
         import fullmag as fm
@@ -4398,6 +4442,43 @@ class ProblemApiTests(unittest.TestCase):
         geom_hints = hint.get("geometry_hints", {})
         self.assertEqual(geom_hints.get("waveguide"), {"show": True, "mode": "surface"})
 
+    def test_geometry_visualization_hint_sets_per_target_quantity(self) -> None:
+        script = """
+        import fullmag as fm
+
+        waveguide = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="waveguide")
+        waveguide.Ms = 800e3
+        waveguide.Aex = 13e-12
+        waveguide.alpha = 0.1
+        waveguide.m = fm.texture.uniform(1, 0, 0)
+        waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
+        s = fm.study().engine("fdm")
+        s.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff")
+        s.relax()
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_geom_viz_quantity.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        ir = loaded.stages[0].to_ir(
+            requested_backend=fm.BackendTarget.FDM,
+            execution_mode=fm.ExecutionMode.STRICT,
+            execution_precision=fm.ExecutionPrecision.DOUBLE,
+            script_source=loaded.script_source,
+        )
+        hint = ir["problem_meta"]["runtime_metadata"].get("visualization_hint", {})
+        geom_hints = hint.get("geometry_hints", {})
+        self.assertEqual(
+            geom_hints.get("waveguide"),
+            {"show": True, "mode": "surface", "active_quantity_id": "m"},
+        )
+        self.assertEqual(
+            hint.get("airbox"),
+            {"show": True, "mode": "vectors", "active_quantity_id": "h_eff"},
+        )
+
     def test_visualization_hints_round_trip_through_script_export(self) -> None:
         script = """
         import fullmag as fm
@@ -4407,9 +4488,9 @@ class ProblemApiTests(unittest.TestCase):
         waveguide.Aex = 13e-12
         waveguide.alpha = 0.1
         waveguide.m = fm.texture.uniform(1, 0, 0)
-        waveguide.visualization(show=True, mode="surface")
+        waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
         s = fm.study().engine("fdm")
-        s.airbox.visualization(show=True, mode="vectors")
+        s.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff")
         s.relax()
         """
 
@@ -4419,8 +4500,14 @@ class ProblemApiTests(unittest.TestCase):
             loaded = fm.load_problem_from_script(path)
 
         exported = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn('waveguide.visualization(show=True, mode="surface")', exported)
-        self.assertIn('study.airbox.visualization(show=True, mode="vectors")', exported)
+        self.assertIn(
+            'waveguide.visualization(show=True, mode="surface", active_quantity_id="m")',
+            exported,
+        )
+        self.assertIn(
+            'study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff")',
+            exported,
+        )
 
     def test_llg_requires_supported_integrator_and_positive_timestep(self) -> None:
         with self.assertRaisesRegex(ValueError, "integrator must be one of"):

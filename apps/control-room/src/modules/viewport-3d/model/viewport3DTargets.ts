@@ -81,9 +81,16 @@ function resolveObjectBounds(
   objectId: string | null,
 ): Viewport3DBounds | null {
   if (!objectId) return null;
-  const partIds = domain.objectPartIds.get(objectId) ?? [];
+  let partIds = domain.objectPartIds.get(objectId);
+  if (!partIds) {
+    partIds = domain.objectPartIds.get(`${objectId}_geom`);
+  }
+  if (!partIds && objectId.endsWith("_geom")) {
+    partIds = domain.objectPartIds.get(objectId.slice(0, -5));
+  }
+  const ids = partIds ?? [];
   return combineBounds(
-    partIds.map((partId) => resolveMeshPartBounds(domain.partsById.get(partId))),
+    ids.map((partId) => resolveMeshPartBounds(domain.partsById.get(partId))),
   );
 }
 

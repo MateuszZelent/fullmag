@@ -4,6 +4,7 @@ import {
   isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
   resolveUnknownTopologyProvenanceRefreshKey,
+  resolveViewport3DTopologyFreshnessLabel,
   resolveViewport3DTopologyFreshness,
 } from "./viewport3dTopologyStaleness";
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
@@ -61,6 +62,16 @@ describe("viewport3dTopologyStaleness", () => {
       visible: true,
       wireframeVisible: true,
     });
+  });
+
+  it("surfaces stale topology as explicit viewport HUD status", () => {
+    expect(resolveViewport3DTopologyFreshnessLabel("current")).toBeNull();
+    expect(resolveViewport3DTopologyFreshnessLabel("stale")).toBe(
+      "topology stale",
+    );
+    expect(resolveViewport3DTopologyFreshnessLabel("unknown")).toBe(
+      "topology freshness unknown",
+    );
   });
 
   it("respects hidden targets while resolving stale display settings", () => {

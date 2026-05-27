@@ -55,6 +55,12 @@ struct MeshPartResource {
     id: String,
     role: String,
     object_id: Option<String>,
+    #[serde(default)]
+    node_count: u32,
+    #[serde(default)]
+    element_count: u32,
+    #[serde(default)]
+    boundary_face_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,25 +235,60 @@ fn run_mesh_api_smoke_test() -> Result<String> {
         .as_ref()
         .map(|stages| stages.len())
         .unwrap_or(0);
-    Ok(format!(
-        "mesh_name={} mesh_id={} generation_id={} object_id={} airbox={} shared={}n/{}e/{}bf object={}n/{}e pipeline_stages={}",
+    Ok(format_mesh_api_smoke_summary(
+        &manifest,
+        summary_mesh,
+        &object_id,
+        shared_header,
+        object_header,
+        pipeline_stage_count,
+    ))
+}
+
+fn format_mesh_api_smoke_summary(
+    manifest: &MeshSharedDomainManifestResource,
+    summary_mesh: &MeshSummaryPayload,
+    object_id: &str,
+    shared_header: FmmtHeader,
+    object_header: FmmtHeader,
+    pipeline_stage_count: usize,
+) -> String {
+    let generation_id = manifest
+        .generation_id
+        .as_deref()
+        .or(summary_mesh.generation_id.as_deref())
+        .or(summary_mesh.mesh_id.as_deref())
+        .unwrap_or("unknown");
+    let airbox = manifest
+        .mesh_parts
+        .iter()
+        .find(|part| part.role == "air")
+        .map(format_mesh_part_counts)
+        .unwrap_or_else(|| "absent".to_string());
+
+    format!(
+        "mesh_name={} mesh_id={} generation_id={} object_id={} airbox={} ferromagnet={}:{}n/{}e/{}bf shared={}n/{}e/{}bf pipeline_stages={}",
         manifest.mesh_name,
         manifest.mesh_id,
-        manifest
-            .generation_id
-            .as_deref()
-            .or(summary_mesh.generation_id.as_deref())
-            .or(summary_mesh.mesh_id.as_deref())
-            .unwrap_or("unknown"),
+        generation_id,
         object_id,
-        if has_airbox { manifest.mesh_parts.iter().find(|part| part.role == "air").map(|part| part.id.as_str()).unwrap_or("present") } else { "absent" },
+        airbox,
+        object_id,
+        object_header.node_count,
+        object_header.element_count,
+        object_header.boundary_face_count,
         shared_header.node_count,
         shared_header.element_count,
         shared_header.boundary_face_count,
-        object_header.node_count,
-        object_header.element_count,
         pipeline_stage_count,
-    ))
+    )
+}
+
+fn format_mesh_part_counts(part: &MeshPartResource) -> String {
+    format!(
+        "{}:{}n/{}e/{}bf",
+        part.id, part.node_count, part.element_count, part.boundary_face_count
+    )
 }
 
 fn resolve_smoke_object_id(
@@ -446,9 +487,80 @@ mod tests {
                 id: "body".to_string(),
                 role: "magnetic_object".to_string(),
                 object_id: Some("body".to_string()),
+                node_count: 4,
+                element_count: 1,
+                boundary_face_count: 4,
             }],
         };
         let object_id = resolve_smoke_object_id(&scene_ids, &manifest).expect("object id");
         assert_eq!(object_id, "body");
+    }
+
+    #[test]
+    fn format_mesh_api_smoke_summary_labels_airbox_and_ferromagnet_counts() {
+        let summary = super::MeshSummaryPayload {
+            mesh_id: Some("summary-mesh:1".to_string()),
+            generation_id: None,
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            node_count: 128,
+            element_count: 512,
+            boundary_face_count: 96,
+        };
+        let manifest = super::MeshSharedDomainManifestResource {
+            mesh_name: "study_domain".to_string(),
+            mesh_id: "study_domain:42".to_string(),
+            generation_id: Some("42".to_string()),
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            object_segments: vec![super::MeshObjectSegmentResource {
+                object_id: "arch_waveguide".to_string(),
+                node_count: 17,
+                element_count: 41,
+                boundary_face_count: 23,
+            }],
+            mesh_parts: vec![
+                super::MeshPartResource {
+                    id: "part:__air__".to_string(),
+                    role: "air".to_string(),
+                    object_id: None,
+                    node_count: 111,
+                    element_count: 471,
+                    boundary_face_count: 73,
+                },
+                super::MeshPartResource {
+                    id: "arch_waveguide".to_string(),
+                    role: "magnetic_object".to_string(),
+                    object_id: Some("arch_waveguide".to_string()),
+                    node_count: 17,
+                    element_count: 41,
+                    boundary_face_count: 23,
+                },
+            ],
+        };
+
+        let summary_line = super::format_mesh_api_smoke_summary(
+            &manifest,
+            &summary,
+            "arch_waveguide",
+            super::FmmtHeader {
+                node_count: 128,
+                element_count: 512,
+                boundary_face_count: 96,
+                element_marker_count: 512,
+                boundary_marker_count: 96,
+            },
+            super::FmmtHeader {
+                node_count: 17,
+                element_count: 41,
+                boundary_face_count: 23,
+                element_marker_count: 41,
+                boundary_marker_count: 23,
+            },
+            7,
+        );
+
+        assert_eq!(
+            summary_line,
+            "mesh_name=study_domain mesh_id=study_domain:42 generation_id=42 object_id=arch_waveguide airbox=part:__air__:111n/471e/73bf ferromagnet=arch_waveguide:17n/41e/23bf shared=128n/512e/96bf pipeline_stages=7"
+        );
     }
 }

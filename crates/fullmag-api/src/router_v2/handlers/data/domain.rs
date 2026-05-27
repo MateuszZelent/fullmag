@@ -201,11 +201,14 @@ fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
     get,
     path = "/v2/sessions/current/data/domain/topology",
     params(
-        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous domain topology response")
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous domain topology response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for chunked FMMT topology reads")
     ),
     responses(
         (status = 200, description = "Binary FEM topology (FMMT)", content_type = "application/octet-stream"),
+        (status = 206, description = "Partial binary FEM topology range (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Domain topology not modified for the supplied ETag"),
+        (status = 416, description = "Requested topology byte range is not satisfiable"),
         (status = 204, description = "Not applicable (FDM)"),
         (status = 404, description = "No active workspace"),
     ),

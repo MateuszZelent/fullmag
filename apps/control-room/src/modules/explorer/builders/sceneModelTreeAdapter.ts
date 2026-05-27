@@ -58,11 +58,15 @@ export function modelTreeSnapshotWithStageExecution(
 ): ModelTreeSnapshot {
   if (!snapshot.study || !stageExecution?.stages.length) return snapshot;
 
-  const runtimeByStageId = new Map(
-    stageExecution.stages
-      .filter((stage) => typeof stage.stage_id === "string")
-      .map((stage) => [stage.stage_id, stage]),
-  );
+  const runtimeByStageId = new Map<
+    string,
+    (typeof stageExecution.stages)[number]
+  >();
+  for (const stage of stageExecution.stages) {
+    if (typeof stage.stage_id === "string") {
+      runtimeByStageId.set(stage.stage_id, stage);
+    }
+  }
 
   return {
     ...snapshot,

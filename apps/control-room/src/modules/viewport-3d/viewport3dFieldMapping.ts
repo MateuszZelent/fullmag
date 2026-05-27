@@ -15,12 +15,18 @@ export interface ScalarRange {
 
 export interface ScalarColorBuffer {
   colors: Float32Array;
+  colorMode?: string;
+  colorPalette?: string;
   range: ScalarRange;
+  scalarValues?: Float32Array;
+  vectorValues?: Float32Array;
 }
 
 export interface ChunkedFieldTransformOptions {
   chunkSize?: number;
   colorMode?: string;
+  colorPalette?: string;
+  shaderOnly?: boolean;
   signal?: AbortSignal;
   yieldToMain?: () => Promise<void>;
 }
@@ -39,6 +45,7 @@ export function buildVertexScalarColors(
   vertexCount: number,
   maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
   colorMode = "magnitude",
+  colorPalette = "viridis",
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -54,13 +61,19 @@ export function buildVertexScalarColors(
     return null;
   }
 
-  return buildVertexScalarColorsUnchecked(fieldVector, vertexCount, resolvedColorMode);
+  return buildVertexScalarColorsUnchecked(
+    fieldVector,
+    vertexCount,
+    resolvedColorMode,
+    colorPalette,
+  );
 }
 
 export function buildSampledScalarColors(
   fieldVector: DecodedFieldVector | null | undefined,
   pointIndices: Uint32Array | null | undefined,
   colorMode = "magnitude",
+  colorPalette = "viridis",
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -78,6 +91,9 @@ export function buildSampledScalarColors(
 
   const range = resolveScalarRange(fieldVector, resolvedColorMode);
   const colors = new Float32Array(pointIndices.length * 3);
+  const scalarValues = shaderScalarModeSupports(resolvedColorMode)
+    ? new Float32Array(pointIndices.length)
+    : undefined;
 
   for (let index = 0; index < pointIndices.length; index += 1) {
     const pointIndex = pointIndices[index] ?? 0;
@@ -88,11 +104,15 @@ export function buildSampledScalarColors(
       colors[target + 2] = 0.5;
       continue;
     }
+    if (scalarValues) {
+      scalarValues[index] = scalarAt(fieldVector, pointIndex, resolvedColorMode);
+    }
     const [red, green, blue] = colorAt(
       fieldVector,
       pointIndex,
       resolvedColorMode,
       range,
+      colorPalette,
     );
     const target = index * 3;
     colors[target] = red;
@@ -100,7 +120,72 @@ export function buildSampledScalarColors(
     colors[target + 2] = blue;
   }
 
-  return { colors, range };
+  return {
+    colors,
+    colorMode: resolvedColorMode,
+    colorPalette,
+    range,
+    scalarValues,
+  };
+}
+
+export function buildMappedVertexScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  targetNodeIndices: Uint32Array | null | undefined,
+  vertexCount: number,
+  maxSynchronousPoints = VIEWPORT_3D_SYNC_COLOR_POINT_LIMIT,
+  colorMode = "magnitude",
+  colorPalette = "viridis",
+): ScalarColorBuffer | null {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  if (
+    !fieldVector ||
+    !targetNodeIndices ||
+    targetNodeIndices.length < fieldVector.pointCount ||
+    fieldVector.pointCount === 0 ||
+    resolvedColorMode === "monochrome" ||
+    fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)
+  ) {
+    return null;
+  }
+
+  const range = resolveScalarRange(fieldVector, resolvedColorMode);
+  const colors = new Float32Array(vertexCount * 3);
+  const scalarValues = shaderScalarModeSupports(resolvedColorMode)
+    ? new Float32Array(vertexCount)
+    : undefined;
+
+  for (let index = 0; index < fieldVector.pointCount; index += 1) {
+    const nodeIndex = targetNodeIndices[index] ?? -1;
+    if (nodeIndex < 0 || nodeIndex >= vertexCount) {
+      continue;
+    }
+    if (scalarValues) {
+      scalarValues[nodeIndex] = scalarAt(fieldVector, index, resolvedColorMode);
+    }
+    const [red, green, blue] = colorAt(
+      fieldVector,
+      index,
+      resolvedColorMode,
+      range,
+      colorPalette,
+    );
+    const target = nodeIndex * 3;
+    colors[target] = red;
+    colors[target + 1] = green;
+    colors[target + 2] = blue;
+  }
+
+  return {
+    colors,
+    colorMode: resolvedColorMode,
+    colorPalette,
+    range,
+    scalarValues,
+  };
 }
 
 export async function buildVertexScalarColorsChunked(
@@ -112,27 +197,62 @@ export async function buildVertexScalarColorsChunked(
     options.colorMode,
     "magnitude",
   );
-  const yieldToMain = options.yieldToMain ?? (() => Promise.resolve());
-  const range = await resolveScalarRangeChunked(
-    fieldVector,
-    colorMode,
-    chunkSize,
-    options.signal,
-    yieldToMain,
+  const colorPalette = options.colorPalette ?? "viridis";
+  const shaderScalarMode = shaderScalarModeSupports(colorMode);
+  const shaderVectorMode = shaderVectorModeSupports(colorMode, fieldVector);
+  const shaderOnly = Boolean(
+    options.shaderOnly && (shaderScalarMode || shaderVectorMode),
   );
-  const colors = new Float32Array(fieldVector.pointCount * 3);
+  const yieldToMain = options.yieldToMain ?? (() => Promise.resolve());
+  const range =
+    shaderOnly && shaderVectorMode
+      ? { max: 1, min: 0 }
+      : await resolveScalarRangeChunked(
+          fieldVector,
+          colorMode,
+          chunkSize,
+          options.signal,
+          yieldToMain,
+        );
+  const colors = shaderOnly
+    ? new Float32Array(0)
+    : new Float32Array(fieldVector.pointCount * 3);
+  const scalarValues = shaderScalarMode
+    ? new Float32Array(fieldVector.pointCount)
+    : undefined;
+  const vectorValues =
+    shaderOnly && shaderVectorMode
+      ? new Float32Array(fieldVector.pointCount * 3)
+      : undefined;
 
   for (let start = 0; start < fieldVector.pointCount; start += chunkSize) {
     throwIfAborted(options.signal);
     const end = Math.min(start + chunkSize, fieldVector.pointCount);
-    writeScalarColors(fieldVector, colors, range, start, end, colorMode);
+    writeScalarColors(
+      fieldVector,
+      colors,
+      range,
+      start,
+      end,
+      colorMode,
+      colorPalette,
+      scalarValues,
+      vectorValues,
+    );
     if (end < fieldVector.pointCount) {
       await yieldToMain();
     }
   }
 
   throwIfAborted(options.signal);
-  return { colors, range };
+  return {
+    colors,
+    colorMode,
+    colorPalette,
+    range,
+    scalarValues,
+    vectorValues,
+  };
 }
 
 /**
@@ -202,9 +322,13 @@ function buildVertexScalarColorsUnchecked(
   fieldVector: DecodedFieldVector,
   vertexCount: number,
   colorMode: Viewport3DVectorColorMode,
+  colorPalette: string,
 ): ScalarColorBuffer {
   const range = resolveScalarRange(fieldVector, colorMode);
   const colors = new Float32Array(vertexCount * 3);
+  const scalarValues = shaderScalarModeSupports(colorMode)
+    ? new Float32Array(vertexCount)
+    : undefined;
   writeScalarColors(
     fieldVector,
     colors,
@@ -212,8 +336,16 @@ function buildVertexScalarColorsUnchecked(
     0,
     fieldVector.pointCount,
     colorMode,
+    colorPalette,
+    scalarValues,
   );
-  return { colors, range };
+  return {
+    colors,
+    colorMode,
+    colorPalette,
+    range,
+    scalarValues,
+  };
 }
 
 function writeScalarColors(
@@ -223,14 +355,44 @@ function writeScalarColors(
   start: number,
   end: number,
   colorMode: Viewport3DVectorColorMode,
+  colorPalette: string,
+  scalarValues?: Float32Array,
+  vectorValues?: Float32Array,
 ): void {
   for (let index = start; index < end; index += 1) {
-    const [red, green, blue] = colorAt(fieldVector, index, colorMode, range);
-    const target = index * 3;
-    colors[target] = red;
-    colors[target + 1] = green;
-    colors[target + 2] = blue;
+    if (vectorValues) {
+      writeVectorValue(fieldVector, index, vectorValues, index);
+    }
+    if (scalarValues) {
+      scalarValues[index] = scalarAt(fieldVector, index, colorMode);
+    }
+    if (colors.length > 0) {
+      const [red, green, blue] = colorAt(
+        fieldVector,
+        index,
+        colorMode,
+        range,
+        colorPalette,
+      );
+      const target = index * 3;
+      colors[target] = red;
+      colors[target + 1] = green;
+      colors[target + 2] = blue;
+    }
   }
+}
+
+function writeVectorValue(
+  fieldVector: DecodedFieldVector,
+  sourceIndex: number,
+  targetValues: Float32Array,
+  targetIndex: number,
+): void {
+  const source = sourceIndex * fieldVector.nComp;
+  const target = targetIndex * 3;
+  targetValues[target] = fieldVector.values[source] ?? 0;
+  targetValues[target + 1] = fieldVector.values[source + 1] ?? 0;
+  targetValues[target + 2] = fieldVector.values[source + 2] ?? 0;
 }
 
 function colorAt(
@@ -238,6 +400,7 @@ function colorAt(
   pointIndex: number,
   colorMode: Viewport3DVectorColorMode,
   range: Viewport3DScalarColorRange,
+  colorPalette = "viridis",
 ): [number, number, number] {
   const offset = pointIndex * fieldVector.nComp;
   if (fieldVector.nComp === 1) {
@@ -249,6 +412,7 @@ function colorAt(
       0,
       range,
       normalizeScalarValue(value, range),
+      colorPalette,
     ) ?? [1, 1, 1];
   }
 
@@ -264,6 +428,7 @@ function colorAt(
       z,
       range,
       normalizeScalarValue(scalar, range),
+      colorPalette,
     ) ?? [1, 1, 1]
   );
 }
@@ -296,4 +461,15 @@ function normalizeScalarValue(
 ): number {
   const span = Math.max(range.max - range.min, 1e-12);
   return Math.min(Math.max((value - range.min) / span, 0), 1);
+}
+
+function shaderScalarModeSupports(mode: Viewport3DVectorColorMode): boolean {
+  return mode === "magnitude" || mode === "x" || mode === "y" || mode === "z";
+}
+
+function shaderVectorModeSupports(
+  mode: Viewport3DVectorColorMode,
+  fieldVector: DecodedFieldVector,
+): boolean {
+  return mode === "orientation" && fieldVector.nComp >= 3;
 }

@@ -116,6 +116,14 @@ function binaryResponse(body: ArrayBuffer, init: ResponseInit = {}): Response {
   });
 }
 
+function parseByteRange(range: string): [number, number] {
+  const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+  if (!match) {
+    throw new Error(`Unexpected byte range ${range}`);
+  }
+  return [Number(match[1]), Number(match[2])];
+}
+
 function makeTopologyBuffer(): ArrayBuffer {
   const nodeCount = 4;
   const elementCount = 1;
@@ -156,6 +164,42 @@ function makeTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, offset, 1).set([10]);
   offset += Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, 1).set([20]);
+  return buffer;
+}
+
+function makeLargeTopologyBuffer(): ArrayBuffer {
+  const nodeCount = 700_000;
+  const elementCount = 1;
+  const boundaryFaceCount = 1;
+  const markerCount = 1;
+  const byteLength =
+    32 +
+    nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
+    boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+    markerCount * Uint32Array.BYTES_PER_ELEMENT +
+    markerCount * Uint32Array.BYTES_PER_ELEMENT;
+  const buffer = new ArrayBuffer(byteLength);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, markerCount, true);
+  view.setUint32(24, markerCount, true);
+
+  let offset = 32 + nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, 4).set([0, 1, 2, 3]);
+  offset += 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, 3).set([0, 1, 2]);
+  offset += 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).set([10]);
+  offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).set([20]);
   return buffer;
 }
 
@@ -848,6 +892,79 @@ describe("ControlRoomApi", () => {
         status: 200,
       },
     ]);
+  });
+
+  it("loads raw topology byte ranges for chunked topology transport", async () => {
+    let observedInit: RequestInit | undefined;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        observedInit = init;
+        return binaryResponse(makeTopologyBuffer().slice(0, 4), {
+          headers: {
+            "content-range": "bytes 0-3/164",
+            etag: '"topology-2"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-range",
+    });
+
+    const result = await api.data.domain.topologyBytes({
+      etag: '"topology-1"',
+      range: "bytes=0-3",
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready topology bytes, received ${result.status}`);
+    }
+    expect(Array.from(new Uint8Array(result.data))).toEqual(
+      Array.from(new TextEncoder().encode("FMMT")),
+    );
+    const headers = new Headers(observedInit?.headers);
+    expect(headers.get("if-none-match")).toBe('"topology-1"');
+    expect(headers.get("range")).toBe("bytes=0-3");
+  });
+
+  it("loads large domain topology through chunked byte ranges", async () => {
+    const topologyBuffer = makeLargeTopologyBuffer();
+    const observedRanges: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (_url, init) => {
+        const range = new Headers(init?.headers).get("range");
+        if (!range) {
+          throw new Error("Expected chunked topology request to use Range");
+        }
+        observedRanges.push(range);
+        const [start, end] = parseByteRange(range);
+        return binaryResponse(topologyBuffer.slice(start, end + 1), {
+          headers: {
+            "content-range": `bytes ${start}-${end}/${topologyBuffer.byteLength}`,
+            etag: '"topology-large"',
+            ...contractHeaders,
+          },
+          status: 206,
+        });
+      },
+      requestIdFactory: () => "req-topology-chunked",
+    });
+
+    const result = await api.data.domain.topologyChunked();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready topology, received ${result.status}`);
+    }
+    expect(result.byteLength).toBe(topologyBuffer.byteLength);
+    expect(result.data.nodeCount).toBe(700_000);
+    expect(result.data.indices.length).toBe(4);
+    expect(result.data.boundaryFaces.length).toBe(3);
+    expect(observedRanges[0]).toBe("bytes=0-31");
+    expect(observedRanges.length).toBeGreaterThan(2);
   });
 
   it("schedules topology, mesh-quality, and field-vector decoding through the configured binary decode scheduler", async () => {

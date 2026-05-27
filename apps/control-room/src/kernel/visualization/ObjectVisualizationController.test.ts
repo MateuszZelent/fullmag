@@ -425,13 +425,18 @@ describe("ObjectVisualizationController", () => {
                 vector_thickness: 2,
                 wireframe_color: "#111111",
               },
+              quantity: {
+                active_quantity_id: "h_demag",
+              },
             },
           ],
+          quantity: { active_quantity_id: "m" },
           revision: 13,
         } as never,
       }),
     ).toMatchObject({
       settings: {
+        activeQuantityId: "h_demag",
         geometryScope: "surface",
         opacityPercent: 35,
         shaderMonoColor: "#00ffaa",
@@ -472,6 +477,7 @@ describe("ObjectVisualizationController", () => {
           wireframeColor: "#111111",
           wireframeOpacityPercent: 45,
           wireframeVisible: true,
+          activeQuantityId: "h_eff",
         },
       ),
     ).toMatchObject({
@@ -484,6 +490,9 @@ describe("ObjectVisualizationController", () => {
       },
       scope: "object",
       scope_id: "free-layer",
+      quantity: {
+        active_quantity_id: "h_eff",
+      },
       style: {
         surface_color_source: "solid",
         surface_mono_color: "#00ffaa",
@@ -576,6 +585,7 @@ describe("ObjectVisualizationController", () => {
             scope_id: "airbox",
             settings: {
               ...DEFAULT_AIRBOX_VISUALIZATION,
+              active_quantity_id: "h_eff",
               bounds_visible: true,
               geometry_scope: "surface",
               opacity: 0.28,
@@ -616,6 +626,94 @@ describe("ObjectVisualizationController", () => {
       wireframeColor: "#778899",
       wireframeOpacityPercent: 40,
     });
+  });
+
+  it("keeps airbox quantity target patches addressable locally and remotely", () => {
+    expect(
+      airboxLocalVisualizationPatchFromTargetPatch({
+        activeQuantityId: "h_eff",
+      }),
+    ).toEqual({
+      activeQuantityId: "h_eff",
+    });
+
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch(
+        {
+          activeQuantityId: "h_eff",
+        },
+        [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            quantity: {
+              active_quantity_id: "h_demag",
+            },
+          },
+        ],
+      ),
+    ).toEqual({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "free-layer",
+          quantity: {
+            active_quantity_id: "h_demag",
+          },
+        },
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          quantity: {
+            active_quantity_id: "h_eff",
+          },
+        },
+      ],
+    });
+  });
+
+  it("updates stale backend airbox visibility overrides when patching layer visibility", () => {
+    const patch = airboxVisualizationStatePatchFromTargetPatch(
+      {
+        visible: true,
+      },
+      [
+        {
+          display: {
+            visible: false,
+          },
+          quantity: {
+            active_quantity_id: "h_demag",
+          },
+          scope: "airbox",
+          scope_id: "airbox",
+          visible: false,
+        },
+      ],
+    );
+
+    expect(patch).toMatchObject({
+      layers: {
+        airbox: {
+          visible: true,
+          wireframe: { visible: true },
+        },
+      },
+      overrides: [
+        {
+          display: {
+            visible: true,
+          },
+          quantity: {
+            active_quantity_id: "h_demag",
+          },
+          scope: "airbox",
+          scope_id: "airbox",
+          visible: true,
+        },
+      ],
+    });
+    expect(patch.overrides).toHaveLength(1);
   });
 
   it("derives effective pass visibility from the target master visibility", () => {
@@ -674,6 +772,37 @@ describe("ObjectVisualizationController", () => {
       },
       vector_style: {
         length_scale: 2.25,
+      },
+    });
+  });
+
+  it("enables the default airbox wireframe when master visibility is turned on without active passes", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        visible: true,
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          visible: true,
+          wireframe: { visible: true },
+        },
+      },
+    });
+  });
+
+  it("does not force airbox wireframe when visibility patch includes an explicit drawable pass", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        shaderVisible: true,
+        visible: true,
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          surface: { visible: true },
+          visible: true,
+        },
       },
     });
   });

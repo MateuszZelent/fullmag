@@ -504,8 +504,13 @@ def _build_transition_fields(
         bulk_hmax = _coerce_positive_float(
             entry.get("bulk_hmax") or entry.get("hmax") if entry else None  # type: ignore[union-attr]
         ) or default_hmax
+        raw_transition_distance = entry.get("transition_distance") if entry else None  # type: ignore[union-attr]
+        if raw_transition_distance == 0 or raw_transition_distance == 0.0:
+            continue
+        if isinstance(raw_transition_distance, str) and raw_transition_distance.strip().lower() in {"0", "off", "none", "false"}:
+            continue
         transition_distance_requested = _coerce_positive_float(
-            entry.get("transition_distance") if entry else None  # type: ignore[union-attr]
+            raw_transition_distance
         )
         transition_distance = transition_distance_requested
 
@@ -845,6 +850,7 @@ def _mesh_options_from_runtime_metadata(
     bounds_by_name: dict[str, tuple] | None = None,
     component_aware: bool = False,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
+    include_size_fields: bool = True,
 ) -> MeshOptions:
     raw_mesh_options = (
         mesh_workflow.get("mesh_options")
@@ -942,20 +948,22 @@ def _mesh_options_from_runtime_metadata(
                 merged.extend(value)
         return merged or None
 
-    size_fields = (
-        [field for field in raw_mesh_options.get("size_fields", []) if isinstance(field, Mapping)]
-        if isinstance(raw_mesh_options.get("size_fields"), list)
-        else []
-    )
-    size_fields.extend(
-        _build_field_stack(
-            geometries,
-            default_hmax=default_hmax,
-            per_geometry=mesh_workflow.get("per_geometry") if isinstance(mesh_workflow, Mapping) else None,
-            bounds_by_name=bounds_by_name,
-            component_aware=component_aware,
+    size_fields: list[Mapping[str, object]] = []
+    if include_size_fields:
+        size_fields = (
+            [field for field in raw_mesh_options.get("size_fields", []) if isinstance(field, Mapping)]
+            if isinstance(raw_mesh_options.get("size_fields"), list)
+            else []
         )
-    )
+        size_fields.extend(
+            _build_field_stack(
+                geometries,
+                default_hmax=default_hmax,
+                per_geometry=mesh_workflow.get("per_geometry") if isinstance(mesh_workflow, Mapping) else None,
+                bounds_by_name=bounds_by_name,
+                component_aware=component_aware,
+            )
+        )
     optimize = _mesh_option_value("optimize")
     raw_mesh_strategy = raw_mesh_options.get("mesh_strategy") or _single_geometry_value("mesh_strategy")
     raw_through_thickness_elements = (
@@ -1021,6 +1029,8 @@ def _mesh_options_from_runtime_metadata(
             return None
         return [dict(item) for item in value if isinstance(item, Mapping)]
 
+    raw_optimize_iters = _mesh_option_value("optimize_iterations", "optimize_iters")
+
     return MeshOptions(
         algorithm_2d=int(_mesh_option_value("algorithm_2d") or 6),
         algorithm_3d=int(_mesh_option_value("algorithm_3d") or 1),
@@ -1051,9 +1061,7 @@ def _mesh_options_from_runtime_metadata(
         ),
         smoothing_steps=int(_mesh_option_value("smoothing_steps") or 1),
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
-        optimize_iters=int(
-            _mesh_option_value("optimize_iterations", "optimize_iters") or 1
-        ),
+        optimize_iters=int(raw_optimize_iters) if raw_optimize_iters is not None else 1,
         size_fields=size_fields,
         compute_quality=(
             bool(raw_compute_quality) if raw_compute_quality is not None else True

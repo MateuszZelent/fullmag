@@ -63,8 +63,8 @@ interface CameraRegistryControllerOptions {
   windowTarget?: CameraRegistryEventTarget | null;
 }
 
-export const DEFAULT_CAMERA_REGISTRY_SYNC_INTERVAL_MS = 60_000;
-export const DEFAULT_CAMERA_REGISTRY_IDLE_FLUSH_MS = 8_000;
+const DEFAULT_CAMERA_REGISTRY_SYNC_INTERVAL_MS = 60_000;
+const DEFAULT_CAMERA_REGISTRY_IDLE_FLUSH_MS = 8_000;
 
 export const DEFAULT_CAMERA_REGISTRY_STATE: CameraRegistryCameraState = {
   fov_degrees: 42,
@@ -192,6 +192,9 @@ export class CameraRegistryController {
     syncedAt: number | null,
   ): void {
     if (!state?.camera) return;
+    if (isOlderNumericRevision(state.revision, this.snapshot.lastRemoteRevision)) {
+      return;
+    }
 
     const previous = this.snapshot;
     const remoteCamera = normalizeCameraState(state.camera);
@@ -561,6 +564,17 @@ function quantizeForSignature(value: number, epsilon: number): string {
 
 function resourceRevisionKey(revision: ResourceRevision): string {
   return `${typeof revision}:${String(revision)}`;
+}
+
+function isOlderNumericRevision(
+  next: ResourceRevision,
+  current: ResourceRevision | null,
+): boolean {
+  return (
+    typeof next === "number" &&
+    typeof current === "number" &&
+    next < current
+  );
 }
 
 function vector3OrFallback(

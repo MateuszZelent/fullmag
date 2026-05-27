@@ -557,10 +557,18 @@ fn fem_mesh_identity(mesh: &fullmag_runner::FemMeshPayload) -> String {
     )
 }
 
+fn is_solver_domain_fem_mesh(mesh: &fullmag_runner::FemMeshPayload) -> bool {
+    !mesh.elements.is_empty()
+}
+
 fn apply_fem_mesh_update(
     current: &mut SessionStateResponse,
     fem_mesh: fullmag_runner::FemMeshPayload,
 ) {
+    if !is_solver_domain_fem_mesh(&fem_mesh) {
+        return;
+    }
+
     let changed =
         current.fem_mesh.as_ref().map(fem_mesh_identity) != Some(fem_mesh_identity(&fem_mesh));
     current.fem_mesh = Some(fem_mesh);
@@ -1039,6 +1047,22 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].step, 1);
         assert_eq!(rows[1].step, 3);
+    }
+
+    #[test]
+    fn surface_preview_mesh_update_does_not_replace_domain_mesh() {
+        let mut current = test_current_snapshot();
+        let domain_mesh = domain_fem_mesh("domain-gen-1");
+
+        apply_fem_mesh_update(&mut current, domain_mesh);
+        let mesh_revision = current.mesh_revision;
+
+        apply_fem_mesh_update(&mut current, surface_preview_mesh());
+
+        let mesh = current.fem_mesh.as_ref().expect("domain mesh is preserved");
+        assert_eq!(mesh.mesh_id, "domain-mesh-id");
+        assert_eq!(mesh.generation_id.as_deref(), Some("domain-gen-1"));
+        assert_eq!(current.mesh_revision, mesh_revision);
     }
 
     #[test]
@@ -1670,6 +1694,51 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    fn domain_fem_mesh(generation_id: &str) -> fullmag_runner::FemMeshPayload {
+        fullmag_runner::FemMeshPayload {
+            mesh_name: "domain-mesh".to_string(),
+            mesh_id: "domain-mesh-id".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some(generation_id.to_string()),
+            per_domain_quality: Default::default(),
+        }
+    }
+
+    fn surface_preview_mesh() -> fullmag_runner::FemMeshPayload {
+        fullmag_runner::FemMeshPayload {
+            mesh_name: "surface-preview".to_string(),
+            mesh_id: "surface-preview-id".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: None,
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: Default::default(),
+        }
     }
 
     fn test_stage_execution(

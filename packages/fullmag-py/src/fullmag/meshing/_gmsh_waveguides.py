@@ -24,6 +24,17 @@ def add_arch_waveguide_to_occ(
     half_w = width * 0.5
     half_h = height * 0.5
 
+    if math.isclose(arch_height, 0.0, abs_tol=max(abs(height), abs(length), 1.0) * 1e-15):
+        tag = gmsh.model.occ.addBox(
+            -half_l,
+            -half_w,
+            z0 - half_h,
+            length,
+            width,
+            height,
+        )
+        return [(3, tag)]
+
     wires: list[int] = []
     for index in range(n_sections):
         t = index / (n_sections - 1)

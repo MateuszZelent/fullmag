@@ -83,6 +83,29 @@ def _surface_trimesh_kwargs_from_mesh_options(opts: MeshOptions) -> dict[str, ob
     }
 
 
+def _surface_trimesh_kwargs_for_geometry(
+    geometry: Geometry,
+    base_kwargs: Mapping[str, object],
+    mesh_workflow: Mapping[str, object] | None,
+) -> dict[str, object]:
+    kwargs = dict(base_kwargs)
+    per_geometry = (
+        mesh_workflow.get("per_geometry")
+        if isinstance(mesh_workflow, Mapping)
+        else None
+    )
+    overrides = _parse_per_geometry_overrides(per_geometry)
+    entry = _lookup_geometry_name_alias(overrides, geometry.geometry_name)
+    if isinstance(entry, Mapping):
+        surface_hmax = _coerce_positive_float(
+            entry.get("surface_maximum_element_size")
+            or entry.get("surface_hmax")
+        )
+        if surface_hmax is not None:
+            kwargs["surface_maximum_element_size"] = surface_hmax
+    return kwargs
+
+
 def _surface_preview_to_mesh_data(preview: dict[str, object]) -> MeshData:
     nodes = np.asarray(preview.get("nodes", []), dtype=np.float64)
     boundary_faces = np.asarray(preview.get("boundary_faces", []), dtype=np.int32)
@@ -304,6 +327,40 @@ def _apply_study_universe_to_fdm_asset(
     return tight
 
 
+def _validate_explicit_airbox_contains_geometry_bounds(
+    geometries: list[Geometry],
+    *,
+    size: tuple[float, float, float],
+    center: tuple[float, float, float],
+) -> None:
+    bounds = [
+        geometry_bounds(geometry, source_root=None)
+        for geometry in geometries
+    ]
+    valid_bounds = [item for item in bounds if item[0] is not None and item[1] is not None]
+    if not valid_bounds:
+        return
+
+    object_min = np.asarray([item[0] for item in valid_bounds], dtype=np.float64).min(axis=0)
+    object_max = np.asarray([item[1] for item in valid_bounds], dtype=np.float64).max(axis=0)
+    airbox_center = np.asarray(center, dtype=np.float64)
+    airbox_half_size = np.asarray(size, dtype=np.float64) * 0.5
+    airbox_min = airbox_center - airbox_half_size
+    airbox_max = airbox_center + airbox_half_size
+    tolerance = max(float(np.max(np.abs(object_max - object_min))), float(np.max(np.abs(size))), 1.0) * 1e-12
+
+    axis_names = ("x", "y", "z")
+    for axis, axis_name in enumerate(axis_names):
+        if object_min[axis] < airbox_min[axis] - tolerance or object_max[axis] > airbox_max[axis] + tolerance:
+            raise ValueError(
+                "study_universe.size does not contain geometry bounds on "
+                f"axis {axis_name}: airbox "
+                f"{_format_length_m(float(airbox_min[axis]))} -> {_format_length_m(float(airbox_max[axis]))}, "
+                f"geometry {_format_length_m(float(object_min[axis]))} -> {_format_length_m(float(object_max[axis]))}; "
+                "increase the airbox size or use padding"
+            )
+
+
 def _study_universe_airbox_options(
     geometries: list[Geometry],
     study_universe: Mapping[str, object] | None,
@@ -336,6 +393,11 @@ def _study_universe_airbox_options(
     # builder can preserve auto mode while still materializing a fixed box.
     if declared_size is not None:
         if resolved_mode in {"manual", "auto"}:
+            _validate_explicit_airbox_contains_geometry_bounds(
+                geometries,
+                size=declared_size,
+                center=declared_center,
+            )
             return AirboxOptions(
                 size=declared_size,
                 center=declared_center,
@@ -578,7 +640,7 @@ def _format_length_m(value: float) -> str:
 def _element_metric_summary_for_mask(
     mesh: MeshData,
     element_mask: np.ndarray,
-) -> dict[str, tuple[float, float]] | None:
+) -> dict[str, Any] | None:
     if mesh.elements.size == 0 or not np.any(element_mask):
         return None
     points = np.asarray(mesh.nodes[mesh.elements[element_mask]], dtype=np.float64)
@@ -605,16 +667,52 @@ def _element_metric_summary_for_mask(
         }
     # Regular-tetra equivalent edge length: V = a^3 / (6 * sqrt(2))
     characteristic = np.cbrt(positive_volumes * 6.0 * math.sqrt(2.0))
+    characteristic_min = float(np.min(characteristic))
+    characteristic_max = float(np.max(characteristic))
+    if characteristic_max > characteristic_min and not math.isclose(characteristic_min, characteristic_max):
+        bin_edges = np.geomspace(characteristic_min, characteristic_max, num=6)
+        if np.all(np.diff(bin_edges) > 0.0):
+            bin_counts, bin_edges = np.histogram(characteristic, bins=bin_edges)
+            characteristic_bins = [
+                (float(bin_edges[index]), float(bin_edges[index + 1]), int(count))
+                for index, count in enumerate(bin_counts)
+            ]
+        else:
+            characteristic_bins = [
+                (characteristic_min, characteristic_max, int(characteristic.size))
+            ]
+    else:
+        characteristic_bins = [
+            (characteristic_min, characteristic_max, int(characteristic.size))
+        ]
     return {
         "characteristic_size": (
-            float(np.min(characteristic)),
-            float(np.max(characteristic)),
+            characteristic_min,
+            characteristic_max,
         ),
+        "characteristic_size_bins": characteristic_bins,
         "edge_span": (
             float(np.min(edge_span)),
             float(np.max(edge_span)),
         ),
     }
+
+
+def _format_size_bins(bins: object) -> str | None:
+    if not isinstance(bins, list) or not bins:
+        return None
+    formatted_bins: list[str] = []
+    for item in bins:
+        if not isinstance(item, tuple) or len(item) != 3:
+            return None
+        start, end, count = item
+        if not isinstance(start, float) or not isinstance(end, float) or not isinstance(count, int):
+            return None
+        if math.isclose(start, end):
+            formatted_bins.append(f"{_format_length_m(start)}: {count}")
+        else:
+            formatted_bins.append(f"{_format_length_m(start)}-{_format_length_m(end)}: {count}")
+    return "; ".join(formatted_bins)
 
 
 def _display_mesh_partition_name(name: str) -> str:
@@ -691,6 +789,14 @@ def _resolve_effective_shared_domain_targets(
         }
     return effective_airbox_target, effective_per_object_targets
 
+
+def _shared_domain_size_field_default_hmax(hints: FEM, airbox: AirboxOptions | None) -> float:
+    default_hmax = float(hints.hmax)
+    if airbox is not None and airbox.maximum_element_size is not None:
+        return max(default_hmax, float(airbox.maximum_element_size))
+    return default_hmax
+
+
 def _emit_shared_domain_mesh_summary(
     mesh: MeshData,
     region_markers: list[dict[str, object]],
@@ -717,12 +823,15 @@ def _emit_shared_domain_mesh_summary(
             )
         if air_metrics is not None:
             characteristic = air_metrics.get("characteristic_size")
+            size_bins = _format_size_bins(air_metrics.get("characteristic_size_bins"))
             edge_span = air_metrics.get("edge_span")
             if characteristic is not None:
                 parts.append(
                     "characteristic size: "
                     f"{_format_length_m(characteristic[0])} -> {_format_length_m(characteristic[1])}"
                 )
+            if size_bins is not None:
+                parts.append(f"size bins: {size_bins}")
             if edge_span is not None:
                 parts.append(
                     "edge span: "
@@ -759,12 +868,15 @@ def _emit_shared_domain_mesh_summary(
             )
         if part_metrics is not None:
             characteristic = part_metrics.get("characteristic_size")
+            size_bins = _format_size_bins(part_metrics.get("characteristic_size_bins"))
             edge_span = part_metrics.get("edge_span")
             if characteristic is not None:
                 parts.append(
                     "characteristic size: "
                     f"{_format_length_m(characteristic[0])} -> {_format_length_m(characteristic[1])}"
                 )
+            if size_bins is not None:
+                parts.append(f"size bins: {size_bins}")
             if edge_span is not None:
                 parts.append(
                     "edge span: "
@@ -865,9 +977,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "shared FEM domain mesh generation requires a declared study universe "
             "(manual size/center or auto padding)"
         )
-    # Keep component-aware shared-domain meshing as the default even for
-    # single-body studies. This preserves the same field-stack behavior and
-    # avoids OCC single-body regressions in through-thickness refinement.
     single_geometry_occ_direct = False
     if (
         isinstance(mesh_workflow, Mapping)
@@ -884,30 +993,55 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         geometries=geometries,
         default_hmax=float(hints.hmax),
         bounds_by_name=None,
+        include_size_fields=False,
     )
     surface_trimesh_kwargs = _surface_trimesh_kwargs_from_mesh_options(surface_mesh_options)
+    conformal_occ_direct = False
+    if not single_geometry_occ_direct:
+        from ._gmsh_occ import is_occ_compatible
+
+        conformal_occ_direct = is_occ_compatible(geometries)
 
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
-        if not single_geometry_occ_direct:
-            trimesh = _import_trimesh()
-            try:
-                for geometry in geometries:
-                    comp_mesh = _geometry_to_trimesh(geometry, trimesh, **surface_trimesh_kwargs)
-                    verts = np.asarray(comp_mesh.vertices)
-                    b_min = tuple(float(v) for v in verts.min(axis=0))
-                    b_max = tuple(float(v) for v in verts.max(axis=0))
-                    bounds_by_name[geometry.geometry_name] = (b_min, b_max)
-                    comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
-                    comp_mesh.export(comp_path)
-                    component_descriptors.append(
-                        ComponentDescriptor(
-                            geometry_name=geometry.geometry_name,
-                            stl_path=comp_path,
-                            bounds_min=b_min,
-                            bounds_max=b_max,
-                        )
+        trimesh_module: object | None = None
+
+        def _prepare_component_descriptors() -> object:
+            nonlocal trimesh_module
+            if component_descriptors:
+                if trimesh_module is None:
+                    trimesh_module = _import_trimesh()
+                return trimesh_module
+            trimesh_module = _import_trimesh()
+            for geometry in geometries:
+                comp_mesh = _geometry_to_trimesh(
+                    geometry,
+                    trimesh_module,
+                    **_surface_trimesh_kwargs_for_geometry(
+                        geometry,
+                        surface_trimesh_kwargs,
+                        mesh_workflow,
+                    ),
+                )
+                verts = np.asarray(comp_mesh.vertices)
+                b_min = tuple(float(v) for v in verts.min(axis=0))
+                b_max = tuple(float(v) for v in verts.max(axis=0))
+                bounds_by_name[geometry.geometry_name] = (b_min, b_max)
+                comp_path = Path(tmp_dir) / f"{geometry.geometry_name}.stl"
+                comp_mesh.export(comp_path)
+                component_descriptors.append(
+                    ComponentDescriptor(
+                        geometry_name=geometry.geometry_name,
+                        stl_path=comp_path,
+                        bounds_min=b_min,
+                        bounds_max=b_max,
                     )
+                )
+            return trimesh_module
+
+        if not single_geometry_occ_direct and not conformal_occ_direct:
+            try:
+                _prepare_component_descriptors()
             except Exception as exc:
                 if len(geometries) == 1 and not isinstance(geometries[0], ImportedGeometry):
                     single_geometry_occ_direct = True
@@ -919,7 +1053,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 else:
                     raise
 
-        if single_geometry_occ_direct:
+        if single_geometry_occ_direct or conformal_occ_direct:
             for geometry in geometries:
                 bounds_min, bounds_max = geometry_bounds(geometry)
                 if bounds_min is None or bounds_max is None:
@@ -929,12 +1063,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     tuple(float(value) for value in bounds_max),
                 )
 
+        size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
+
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
             geometries=geometries,
-            default_hmax=float(hints.hmax),
+            default_hmax=size_field_default_hmax,
             bounds_by_name=bounds_by_name,
-            component_aware=not single_geometry_occ_direct,
+            component_aware=True,
             per_object_recipes=per_object_recipes,
         )
         if per_object_recipes:
@@ -943,9 +1079,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 geometries,
                 per_object_recipes,
                 _policy,
-                default_hmax=float(hints.hmax),
+                default_hmax=size_field_default_hmax,
                 bounds_by_name=bounds_by_name,
-                component_aware=not single_geometry_occ_direct,
+                component_aware=True,
             )
             if recipe_fields:
                 existing = _strip_overridden_geometry_fields(
@@ -961,7 +1097,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             per_object_recipes=per_object_recipes,
         )
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
-        planned_build_mode = "single_geometry_occ" if single_geometry_occ_direct else "component_aware"
+        if single_geometry_occ_direct:
+            planned_build_mode = "single_geometry_occ"
+        elif conformal_occ_direct:
+            planned_build_mode = "conformal_occ"
+        else:
+            planned_build_mode = "component_aware"
         planned_operation_statuses = _build_mesh_operation_statuses(
             geometries,
             mesh_options,
@@ -1026,84 +1167,152 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     options=mesh_options,
                 )
             else:
-                emit_progress_event(
-                    {
-                        "kind": "mesh_build_phase",
-                        "phase": "meshing",
-                        "message": "Generating component-aware 3D tetrahedral mesh",
-                    }
-                )
+                # Decide between native OCC-conformal pipeline or single-pass STL pipeline
+                from ._gmsh_occ import generate_shared_domain_mesh_via_occ
+
+                is_stl_multi = len(geometries) > 1 and any(isinstance(g, ImportedGeometry) for g in geometries)
+
                 try:
-                    result = generate_shared_domain_mesh_from_components(
-                        component_descriptors,
-                        hmax=effective_hmax,
-                        order=hints.order,
-                        airbox=airbox,
-                        options=mesh_options,
-                    )
-                    mesh = result.mesh
-                    emit_progress(
-                        f"Component-aware mesh: geometry→volume mapping established for "
-                        f"{len(result.component_volume_tags)} components"
-                    )
-                except Exception as exc:
-                    build_mode = "concatenated_stl_fallback"
-                    fallbacks_triggered.append("component_aware_import_failed")
-                    emit_progress(
-                        f"Component-aware mesh failed ({exc!r}), falling back to concatenated STL"
-                    )
-                    # Rebuild mesh options for the non-component STL path so local
-                    # refinement fields do not depend on recovered component tags.
-                    # This preserves per-object hmax behavior (Box/Bounds thresholds)
-                    # even when component-aware tagging fails.
-                    mesh_options = _mesh_options_from_runtime_metadata(
-                        mesh_workflow,
-                        geometries=geometries,
-                        default_hmax=float(hints.hmax),
-                        bounds_by_name=bounds_by_name,
-                        component_aware=False,
-                        per_object_recipes=per_object_recipes,
-                    )
-                    if per_object_recipes:
-                        _policy = (
-                            assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
+                    if conformal_occ_direct:
+                        build_mode = "conformal_occ"
+                        emit_progress_event(
+                            {
+                                "kind": "mesh_build_phase",
+                                "phase": "meshing",
+                                "message": "Generating native OCC-conformal 3D tetrahedral mesh",
+                            }
                         )
-                        recipe_fields = _resolve_per_object_mesh_options(
+                        result = generate_shared_domain_mesh_via_occ(
                             geometries,
-                            per_object_recipes,
-                            _policy,
-                            default_hmax=float(hints.hmax),
+                            hmax=effective_hmax,
+                            order=hints.order,
+                            airbox=airbox,
+                            options=mesh_options,
+                        )
+                        mesh = result.mesh
+                        emit_progress(
+                            f"Conformal OCC mesh: geometry→volume mapping established for "
+                            f"{len(result.component_volume_tags)} components"
+                        )
+                    elif is_stl_multi:
+                        build_mode = "component_aware"
+                        raise RuntimeError(
+                            "Multi-component STL meshing is routed to concatenated STL fallback for numerical stability"
+                        )
+                    else:
+                        build_mode = "component_aware"
+                        emit_progress_event(
+                            {
+                                "kind": "mesh_build_phase",
+                                "phase": "meshing",
+                                "message": "Generating component-aware 3D tetrahedral mesh",
+                            }
+                        )
+                        result = generate_shared_domain_mesh_from_components(
+                            component_descriptors,
+                            hmax=effective_hmax,
+                            order=hints.order,
+                            airbox=airbox,
+                            options=mesh_options,
+                        )
+                        mesh = result.mesh
+                        emit_progress(
+                            f"Component-aware mesh: geometry→volume mapping established for "
+                            f"{len(result.component_volume_tags)} components"
+                        )
+                except Exception as primary_exc:
+                    # If conformal OCC failed, fall back safely to component-aware STL mesh
+                    if build_mode == "conformal_occ":
+                        build_mode = "component_aware"
+                        fallbacks_triggered.append("conformal_occ_failed")
+                        emit_progress(
+                            f"Conformal OCC mesh failed ({primary_exc!r}), falling back to STL component-aware mesh"
+                        )
+                        try:
+                            _prepare_component_descriptors()
+                            result = generate_shared_domain_mesh_from_components(
+                                component_descriptors,
+                                hmax=effective_hmax,
+                                order=hints.order,
+                                airbox=airbox,
+                                options=mesh_options,
+                            )
+                            mesh = result.mesh
+                            emit_progress(
+                                f"Component-aware mesh: geometry→volume mapping established for "
+                                f"{len(result.component_volume_tags)} components"
+                            )
+                            primary_exc = None  # successfully recovered!
+                        except Exception as stl_exc:
+                            primary_exc = stl_exc
+
+                    if primary_exc is not None:
+                        build_mode = "concatenated_stl_fallback"
+                        fallbacks_triggered.append("component_aware_import_failed")
+                        emit_progress(
+                            f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
+                        )
+                        # Rebuild mesh options for the non-component STL path so local
+                        # refinement fields do not depend on recovered component tags.
+                        # This preserves per-object hmax behavior (Box/Bounds thresholds)
+                        # even when component-aware tagging fails.
+                        mesh_options = _mesh_options_from_runtime_metadata(
+                            mesh_workflow,
+                            geometries=geometries,
+                            default_hmax=size_field_default_hmax,
                             bounds_by_name=bounds_by_name,
                             component_aware=False,
+                            per_object_recipes=per_object_recipes,
                         )
-                        if recipe_fields:
-                            existing = _strip_overridden_geometry_fields(
-                                list(mesh_options.size_fields), per_object_recipes
+                        if per_object_recipes:
+                            _policy = (
+                                assembly_policy if assembly_policy is not None else SharedMeshAssemblyPolicy()
                             )
-                            from dataclasses import replace as _dc_replace
-                            mesh_options = _dc_replace(
-                                mesh_options, size_fields=recipe_fields + existing
+                            recipe_fields = _resolve_per_object_mesh_options(
+                                geometries,
+                                per_object_recipes,
+                                _policy,
+                                default_hmax=size_field_default_hmax,
+                                bounds_by_name=bounds_by_name,
+                                component_aware=False,
                             )
-                    used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
-                    if mesh_options.size_fields:
-                        emit_progress(
-                            f"Fallback local sizing active ({len(mesh_options.size_fields)} size fields)"
+                            if recipe_fields:
+                                existing = _strip_overridden_geometry_fields(
+                                    list(mesh_options.size_fields), per_object_recipes
+                                )
+                                from dataclasses import replace as _dc_replace
+                                mesh_options = _dc_replace(
+                                    mesh_options, size_fields=recipe_fields + existing
+                                )
+                        used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
+                        if mesh_options.size_fields:
+                            emit_progress(
+                                f"Fallback local sizing active ({len(mesh_options.size_fields)} size fields)"
+                            )
+                        trimesh = _prepare_component_descriptors()
+                        component_meshes = [
+                            _geometry_to_trimesh(
+                                g,
+                                trimesh,
+                                **_surface_trimesh_kwargs_for_geometry(
+                                    g,
+                                    surface_trimesh_kwargs,
+                                    mesh_workflow,
+                                ),
+                            ).copy()
+                            for g in geometries
+                        ]
+                        combined_surface = trimesh.util.concatenate(component_meshes)
+                        surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
+                        combined_surface.export(surface_path)
+                        from .gmsh_bridge import generate_mesh_from_file
+                        mesh = generate_mesh_from_file(
+                            surface_path,
+                            hmax=effective_hmax,
+                            order=hints.order,
+                            airbox=airbox,
+                            options=mesh_options,
                         )
-                    component_meshes = [
-                        _geometry_to_trimesh(g, trimesh, **surface_trimesh_kwargs).copy()
-                        for g in geometries
-                    ]
-                    combined_surface = trimesh.util.concatenate(component_meshes)
-                    surface_path = Path(tmp_dir) / "shared_domain_surface.stl"
-                    combined_surface.export(surface_path)
-                    from .gmsh_bridge import generate_mesh_from_file
-                    mesh = generate_mesh_from_file(
-                        surface_path,
-                        hmax=effective_hmax,
-                        order=hints.order,
-                        airbox=airbox,
-                        options=mesh_options,
-                    )
             emit_progress_event(
                 {
                     "kind": "mesh_build_phase",

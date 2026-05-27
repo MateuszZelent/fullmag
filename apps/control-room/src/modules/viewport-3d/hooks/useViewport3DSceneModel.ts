@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { CameraRegistrySnapshot } from "@/kernel/visualization/CameraRegistryController";
 import {
@@ -75,17 +76,20 @@ import {
 } from "../viewport3dRenderModel";
 import {
   getViewport3DCacheStats as getCacheStats,
+  resolveViewport3DFieldVectorResourceKey,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
   useViewport3DFieldVector,
   useViewport3DMeshQualityData,
+  useViewport3DQuantityFieldVectors,
   useViewport3DScene,
   useViewport3DSharedDomainManifest,
   useViewport3DUniverse,
 } from "../viewport3dResources";
 import {
   isViewport3DTopologyCurrent,
+  resolveViewport3DTopologyFreshnessLabel,
   resolveUnknownTopologyProvenanceRefreshKey,
   resolveViewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
@@ -105,6 +109,14 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
+
+export interface Viewport3DFieldDataIssue {
+  key: string;
+  message: string;
+  quantityId: string;
+  resourceKey: string;
+  retry: () => void;
+}
 
 function resolveSelectionMeshQualityMetric(
   selection: Selection,
@@ -273,6 +285,8 @@ export function useViewport3DSceneModel({
     layers: renderingState?.layers,
   });
   const quantityId = renderingState?.active_quantity_id ?? "m";
+  const scalarColorPalette =
+    renderingState?.quantity?.colormap ?? renderingState?.colormap ?? "viridis";
   const vectorColorMode =
     renderingState?.vector_style.color_mode ?? "orientation";
   const vectorLengthScale = renderingState?.vector_style.length_scale ?? 1;
@@ -432,6 +446,8 @@ export function useViewport3DSceneModel({
       renderingState?.vector_style.mono_color,
       renderingState?.vector_style.thickness,
       renderingState?.vector_glyphs,
+      renderingState?.quantity?.active_quantity_id,
+      renderingState?.active_quantity_id,
     ],
   );
   const viewportVisualizationTargets = useMemo(() => {
@@ -503,7 +519,7 @@ export function useViewport3DSceneModel({
       snapshot: objectVisualizationSnapshot,
       target: { id: fdmDomainId, kind: "object" },
       visualizationState: renderingState,
-    }).settings;
+    }).effectiveSettings;
   }, [
     domainMeta.data?.domain_id,
     fallbackSettings,
@@ -518,7 +534,7 @@ export function useViewport3DSceneModel({
         snapshot: objectVisualizationSnapshot,
         target: AIRBOX_VISUALIZATION_TARGET,
         visualizationState: renderingState,
-      }).settings,
+      }).effectiveSettings,
     [objectVisualizationSnapshot, renderingState],
   );
   const getPartSettings = useCallback(
@@ -527,7 +543,7 @@ export function useViewport3DSceneModel({
         snapshot: objectVisualizationSnapshot,
         target: targetForMeshPart(part),
         visualizationState: renderingState,
-      }).settings,
+      }).effectiveSettings,
     [objectVisualizationSnapshot, renderingState],
   );
   const getObjectSettings = useCallback(
@@ -540,7 +556,7 @@ export function useViewport3DSceneModel({
           label: object.label,
         },
         visualizationState: renderingState,
-      }).settings,
+      }).effectiveSettings,
     [objectVisualizationSnapshot, renderingState],
   );
   const airboxVectorsAllowed =
@@ -553,8 +569,53 @@ export function useViewport3DSceneModel({
       EMPTY_AIRBOX_FIELD_VECTOR_PARTS,
     [currentTopologyRenderModel],
   );
-  const airboxFieldVectors = useViewport3DAirboxFieldVectors(
+  const targetQuantityIds = useMemo(() => {
+    if (!currentTopologyRenderModel) return [];
+    const ids = new Set<string>();
+    for (const partModel of currentTopologyRenderModel.magneticParts) {
+      const settings = getPartSettings(partModel.part);
+      if (
+        settings.activeQuantityId !== quantityId &&
+        settings.visible &&
+        (settings.shaderVisible || settings.vectorsVisible)
+      ) {
+        ids.add(settings.activeQuantityId);
+      }
+    }
+    if (
+      airboxSettings.activeQuantityId !== quantityId &&
+      airboxSettings.visible &&
+      (airboxSettings.shaderVisible || airboxSettings.vectorsVisible)
+    ) {
+      ids.add(airboxSettings.activeQuantityId);
+    }
+    if (
+      fdmSettings.activeQuantityId !== quantityId &&
+      fdmSettings.visible &&
+      (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
+    ) {
+      ids.add(fdmSettings.activeQuantityId);
+    }
+    return Array.from(ids).toSorted();
+  }, [
+    airboxSettings.activeQuantityId,
+    airboxSettings.shaderVisible,
+    airboxSettings.vectorsVisible,
+    airboxSettings.visible,
+    currentTopologyRenderModel,
+    fdmSettings.activeQuantityId,
+    fdmSettings.shaderVisible,
+    fdmSettings.vectorsVisible,
+    fdmSettings.visible,
+    getPartSettings,
     quantityId,
+  ]);
+  const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
+    targetQuantityIds,
+    targetQuantityIds.length > 0,
+  );
+  const airboxFieldVectors = useViewport3DAirboxFieldVectors(
+    airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     Boolean(
       airboxVectorsAllowed &&
@@ -566,19 +627,51 @@ export function useViewport3DSceneModel({
     airboxSettings,
     fallbackSettings,
     getPartSettings,
+    scalarColorPalette,
     topologyRenderModel: currentTopologyRenderModel,
     vectorColorMode,
     vectorDomain,
   });
   const resolvedFieldRenderOptions = useMemo(
-    () =>
-      airboxFieldVectors.data && airboxFieldVectors.data.size > 0
+    () => {
+      const partFieldVectors = new Map<string, DecodedFieldVector>();
+      if (targetQuantityFieldVectors.data && currentTopologyRenderModel) {
+        for (const partModel of currentTopologyRenderModel.magneticParts) {
+          const targetQuantityId = getPartSettings(partModel.part).activeQuantityId;
+          const fieldVector = targetQuantityFieldVectors.data.get(targetQuantityId);
+          if (fieldVector) {
+            partFieldVectors.set(partModel.part.id, fieldVector);
+          }
+        }
+        for (const partModel of currentTopologyRenderModel.airboxParts) {
+          const fieldVector = targetQuantityFieldVectors.data.get(
+            airboxSettings.activeQuantityId,
+          );
+          if (fieldVector) {
+            partFieldVectors.set(partModel.part.id, fieldVector);
+          }
+        }
+      }
+      if (airboxFieldVectors.data) {
+        for (const [partId, fieldVector] of airboxFieldVectors.data) {
+          partFieldVectors.set(partId, fieldVector);
+        }
+      }
+      return partFieldVectors.size > 0
         ? {
             ...fieldRenderOptions,
-            partFieldVectors: airboxFieldVectors.data,
+            partFieldVectors,
           }
-        : fieldRenderOptions,
-    [airboxFieldVectors.data, fieldRenderOptions],
+        : fieldRenderOptions;
+    },
+    [
+      airboxFieldVectors.data,
+      airboxSettings.activeQuantityId,
+      currentTopologyRenderModel,
+      fieldRenderOptions,
+      getPartSettings,
+      targetQuantityFieldVectors.data,
+    ],
   );
   const fdmSurfaceColorMode =
     fdmDomain && fdmSettings.visible && fdmSettings.shaderVisible
@@ -592,7 +685,19 @@ export function useViewport3DSceneModel({
     fdmDomain &&
       fdmSettings.visible &&
       fdmSettings.shaderVisible &&
-      visualProfile.voxelTopography.enabled,
+      commandState.widgets.fdmTopographyEnabled,
+  );
+  const fdmVoxelTopography = useMemo(
+    () => ({
+      amplitudeCells: commandState.widgets.fdmTopographyAmplitudeCells,
+      component: commandState.widgets.fdmTopographyComponent,
+      enabled: fdmTopographyEnabled,
+    }),
+    [
+      commandState.widgets.fdmTopographyAmplitudeCells,
+      commandState.widgets.fdmTopographyComponent,
+      fdmTopographyEnabled,
+    ],
   );
   const fdmVectorsVisible = Boolean(
     fdmDomain && fdmSettings.visible && fdmSettings.vectorsVisible,
@@ -614,8 +719,34 @@ export function useViewport3DSceneModel({
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
+  const fieldDataIssue = useMemo<Viewport3DFieldDataIssue | null>(() => {
+    if (!(fieldVectorEnabled && fieldVector.error)) return null;
+    const message =
+      fieldVector.error.message.trim() || "Field vector resource failed to load.";
+    const resourceKey = resolveViewport3DFieldVectorResourceKey(
+      quantityId,
+      FULL_FIELD_QUERY,
+    );
+    return {
+      key: `${resourceKey}:${fieldVector.revision ?? "none"}:${message}`,
+      message,
+      quantityId,
+      resourceKey,
+      retry: fieldVector.refetch,
+    };
+  }, [
+    fieldVector.error,
+    fieldVector.refetch,
+    fieldVector.revision,
+    fieldVectorEnabled,
+    quantityId,
+  ]);
+  const fdmFieldVector =
+    fdmSettings.activeQuantityId === quantityId
+      ? fieldVector.data
+      : targetQuantityFieldVectors.data?.get(fdmSettings.activeQuantityId) ?? null;
   const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
-    ? fieldVector.data
+    ? fdmFieldVector
     : null;
   const fdmInstanceModel = useMemo<
     FdmCuboidInstanceModel | null | undefined
@@ -628,7 +759,7 @@ export function useViewport3DSceneModel({
           fieldVector: fdmInstanceModelFieldVector,
           voxelFillRatio: visualProfile.voxelFillRatio,
           voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
-          voxelTopography: visualProfile.voxelTopography,
+          voxelTopography: fdmVoxelTopography,
         }),
     );
   }, [
@@ -636,19 +767,26 @@ export function useViewport3DSceneModel({
     fdmInstanceModelEnabled,
     fdmInstanceModelFieldVector,
     fdmVoxelMagnitudeThreshold,
+    fdmVoxelTopography,
     visualProfile.voxelFillRatio,
-    visualProfile.voxelTopography,
   ]);
   const fdmSurfaceColors = useMemo(() => {
     if (!fdmSurfaceColorMode) return null;
     return buildSampledScalarColors(
-      fieldVector.data,
+      fdmFieldVector,
       fdmInstanceModel?.cellIndices,
       fdmSurfaceColorMode,
+      scalarColorPalette,
     );
-  }, [fdmSurfaceColorMode, fdmInstanceModel, fieldVector.data]);
+  }, [
+    fdmFieldVector,
+    fdmSurfaceColorMode,
+    fdmInstanceModel,
+    scalarColorPalette,
+  ]);
   const chunkedScalarColors = useViewport3DChunkedScalarColors({
     colorModes: fieldRenderOptions.scalarColorModes,
+    colorPalette: scalarColorPalette,
     enabled: fieldRenderOptions.scalarColorsVisible !== false,
     fieldVector: fieldVector.data,
     topology: currentTopologyRenderModel,
@@ -682,12 +820,14 @@ export function useViewport3DSceneModel({
     topology.error?.message ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
+    targetQuantityFieldVectors.error?.message ??
     airboxFieldVectors.error?.message ??
     scene.error?.message ??
     universe.error?.message ??
     domainMeta.error?.message ??
     sharedDomainManifest.error?.message ??
     visualizationState.error?.message ??
+    resolveViewport3DTopologyFreshnessLabel(topologyFreshness) ??
     topology.status;
   const domainSummary = fdmDomain
     ? `${fdmDomain.displayCellCount}/${fdmDomain.totalCells}`
@@ -717,6 +857,12 @@ export function useViewport3DSceneModel({
       id: "field-vector",
       revision: fieldVector.revision,
       status: fieldVector.status,
+    },
+    {
+      error: targetQuantityFieldVectors.error?.message,
+      id: "target-quantity-field-vectors",
+      revision: targetQuantityFieldVectors.revision,
+      status: targetQuantityFieldVectors.status,
     },
     {
       error: airboxFieldVectors.error?.message,
@@ -780,6 +926,7 @@ export function useViewport3DSceneModel({
     fdmSettings,
     fdmSurfaceColors,
     femDomain,
+    fieldDataIssue,
     fieldModel: fieldRenderModel,
     fieldVector: fieldVector.data,
     getObjectSettings,

@@ -162,7 +162,9 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
       echo "Freeing ports 3100 and 8081 ..." >&2; \
       fuser -k 3100/tcp 2>/dev/null || true; \
       fuser -k 8081/tcp 2>/dev/null || true; \
-      pkill -f "/[f]ullmag-fem-gpu-bin --dev .*examples/arch_waveguide_relax_50nm.py" >/dev/null 2>&1 || true; \
+      pkill -9 -f "fullmag-fem-gpu-bi[n]" >/dev/null 2>&1 || true; \
+      pkill -9 -f "fullmag-ap[i]" >/dev/null 2>&1 || true; \
+      pkill -9 -f "helper.p[y]" >/dev/null 2>&1 || true; \
       rm -rf apps/control-room/.next/dev; \
       mkdir -p .fullmag/logs; \
       echo "Starting v2 control room on :3100 ..." >&2; \
@@ -191,7 +193,8 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
       physical_cores=$(lscpu -p=CORE 2>/dev/null | grep "^[0-9]" | sort -u | wc -l || echo ""); \
       cpu_threads="${physical_cores:-auto}"; \
       if [ -z "$cpu_threads" ] || [ "$cpu_threads" = "0" ]; then cpu_threads="auto"; fi; \
-      echo "cpu_threads=$cpu_threads (physical cores)" >&2; \
+      if [ "$cpu_threads" != "auto" ] && [ "$cpu_threads" -gt 8 ]; then cpu_threads=8; fi; \
+      echo "cpu_threads=$cpu_threads (capped at 8 for WSL memory stability)" >&2; \
       FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" "$cpu_threads" 3100'
 
 

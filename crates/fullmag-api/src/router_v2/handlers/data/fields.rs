@@ -9,8 +9,9 @@ use axum::Json;
 use serde::Deserialize;
 
 use super::field_resolution::{
-    extract_fdm_field, extract_fem_field, flatten_json_field_values, json_field_grid,
-    live_magnetization_available, live_magnetization_values,
+    extract_fdm_field, extract_fem_field, field_values_match_current_domain,
+    flatten_json_field_values, json_field_grid, live_magnetization_available,
+    live_magnetization_values,
 };
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
@@ -168,7 +169,14 @@ pub async fn get_field_catalog(
 
     let mut quantities = Vec::new();
 
-    for (qid, _value) in snapshot.latest_fields.entries() {
+    for (qid, value) in snapshot.latest_fields.entries() {
+        let n_comp = quantity_spec(qid)
+            .map(|spec| spec.n_comp as usize)
+            .unwrap_or(3);
+        let values = flatten_json_field_values(value);
+        if !field_values_match_current_domain(snapshot, qid, n_comp, &values) {
+            continue;
+        }
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -180,6 +188,12 @@ pub async fn get_field_catalog(
 
     for (qid, field) in snapshot.preview_cache.iter() {
         if quantities.iter().any(|q| q.quantity_id == *qid) {
+            continue;
+        }
+        let n_comp = quantity_spec(qid)
+            .map(|spec| spec.n_comp as usize)
+            .unwrap_or(3);
+        if !field_values_match_current_domain(snapshot, qid, n_comp, &field.vector_field_values) {
             continue;
         }
         push_field_descriptor(
@@ -249,7 +263,14 @@ pub async fn get_field_meta(
         .and_then(|g| g.parse::<u64>().ok())
         .unwrap_or(0);
 
-    if snapshot.latest_fields.get(&quantity_id).is_some() {
+    if snapshot
+        .latest_fields
+        .get(&quantity_id)
+        .map(|raw| flatten_json_field_values(raw))
+        .is_some_and(|values| {
+            field_values_match_current_domain(snapshot, &quantity_id, n_comp as usize, &values)
+        })
+    {
         return Ok(Json(FieldMeta {
             quantity_id,
             label,
@@ -263,7 +284,17 @@ pub async fn get_field_meta(
         }));
     }
 
-    if snapshot.preview_cache.get(&quantity_id).is_some()
+    if snapshot
+        .preview_cache
+        .get(&quantity_id)
+        .is_some_and(|field| {
+            field_values_match_current_domain(
+                snapshot,
+                &quantity_id,
+                n_comp as usize,
+                &field.vector_field_values,
+            )
+        })
         || (quantity_id == "m" && live_magnetization_available(snapshot))
     {
         return Ok(Json(FieldMeta {
@@ -409,14 +440,31 @@ fn required_scope_id<'a>(
         })
 }
 
+fn object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
 fn resolve_object_scope(
     mesh: &FemMeshPayload,
     object_id: &str,
 ) -> Result<ResolvedFieldScope, ApiError> {
     if let Some(part) = mesh.mesh_parts.iter().find(|part| {
         part.role == "magnetic_object"
-            && (part.object_id.as_deref() == Some(object_id)
-                || part.geometry_id.as_deref() == Some(object_id)
+            && (part
+                .object_id
+                .as_deref()
+                .map(|id| object_ids_match(id, object_id))
+                .unwrap_or(false)
+                || part
+                    .geometry_id
+                    .as_deref()
+                    .map(|id| object_ids_match(id, object_id))
+                    .unwrap_or(false)
                 || part.id == object_id)
     }) {
         return Ok(ResolvedFieldScope {
@@ -429,7 +477,7 @@ fn resolve_object_scope(
     let segment = mesh
         .object_segments
         .iter()
-        .find(|segment| segment.object_id == object_id)
+        .find(|segment| object_ids_match(&segment.object_id, object_id))
         .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
     let start = segment.node_start as usize;
     let end = start.saturating_add(segment.node_count as usize);
@@ -484,7 +532,7 @@ fn resolve_selection_scope(
         if mesh
             .object_segments
             .iter()
-            .any(|segment| segment.object_id == entity_id)
+            .any(|segment| object_ids_match(&segment.object_id, entity_id))
         {
             let mut scope = resolve_object_scope(mesh, entity_id)?;
             scope.kind = "selection".to_string();
@@ -507,7 +555,7 @@ fn resolve_selection_scope(
         if mesh
             .object_segments
             .iter()
-            .any(|segment| segment.object_id == node_id)
+            .any(|segment| object_ids_match(&segment.object_id, node_id))
         {
             let mut scope = resolve_object_scope(mesh, node_id)?;
             scope.kind = "selection".to_string();
@@ -599,6 +647,9 @@ pub async fn get_field_vector(
     .or_else(|| {
         if let Some(raw) = snapshot.latest_fields.get(&quantity_id) {
             let values = flatten_json_field_values(raw);
+            if !field_values_match_current_domain(snapshot, &quantity_id, n_comp, &values) {
+                return None;
+            }
             let element_count = if n_comp > 0 {
                 values.len() / n_comp
             } else {
@@ -607,6 +658,14 @@ pub async fn get_field_vector(
             let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
             Some((values, grid))
         } else if let Some(field) = snapshot.preview_cache.get(&quantity_id) {
+            if !field_values_match_current_domain(
+                snapshot,
+                &quantity_id,
+                n_comp,
+                &field.vector_field_values,
+            ) {
+                return None;
+            }
             Some((field.vector_field_values.clone(), field.preview_grid))
         } else {
             None

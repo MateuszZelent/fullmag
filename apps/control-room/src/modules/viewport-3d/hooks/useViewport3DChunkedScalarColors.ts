@@ -17,6 +17,7 @@ import type {
 
 interface ChunkedScalarColorState {
   buffers: Map<string, ScalarColorBuffer>;
+  colorPalette: string;
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>;
 }
 
@@ -42,11 +43,13 @@ export function mergeViewport3DFieldScalarColors(
 
 export function useViewport3DChunkedScalarColors({
   colorModes,
+  colorPalette = "viridis",
   enabled,
   fieldVector,
   topology,
 }: {
   colorModes: ReadonlySet<string> | null | undefined;
+  colorPalette?: string;
   enabled: boolean;
   fieldVector: DecodedFieldVector | null | undefined;
   topology:
@@ -68,7 +71,7 @@ export function useViewport3DChunkedScalarColors({
       !enabled ||
       !topology ||
       !fieldVector ||
-      fieldVector.pointCount > topology.nodeCount ||
+      fieldVector.pointCount !== topology.nodeCount ||
       !fieldTransformNeedsChunking(fieldVector.pointCount) ||
       modes.length === 0
     ) {
@@ -84,6 +87,8 @@ export function useViewport3DChunkedScalarColors({
           mode,
           await buildVertexScalarColorsChunked(fieldVector, {
             colorMode: mode,
+            colorPalette,
+            shaderOnly: true,
             signal: controller.signal,
             yieldToMain: yieldToViewport3DMainThread,
           }),
@@ -93,6 +98,7 @@ export function useViewport3DChunkedScalarColors({
       if (!cancelled) {
         setState({
           buffers: new Map(entries),
+          colorPalette,
           topology,
         });
       }
@@ -106,9 +112,14 @@ export function useViewport3DChunkedScalarColors({
       cancelled = true;
       controller.abort();
     };
-  }, [enabled, fieldVector, modes, topology]);
+  }, [colorPalette, enabled, fieldVector, modes, topology]);
 
-  if (!enabled || !topology || state?.topology !== topology) {
+  if (
+    !enabled ||
+    !topology ||
+    state?.topology !== topology ||
+    state.colorPalette !== colorPalette
+  ) {
     return EMPTY_SCALAR_COLOR_MAP;
   }
 

@@ -313,6 +313,30 @@ class TestMetricSpaceSampling:
         mz2 = abs(result1.values[1][2])
         assert abs(mz1 - mz2) < 0.05
 
+    def test_bloch_negative_chirality_flips_helicity_not_winding(self):
+        """Bloch chirality=-1 should be the opposite tangent field, not a mirrored winding."""
+        radius = 35e-9
+        result = evaluate_preset_texture(
+            "bloch_skyrmion",
+            {"radius": radius, "wall_width": 10e-9, "core_polarity": -1, "chirality": -1, "plane": "xy"},
+            [(radius, 0.0, 0.0), (0.0, radius, 0.0)],
+        )
+
+        assert result.values[0][1] < -0.9
+        assert result.values[1][0] > 0.9
+
+    def test_neel_negative_chirality_points_radially_inward(self):
+        """Néel chirality=-1 should point inward at the domain wall."""
+        radius = 35e-9
+        result = evaluate_preset_texture(
+            "neel_skyrmion",
+            {"radius": radius, "wall_width": 10e-9, "core_polarity": -1, "chirality": -1, "plane": "xy"},
+            [(radius, 0.0, 0.0), (0.0, radius, 0.0)],
+        )
+
+        assert result.values[0][0] < -0.9
+        assert result.values[1][1] < -0.9
+
 
 # ---------------------------------------------------------------------------
 # 8.4  prepare_initial_magnetization integration

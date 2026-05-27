@@ -582,6 +582,15 @@ fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTre
     nodes_by_marker
 }
 
+fn artifacts_object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
 fn write_prescribed_current_transport_artifacts(
     output_dir: &Path,
     problem: &fullmag_ir::ProblemIR,
@@ -630,9 +639,9 @@ fn write_prescribed_current_transport_artifacts(
                 for segment in &fem.object_segments {
                     let matches_region = solve_region
                         .as_deref()
-                        .is_some_and(|region| segment.object_id == region);
+                        .is_some_and(|region| artifacts_object_ids_match(&segment.object_id, region));
                     let matches_geometry = target_geometry.is_some_and(|geometry_name| {
-                        segment.geometry_id.as_deref() == Some(geometry_name)
+                        segment.geometry_id.as_deref().map(|g_id| artifacts_object_ids_match(g_id, geometry_name)).unwrap_or(false)
                     });
                     let matches = solve_region.is_none() || matches_region || matches_geometry;
                     if !matches {

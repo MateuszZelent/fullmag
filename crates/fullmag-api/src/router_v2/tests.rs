@@ -1745,6 +1745,45 @@ async fn domain_topology_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn domain_topology_supports_byte_ranges_for_large_topology_payloads() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 18;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/topology")
+                .header("range", "bytes=0-3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response
+            .headers()
+            .get("accept-ranges")
+            .and_then(|value| value.to_str().ok()),
+        Some("bytes")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("content-range")
+            .and_then(|value| value.to_str().ok()),
+        Some("bytes 0-3/164")
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..], b"FMMT");
+}
+
+#[tokio::test]
 async fn domain_slice_mesh_overlay_returns_204_for_fdm() {
     let app = test_router_with_session().await;
     let response = app
@@ -2150,13 +2189,15 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 4);
+    assert_eq!(json["schema_version"], 5);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
     );
     assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
     assert_eq!(json["layers"]["vectors"]["density"], json["vector_density"]);
+    assert_eq!(json["layers"]["airbox"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], true);
     assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
@@ -2227,7 +2268,14 @@ async fn visualization_state_exposes_effective_scene_object_targets() {
 
 #[tokio::test]
 async fn visualization_state_patch_accepts_nested_v2_controls() {
-    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "arch_waveguide".to_string();
+    scene.objects[0].name = "arch_waveguide".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
 
     let response = app
         .oneshot(
@@ -2277,7 +2325,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                         "overrides": [
                             {
                                 "scope": "object",
-                                "scope_id": "free-layer",
+                                "scope_id": "arch_waveguide",
                                 "visible": true,
                                 "display": {
                                     "visible": true,
@@ -2299,6 +2347,9 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "vector_length_scale": 1.75,
                                     "vector_thickness": 2.0,
                                     "wireframe_color": "#111111"
+                                },
+                                "quantity": {
+                                    "active_quantity_id": "h_demag"
                                 }
                             }
                         ]
@@ -2312,7 +2363,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 4);
+    assert_eq!(json["schema_version"], 5);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -2334,7 +2385,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     );
     assert_eq!(json["camera"]["orthographic_scale"], 2.5e-6);
     assert_eq!(json["overrides"][0]["scope"], "object");
-    assert_eq!(json["overrides"][0]["scope_id"], "free-layer");
+    assert_eq!(json["overrides"][0]["scope_id"], "arch_waveguide");
     assert_eq!(json["overrides"][0]["display"]["bounds"]["visible"], true);
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
@@ -2345,6 +2396,14 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
     assert_eq!(json["overrides"][0]["style"]["vector_budget"], 384);
     assert_eq!(json["overrides"][0]["style"]["vector_length_scale"], 1.75);
+    assert_eq!(
+        json["overrides"][0]["quantity"]["active_quantity_id"],
+        "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["active_quantity_id"],
+        "h_demag"
+    );
 }
 
 #[tokio::test]
@@ -3092,6 +3151,97 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert!(presentation.visualization_trim.is_some());
     assert!(presentation.visualization_clip.is_some());
     assert!(presentation.visualization_vector_style.is_some());
+}
+
+#[tokio::test]
+async fn visualization_airbox_layer_patch_supersedes_initial_airbox_override() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state.clone());
+
+    let seeded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [
+                            {
+                                "scope": "airbox",
+                                "scope_id": "airbox",
+                                "visible": false,
+                                "display": { "visible": false },
+                                "quantity": { "active_quantity_id": "h_demag" }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(seeded.status(), StatusCode::OK);
+    let seeded_json = body_json(seeded).await;
+    assert_eq!(
+        seeded_json["targets"]["airbox"]["settings"]["visible"],
+        false
+    );
+    assert_eq!(
+        seeded_json["targets"]["airbox"]["settings"]["active_quantity_id"],
+        "h_demag"
+    );
+
+    let patched = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "layers": {
+                            "airbox": {
+                                "visible": true,
+                                "wireframe": { "visible": true }
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(patched.status(), StatusCode::OK);
+
+    let fetched = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched_json = body_json(fetched).await;
+    assert_eq!(fetched_json["layers"]["airbox"]["visible"], true);
+    assert_eq!(
+        fetched_json["targets"]["airbox"]["settings"]["visible"],
+        true
+    );
+    assert_eq!(
+        fetched_json["targets"]["airbox"]["settings"]["active_quantity_id"],
+        "h_demag"
+    );
 }
 
 #[tokio::test]
@@ -7821,8 +7971,14 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
     assert_eq!(json["stages"][0]["metric_name"], "max_torque_apm");
     assert_eq!(json["stages"][0]["metric_value"], 75.0);
     assert_eq!(json["stages"][0]["threshold"], 80.0);
-    assert_eq!(json["stages"][0]["completed_at_unix_ms"], 1_700_000_010_000u64);
-    assert_eq!(json["stages"][0]["artifact_refs"][0], "runs/run-1/stages/stage-relax");
+    assert_eq!(
+        json["stages"][0]["completed_at_unix_ms"],
+        1_700_000_010_000u64
+    );
+    assert_eq!(
+        json["stages"][0]["artifact_refs"][0],
+        "runs/run-1/stages/stage-relax"
+    );
     assert_eq!(json["stages"][0]["checkpoint_ref"], "cp-relaxed");
     assert_eq!(json["stages"][0]["stage_id"], "stage-relax");
     assert_eq!(json["stages"][0]["kind"], "relax");
@@ -9167,6 +9323,156 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
         .await
         .unwrap();
     assert_eq!(vector_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 1.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [6, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    1.0, 0.0, 0.0, //
+                    0.0, 1.0, 0.0, //
+                    0.0, 0.0, 1.0, //
+                    1.0, 0.0, 0.0, //
+                    0.0, 1.0, 0.0, //
+                    0.0, 0.0, 1.0,
+                ]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let quantities = catalog["quantities"]
+        .as_array()
+        .expect("field catalog quantities should be an array");
+    assert!(
+        quantities
+            .iter()
+            .all(|entry| entry["quantity_id"].as_str() != Some("m")),
+        "FEM live magnetization with a point count unrelated to the current mesh must not be advertised"
+    );
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::NOT_FOUND);
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 1.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [4, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![
+                    1.0, 0.0, 0.0, //
+                    0.0, 1.0, 0.0, //
+                    0.0, 0.0, 1.0, //
+                    -1.0, 0.0, 0.0,
+                ]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("4")
+    );
 }
 
 #[tokio::test]
@@ -10850,6 +11156,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         );
     }
     for required in [
+        "active_quantity_id",
         "visible",
         "bounds_visible",
         "surface_visible",
@@ -10868,7 +11175,9 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         );
     }
 
-    for required in ["scope", "scope_id", "visible", "display", "style"] {
+    for required in [
+        "scope", "scope_id", "visible", "display", "style", "quantity",
+    ] {
         assert!(
             override_props.contains(required),
             "VisualizationOverrideState missing target override field `{required}`"

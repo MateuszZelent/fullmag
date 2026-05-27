@@ -8,6 +8,13 @@ export type Viewport3DVectorColorMode =
   | "magnitude"
   | "monochrome";
 
+export type Viewport3DColorPalette =
+  | "coolwarm"
+  | "inferno"
+  | "jet"
+  | "magma"
+  | "viridis";
+
 export interface Viewport3DScalarColorRange {
   max: number;
   min: number;
@@ -21,6 +28,13 @@ const VECTOR_COLOR_MODES = new Set<Viewport3DVectorColorMode>([
   "magnitude",
   "monochrome",
 ]);
+const COLOR_PALETTES = new Set<Viewport3DColorPalette>([
+  "coolwarm",
+  "inferno",
+  "jet",
+  "magma",
+  "viridis",
+]);
 
 export function normalizeViewport3DVectorColorMode(
   value: string | null | undefined,
@@ -29,6 +43,16 @@ export function normalizeViewport3DVectorColorMode(
   const normalized = normalizeVectorColorToken(value);
   return VECTOR_COLOR_MODES.has(normalized as Viewport3DVectorColorMode)
     ? (normalized as Viewport3DVectorColorMode)
+    : fallback;
+}
+
+export function normalizeViewport3DColorPalette(
+  value: string | null | undefined,
+  fallback: Viewport3DColorPalette = "viridis",
+): Viewport3DColorPalette {
+  const normalized = value?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return COLOR_PALETTES.has(normalized as Viewport3DColorPalette)
+    ? (normalized as Viewport3DColorPalette)
     : fallback;
 }
 
@@ -69,16 +93,53 @@ const MAGNITUDE_STOPS: [number, number, number][] = [
   [0x35 / 255, 0xb7 / 255, 0x79 / 255],
   [0xfd / 255, 0xe7 / 255, 0x25 / 255],
 ];
+const PALETTE_STOPS: Record<
+  Viewport3DColorPalette,
+  [number, number, number][]
+> = {
+  coolwarm: [
+    [0x3b / 255, 0x4c / 255, 0xc0 / 255],
+    [0xdd / 255, 0xdd / 255, 0xdd / 255],
+    [0xb4 / 255, 0x04 / 255, 0x26 / 255],
+  ],
+  inferno: [
+    [0x00 / 255, 0x00 / 255, 0x04 / 255],
+    [0x42 / 255, 0x0a / 255, 0x68 / 255],
+    [0x93 / 255, 0x2b / 255, 0x5d / 255],
+    [0xdd / 255, 0x51 / 255, 0x3a / 255],
+    [0xfc / 255, 0xff / 255, 0xa4 / 255],
+  ],
+  jet: [
+    [0x00 / 255, 0x00 / 255, 0x7f / 255],
+    [0x00 / 255, 0x7f / 255, 0xff / 255],
+    [0x7f / 255, 0xff / 255, 0x7f / 255],
+    [0xff / 255, 0x7f / 255, 0x00 / 255],
+    [0x7f / 255, 0x00 / 255, 0x00 / 255],
+  ],
+  magma: [
+    [0x00 / 255, 0x00 / 255, 0x04 / 255],
+    [0x3b / 255, 0x0f / 255, 0x70 / 255],
+    [0x8c / 255, 0x29 / 255, 0x80 / 255],
+    [0xde / 255, 0x49 / 255, 0x68 / 255],
+    [0xfc / 255, 0xfd / 255, 0xbf / 255],
+  ],
+  viridis: MAGNITUDE_STOPS,
+};
 
 /**
- * Maps a relative magnitude [0..1] to an RGB colour using the Viridis palette.
+ * Maps a relative magnitude [0..1] to an RGB colour using the selected palette.
  */
-export function magnitudeColorRgb(t: number): [number, number, number] {
+export function magnitudeColorRgb(
+  t: number,
+  palette: string | null | undefined = "viridis",
+): [number, number, number] {
   const clamped = Math.min(Math.max(t, 0), 1);
-  const idx = Math.min(Math.floor(clamped * 3), 2);
-  const frac = clamped * 3 - idx;
-  const a = MAGNITUDE_STOPS[idx]!;
-  const b = MAGNITUDE_STOPS[idx + 1]!;
+  const stops = PALETTE_STOPS[normalizeViewport3DColorPalette(palette)];
+  const scaled = clamped * (stops.length - 1);
+  const idx = Math.min(Math.floor(scaled), stops.length - 2);
+  const frac = scaled - idx;
+  const a = stops[idx]!;
+  const b = stops[idx + 1]!;
   return [
     a[0] + (b[0] - a[0]) * frac,
     a[1] + (b[1] - a[1]) * frac,
@@ -97,13 +158,14 @@ export function resolveViewport3DVectorColorRgb(
   z: number,
   range: Viewport3DScalarColorRange,
   relMag = 1,
+  palette: string | null | undefined = "viridis",
 ): [number, number, number] | null {
   if (mode === "monochrome") return null;
   if (mode === "orientation") {
     return magnetizationHslRgb(x, y, z);
   }
   if (mode === "magnitude") {
-    return magnitudeColorRgb(relMag);
+    return magnitudeColorRgb(relMag, palette);
   }
 
   return scalarColorRgb(

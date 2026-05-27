@@ -9,7 +9,10 @@ import {
   fieldTransformNeedsChunking,
   resolveScalarRange,
 } from "./viewport3dFieldMapping";
-import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+import {
+  magnitudeColorRgb,
+  normalizeViewport3DColorPalette,
+} from "./viewport3dVectorColoring";
 
 function vectorField(values: number[], nComp = 3): DecodedFieldVector {
   return {
@@ -36,6 +39,53 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.range).toEqual({ max: 1, min: 0 });
     expect(Array.from(result?.colors ?? [])).toEqual(
       Array.from(Float32Array.from([...magnitudeColorRgb(0), ...magnitudeColorRgb(1)])),
+    );
+  });
+
+  it("applies the selected magnitude colormap palette to scalar colors", () => {
+    const result = buildVertexScalarColors(
+      vectorField([
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      2,
+      undefined,
+      "magnitude",
+      "inferno",
+    );
+
+    expect(normalizeViewport3DColorPalette("inferno")).toBe("inferno");
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(
+        Float32Array.from([
+          ...magnitudeColorRgb(0, "inferno"),
+          ...magnitudeColorRgb(1, "inferno"),
+        ]),
+      ),
+    );
+    expect(magnitudeColorRgb(0.5, "inferno")).not.toEqual(
+      magnitudeColorRgb(0.5, "viridis"),
+    );
+  });
+
+  it("uses the selected colormap for sampled FDM scalar colors", () => {
+    const result = buildSampledScalarColors(
+      vectorField([
+        0, 0, 0,
+        1, 0, 0,
+      ]),
+      Uint32Array.from([0, 1]),
+      "magnitude",
+      "coolwarm",
+    );
+
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(
+        Float32Array.from([
+          ...magnitudeColorRgb(0, "coolwarm"),
+          ...magnitudeColorRgb(1, "coolwarm"),
+        ]),
+      ),
     );
   });
 
@@ -164,6 +214,49 @@ describe("viewport3dFieldMapping", () => {
     });
     expect(result.colors).toHaveLength(9);
     expect(yieldToMain).toHaveBeenCalledTimes(4);
+  });
+
+  it("builds shader-only scalar values through a chunked transform", async () => {
+    const result = await buildVertexScalarColorsChunked(
+      vectorField([
+        1, 0, 0,
+        2, 0, 0,
+        3, 0, 0,
+      ]),
+      {
+        chunkSize: 1,
+        colorMode: "magnitude",
+        colorPalette: "inferno",
+        shaderOnly: true,
+      },
+    );
+
+    expect(result.colors).toHaveLength(0);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([1, 2, 3]);
+    expect(result.colorMode).toBe("magnitude");
+    expect(result.colorPalette).toBe("inferno");
+  });
+
+  it("builds shader-only vector values for chunked orientation colors", async () => {
+    const result = await buildVertexScalarColorsChunked(
+      vectorField([
+        1, 0, 0,
+        0, 0, 1,
+      ]),
+      {
+        chunkSize: 1,
+        colorMode: "orientation",
+        shaderOnly: true,
+      },
+    );
+
+    expect(result.colors).toHaveLength(0);
+    expect(result.scalarValues).toBeUndefined();
+    expect(Array.from(result.vectorValues ?? [])).toEqual([
+      1, 0, 0,
+      0, 0, 1,
+    ]);
+    expect(result.colorMode).toBe("orientation");
   });
 
   it("aborts stale chunked field transforms", async () => {

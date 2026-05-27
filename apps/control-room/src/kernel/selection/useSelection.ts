@@ -10,17 +10,6 @@ export { selectionSnapshotEquals } from "./selectionTypes";
 
 export type SelectionPatch = Partial<Omit<Selection, "moduleSource">>;
 
-/**
- * React hook for reading and writing kernel selection.
- * Re-renders only when the selection changes.
- */
-export function useSelection(moduleId: ModuleId) {
-  const state = useSelectionSelector((selection) => selection);
-  const { select, clear } = useSelectionActions(moduleId);
-
-  return { selection: state, select, clear } as const;
-}
-
 export function useSelectionActions(moduleId: ModuleId) {
   const { selection } = useKernel();
 

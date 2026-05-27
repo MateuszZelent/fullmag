@@ -110,6 +110,25 @@ describe("viewport3dRenderModel", () => {
     ]);
   });
 
+  it("deduplicates large tetrahedral volume edge ids without numeric pairing collisions", () => {
+    const largeNodeId = 94_906_266;
+
+    expect(
+      Array.from(
+        buildTetraVolumeEdgeIndices(
+          new Uint32Array([0, largeNodeId, 1, 2]),
+        ),
+      ),
+    ).toEqual([
+      0, largeNodeId,
+      0, 1,
+      0, 2,
+      1, largeNodeId,
+      2, largeNodeId,
+      1, 2,
+    ]);
+  });
+
   it("resolves center and radius from decoded topology positions", () => {
     const bounds = resolveTopologyBounds(topologyFixture());
 
@@ -757,6 +776,247 @@ describe("viewport3dRenderModel", () => {
     expect(model?.scalarColorsByMode.get("z")?.colors.length).toBe(12);
     expect(model?.scalarColorsByMode.get("magnitude")?.colors.length).toBe(12);
     expect(model?.scalarColorsByMode.has("monochrome")).toBe(false);
+  });
+
+  it("rejects full-domain field buffers that do not match the active topology node count", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const mismatchedFieldVector: DecodedFieldVector = {
+      ...fieldVectorFixture(),
+      pointCount: 3,
+      valueCount: 9,
+      values: new Float64Array([
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      mismatchedFieldVector,
+      0.5,
+      {
+        partVectorBudgets: new Map([["part-a", 2]]),
+        scalarColorModes: new Set(["magnitude"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(model?.scalarColors).toBeNull();
+    expect(model?.scalarColorsByMode.get("magnitude")).toBeNull();
+    expect(model?.fullVectorSegments).toBeNull();
+    expect(model?.partVectorSegments.get("part-a")).toBeNull();
+  });
+
+  it("maps magnetic-only FEM fields onto magnetic mesh nodes when the topology includes airbox nodes", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 2,
+        boundaryFaces: new Uint32Array([
+          2, 4, 6,
+          0, 1, 3,
+        ]),
+        boundaryMarkers: new Uint32Array([1, 0]),
+        elementCount: 2,
+        elementMarkers: new Uint32Array([1, 0]),
+        indices: new Uint32Array([
+          2, 4, 6, 7,
+          0, 1, 3, 5,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          10, 0, 0,
+          0, 1, 0,
+          11, 0, 0,
+          0, 0, 1,
+          10, 1, 0,
+          10, 0, 1,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_indices: [0],
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          label: "Magnetic Part",
+          node_indices: [2, 4, 6, 7],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_indices: [1],
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: [0, 1, 3, 5],
+        },
+      ],
+    );
+    const magneticOnlyField: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [4, 1, 1],
+      nComp: 3,
+      pointCount: 4,
+      quantityId: "m",
+      valueCount: 12,
+      values: new Float64Array([
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        -1, 0, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      magneticOnlyField,
+      0.5,
+      {
+        partVectorBudgets: new Map([["magnetic-part", 4]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    const colors = model?.scalarColorsByMode.get("x")?.colors;
+    expect(colors?.length).toBe(24);
+    expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(Array.from(colors!.slice(6, 9))).not.toEqual([0, 0, 0]);
+    expect(model?.partVectorSegments.get("magnetic-part")?.length).toBe(28);
+    expect(model?.partVectorSegments.get("airbox")).toBeNull();
+  });
+
+  it("builds per-part scalar colors from target-specific quantity vectors", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const targetQuantityVector = {
+      ...fieldVectorFixture(),
+      quantityId: "h_eff",
+      values: new Float64Array([
+        2, 0, 0,
+        0, 2, 0,
+        0, 0, 2,
+        2, 2, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        quantityId: "m",
+      },
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", targetQuantityVector]]),
+        scalarColorModes: new Set(["magnitude"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("magnitude")?.colors
+        .length,
+    ).toBe(12);
+  });
+
+  it("maps scoped per-part scalar colors onto global topology node indices", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        ...topologyFixture(),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          1, 2, 3, 4,
+        ]),
+        nodeCount: 5,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          1, 1, 0,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          node_indices: [2, 4],
+        },
+      ],
+      [],
+    );
+    const scopedTargetVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [2, 1, 1],
+      nComp: 3,
+      pointCount: 2,
+      quantityId: "h_eff",
+      valueCount: 6,
+      values: new Float64Array([
+        -1, 0, 0,
+        1, 0, 0,
+      ]),
+    };
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        pointCount: 5,
+        valueCount: 15,
+        values: new Float64Array(15),
+      },
+      0.5,
+      {
+        partFieldVectors: new Map([["part-a", scopedTargetVector]]),
+        scalarColorModes: new Set(["x"]),
+        scalarColorsVisible: true,
+      },
+    );
+
+    const colors =
+      model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.colors;
+    expect(colors).toBeDefined();
+    expect(Array.from(colors!.slice(0, 6))).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(colors![6]).toBe(0);
+    expect(colors![7]).toBeCloseTo(0.38);
+    expect(colors![8]).toBe(1);
+    expect(Array.from(colors!.slice(9, 12))).toEqual([0, 0, 0]);
+    expect(colors![12]).toBe(1);
+    expect(colors![13]).toBeCloseTo(0.38);
+    expect(colors![14]).toBe(0);
   });
 
   it("reuses unchanged part vector buffers when another part changes", () => {

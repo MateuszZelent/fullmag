@@ -39,6 +39,15 @@ import {
 } from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
 import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/Dialog";
+import {
   useMeshSharedDomainManifestResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -50,6 +59,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
+  buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   resolveVisualizationRenderResolution,
@@ -57,6 +67,7 @@ import {
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
+  visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
 
 const RENDER_MODES: Array<{
@@ -221,6 +232,7 @@ function remoteVisualizationTargetPatch(
   delete remotePatch.vectorCenteringEnabled;
   delete remotePatch.vectorSurfaceOffsetEnabled;
   delete remotePatch.vectorSurfaceOffsetScale;
+  delete remotePatch.primitiveVisible;
   return remotePatch;
 }
 
@@ -231,6 +243,7 @@ function VisualizationDisplayPassesSection({
   pending,
   renderWarning,
   settings,
+  targetKind,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
@@ -238,20 +251,88 @@ function VisualizationDisplayPassesSection({
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
+  targetKind: VisualizationTargetKind;
 }) {
+  const [airboxDiagnosticOpen, setAirboxDiagnosticOpen] = useState(false);
+  const airboxDiagnostic =
+    targetKind === "airbox"
+      ? buildAirboxVisibilityDiagnostic({
+          displaySettings,
+          renderWarning,
+          settings,
+        })
+      : null;
+
+  function handleVisibleClick(): void {
+    const nextVisible = !settings.visible;
+    void patch({ visible: nextVisible });
+    if (targetKind === "airbox" && nextVisible) {
+      setAirboxDiagnosticOpen(true);
+    } else if (targetKind === "airbox") {
+      setAirboxDiagnosticOpen(false);
+    }
+  }
+
   return (
     <InspectorSection title="Display Passes">
       {renderWarning ? (
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
       <div className="fm-visualization-toggle-grid">
-        <ToggleButton active={displaySettings.visible} disabled={pending} label="Visible" onClick={() => void patch({ visible: !settings.visible })} />
+        <ToggleButton
+          active={displaySettings.visible}
+          disabled={pending}
+          label="Visible"
+          onClick={handleVisibleClick}
+        />
         <ToggleButton active={displaySettings.shaderVisible} disabled={passControlsDisabled} label="Surface" onClick={() => void patch(surfaceDisplayPassPatch(settings))} />
         <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch({ wireframeVisible: !settings.wireframeVisible })} />
         <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
         <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
         <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
+        {targetKind === "object" ? (
+          <ToggleButton
+            active={Boolean(displaySettings.primitiveVisible)}
+            disabled={passControlsDisabled}
+            label="Primitive"
+            onClick={() =>
+              void patch({ primitiveVisible: !settings.primitiveVisible })
+            }
+          />
+        ) : null}
       </div>
+      <Dialog
+        open={airboxDiagnosticOpen && airboxDiagnostic !== null}
+        onOpenChange={setAirboxDiagnosticOpen}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {airboxDiagnostic?.title ?? "Airbox visibility diagnostic"}
+            </DialogTitle>
+            <DialogDescription>
+              {airboxDiagnostic?.message ??
+                "Airbox visibility state is not available."}
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            {airboxDiagnostic?.details.map((detail) => (
+              <FieldRow
+                key={detail.label}
+                label={detail.label}
+                value={detail.value}
+              />
+            ))}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button size="sm" type="button" variant="secondary">
+                Close
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </InspectorSection>
   );
 }
@@ -334,6 +415,36 @@ function VisualizationSurfaceColoringSection({
           fieldCatalog.status,
         )}
       />
+    </InspectorSection>
+  );
+}
+
+function VisualizationQuantitySection({
+  patch,
+  pending,
+  settings,
+}: {
+  patch: PatchVisualizationTarget;
+  pending: boolean;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Quantity Source">
+      <FormField
+        disabled={pending}
+        label="Quantity source"
+        type="select"
+        value={settings.activeQuantityId}
+        onChange={(event) =>
+          void patch({ activeQuantityId: event.target.value })
+        }
+      >
+        {visualizationQuantityItems(settings.activeQuantityId).map((quantity) => (
+          <option key={quantity.value} value={quantity.value}>
+            {quantity.label}
+          </option>
+        ))}
+      </FormField>
     </InspectorSection>
   );
 }
@@ -536,7 +647,9 @@ function VisualizationOverridesSection({
   );
 }
 
-export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
+function useObjectVisualizationPanelState(
+  selection: InspectorPanelProps["selection"],
+) {
   const target = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
@@ -619,7 +732,10 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     if (target.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
-      const statePatch = airboxVisualizationStatePatchFromTargetPatch(patchValue);
+      const statePatch = airboxVisualizationStatePatchFromTargetPatch(
+        patchValue,
+        visualizationState.data?.overrides,
+      );
       if (Object.keys(localPatch).length > 0) {
         visualization.patchTarget(target, localPatch);
       }
@@ -761,17 +877,9 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     });
   })();
 
-  if (!target || !settings) {
-    return (
-      <div className="fm-inspector-panel">
-        <InspectorSection title="Visualization">
-          <FieldRow label="Target" value="No visualization target" />
-        </InspectorSection>
-      </div>
-    );
-  }
-
-  const displaySettings = renderResolution?.finalSettings ?? effectiveSettings ?? settings;
+  const displaySettings = settings
+    ? renderResolution?.finalSettings ?? effectiveSettings ?? settings
+    : null;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
 
   function onTogglePartVectors(partId: string, visible: boolean) {
@@ -788,6 +896,86 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       ),
     });
   }
+
+  return {
+    displaySettings,
+    effectiveSettings,
+    feedback,
+    fieldCatalog,
+    onTogglePartVectors,
+    passControlsDisabled,
+    patch,
+    patchColor,
+    patchNumber,
+    pending,
+    renderResolution,
+    renderWarning,
+    resetTarget,
+    revision,
+    sectionDisabled,
+    settings,
+    target,
+    vectorMeshParts,
+  } as const;
+}
+
+type ObjectVisualizationPanelState = ReturnType<
+  typeof useObjectVisualizationPanelState
+>;
+type ResolvedObjectVisualizationPanelState = Omit<
+  ObjectVisualizationPanelState,
+  "displaySettings" | "settings" | "target"
+> & {
+  displaySettings: VisualizationTargetSettings;
+  settings: VisualizationTargetSettings;
+  target: VisualizationTargetRef;
+};
+
+export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
+  const panel = useObjectVisualizationPanelState(selection);
+  const { displaySettings, settings, target } = panel;
+
+  if (!target || !settings || !displaySettings) {
+    return (
+      <div className="fm-inspector-panel">
+        <InspectorSection title="Visualization">
+          <FieldRow label="Target" value="No visualization target" />
+        </InspectorSection>
+      </div>
+    );
+  }
+
+  return (
+    <ObjectVisualizationPanelView
+      panel={{ ...panel, displaySettings, settings, target }}
+    />
+  );
+}
+
+function ObjectVisualizationPanelView({
+  panel,
+}: {
+  panel: ResolvedObjectVisualizationPanelState;
+}) {
+  const {
+    displaySettings,
+    feedback,
+    fieldCatalog,
+    onTogglePartVectors,
+    passControlsDisabled,
+    patch,
+    patchColor,
+    patchNumber,
+    pending,
+    renderResolution,
+    renderWarning,
+    resetTarget,
+    revision,
+    sectionDisabled,
+    settings,
+    target,
+    vectorMeshParts,
+  } = panel;
 
   return (
     <div className="fm-inspector-panel" data-visualization-revision={revision}>
@@ -812,11 +1000,18 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         pending={pending}
         renderWarning={renderWarning}
         settings={settings}
+        targetKind={target.kind}
       />
+
       <VisualizationRenderModeSection
         displaySettings={displaySettings}
         passControlsDisabled={passControlsDisabled}
         patch={patch}
+      />
+      <VisualizationQuantitySection
+        patch={patch}
+        pending={pending}
+        settings={settings}
       />
       <VisualizationSurfaceColoringSection
         patch={patch}
@@ -914,21 +1109,16 @@ function NumberField({
   unit?: string;
   value: number;
 }) {
-  const [draftValue, setDraftValue] = useState(value);
+  const [draftOverride, setDraftOverride] = useState<number | null>(null);
   const editingRef = useRef(false);
   const latestOnChangeRef = useRef(onChange);
   const pendingValueRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+  const displayValue = draftOverride ?? value;
 
   useEffect(() => {
     latestOnChangeRef.current = onChange;
   }, [onChange]);
-
-  useEffect(() => {
-    if (!editingRef.current) {
-      setDraftValue(value);
-    }
-  }, [value]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -941,6 +1131,7 @@ function NumberField({
     const pendingValue = pendingValueRef.current;
     editingRef.current = false;
     pendingValueRef.current = null;
+    setDraftOverride(null);
     clearTimer();
     if (pendingValue !== null) {
       latestOnChangeRef.current(pendingValue);
@@ -949,17 +1140,11 @@ function NumberField({
 
   useEffect(() => () => clearTimer(), [clearTimer]);
 
-  useEffect(() => {
-    if (disabled) {
-      flushDraft();
-    }
-  }, [disabled, flushDraft]);
-
   const scheduleDraft = useCallback(
     (nextValue: number) => {
       editingRef.current = true;
       pendingValueRef.current = nextValue;
-      setDraftValue(nextValue);
+      setDraftOverride(nextValue);
       clearTimer();
       timerRef.current = window.setTimeout(
         flushDraft,
@@ -971,13 +1156,13 @@ function NumberField({
 
   const pct = Math.max(
     0,
-    Math.min(100, ((draftValue - min) / (max - min)) * 100),
+    Math.min(100, ((displayValue - min) / (max - min)) * 100),
   );
 
   return (
     <label className="fm-visualization-range">
       <span>
-        {unit ? `${label}: ${draftValue}${unit}` : `${label}: ${draftValue}`}
+        {unit ? `${label}: ${displayValue}${unit}` : `${label}: ${displayValue}`}
       </span>
       <input
         disabled={disabled}
@@ -986,7 +1171,7 @@ function NumberField({
         step={step}
         style={{ "--pct": `${pct}%` } as React.CSSProperties}
         type="range"
-        value={draftValue}
+        value={displayValue}
         onBlur={flushDraft}
         onChange={(event) => scheduleDraft(Number(event.target.value))}
         onKeyUp={flushDraft}

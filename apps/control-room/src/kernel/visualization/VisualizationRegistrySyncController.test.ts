@@ -117,7 +117,7 @@ function visualizationState(
       profile: "balanced",
       progressive: true,
     },
-    schema_version: 4,
+    schema_version: 5,
     slice: {
       axis: "z",
       auto_contrast: true,
@@ -148,6 +148,7 @@ function visualizationState(
         scope: "airbox",
         scope_id: "airbox",
         settings: {
+          active_quantity_id: "m",
           bounds_visible: false,
           geometry_scope: "full",
           opacity: 0.28,

@@ -110,6 +110,7 @@ def _apply_mesh_options(
     gmsh.option.setNumber("Mesh.Algorithm3D", algorithm_3d)
     gmsh.option.setNumber("Mesh.MeshSizeFactor", opts.size_factor)
     gmsh.option.setNumber("Mesh.Smoothing", opts.smoothing_steps)
+    gmsh.option.setNumber("Mesh.Optimize", 0)
 
     if opts.hmin is not None:
         gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * hscale)
@@ -654,6 +655,8 @@ def _add_component_volume_constant_field(
     gmsh.model.mesh.field.setNumbers(field_id, "VolumesList", volume_tags)
     gmsh.model.mesh.field.setNumber(field_id, "VIn", float(vin) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "VOut", float(vout) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "IncludeBoundary", 1)
+    gmsh.model.mesh.field.setNumber(field_id, "IncludeEmbedded", 1)
     return field_id
 
 

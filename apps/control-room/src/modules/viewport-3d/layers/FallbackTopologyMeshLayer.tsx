@@ -22,6 +22,7 @@ import {
   buildLineIndexGeometry,
   buildSurfaceEdgeGeometry,
 } from "../viewport3dSurfaceEdges";
+import { buildViewport3DPointGeometry } from "../viewport3dPointGeometry";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -31,6 +32,12 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import {
+  applyScalarShaderColorBuffer,
+  canApplyScalarShaderColorBuffer,
+  createScalarSurfaceShaderMaterial,
+  updateScalarSurfaceShaderMaterial,
+} from "../viewport3dScalarSurfaceShader";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -108,6 +115,20 @@ export function FallbackTopologyMeshLayer({
     () => () => tracker.release("geometry", edgeGeometry),
     [edgeGeometry, tracker],
   );
+  const pointGeometry = useMemo(() => {
+    if (!topologyModel) return null;
+    const selection =
+      fallbackSettings.geometryScope === "full"
+        ? null
+        : { nodeIndices: uniqueSortedSurfaceIndices(topologyModel.fallbackSurfaceIndices) };
+    const next = buildViewport3DPointGeometry(topologyModel, selection);
+    return next ? tracker.track("geometry", next) : null;
+  }, [fallbackSettings.geometryScope, topologyModel, tracker]);
+
+  useEffect(
+    () => () => tracker.release("geometry", pointGeometry),
+    [pointGeometry, tracker],
+  );
 
   const scalarColorMode = surfaceScalarColorModeFromSettings(fallbackSettings);
   const scalarColors = scalarColorMode
@@ -116,15 +137,40 @@ export function FallbackTopologyMeshLayer({
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
     Boolean(meshQualityColors) || shaderUsesVertexColors(fallbackSettings);
+  const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
+    effectiveScalarColors,
+    topologyModel?.nodeCount ?? 0,
+  );
+  const shaderScalarColorsEnabled =
+    !meshQualityColors &&
+    vertexColorsEnabled &&
+    canApplyScalarShaderColorBuffer(
+      effectiveScalarColors,
+      topologyModel?.nodeCount ?? 0,
+    ) &&
+    !canUseVertexScalarColors;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
-    applyVertexScalarColorBuffer(
-      geometry,
-      vertexColorsEnabled ? effectiveScalarColors : null,
-      topologyModel.nodeCount,
-    );
+    if (shaderScalarColorsEnabled) {
+      applyScalarShaderColorBuffer(
+        geometry,
+        effectiveScalarColors,
+        topologyModel.nodeCount,
+      );
+    } else {
+      applyScalarShaderColorBuffer(geometry, null, topologyModel.nodeCount);
+      applyVertexScalarColorBuffer(
+        geometry,
+        vertexColorsEnabled ? effectiveScalarColors : null,
+        topologyModel.nodeCount,
+      );
+    }
     tracker.recordDirtyFrame(
-      meshQualityColors ? "mesh-quality-colors" : "field-colors",
+      shaderScalarColorsEnabled
+        ? "field-scalar-shader"
+        : meshQualityColors
+          ? "mesh-quality-colors"
+          : "field-colors",
     );
     invalidate();
   }, [
@@ -132,10 +178,50 @@ export function FallbackTopologyMeshLayer({
     geometry,
     invalidate,
     meshQualityColors,
+    shaderScalarColorsEnabled,
     topologyModel,
     tracker,
     vertexColorsEnabled,
   ]);
+
+  const hasScalarColors =
+    vertexColorsEnabled && canUseVertexScalarColors;
+  const surfaceOpacity = opacityFromSettings(fallbackSettings);
+  const surfacePolicy = useMemo(
+    () => surfaceMaterialPolicyProps(surfaceOpacity),
+    [surfaceOpacity],
+  );
+  const scalarShaderMaterial = useMemo(() => {
+    if (!shaderScalarColorsEnabled || !effectiveScalarColors) return null;
+    return tracker.track(
+      "material",
+      createScalarSurfaceShaderMaterial(effectiveScalarColors, {
+        ...surfacePolicy,
+        opacity: surfaceOpacity,
+        toneMapped: materialProfile.magneticSurface.toneMapped,
+      }),
+    );
+  }, [
+    effectiveScalarColors,
+    materialProfile.magneticSurface.toneMapped,
+    shaderScalarColorsEnabled,
+    surfaceOpacity,
+    surfacePolicy,
+    tracker,
+  ]);
+
+  useEffect(
+    () => () => tracker.release("material", scalarShaderMaterial),
+    [scalarShaderMaterial, tracker],
+  );
+  useEffect(() => {
+    if (!scalarShaderMaterial || !effectiveScalarColors) return;
+    updateScalarSurfaceShaderMaterial(
+      scalarShaderMaterial,
+      effectiveScalarColors,
+      surfaceOpacity,
+    );
+  }, [effectiveScalarColors, scalarShaderMaterial, surfaceOpacity]);
 
   if (!geometry) return null;
   if (
@@ -160,33 +246,31 @@ export function FallbackTopologyMeshLayer({
 
     onSelectDomain();
   };
-  const hasScalarColors =
-    vertexColorsEnabled &&
-    canApplyVertexScalarColorBuffer(
-      effectiveScalarColors,
-      topologyModel?.nodeCount ?? 0,
-    );
 
   return (
     <group onPointerDown={handlePointerDown}>
       {fallbackSettings.shaderVisible ? (
         <mesh
           geometry={geometry}
-          renderOrder={surfaceMaterialPolicyProps(opacityFromSettings(fallbackSettings)).transparent
+          renderOrder={surfacePolicy.transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
             : RENDER_POLICIES.solidSurface.renderOrder}
         >
-          <meshStandardMaterial
-            color={surfaceMaterialColorFromSettings(
-              fallbackSettings,
-              colors.mesh,
-              hasScalarColors,
-            )}
-            opacity={opacityFromSettings(fallbackSettings)}
-            {...materialProfile.magneticSurface}
-            vertexColors={hasScalarColors}
-            {...surfaceMaterialPolicyProps(opacityFromSettings(fallbackSettings))}
-          />
+          {scalarShaderMaterial ? (
+            <primitive attach="material" object={scalarShaderMaterial} />
+          ) : (
+            <meshStandardMaterial
+              color={surfaceMaterialColorFromSettings(
+                fallbackSettings,
+                colors.mesh,
+                hasScalarColors,
+              )}
+              opacity={surfaceOpacity}
+              {...materialProfile.magneticSurface}
+              vertexColors={hasScalarColors}
+              {...surfacePolicy}
+            />
+          )}
         </mesh>
       ) : null}
       {fallbackSettings.wireframeVisible && edgeGeometry ? (
@@ -219,14 +303,14 @@ export function FallbackTopologyMeshLayer({
           />
         </lineSegments>
       ) : null}
-      {fallbackSettings.pointsVisible ? (
+      {fallbackSettings.pointsVisible && pointGeometry ? (
         <points
-          geometry={geometry}
+          geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
             color={colors.wire}
-            opacity={opacityFromSettings(fallbackSettings)}
+            opacity={surfaceOpacity}
             sizeAttenuation={false}
             size={3}
             {...materialPolicyProps("points")}
@@ -241,7 +325,7 @@ export function FallbackTopologyMeshLayer({
             vectorColorMode,
           )}
           materialProfile={materialProfile.glyphs}
-          opacity={opacityFromSettings(fallbackSettings)}
+          opacity={surfaceOpacity}
           segments={fieldModel?.fullVectorSegments ?? null}
           style={vectorStyleFromSettings(fallbackSettings, vectorStyle)}
           tracker={tracker}
@@ -249,4 +333,8 @@ export function FallbackTopologyMeshLayer({
       ) : null}
     </group>
   );
+}
+
+function uniqueSortedSurfaceIndices(indices: Uint32Array): number[] {
+  return [...new Set(indices)].toSorted((left, right) => left - right);
 }

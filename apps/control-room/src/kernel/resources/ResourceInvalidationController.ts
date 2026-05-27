@@ -17,7 +17,8 @@ export class ResourceInvalidationController {
   }
 
   invalidate(resourceKey: ResourceKey, revision: ResourceRevision): void {
-    if (this.revisions.get(resourceKey) === revision) {
+    const current = this.revisions.get(resourceKey);
+    if (current === revision || isOlderNumericRevision(revision, current)) {
       return;
     }
 
@@ -59,4 +60,15 @@ export class ResourceInvalidationController {
       }
     };
   }
+}
+
+function isOlderNumericRevision(
+  next: ResourceRevision,
+  current: ResourceRevision | undefined,
+): boolean {
+  return (
+    typeof next === "number" &&
+    typeof current === "number" &&
+    next < current
+  );
 }

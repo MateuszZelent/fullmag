@@ -316,6 +316,7 @@ class MagnetHandle:
         *,
         show: bool = True,
         mode: str | None = None,
+        active_quantity_id: str | None = None,
     ) -> "MagnetHandle":
         """Declare an initial viewport display hint for this geometry.
 
@@ -326,12 +327,21 @@ class MagnetHandle:
         mode:
             Display mode, e.g. ``"surface"``, ``"vectors"``, ``"wireframe"``.
             ``None`` leaves the control room at its own default.
+        active_quantity_id:
+            Per-object quantity to display when the session opens.  ``None``
+            inherits the study/global quantity.
         """
         hint: dict[str, object] = {"show": bool(show)}
         if mode is not None:
             if not isinstance(mode, str) or not mode.strip():
                 raise ValueError("visualization mode must be a non-empty string")
             hint["mode"] = mode
+        if active_quantity_id is not None:
+            if not isinstance(active_quantity_id, str):
+                raise TypeError("active_quantity_id must be a string or None")
+            if not active_quantity_id.strip():
+                raise ValueError("active_quantity_id must not be empty")
+            hint["active_quantity_id"] = active_quantity_id
         self._visualization = hint
         _state._register_geometry_visualization_hint(self._name, hint)
         return self
@@ -864,8 +874,10 @@ class GeometryMeshHandle:
             require_positive(float(interface_thickness), f"{self._owner._name}.mesh.interface_thickness")
             spec.interface_thickness = float(interface_thickness)
         if transition_distance is not None:
-            require_positive(float(transition_distance), f"{self._owner._name}.mesh.transition_distance")
-            spec.transition_distance = float(transition_distance)
+            resolved_transition_distance = float(transition_distance)
+            if resolved_transition_distance < 0.0:
+                raise ValueError(f"{self._owner._name}.mesh.transition_distance must be non-negative")
+            spec.transition_distance = resolved_transition_distance
         if transition_growth is not None:
             require_positive(float(transition_growth), f"{self._owner._name}.mesh.transition_growth")
             spec.transition_growth = float(transition_growth)
@@ -1185,12 +1197,16 @@ class _WorldState:
     _last_step: Any | None = None
 
     def _register_geometry_visualization_hint(self, name: str, hint: dict[str, object]) -> None:
-        self._geometry_visualization_hints[name] = hint
+        previous = self._geometry_visualization_hints.get(name, {})
+        self._geometry_visualization_hints[name] = {**previous, **hint}
 
     def _register_airbox_visualization_hint(self, hint: dict[str, object]) -> None:
         if self._visualization_hint is None:
             self._visualization_hint = {}
-        self._visualization_hint["airbox"] = hint
+        previous = self._visualization_hint.get("airbox")
+        if not isinstance(previous, dict):
+            previous = {}
+        self._visualization_hint["airbox"] = {**previous, **hint}
 
     # Problem name
     _name: str = "fullmag_sim"
@@ -2364,6 +2380,7 @@ class StudyAirboxVisualizationHandle:
         *,
         show: bool = True,
         mode: str | None = None,
+        active_quantity_id: str | None = None,
     ) -> "StudyBuilder":
         """Declare an initial viewport display hint for the airbox.
 
@@ -2373,12 +2390,21 @@ class StudyAirboxVisualizationHandle:
             Whether the airbox should be visible when the session opens.
         mode:
             Display mode, e.g. ``\"vectors\"``, ``\"surface\"``, ``\"wireframe\"``.\n            ``None`` leaves the control room at its own default.
+        active_quantity_id:
+            Per-airbox quantity to display when the session opens.  ``None``
+            inherits the study/global quantity.
         """
         hint: dict[str, object] = {"show": bool(show)}
         if mode is not None:
             if not isinstance(mode, str) or not mode.strip():
                 raise ValueError("visualization mode must be a non-empty string")
             hint["mode"] = mode
+        if active_quantity_id is not None:
+            if not isinstance(active_quantity_id, str):
+                raise TypeError("active_quantity_id must be a string or None")
+            if not active_quantity_id.strip():
+                raise ValueError("active_quantity_id must not be empty")
+            hint["active_quantity_id"] = active_quantity_id
         _state._register_airbox_visualization_hint(hint)
         return self._owner
 
@@ -3601,10 +3627,23 @@ def _resolve_flat_fem_hint() -> FEM | None:
         and shared_source is None
     )
 
+    def _resolve_object_base_hmax() -> float | str | None:
+        explicit_hmaxs = _explicit_object_hmaxs()
+        if isinstance(shared_hmax, (int, float)):
+            return float(shared_hmax)
+        if shared_hmax == "auto":
+            return "auto"
+        if explicit_hmaxs and all(isinstance(value, (int, float)) for value in explicit_hmaxs):
+            return max(float(value) for value in explicit_hmaxs)
+        if explicit_hmaxs and len(set(explicit_hmaxs)) == 1 and explicit_hmaxs[0] == "auto":
+            return "auto"
+        return None
+
     resolved_hmax = shared_hmax
     if generated_shared_domain:
         strict_domain_requirements = build_requested
         airbox_hmax = s._study_universe.airbox_hmax
+        resolved_hmax = _resolve_object_base_hmax()
         if airbox_hmax is None:
             has_shared_base_hmax = isinstance(shared_hmax, (int, float)) or shared_hmax == "auto"
             if strict_domain_requirements and not has_shared_base_hmax:
@@ -3612,23 +3651,12 @@ def _resolve_flat_fem_hint() -> FEM | None:
                     "Generated shared-domain FEM mesh requires an explicit airbox maximum_element_size. "
                     "Set study.universe.mesh(maximum_element_size=...)."
                 )
-            explicit_hmaxs = _explicit_object_hmaxs()
-            if isinstance(shared_hmax, (int, float)):
-                resolved_hmax = float(shared_hmax)
-            elif shared_hmax == "auto":
-                resolved_hmax = "auto"
-            elif explicit_hmaxs and all(isinstance(value, (int, float)) for value in explicit_hmaxs):
-                resolved_hmax = max(float(value) for value in explicit_hmaxs)
-            elif explicit_hmaxs and len(set(explicit_hmaxs)) == 1 and explicit_hmaxs[0] == "auto":
-                resolved_hmax = "auto"
-            else:
+            if resolved_hmax is None:
                 resolved_hmax = "auto"
             emit_progress(
                 "No explicit airbox maximum_element_size provided for generated shared-domain FEM mesh; "
                 "falling back to implicit base mesh size"
             )
-        else:
-            resolved_hmax = float(airbox_hmax)
         missing_object_hmax = [
             handle._name for handle in s._magnets if handle._mesh_spec.hmax is None
         ] if default_spec.hmax is None else []
@@ -3642,12 +3670,19 @@ def _resolve_flat_fem_hint() -> FEM | None:
                 )
             emit_progress(
                 "No explicit per-object maximum_element_size for all magnetic geometries; "
-                "using shared-domain base mesh size as compatibility fallback"
+                "using implicit auto object mesh size as compatibility fallback"
             )
+            if resolved_hmax is None:
+                resolved_hmax = "auto"
         if isinstance(resolved_hmax, (int, float)):
             emit_progress(
-                "Using shared-domain base mesh size "
+                "Using magnetic-domain base mesh size "
                 f"({resolved_hmax * 1e9:.2f} nm)"
+            )
+        if airbox_hmax is not None:
+            emit_progress(
+                "Using airbox maximum element size "
+                f"({float(airbox_hmax) * 1e9:.2f} nm)"
             )
     elif resolved_hmax is None and study_surface:
         explicit_hmaxs = _explicit_object_hmaxs()

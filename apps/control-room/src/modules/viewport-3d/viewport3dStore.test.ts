@@ -54,6 +54,9 @@ describe("viewport3dStore", () => {
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
+      fdmTopographyAmplitudeCells: 0,
+      fdmTopographyComponent: "z",
+      fdmTopographyEnabled: false,
       hslReferenceMode: "auto",
       rotationMode: "camera",
       scaleLabelsVisible: true,
@@ -78,6 +81,9 @@ describe("viewport3dStore", () => {
       effectAmbientOcclusion: false,
       effectAntialias: true,
       effectBloom: false,
+      fdmTopographyAmplitudeCells: 0,
+      fdmTopographyComponent: "z",
+      fdmTopographyEnabled: false,
       hslReferenceMode: "off",
       rotationMode: "camera",
       scaleLabelsVisible: true,
@@ -113,6 +119,20 @@ describe("viewport3dStore", () => {
 
     viewport3dStore.setRotationMode("camera");
     expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
+  });
+
+  it("updates FDM topography preferences", () => {
+    viewport3dStore.resetForTest();
+
+    viewport3dStore.setFdmTopographyEnabled(true);
+    viewport3dStore.setFdmTopographyAmplitudeCells(2.5);
+    viewport3dStore.setFdmTopographyComponent("magnitude");
+
+    expect(viewport3dStore.getSnapshot().widgets).toMatchObject({
+      fdmTopographyAmplitudeCells: 2.5,
+      fdmTopographyComponent: "magnitude",
+      fdmTopographyEnabled: true,
+    });
   });
 
   it("opens and closes the camera dialog from module commands", () => {

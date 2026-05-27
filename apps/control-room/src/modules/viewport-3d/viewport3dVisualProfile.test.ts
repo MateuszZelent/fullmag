@@ -76,19 +76,19 @@ describe("viewport3d visual profiles", () => {
     });
   });
 
-  it("lets the viewport antialias command override profile antialiasing", () => {
+  it("keeps native canvas antialiasing profile-owned", () => {
     expect(
       resolveViewport3DCanvasGlOptions(
         getViewport3DVisualProfile("interactive"),
         false,
       ),
-    ).toMatchObject({ antialias: false });
+    ).toMatchObject({ antialias: true });
     expect(
       resolveViewport3DCanvasGlOptions(
         getViewport3DVisualProfile("interactive-lite"),
         true,
       ),
-    ).toMatchObject({ antialias: true });
+    ).toMatchObject({ antialias: false });
   });
 
   it("configures ACES tone mapping for quality profiles", () => {

@@ -66,6 +66,9 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.rotation-camera")).toBeDefined();
     expect(registry.get("viewport-3d.rotation-object")).toBeDefined();
     expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
+    expect(registry.get("viewport-3d.fdm-topography-toggle")).toBeDefined();
+    expect(registry.get("viewport-3d.fdm-topography-component-magnitude"))
+      .toBeDefined();
 
     await registry.execute("viewport-3d.toggle-viewcube", { source: "test" });
     expect(viewport3dStore.getSnapshot().widgets.viewCubeVisible).toBe(false);
@@ -88,6 +91,16 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
     expect(registry.isActive("viewport-3d.rotation-object", { source: "test" }))
       .toBe(true);
+
+    await registry.execute("viewport-3d.fdm-topography-toggle", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled).toBe(true);
+    await registry.execute(
+      "viewport-3d.fdm-topography-component-magnitude",
+      { source: "test" },
+    );
+    expect(viewport3dStore.getSnapshot().widgets.fdmTopographyComponent).toBe(
+      "magnitude",
+    );
   });
 
   it("contributes dimension frame commands for the ribbon and palette", async () => {

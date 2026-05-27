@@ -331,4 +331,28 @@ describe("CameraRegistryController", () => {
       controller.shouldSuppressInvalidation(VISUALIZATION_STATE_PATH, 44),
     ).toBe(false);
   });
+
+  it("does not adopt an older backend camera revision after syncing local state", async () => {
+    const staleRemote = camera({ position: [0, 0, 1] });
+    const syncedCamera = camera({
+      position: [4, 5, 6],
+      target: [0, 0, 0],
+      up: [0, 0, 1],
+    });
+    const { controller } = createController({
+      patch: vi.fn(async () => visualizationState(11, syncedCamera)),
+    });
+
+    controller.observeRemoteState(visualizationState(10, staleRemote));
+    controller.patchCamera({
+      position: syncedCamera.position,
+      target: syncedCamera.target,
+      up: syncedCamera.up,
+    });
+    await controller.flushDue();
+    controller.observeRemoteState(visualizationState(10, staleRemote));
+
+    expect(controller.getSnapshot().camera).toEqual(syncedCamera);
+    expect(controller.getSnapshot().lastRemoteRevision).toBe(11);
+  });
 });

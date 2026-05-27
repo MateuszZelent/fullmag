@@ -144,7 +144,8 @@ function PrimitiveObject({
     [edgeGeometry, tracker],
   );
 
-  if (!settings.visible) return null;
+  if (!settings.visible || settings.primitiveVisible === false) return null;
+
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();

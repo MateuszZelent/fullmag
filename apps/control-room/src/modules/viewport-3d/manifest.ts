@@ -5,6 +5,7 @@ import { viewport3dStore } from "./viewport3dStore";
 import type {
   Viewport3DDimensionFrameDensity,
   Viewport3DDimensionFrameMode,
+  Viewport3DFdmTopographyComponent,
   Viewport3DScaleUnitMode,
 } from "./viewport3dStore";
 import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
@@ -111,6 +112,32 @@ const SCALE_UNIT_COMMANDS: Array<{
     id: "viewport-3d.scale-unit-m",
     title: "Use Meter Scale Units",
     unitMode: "m",
+  },
+];
+const FDM_TOPOGRAPHY_COMPONENT_COMMANDS: Array<{
+  component: Viewport3DFdmTopographyComponent;
+  id: string;
+  title: string;
+}> = [
+  {
+    component: "z",
+    id: "viewport-3d.fdm-topography-component-z",
+    title: "Use Z FDM Topography",
+  },
+  {
+    component: "magnitude",
+    id: "viewport-3d.fdm-topography-component-magnitude",
+    title: "Use Magnitude FDM Topography",
+  },
+  {
+    component: "x",
+    id: "viewport-3d.fdm-topography-component-x",
+    title: "Use X FDM Topography",
+  },
+  {
+    component: "y",
+    id: "viewport-3d.fdm-topography-component-y",
+    title: "Use Y FDM Topography",
   },
 ];
 
@@ -333,6 +360,47 @@ export const viewport3dManifest: ModuleManifest = {
           command.unitMode,
         run: () => {
           viewport3dStore.setScaleUnitMode(command.unitMode);
+          return { status: "completed" as const };
+        },
+      })),
+      {
+        id: "viewport-3d.fdm-topography-toggle",
+        title: "Toggle FDM Voxel Topography",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled,
+        run: () => {
+          const current =
+            viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled;
+          viewport3dStore.setFdmTopographyEnabled(!current);
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.fdm-topography-amplitude",
+        title: "Set FDM Voxel Topography Amplitude",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        run: (context) => {
+          const value = Number(context.input);
+          viewport3dStore.setFdmTopographyAmplitudeCells(value);
+          return { status: "completed" };
+        },
+      },
+      ...FDM_TOPOGRAPHY_COMPONENT_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.fdmTopographyComponent ===
+          command.component,
+        run: () => {
+          viewport3dStore.setFdmTopographyComponent(command.component);
           return { status: "completed" as const };
         },
       })),

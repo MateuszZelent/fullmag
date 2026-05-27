@@ -1,6 +1,6 @@
 import type { CommandContext, CommandId } from "./commandTypes";
 
-export type CommandDiagnosticStatus =
+type CommandDiagnosticStatus =
   | "cancelled"
   | "completed"
   | "disabled"

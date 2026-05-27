@@ -43,6 +43,23 @@ describe("ResourceInvalidationController", () => {
     expect(controller.getRevision("session:status")).toBe(4);
   });
 
+  it("does not move numeric resource revisions backwards", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const eventListener = vi.fn();
+    const resourceListener = vi.fn();
+
+    bus.on("resource:invalidated", eventListener);
+    controller.subscribe("visualization/state", resourceListener);
+
+    controller.invalidate("visualization/state", 11);
+    controller.invalidate("visualization/state", 10);
+
+    expect(controller.getRevision("visualization/state")).toBe(11);
+    expect(resourceListener).toHaveBeenCalledTimes(1);
+    expect(eventListener).toHaveBeenCalledTimes(1);
+  });
+
   it("invalidates subscribed child resources by prefix", () => {
     const bus = new EventBus<KernelEventMap>();
     const controller = new ResourceInvalidationController(bus);

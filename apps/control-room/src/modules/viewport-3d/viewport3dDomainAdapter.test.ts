@@ -119,6 +119,30 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.partsById.get("part-air")?.role).toBe("air");
   });
 
+  it("indexes mesh parts by object and geometry aliases", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [
+      {
+        boundary_face_count: 4,
+        boundary_face_start: 0,
+        element_count: 12,
+        element_start: 0,
+        geometry_id: "object-1_geom",
+        id: "part-magnet",
+        label: "Magnet",
+        node_count: 8,
+        node_start: 0,
+        object_id: "object-1",
+        role: "magnetic",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.objectPartIds.get("object-1")).toEqual(["part-magnet"]);
+    expect(domain.objectPartIds.get("object-1_geom")).toEqual(["part-magnet"]);
+  });
+
   it("keeps helper boundary and interface parts out of renderable FEM part lists", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 

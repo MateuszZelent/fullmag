@@ -678,6 +678,13 @@ pub struct VisualizationOverrideState {
     pub display: Option<VisualizationTargetDisplayOverride>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<VisualizationTargetStyleOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<VisualizationTargetQuantityOverride>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationTargetQuantityOverride {
+    pub active_quantity_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -695,6 +702,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
             label: "Airbox".to_string(),
             source: VisualizationTargetSource::Airbox,
             settings: VisualizationResolvedTargetSettings {
+                active_quantity_id: "m".to_string(),
                 visible: false,
                 bounds_visible: false,
                 geometry_scope: VisualizationTargetGeometryScope::Full,
@@ -743,6 +751,7 @@ pub enum VisualizationTargetSource {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct VisualizationResolvedTargetSettings {
+    pub active_quantity_id: String,
     pub visible: bool,
     pub bounds_visible: bool,
     pub geometry_scope: VisualizationTargetGeometryScope,

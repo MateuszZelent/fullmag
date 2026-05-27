@@ -88,14 +88,15 @@ def _scale_mesh_nodes(mesh: MeshData, scale_xyz: NDArray[np.float64]) -> MeshDat
 
 
 def _resolve_gmsh_thread_count(requested_threads: int | None = None) -> int:
-    env_value = os.environ.get("FULLMAG_GMSH_THREADS")
-    if env_value:
-        try:
-            parsed = int(env_value)
-            if parsed >= 1:
-                return parsed
-        except ValueError:
-            pass
+    for env_var in ("FULLMAG_GMSH_THREADS", "FULLMAG_CPU_THREADS"):
+        env_value = os.environ.get(env_var)
+        if env_value:
+            try:
+                parsed = int(env_value)
+                if parsed >= 1:
+                    return parsed
+            except ValueError:
+                pass
     if requested_threads is not None and requested_threads >= 1:
         return requested_threads
     cpu_total = os.cpu_count() or 1

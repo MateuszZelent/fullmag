@@ -27,16 +27,16 @@ const UNIT_Y = new Vector3(0, 1, 0);
 const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
 const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
-export const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 1024;
+const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 1024;
 
-export interface VectorGlyphUploadBatch {
+interface VectorGlyphUploadBatch {
   end: number;
   start: number;
 }
 
 type VectorGlyphUploadTaskHandle = ReturnType<typeof setTimeout>;
 
-export function buildVectorGlyphUploadBatches(
+function buildVectorGlyphUploadBatches(
   count: number,
   batchSize = VECTOR_GLYPH_UPLOAD_BATCH_SIZE,
 ): VectorGlyphUploadBatch[] {

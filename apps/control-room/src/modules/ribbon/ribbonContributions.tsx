@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Binary,
   Blend,
@@ -90,17 +91,22 @@ import {
 } from "@/shared/domain/mesh/buildPipeline";
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
+import { viewport3dStore } from "../viewport-3d/viewport3dStore";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
+  RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
   RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+  globalQuantityCommandInput,
   visualizationAirboxCommandInput,
   visualizationDefaultsCommandInput,
   visualizationStateCommandInput,
+  visualizationTargetCommandInput,
 } from "./ribbonCommands";
 
 const I = 20; // icon size
@@ -1565,7 +1571,7 @@ const automationTab: RibbonTabContent = {
   ],
 };
 
-export type RibbonSessionStatus = {
+type RibbonSessionStatus = {
   resources: Pick<
     LiveStatusResource["resources"],
     "field_revision" | "fields_revision"
@@ -2173,6 +2179,8 @@ function buildViewDisplayGroup(
         ? buildViewCameraAction(context)
       : action.id === "view-dimension-frame"
         ? buildDimensionFrameAction(context)
+      : action.id === "view-topography"
+        ? buildTopographyAction(context)
         : action,
     ),
   };
@@ -2306,6 +2314,81 @@ function buildViewCameraAction({
       { type: "separator", id: "camera:rotation-separator" },
       { type: "item", id: "camera:focus", label: "Focus selected", disabled: true },
       { type: "item", id: "camera:frame-all", label: "Frame all", disabled: true },
+    ],
+  };
+}
+
+function buildTopographyAction({
+  commandContext = { source: "ribbon" },
+  commands,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const snapshot = viewport3dStore.getSnapshot().widgets;
+  const enabled = Boolean(
+    commands?.isActive("viewport-3d.fdm-topography-toggle", commandContext),
+  );
+  const component =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.fdm-topography-component-z", "z"],
+      ["viewport-3d.fdm-topography-component-magnitude", "magnitude"],
+      ["viewport-3d.fdm-topography-component-x", "x"],
+      ["viewport-3d.fdm-topography-component-y", "y"],
+    ]) ?? snapshot.fdmTopographyComponent;
+
+  return {
+    id: "view-topography",
+    icon: icon(Sparkles),
+    label: "Topography",
+    active: enabled,
+    iconColor: "text-amber-300",
+    menu: [
+      { type: "label", id: "topography:header", label: "Topography", badge: "FDM" },
+      {
+        type: "checkbox",
+        id: "topography:enabled",
+        label: "Voxel topography",
+        checked: enabled,
+        commandId: "viewport-3d.fdm-topography-toggle",
+      },
+      {
+        type: "slider",
+        id: "topography:amplitude",
+        label: "Amplitude",
+        value: snapshot.fdmTopographyAmplitudeCells,
+        min: -16,
+        max: 16,
+        step: 0.25,
+        unit: "cells",
+        commandId: "viewport-3d.fdm-topography-amplitude",
+        commandInput: (value: number) => value,
+      },
+      {
+        type: "radio-group",
+        id: "topography:component",
+        label: "Component",
+        value: component,
+        items: [
+          {
+            commandId: "viewport-3d.fdm-topography-component-z",
+            label: "Z",
+            value: "z",
+          },
+          {
+            commandId: "viewport-3d.fdm-topography-component-magnitude",
+            label: "Magnitude",
+            value: "magnitude",
+          },
+          {
+            commandId: "viewport-3d.fdm-topography-component-x",
+            label: "X",
+            value: "x",
+          },
+          {
+            commandId: "viewport-3d.fdm-topography-component-y",
+            label: "Y",
+            value: "y",
+          },
+        ],
+      },
     ],
   };
 }
@@ -2509,6 +2592,12 @@ function buildQuantityAction(
   const state = context.visualizationState;
   const activeQuantityId =
     state?.quantity?.active_quantity_id ?? state?.active_quantity_id ?? "m";
+  const targetQuantityOverrideCount =
+    state?.overrides?.filter((entry) => {
+      const quantityId = entry.quantity?.active_quantity_id;
+      return Boolean(quantityId && quantityId !== activeQuantityId);
+    }).length ?? 0;
+  const hasMixedTargetQuantities = targetQuantityOverrideCount > 0;
   const overlayVisible = state?.layers?.quantity_overlay?.visible ?? true;
   const autoContrast = state?.quantity?.auto_contrast ?? state?.auto_contrast ?? true;
   const colormap = state?.quantity?.colormap ?? state?.colormap ?? "viridis";
@@ -2516,9 +2605,9 @@ function buildQuantityAction(
     state?.vector_style?.color_mode ?? "orientation";
   return {
     id: "view-quantity",
-    icon: icon(Sigma),
+    icon: icon(hasMixedTargetQuantities ? AlertTriangle : Sigma),
     label: "Quantity",
-    iconColor: "text-sky-300",
+    iconColor: hasMixedTargetQuantities ? "text-amber-300" : "text-sky-300",
     disabled: !context.api,
     menu: [
       { type: "label", id: "quantity:header", label: "Active quantity" },
@@ -2528,6 +2617,19 @@ function buildQuantityAction(
         label: "Current",
         value: quantityLabel(activeQuantityId),
       },
+      ...(hasMixedTargetQuantities
+        ? [
+            {
+              type: "status" as const,
+              id: "quantity:mixed-targets",
+              label: "Target quantities",
+              tone: "warning" as const,
+              value: `${targetQuantityOverrideCount} target override${
+                targetQuantityOverrideCount === 1 ? "" : "s"
+              }`,
+            },
+          ]
+        : []),
       {
         type: "checkbox",
         id: "quantity:overlay-visible",
@@ -2548,12 +2650,14 @@ function buildQuantityAction(
         value: activeQuantityId,
         items: QUANTITY_ITEMS,
         disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
         commandInput: (value: string) =>
-          visualizationStateCommandInput({
-            active_quantity_id: value,
-            quantity: { active_quantity_id: value },
-          }),
+          globalQuantityCommandInput(
+            value,
+            hasMixedTargetQuantities,
+            hasMixedTargetQuantities,
+            targetQuantityOverrideCount,
+          ),
       },
       { type: "separator", id: "quantity:s1" },
       {
@@ -2626,6 +2730,8 @@ function buildVectorsAction(
   const vectorLayer = state?.layers?.vectors;
   const vectorStyle = state?.vector_style;
   const objectVectorSettings = context.visualization.getDefaultSettings("object");
+  const objectVectorScope =
+    context.visualizationSnapshot.defaults.object?.geometryScope ?? "full";
   const visible = vectorLayer?.visible ?? state?.vector_glyphs ?? false;
   const density =
     state?.sampling?.max_glyphs ??
@@ -2681,7 +2787,7 @@ function buildVectorsAction(
         type: "radio-group",
         id: "vectors:geometry-scope",
         label: "Arrow extent",
-        value: objectVectorSettings.geometryScope,
+        value: objectVectorScope,
         items: GEOMETRY_SCOPE_ITEMS,
         disabled: !context.api,
         commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
@@ -3421,6 +3527,17 @@ function buildSelectedVisualizationGroup(
     settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource,
     context.sessionStatus,
   );
+  const selectedQuantityId =
+    settings?.activeQuantityId ??
+    context.visualizationState?.quantity?.active_quantity_id ??
+    context.visualizationState?.active_quantity_id ??
+    "m";
+  const selectedVectorScope =
+    targetVisualization?.override?.geometryScope ??
+    (target
+      ? visualizationSnapshot.defaults[target.kind]?.geometryScope
+      : undefined) ??
+    "full";
   const revision = targetVisualization?.revision ?? `${visualizationSnapshot.version}`;
 
   return {
@@ -3447,6 +3564,21 @@ function buildSelectedVisualizationGroup(
             id: "selected-texture:state",
             label: "Target",
             value: targetLabel,
+          },
+          {
+            type: "radio-group",
+            id: "selected-texture:quantity",
+            label: "Quantity source",
+            value: selectedQuantityId,
+            items: QUANTITY_ITEMS,
+            disabled: !enabled || !target,
+            commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+            commandInput: (value: string) =>
+              target
+                ? visualizationTargetCommandInput(target, {
+                    activeQuantityId: value,
+                  })
+                : value,
           },
           {
             type: "checkbox",
@@ -3503,7 +3635,7 @@ function buildSelectedVisualizationGroup(
             type: "radio-group",
             id: "selected-texture:vector-scope",
             label: "Vector extent",
-            value: settings?.geometryScope ?? "full",
+            value: selectedVectorScope,
             items: GEOMETRY_SCOPE_ITEMS.map((item) => ({
               ...item,
             })),

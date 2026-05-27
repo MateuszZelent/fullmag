@@ -263,6 +263,7 @@ describe("StudyInspectorPanel", () => {
               artifactRefs: ["runs/run-1/stages/stage-relax"],
               checkpointRef: "cp-relaxed",
               commandId: "cmd-relax",
+              completedAtIso: "2023-11-14T22:13:30.000Z",
               completedAtUnixMs: 1_700_000_010_000,
               energyTolerance: null,
               index: 0,

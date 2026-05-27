@@ -2,7 +2,11 @@
 
 import { type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo, memo, useRef } from "react";
-import { BufferAttribute, BufferGeometry, type MeshStandardMaterial } from "three";
+import {
+  BufferAttribute,
+  BufferGeometry,
+  type MeshStandardMaterial,
+} from "three";
 import {
   RENDER_POLICIES,
   materialPolicyProps,
@@ -25,6 +29,13 @@ import {
 } from "../viewport3dGeometryColors";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
+import { buildViewport3DPointGeometry } from "../viewport3dPointGeometry";
+import {
+  applyScalarShaderColorBuffer,
+  canApplyScalarShaderColorBuffer,
+  createScalarSurfaceShaderMaterial,
+  updateScalarSurfaceShaderMaterial,
+} from "../viewport3dScalarSurfaceShader";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyPartRenderModel,
@@ -37,8 +48,8 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
+  resolveMeshPartSurfaceMaterialColor,
   shaderUsesVertexColors,
-  surfaceMaterialColorFromSettings,
   surfaceScalarColorModeFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -111,14 +122,45 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     () => () => tracker.release("geometry", edgeGeometry),
     [edgeGeometry, tracker],
   );
+  const pointGeometry = useMemo(() => {
+    if (!topologyModel) return null;
+    const nodeSelection =
+      settings.geometryScope === "full"
+        ? partModel.part
+        : partModel.surfaceNodeSelection ?? partModel.part;
+    const next = buildViewport3DPointGeometry(topologyModel, nodeSelection);
+    return next ? tracker.track("geometry", next) : null;
+  }, [partModel, settings.geometryScope, topologyModel, tracker]);
+
+  useEffect(
+    () => () => tracker.release("geometry", pointGeometry),
+    [pointGeometry, tracker],
+  );
 
   const scalarColorMode = surfaceScalarColorModeFromSettings(settings);
+  const part = partModel.part;
   const scalarColors = scalarColorMode
-    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
+    ? fieldModel?.scalarColorsByPartAndMode
+        .get(part.id)
+        ?.get(scalarColorMode) ??
+      fieldModel?.scalarColorsByMode.get(scalarColorMode) ??
+      null
     : null;
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
     Boolean(meshQualityColors) || shaderUsesVertexColors(settings);
+  const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
+    effectiveScalarColors,
+    topologyModel?.nodeCount ?? 0,
+  );
+  const shaderScalarColorsEnabled =
+    !meshQualityColors &&
+    vertexColorsEnabled &&
+    canApplyScalarShaderColorBuffer(
+      effectiveScalarColors,
+      topologyModel?.nodeCount ?? 0,
+    ) &&
+    !canUseVertexScalarColors;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
     // Skip the destructive zero-fill when the surface mesh is unmounted
@@ -127,13 +169,26 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     // so without this guard the effect would zero the buffer while hidden and
     // then skip re-application on toggle-on (same ref → deps unchanged).
     if (!settings.shaderVisible) return;
-    applyVertexScalarColorBuffer(
-      geometry,
-      vertexColorsEnabled ? effectiveScalarColors : null,
-      topologyModel.nodeCount,
-    );
+    if (shaderScalarColorsEnabled) {
+      applyScalarShaderColorBuffer(
+        geometry,
+        effectiveScalarColors,
+        topologyModel.nodeCount,
+      );
+    } else {
+      applyScalarShaderColorBuffer(geometry, null, topologyModel.nodeCount);
+      applyVertexScalarColorBuffer(
+        geometry,
+        vertexColorsEnabled ? effectiveScalarColors : null,
+        topologyModel.nodeCount,
+      );
+    }
     tracker.recordDirtyFrame(
-      meshQualityColors ? "mesh-quality-colors" : "field-colors",
+      shaderScalarColorsEnabled
+        ? "field-scalar-shader"
+        : meshQualityColors
+          ? "mesh-quality-colors"
+          : "field-colors",
     );
     invalidate();
   }, [
@@ -142,19 +197,50 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate,
     meshQualityColors,
     settings.shaderVisible,
+    shaderScalarColorsEnabled,
     topologyModel,
     tracker,
     vertexColorsEnabled,
   ]);
 
   const materialRef = useRef<MeshStandardMaterial>(null);
-  const part = partModel.part;
-  const hasScalarColors =
-    vertexColorsEnabled &&
-    canApplyVertexScalarColorBuffer(
-      effectiveScalarColors,
-      topologyModel?.nodeCount ?? 0,
+  const hasScalarColors = vertexColorsEnabled && canUseVertexScalarColors;
+  const surfaceOpacity = opacityFromSettings(settings);
+  const surfacePolicy = useMemo(
+    () => surfaceMaterialPolicyProps(surfaceOpacity),
+    [surfaceOpacity],
+  );
+  const scalarShaderMaterial = useMemo(() => {
+    if (!shaderScalarColorsEnabled || !effectiveScalarColors) return null;
+    return tracker.track(
+      "material",
+      createScalarSurfaceShaderMaterial(effectiveScalarColors, {
+        ...surfacePolicy,
+        opacity: surfaceOpacity,
+        toneMapped: materialProfile.magneticSurface.toneMapped,
+      }),
     );
+  }, [
+    effectiveScalarColors,
+    materialProfile.magneticSurface.toneMapped,
+    shaderScalarColorsEnabled,
+    surfaceOpacity,
+    surfacePolicy,
+    tracker,
+  ]);
+
+  useEffect(
+    () => () => tracker.release("material", scalarShaderMaterial),
+    [scalarShaderMaterial, tracker],
+  );
+  useEffect(() => {
+    if (!scalarShaderMaterial || !effectiveScalarColors) return;
+    updateScalarSurfaceShaderMaterial(
+      scalarShaderMaterial,
+      effectiveScalarColors,
+      surfaceOpacity,
+    );
+  }, [effectiveScalarColors, scalarShaderMaterial, surfaceOpacity]);
 
   useEffect(() => {
     if (materialRef.current) {
@@ -170,13 +256,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     settings.boundsVisible;
 
   if (!geometry || (!settings.visible && !hasAnyVisibleSubLayer)) return null;
-  const meshColor = surfaceMaterialColorFromSettings(
+  const meshColor = resolveMeshPartSurfaceMaterialColor(
     settings,
-    hasScalarColors
-      ? colors.mesh
-      : (settings.surfaceColorSource !== "solid"
-          ? magnetizationTexturePreview?.color
-          : null) ?? colors.mesh,
+    colors.mesh,
+    magnetizationTexturePreview?.color ?? null,
     hasScalarColors,
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -189,18 +272,22 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {settings.shaderVisible ? (
         <mesh
           geometry={geometry}
-          renderOrder={surfaceMaterialPolicyProps(opacityFromSettings(settings)).transparent
+          renderOrder={surfacePolicy.transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
             : RENDER_POLICIES.solidSurface.renderOrder}
         >
-          <meshStandardMaterial
-            ref={materialRef}
-            color={meshColor}
-            opacity={opacityFromSettings(settings)}
-            {...materialProfile.magneticSurface}
-            vertexColors={hasScalarColors}
-            {...surfaceMaterialPolicyProps(opacityFromSettings(settings))}
-          />
+          {scalarShaderMaterial ? (
+            <primitive attach="material" object={scalarShaderMaterial} />
+          ) : (
+            <meshStandardMaterial
+              ref={materialRef}
+              color={meshColor}
+              opacity={surfaceOpacity}
+              {...materialProfile.magneticSurface}
+              vertexColors={hasScalarColors}
+              {...surfacePolicy}
+            />
+          )}
         </mesh>
       ) : null}
       {settings.wireframeVisible && edgeGeometry ? (
@@ -240,14 +327,14 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           opacity={Math.max(opacityFromSettings(settings), 0.35)}
         />
       ) : null}
-      {settings.pointsVisible ? (
+      {settings.pointsVisible && pointGeometry ? (
         <points
-          geometry={geometry}
+          geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
             color={colors.wire}
-            opacity={opacityFromSettings(settings)}
+            opacity={surfaceOpacity}
             sizeAttenuation={false}
             size={3}
             {...materialPolicyProps("points")}
@@ -259,7 +346,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           colors={colors}
           colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
-          opacity={opacityFromSettings(settings)}
+          opacity={surfaceOpacity}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
           style={vectorStyleFromSettings(settings, vectorStyle)}
           tracker={tracker}

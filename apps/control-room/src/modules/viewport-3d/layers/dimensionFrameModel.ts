@@ -7,8 +7,8 @@ import type {
 export type DimensionFrameMode = "off" | "floor" | "cage";
 export type DimensionFrameDensity = "auto" | "coarse" | "fine";
 export type DimensionFrameUnitMode = "auto" | "nm" | "um" | "mm" | "m";
-export type DimensionFrameAxis = "x" | "y" | "z";
-export type DimensionFramePlaneId =
+type DimensionFrameAxis = "x" | "y" | "z";
+type DimensionFramePlaneId =
   | "xy-min"
   | "x-min"
   | "x-max"
@@ -25,7 +25,7 @@ export interface DimensionFrameOptions {
   unitMode: DimensionFrameUnitMode;
 }
 
-export interface DimensionFramePlane {
+interface DimensionFramePlane {
   fixedAxis: DimensionFrameAxis;
   fixedValue: number;
   id: DimensionFramePlaneId;

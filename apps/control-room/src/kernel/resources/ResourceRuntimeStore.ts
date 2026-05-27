@@ -99,6 +99,12 @@ export class ResourceRuntimeStore<TData = unknown> {
     revision: ResourceRevision,
   ): void {
     const entry = this.getOrCreateEntry<TUpdateData>(resourceKey);
+    entry.sequence += 1;
+    entry.controller?.abort();
+    entry.controller = null;
+    entry.inflight = null;
+    entry.inflightExternalRevision = null;
+    entry.pendingRequest = null;
     entry.snapshot = {
       ...markResourceReady(entry.snapshot, data, revision),
       settledExternalRevision: revision,

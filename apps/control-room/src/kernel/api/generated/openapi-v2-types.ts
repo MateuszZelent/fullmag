@@ -4435,6 +4435,7 @@ export interface components {
         };
         VisualizationOverrideState: {
             display?: null | components["schemas"]["VisualizationTargetDisplayOverride"];
+            quantity?: null | components["schemas"]["VisualizationTargetQuantityOverride"];
             scope: components["schemas"]["VisualizationScopeKind"];
             scope_id: string;
             style?: null | components["schemas"]["VisualizationTargetStyleOverride"];
@@ -4442,6 +4443,7 @@ export interface components {
             visible?: boolean | null;
         };
         VisualizationResolvedTargetSettings: {
+            active_quantity_id: string;
             bounds_visible: boolean;
             geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
@@ -4603,6 +4605,9 @@ export interface components {
         };
         /** @enum {string} */
         VisualizationTargetGeometryScope: "surface" | "full";
+        VisualizationTargetQuantityOverride: {
+            active_quantity_id: string;
+        };
         VisualizationTargetRegistryEntry: {
             label: string;
             override?: null | components["schemas"]["VisualizationOverrideState"];
@@ -5284,6 +5289,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous domain topology response */
                 "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -5306,6 +5313,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial binary FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Domain topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -5315,6 +5331,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6730,6 +6753,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous object-topology response */
                 "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
             };
             path: {
                 /** @description Canonical scene object id */
@@ -6755,6 +6780,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial per-object FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Per-object topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -6769,6 +6803,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     meshing_get_sessions_current_meshing_meshes_parts_part_id_topology: {
@@ -6777,6 +6818,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous part-topology response */
                 "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
             };
             path: {
                 /** @description Stable FEM mesh part id, for example an airbox part */
@@ -6802,6 +6845,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial per-part FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Per-part topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -6811,6 +6863,13 @@ export interface operations {
             };
             /** @description No active workspace or mesh part */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7017,6 +7076,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous shared-domain topology response */
                 "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -7039,6 +7100,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial shared-domain FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Shared-domain topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -7048,6 +7118,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };

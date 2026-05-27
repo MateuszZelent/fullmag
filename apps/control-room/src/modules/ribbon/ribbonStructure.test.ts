@@ -9,6 +9,7 @@ import { buildRibbonTabContent } from "./ribbonContributions";
 import {
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
   visualizationTargetCommandInput,
 } from "./ribbonCommands";
@@ -418,6 +419,120 @@ describe("ribbon structure", () => {
             display: { geometry_scope: "surface" },
             scope: "object",
             scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("patches selected target quantity through backend-owned overrides", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        overrides: [],
+        quantity: { active_quantity_id: "m" },
+        revision: 7,
+      });
+    const selection = {
+      kind: "object.visualization" as const,
+      label: "Free layer",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:visualization",
+      objectId: "free-layer",
+      ref: null,
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const quantityNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "selected-texture:quantity",
+    );
+
+    expect(quantityNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      value: "m",
+    });
+    if (quantityNode?.type !== "radio-group") {
+      throw new Error("Expected selected target quantity control");
+    }
+
+    await runRibbonNode(quantityNode, "h_eff", { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            quantity: { active_quantity_id: "h_eff" },
+            scope: "object",
+            scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("patches selected airbox quantity through backend-owned overrides", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        overrides: [],
+        quantity: { active_quantity_id: "m" },
+        revision: 7,
+      });
+    const selection = {
+      kind: "airbox.visualization" as const,
+      label: "Airbox",
+      moduleSource: "test",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+      ref: null,
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const quantityNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "selected-texture:quantity",
+    );
+
+    expect(quantityNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      value: "m",
+    });
+    if (quantityNode?.type !== "radio-group") {
+      throw new Error("Expected selected airbox quantity control");
+    }
+
+    await runRibbonNode(quantityNode, "h_eff", { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            quantity: { active_quantity_id: "h_eff" },
+            scope: "airbox",
+            scope_id: "airbox",
           },
         ],
       },
@@ -996,6 +1111,9 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             visible: true,
+            wireframe: {
+              visible: true,
+            },
           },
         },
       },
@@ -1271,6 +1389,77 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
       ]),
+    );
+  });
+
+  it("marks global Quantity controls as mixed and can clear per-target quantities", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        layers: {
+          quantity_overlay: { visible: true },
+        },
+        overrides: [
+          {
+            scope: "airbox",
+            scope_id: "airbox",
+            quantity: { active_quantity_id: "h_eff" },
+          },
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            display: { visible: true },
+            quantity: { active_quantity_id: "h_demag" },
+          },
+        ],
+        quantity: {
+          active_quantity_id: "m",
+          auto_contrast: true,
+          colormap: "viridis",
+          field_component: "magnitude",
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", context);
+    const quantityAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-quantity");
+    const sourceNode = quantityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "quantity:source",
+    );
+    const mixedNode = quantityAction?.menu?.find(
+      (node) => node.type === "status" && node.id === "quantity:mixed-targets",
+    );
+
+    expect(quantityAction?.iconColor).toBe("text-amber-300");
+    expect(mixedNode).toMatchObject({
+      tone: "warning",
+      value: "2 target overrides",
+    });
+    if (sourceNode?.type !== "radio-group") {
+      throw new Error("Expected quantity source control");
+    }
+    expect(sourceNode.commandId).toBe(
+      RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+    );
+
+    await runRibbonNode(sourceNode, "h_ex", context);
+
+    expect(patches).toEqual([
+      {
+        active_quantity_id: "h_ex",
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            display: { visible: true },
+          },
+        ],
+        quantity: { active_quantity_id: "h_ex" },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
     );
   });
 
@@ -1582,8 +1771,17 @@ describe("ribbon structure", () => {
     const cameraAction = displayGroup?.actions.find(
       (action) => action.id === "view-camera",
     );
+    const topographyAction = displayGroup?.actions.find(
+      (action) => action.id === "view-topography",
+    );
     const cameraParametersNode = cameraAction?.menu?.find(
       (node) => node.type === "item" && node.id === "camera:parameters",
+    );
+    const topographyEnabledNode = topographyAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "topography:enabled",
+    );
+    const topographyComponentNode = topographyAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "topography:component",
     );
     const viewRotationNode = cameraAction?.menu?.find(
       (node) => node.type === "radio-group" && node.id === "view-camera:rotation-mode",
@@ -1655,6 +1853,23 @@ describe("ribbon structure", () => {
     expect(cameraParametersNode).toMatchObject({
       commandId: "viewport-3d.open-camera-dialog",
       label: "Camera parameters",
+    });
+    expect(topographyAction).toMatchObject({
+      disabled: false,
+      label: "Topography",
+    });
+    expect(topographyEnabledNode).toMatchObject({
+      commandId: "viewport-3d.fdm-topography-toggle",
+      type: "checkbox",
+    });
+    expect(topographyComponentNode).toMatchObject({
+      value: "z",
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          commandId: "viewport-3d.fdm-topography-component-magnitude",
+          value: "magnitude",
+        }),
+      ]),
     });
     expect(viewRotationNode).toMatchObject({
       value: "camera",

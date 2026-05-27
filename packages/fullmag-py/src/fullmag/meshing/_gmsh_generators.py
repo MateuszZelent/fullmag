@@ -90,13 +90,6 @@ def _add_airbox_volume_clamp_fields(
         gmsh.model.mesh.field.setNumber(f_air_max, "VOut", float(_NO_OP_FIELD_SIZE))
         upper_bound_fields.append(f_air_max)
 
-    if airbox.minimum_element_size is not None:
-        f_air_min = gmsh.model.mesh.field.add("Constant")
-        gmsh.model.mesh.field.setNumbers(f_air_min, "VolumesList", air_volume_tags)
-        gmsh.model.mesh.field.setNumber(f_air_min, "VIn", float(airbox.minimum_element_size))
-        gmsh.model.mesh.field.setNumber(f_air_min, "VOut", 0.0)
-        lower_bound_fields.append(f_air_min)
-
     return upper_bound_fields, lower_bound_fields
 
 
@@ -172,7 +165,8 @@ def _sanitize_volume_mesh_options(
 
 def _geometry_contains_arch_waveguide(geometry: Geometry) -> bool:
     if isinstance(geometry, ArchWaveguide):
-        return True
+        scale = max(abs(geometry.length), abs(geometry.width), abs(geometry.height), 1.0)
+        return not math.isclose(geometry.arch_height, 0.0, abs_tol=scale * 1e-15)
     if isinstance(geometry, Translate):
         return _geometry_contains_arch_waveguide(geometry.geometry)
     if isinstance(geometry, Difference):
@@ -518,6 +512,8 @@ def _generate_csg_mesh(
         gmsh.model.occ.synchronize()
         has_airbox = airbox_scaled is not None
         airbox_field_ids: list[int] = []
+        component_volume_tags: dict[str, list[int]] | None = None
+        component_surface_tags: dict[str, list[int]] | None = None
         if has_airbox:
             emit_progress("Gmsh: adding airbox domain")
             airbox_field = _add_airbox_and_fragment(
@@ -525,6 +521,18 @@ def _generate_csg_mesh(
             )
             if airbox_field is not None:
                 airbox_field_ids.append(airbox_field)
+            try:
+                magnetic_volumes = list(gmsh.model.getEntitiesForPhysicalGroup(3, 1))
+            except Exception:
+                magnetic_volumes = []
+            try:
+                interface_surfaces = list(gmsh.model.getEntitiesForPhysicalGroup(2, 10))
+            except Exception:
+                interface_surfaces = []
+            if magnetic_volumes:
+                component_volume_tags = {geometry.geometry_name: [int(tag) for tag in magnetic_volumes]}
+            if interface_surfaces:
+                component_surface_tags = {geometry.geometry_name: [int(tag) for tag in interface_surfaces]}
         emit_progress("Gmsh: generating 3D tetrahedral mesh")
         _apply_mesh_options(
             gmsh,
@@ -534,6 +542,8 @@ def _generate_csg_mesh(
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
             airbox_maximum_element_size=airbox_scaled.maximum_element_size if airbox_scaled is not None and airbox_scaled.maximum_element_size is not None else None,
+            component_volume_tags=component_volume_tags,
+            component_surface_tags=component_surface_tags,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)

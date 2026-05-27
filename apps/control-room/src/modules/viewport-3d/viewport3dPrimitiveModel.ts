@@ -11,7 +11,8 @@ type Viewport3DPrimitiveKind = "box" | "cylinder" | "sphere" | "unsupported";
 type Viewport3DPrimitiveMeshState =
   | "primitive-only"
   | "mesh-stale"
-  | "mesh-failed";
+  | "mesh-failed"
+  | "mesh-ready";
 
 export interface Viewport3DPrimitiveObject {
   bounds: Viewport3DBounds;
@@ -157,27 +158,46 @@ function objectIdsWithMesh(
 ): Set<string> {
   const ids = new Set<string>();
   for (const part of manifest?.mesh_parts ?? []) {
-    if (part.object_id) ids.add(part.object_id);
+    addObjectIdAlias(ids, part.object_id);
+    addObjectIdAlias(ids, part.geometry_id);
   }
   return ids;
 }
 
+function addObjectIdAlias(
+  ids: Set<string>,
+  objectId: string | null | undefined,
+): void {
+  if (!objectId) return;
+  ids.add(objectId);
+  if (objectId.endsWith("_geom")) {
+    ids.add(objectId.slice(0, -5));
+  } else {
+    ids.add(`${objectId}_geom`);
+  }
+}
+
 function objectMeshState(
   objectId: string,
-  sceneRevision: number,
+  _sceneRevision: number,
   manifest: MeshSharedDomainManifestResource | null | undefined,
   object?: JsonRecord | null,
 ): Viewport3DPrimitiveMeshState | "mesh-ready" {
   const meshObjectIds = objectIdsWithMesh(manifest);
   if (!meshObjectIds.has(objectId)) return "primitive-only";
 
-  if (object && Array.isArray(object.tags) && object.tags.includes("mesh:ready")) {
-    return "mesh-ready";
+  const tags = Array.isArray(object?.tags) ? object.tags.map(String) : [];
+  if (
+    tags.includes("mesh:failed") ||
+    tags.includes("mesh:validation-blocked")
+  ) {
+    return "mesh-failed";
+  }
+  if (tags.includes("mesh:dirty") || tags.includes("mesh:building")) {
+    return "mesh-stale";
   }
 
-  return manifest?.source_scene_revision === sceneRevision
-    ? "mesh-ready"
-    : "mesh-stale";
+  return "mesh-ready";
 }
 
 function magnetizationAssetById(scene: JsonRecord, assetId: string | null): JsonRecord | null {
@@ -338,8 +358,6 @@ export function buildViewport3DPrimitiveRenderModel(
     if (!object || !objectId || !geometry) return [];
 
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
-    if (state === "mesh-ready") return [];
-
     const transform = asRecord(object.transform);
     return [
       {

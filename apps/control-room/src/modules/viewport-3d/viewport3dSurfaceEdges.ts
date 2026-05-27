@@ -7,7 +7,7 @@ export function buildSurfaceEdgeIndices(
     return null;
   }
 
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const maxEdges = surfaceIndices.length;
   const edges = new Uint32Array(maxEdges * 2);
   let edgeCount = 0;
@@ -24,7 +24,7 @@ export function buildSurfaceEdgeIndices(
     if (a !== b) {
       const minVal = a < b ? a : b;
       const maxVal = a > b ? a : b;
-      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      const key = edgeKey(minVal, maxVal);
       if (!seen.has(key)) {
         seen.add(key);
         edges[edgeCount++] = minVal;
@@ -36,7 +36,7 @@ export function buildSurfaceEdgeIndices(
     if (b !== c) {
       const minVal = b < c ? b : c;
       const maxVal = b > c ? b : c;
-      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      const key = edgeKey(minVal, maxVal);
       if (!seen.has(key)) {
         seen.add(key);
         edges[edgeCount++] = minVal;
@@ -48,7 +48,7 @@ export function buildSurfaceEdgeIndices(
     if (c !== a) {
       const minVal = c < a ? c : a;
       const maxVal = c > a ? c : a;
-      const key = minVal >= maxVal ? minVal * minVal + minVal + maxVal : maxVal * maxVal + minVal;
+      const key = edgeKey(minVal, maxVal);
       if (!seen.has(key)) {
         seen.add(key);
         edges[edgeCount++] = minVal;
@@ -110,6 +110,10 @@ export function buildSurfaceEdgeGeometryFromBufferGeometry(
 
 function isValidIndex(value: number | undefined): value is number {
   return value !== undefined && Number.isInteger(value) && value >= 0;
+}
+
+function edgeKey(first: number, second: number): string {
+  return `${first}:${second}`;
 }
 
 function sequentialIndices(count: number): Uint32Array {

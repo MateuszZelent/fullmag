@@ -49,11 +49,12 @@ describe("app menu command model", () => {
   }
 
   it("does not expose disabled placeholder commands in primary menus", () => {
-    const placeholderIds = new Set(
-      SHELL_COMMANDS
-        .filter((command) => command.group === "workspace-placeholder")
-        .map((command) => command.id),
-    );
+    const placeholderIds = new Set<string>();
+    for (const command of SHELL_COMMANDS) {
+      if (command.group === "workspace-placeholder") {
+        placeholderIds.add(command.id);
+      }
+    }
     const exposedIds = [
       ...flattenMenuIds(APP_DROPDOWN_ITEMS),
       ...flattenMenuIds(MAIN_MENUS),

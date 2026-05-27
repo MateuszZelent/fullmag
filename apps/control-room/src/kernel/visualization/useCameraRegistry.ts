@@ -8,7 +8,7 @@ import type {
   CameraRegistrySnapshot,
 } from "./CameraRegistryController";
 
-export function useCameraRegistryController(): CameraRegistryController {
+function useCameraRegistryController(): CameraRegistryController {
   return useKernel().cameraRegistry;
 }
 

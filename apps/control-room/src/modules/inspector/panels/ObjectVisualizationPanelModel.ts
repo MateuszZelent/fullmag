@@ -34,6 +34,39 @@ export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
   { value: "monochrome", label: "Monochrome" },
 ];
 
+export const VISUALIZATION_QUANTITY_ITEMS: Array<{
+  label: string;
+  value: string;
+}> = [
+  { value: "m", label: "Magnetization / m" },
+  { value: "h_eff", label: "Effective field / h_eff" },
+  { value: "h_demag", label: "Demag field / h_demag" },
+  { value: "h_ex", label: "Exchange field / h_ex" },
+  { value: "h_ani", label: "Anisotropy field / h_ani" },
+  { value: "eden_total", label: "Total energy density / eden_total" },
+  { value: "eden_ex", label: "Exchange energy density / eden_ex" },
+  { value: "eden_demag", label: "Demag energy density / eden_demag" },
+  { value: "eden_ext", label: "Zeeman energy density / eden_ext" },
+  { value: "eden_ani", label: "Anisotropy energy density / eden_ani" },
+  { value: "eden_dmi", label: "DMI energy density / eden_dmi" },
+];
+
+export function visualizationQuantityItems(
+  activeQuantityId: string,
+): Array<{ label: string; value: string }> {
+  if (
+    !activeQuantityId ||
+    VISUALIZATION_QUANTITY_ITEMS.some((item) => item.value === activeQuantityId)
+  ) {
+    return VISUALIZATION_QUANTITY_ITEMS;
+  }
+
+  return [
+    { value: activeQuantityId, label: activeQuantityId },
+    ...VISUALIZATION_QUANTITY_ITEMS,
+  ];
+}
+
 export function colorPickerInputValue(value: string): string {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : rgbToHex(255, 255, 255);
 }
@@ -79,10 +112,98 @@ export interface VisualizationPanelSection {
     | "geometry-scope"
     | "opacity"
     | "overrides"
+    | "quantity-source"
     | "surface-coloring"
     | "vectors"
     | "wireframe";
   title: string;
+}
+
+export type AirboxVisibilityDiagnosticStatus =
+  | "backend-off"
+  | "confirmed"
+  | "display-suppressed"
+  | "no-drawable-pass"
+  | "render-degraded";
+
+export interface AirboxVisibilityDiagnostic {
+  details: Array<{ label: string; value: string }>;
+  message: string;
+  status: AirboxVisibilityDiagnosticStatus;
+  title: string;
+}
+
+export function buildAirboxVisibilityDiagnostic({
+  displaySettings,
+  renderWarning,
+  settings,
+}: {
+  displaySettings: VisualizationTargetSettings;
+  renderWarning: string | null;
+  settings: VisualizationTargetSettings;
+}): AirboxVisibilityDiagnostic {
+  const hasDrawablePass =
+    settings.boundsVisible ||
+    settings.pointsVisible ||
+    settings.shaderVisible ||
+    settings.vectorsVisible ||
+    settings.wireframeVisible;
+  const details = [
+    { label: "Backend master", value: settings.visible ? "on" : "off" },
+    { label: "Surface pass", value: settings.shaderVisible ? "on" : "off" },
+    { label: "Wireframe pass", value: settings.wireframeVisible ? "on" : "off" },
+    { label: "Frame pass", value: settings.boundsVisible ? "on" : "off" },
+    { label: "Points pass", value: settings.pointsVisible ? "on" : "off" },
+    { label: "Vectors pass", value: settings.vectorsVisible ? "on" : "off" },
+    { label: "Effective display", value: displaySettings.visible ? "on" : "off" },
+  ];
+
+  if (!settings.visible) {
+    return {
+      details,
+      message:
+        "The v2 visualization resource currently read by the inspector still reports layers.airbox.visible=false. If the network log shows PATCH 200, the backend/refetch path did not retain the airbox master flag.",
+      status: "backend-off",
+      title: "Airbox visibility not confirmed",
+    };
+  }
+
+  if (!hasDrawablePass) {
+    return {
+      details,
+      message:
+        "The airbox master flag is on, but all drawable airbox passes are off. Enable Wireframe, Frame, Surface, Points, or Vectors to make the airbox render.",
+      status: "no-drawable-pass",
+      title: "Airbox has no active pass",
+    };
+  }
+
+  if (renderWarning) {
+    return {
+      details: [...details, { label: "Render constraint", value: renderWarning }],
+      message: renderWarning,
+      status: "render-degraded",
+      title: "Airbox render is constrained",
+    };
+  }
+
+  if (!displaySettings.visible) {
+    return {
+      details,
+      message:
+        "The backend master flag is on, but the resolved display state is still off. This means the frontend display-resolution layer is suppressing the airbox after the resource update.",
+      status: "display-suppressed",
+      title: "Airbox display is suppressed",
+    };
+  }
+
+  return {
+    details,
+    message:
+      "The backend state now reports the airbox master flag on and at least one drawable pass is active. If the viewport still shows nothing, the remaining issue is below the Visible switch: topology, airbox geometry, camera framing, or renderer layer data.",
+    status: "confirmed",
+    title: "Airbox visibility confirmed",
+  };
 }
 
 export function buildVisualizationPanelSections({
@@ -107,6 +228,14 @@ export function buildVisualizationPanelSections({
       ],
       id: "display-passes",
       title: "Display Passes",
+    },
+    {
+      disabled: false,
+      fields: [
+        { id: "activeQuantityId", kind: "mode", label: "Quantity source" },
+      ],
+      id: "quantity-source",
+      title: "Quantity Source",
     },
     {
       disabled: passDisabled || !effectiveSettings.shaderVisible,

@@ -23,6 +23,19 @@ describe("viewport3dSurfaceEdges", () => {
     ]);
   });
 
+  it("deduplicates large node ids without numeric pairing collisions", () => {
+    const largeNodeId = 94_906_266;
+    const edges = buildSurfaceEdgeIndices(
+      new Uint32Array([0, largeNodeId, 1]),
+    );
+
+    expect(Array.from(edges ?? [])).toEqual([
+      0, largeNodeId,
+      1, largeNodeId,
+      0, 1,
+    ]);
+  });
+
   it("rejects malformed triangle index buffers", () => {
     expect(buildSurfaceEdgeIndices(new Uint32Array([0, 1]))).toBeNull();
     expect(buildSurfaceEdgeIndices(new Uint32Array())).toBeNull();

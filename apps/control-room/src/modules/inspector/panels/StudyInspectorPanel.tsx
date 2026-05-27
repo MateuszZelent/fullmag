@@ -725,11 +725,7 @@ export function StudySelectedStageSection({
       />
       <FieldRow
         label="Completed"
-        value={
-          model.selectedStage?.completedAtUnixMs
-            ? new Date(model.selectedStage.completedAtUnixMs).toISOString()
-            : "not completed"
-        }
+        value={model.selectedStage?.completedAtIso ?? "not completed"}
       />
       <FieldRow
         label="Command"

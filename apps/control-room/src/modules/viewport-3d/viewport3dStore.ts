@@ -31,10 +31,11 @@ export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
 export type Viewport3DDimensionFrameDensity = "auto" | "coarse" | "fine";
 export type Viewport3DDimensionFrameMode = "off" | "floor" | "cage";
+export type Viewport3DFdmTopographyComponent = "magnitude" | "x" | "y" | "z";
 export type Viewport3DRotationMode = "camera" | "object";
 export type Viewport3DScaleUnitMode = "auto" | "nm" | "um" | "mm" | "m";
 
-export interface Viewport3DWidgetState {
+interface Viewport3DWidgetState {
   cameraDialogOpen: boolean;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -43,6 +44,9 @@ export interface Viewport3DWidgetState {
   effectAmbientOcclusion: boolean;
   effectAntialias: boolean;
   effectBloom: boolean;
+  fdmTopographyAmplitudeCells: number;
+  fdmTopographyComponent: Viewport3DFdmTopographyComponent;
+  fdmTopographyEnabled: boolean;
   hslReferenceMode: Viewport3DHslReferenceMode;
   rotationMode: Viewport3DRotationMode;
   scaleLabelsVisible: boolean;
@@ -75,6 +79,9 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     effectAmbientOcclusion: false,
     effectAntialias: true,
     effectBloom: false,
+    fdmTopographyAmplitudeCells: 0,
+    fdmTopographyComponent: "z",
+    fdmTopographyEnabled: false,
     hslReferenceMode: "auto",
     rotationMode: "camera",
     scaleLabelsVisible: true,
@@ -370,6 +377,39 @@ class Viewport3DStore {
     this.notify();
   }
 
+  setFdmTopographyEnabled(enabled: boolean): void {
+    if (this.snapshot.widgets.fdmTopographyEnabled === enabled) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, fdmTopographyEnabled: enabled },
+    };
+    this.notify();
+  }
+
+  setFdmTopographyAmplitudeCells(amplitudeCells: number): void {
+    const nextAmplitude = normalizeFdmTopographyAmplitudeCells(amplitudeCells);
+    if (this.snapshot.widgets.fdmTopographyAmplitudeCells === nextAmplitude) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        fdmTopographyAmplitudeCells: nextAmplitude,
+      },
+    };
+    this.notify();
+  }
+
+  setFdmTopographyComponent(component: Viewport3DFdmTopographyComponent): void {
+    if (this.snapshot.widgets.fdmTopographyComponent === component) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, fdmTopographyComponent: component },
+    };
+    this.notify();
+  }
+
   private notify(): void {
     for (const listener of this.listeners) {
       listener();
@@ -470,4 +510,8 @@ function normalizeOrthographicScale(value: number | null | undefined): number | 
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
+}
+
+function normalizeFdmTopographyAmplitudeCells(value: number): number {
+  return Number.isFinite(value) ? Math.max(-16, Math.min(16, value)) : 0;
 }

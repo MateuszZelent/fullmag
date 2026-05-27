@@ -624,6 +624,17 @@ pub(crate) fn export_script_execution_config_via_python(
     )
 }
 
+pub(crate) fn extract_json_from_stdout(stdout: &str) -> Result<&str> {
+    stdout
+        .lines()
+        .rev()
+        .find(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with('{') && trimmed.ends_with('}')
+        })
+        .ok_or_else(|| anyhow!("could not find valid JSON object in python helper stdout"))
+}
+
 pub(crate) fn export_script_execution_config_via_python_with_options(
     script_path: &Path,
     args: &ScriptCli,
@@ -669,7 +680,8 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
 
     let stdout = String::from_utf8(output.stdout)
         .context("python helper did not return valid UTF-8 JSON")?;
-    serde_json::from_str(&stdout)
+    let json_str = extract_json_from_stdout(&stdout)?;
+    serde_json::from_str(json_str)
         .context("failed to deserialize script execution config from python helper")
 }
 

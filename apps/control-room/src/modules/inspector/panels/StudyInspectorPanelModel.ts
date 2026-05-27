@@ -30,13 +30,13 @@ interface StudyStageSnapshot {
   untilSeconds: string | null;
 }
 
-export interface StudyRelaxTorqueStopModel {
+interface StudyRelaxTorqueStopModel {
   current: string;
   status: string;
   threshold: string;
 }
 
-export interface StudyStageRuntimeMetricModel {
+interface StudyStageRuntimeMetricModel {
   name: string;
   threshold: string;
   value: string;
@@ -47,6 +47,7 @@ export type StudyStageModel = StudyStageSnapshot & {
   artifactRefs: readonly string[];
   checkpointRef: string | null;
   commandId: string | null;
+  completedAtIso: string | null;
   completedAtUnixMs: number | null;
   label: string;
   progressPercent: number;
@@ -68,13 +69,13 @@ export interface StudyInspectorSnapshot {
   stages: StudyStageSnapshot[];
 }
 
-export interface StudyRelaxEnergyStopModel {
+interface StudyRelaxEnergyStopModel {
   current: string;
   status: string;
   threshold: string;
 }
 
-export interface StudyRelaxTimeStopModel {
+interface StudyRelaxTimeStopModel {
   budget: string;
   elapsed: string;
   status: string;
@@ -181,6 +182,10 @@ export function resolveStudyInspectorModel({
       artifactRefs: runtimeRecord?.artifact_refs ?? [],
       checkpointRef: runtimeRecord?.checkpoint_ref ?? null,
       commandId: runtimeRecord?.command_id ?? null,
+      completedAtIso:
+        typeof runtimeRecord?.completed_at_unix_ms === "number"
+          ? new Date(runtimeRecord.completed_at_unix_ms).toISOString()
+          : null,
       completedAtUnixMs: runtimeRecord?.completed_at_unix_ms ?? null,
       label: stageLabel(stage),
       progressPercent: isCompleted

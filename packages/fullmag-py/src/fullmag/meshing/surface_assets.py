@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import shutil
 from typing import Any
@@ -212,6 +213,7 @@ def _geometry_to_trimesh(
     trimesh: Any,
     cylinder_sections: int = 48,
     *,
+    surface_maximum_element_size: float | None = None,
     through_thickness_elements: int | None = None,
     through_thickness_distribution: str | None = None,
     through_thickness_element_ratio: float | None = None,
@@ -253,6 +255,7 @@ def _geometry_to_trimesh(
             geometry,
             trimesh,
             sections=cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -263,6 +266,7 @@ def _geometry_to_trimesh(
             geometry.base,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -272,6 +276,7 @@ def _geometry_to_trimesh(
             geometry.tool,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -283,6 +288,7 @@ def _geometry_to_trimesh(
             geometry.a,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -292,6 +298,7 @@ def _geometry_to_trimesh(
             geometry.b,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -303,6 +310,7 @@ def _geometry_to_trimesh(
             geometry.a,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -312,6 +320,7 @@ def _geometry_to_trimesh(
             geometry.b,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -323,6 +332,7 @@ def _geometry_to_trimesh(
             geometry.geometry,
             trimesh,
             cylinder_sections,
+            surface_maximum_element_size=surface_maximum_element_size,
             through_thickness_elements=through_thickness_elements,
             through_thickness_distribution=through_thickness_distribution,
             through_thickness_element_ratio=through_thickness_element_ratio,
@@ -339,12 +349,22 @@ def _arch_waveguide_to_trimesh(
     trimesh: Any,
     *,
     sections: int,
+    surface_maximum_element_size: float | None = None,
     through_thickness_elements: int | None = None,
     through_thickness_distribution: str | None = None,
     through_thickness_element_ratio: float | None = None,
     through_thickness_symmetric: bool = False,
 ) -> Any:
     n_sections = max(3, int(sections))
+    n_width = 1
+    if (
+        surface_maximum_element_size is not None
+        and math.isfinite(float(surface_maximum_element_size))
+        and float(surface_maximum_element_size) > 0.0
+    ):
+        h_surface = float(surface_maximum_element_size)
+        n_sections = max(n_sections, int(math.ceil(float(geometry.length) / h_surface)) + 1)
+        n_width = max(1, int(math.ceil(float(geometry.width) / h_surface)))
     n_layers = max(1, int(through_thickness_elements or 1))
     scale = max(
         geometry.length,
@@ -368,8 +388,10 @@ def _arch_waveguide_to_trimesh(
         symmetric=through_thickness_symmetric,
     )
 
-    def vid(section_index: int, layer_index: int, side_index: int) -> int:
-        return section_index * (n_layers + 1) * 2 + layer_index * 2 + side_index
+    y_count = n_width + 1
+
+    def vid(section_index: int, layer_index: int, y_index: int) -> int:
+        return section_index * (n_layers + 1) * y_count + layer_index * y_count + y_index
 
     vertices: list[tuple[float, float, float]] = []
     for index in range(n_sections):
@@ -378,26 +400,40 @@ def _arch_waveguide_to_trimesh(
         z_center = z0 + arch_height * np.sin(np.pi * t)
         for fraction in layer_fractions:
             z = z_center - half_h + height * fraction
-            vertices.append((x, -half_w, z))
-            vertices.append((x, half_w, z))
+            for y_index in range(y_count):
+                y_t = y_index / n_width
+                y = -half_w + y_t * width
+                vertices.append((x, y, z))
 
     faces: list[tuple[int, int, int]] = []
     for index in range(n_sections - 1):
-        a0 = vid(index, 0, 0)
-        a1 = vid(index, 0, 1)
-        b0 = vid(index + 1, 0, 0)
-        b1 = vid(index + 1, 0, 1)
-        faces.extend(
-            [
-                (a0, a1, b1),
-                (a0, b1, b0),
-            ]
-        )
+        for y_index in range(n_width):
+            a0 = vid(index, 0, y_index)
+            a1 = vid(index, 0, y_index + 1)
+            b0 = vid(index + 1, 0, y_index)
+            b1 = vid(index + 1, 0, y_index + 1)
+            faces.extend(
+                [
+                    (a0, a1, b1),
+                    (a0, b1, b0),
+                ]
+            )
+            top = n_layers
+            a_top0 = vid(index, top, y_index)
+            a_top1 = vid(index, top, y_index + 1)
+            b_top0 = vid(index + 1, top, y_index)
+            b_top1 = vid(index + 1, top, y_index + 1)
+            faces.extend(
+                [
+                    (a_top1, a_top0, b_top0),
+                    (a_top1, b_top0, b_top1),
+                ]
+            )
         for layer_index in range(n_layers):
-            a_low_y_plus = vid(index, layer_index, 1)
-            a_high_y_plus = vid(index, layer_index + 1, 1)
-            b_low_y_plus = vid(index + 1, layer_index, 1)
-            b_high_y_plus = vid(index + 1, layer_index + 1, 1)
+            a_low_y_plus = vid(index, layer_index, n_width)
+            a_high_y_plus = vid(index, layer_index + 1, n_width)
+            b_low_y_plus = vid(index + 1, layer_index, n_width)
+            b_high_y_plus = vid(index + 1, layer_index + 1, n_width)
             faces.extend(
                 [
                     (a_low_y_plus, a_high_y_plus, b_high_y_plus),
@@ -416,41 +452,30 @@ def _arch_waveguide_to_trimesh(
                 ]
             )
 
-        top = n_layers
-        a_top_y_plus = vid(index, top, 1)
-        a_top_y_minus = vid(index, top, 0)
-        b_top_y_plus = vid(index + 1, top, 1)
-        b_top_y_minus = vid(index + 1, top, 0)
-        faces.extend(
-            [
-                (a_top_y_plus, a_top_y_minus, b_top_y_minus),
-                (a_top_y_plus, b_top_y_minus, b_top_y_plus),
-            ]
-        )
-
     last_section = n_sections - 1
     for layer_index in range(n_layers):
-        first_low_y_minus = vid(0, layer_index, 0)
-        first_low_y_plus = vid(0, layer_index, 1)
-        first_high_y_minus = vid(0, layer_index + 1, 0)
-        first_high_y_plus = vid(0, layer_index + 1, 1)
-        faces.extend(
-            [
-                (first_low_y_minus, first_high_y_plus, first_low_y_plus),
-                (first_low_y_minus, first_high_y_minus, first_high_y_plus),
-            ]
-        )
+        for y_index in range(n_width):
+            first_low0 = vid(0, layer_index, y_index)
+            first_low1 = vid(0, layer_index, y_index + 1)
+            first_high0 = vid(0, layer_index + 1, y_index)
+            first_high1 = vid(0, layer_index + 1, y_index + 1)
+            faces.extend(
+                [
+                    (first_low0, first_high1, first_low1),
+                    (first_low0, first_high0, first_high1),
+                ]
+            )
 
-        last_low_y_minus = vid(last_section, layer_index, 0)
-        last_low_y_plus = vid(last_section, layer_index, 1)
-        last_high_y_minus = vid(last_section, layer_index + 1, 0)
-        last_high_y_plus = vid(last_section, layer_index + 1, 1)
-        faces.extend(
-            [
-                (last_low_y_minus, last_low_y_plus, last_high_y_plus),
-                (last_low_y_minus, last_high_y_plus, last_high_y_minus),
-            ]
-        )
+            last_low0 = vid(last_section, layer_index, y_index)
+            last_low1 = vid(last_section, layer_index, y_index + 1)
+            last_high0 = vid(last_section, layer_index + 1, y_index)
+            last_high1 = vid(last_section, layer_index + 1, y_index + 1)
+            faces.extend(
+                [
+                    (last_low0, last_low1, last_high1),
+                    (last_low0, last_high1, last_high0),
+                ]
+            )
 
     mesh = trimesh.Trimesh(
         vertices=np.asarray(vertices, dtype=np.float64),

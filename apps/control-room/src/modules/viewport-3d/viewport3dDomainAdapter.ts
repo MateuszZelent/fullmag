@@ -113,11 +113,8 @@ export function adaptFemSharedDomainManifest(
       magneticParts.push(part);
     }
 
-    if (part.object_id) {
-      const ids = objectPartIds.get(part.object_id) ?? [];
-      ids.push(part.id);
-      objectPartIds.set(part.object_id, ids);
-    }
+    addObjectPartAlias(objectPartIds, part.object_id, part.id);
+    addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
   }
 
   return {
@@ -126,6 +123,32 @@ export function adaptFemSharedDomainManifest(
     objectPartIds,
     partsById,
   };
+}
+
+function addObjectPartAlias(
+  objectPartIds: Map<string, string[]>,
+  objectId: string | null | undefined,
+  partId: string,
+): void {
+  if (!objectId) return;
+  addObjectPartId(objectPartIds, objectId, partId);
+  if (objectId.endsWith("_geom")) {
+    addObjectPartId(objectPartIds, objectId.slice(0, -5), partId);
+  } else {
+    addObjectPartId(objectPartIds, `${objectId}_geom`, partId);
+  }
+}
+
+function addObjectPartId(
+  objectPartIds: Map<string, string[]>,
+  objectId: string,
+  partId: string,
+): void {
+  const ids = objectPartIds.get(objectId) ?? [];
+  if (!ids.includes(partId)) {
+    ids.push(partId);
+  }
+  objectPartIds.set(objectId, ids);
 }
 
 function isMagneticRenderablePart(part: MeshPart): boolean {

@@ -69,14 +69,6 @@ class ExplorerStore {
 
 export const explorerStore = new ExplorerStore();
 
-export function useExplorerStore(): ExplorerStoreState {
-  return useSyncExternalStore(
-    explorerStore.subscribe,
-    explorerStore.getSnapshot,
-    explorerStore.getSnapshot,
-  );
-}
-
 export function useExplorerStoreSelector<T>(
   selector: (state: ExplorerStoreState) => T,
   options: { isEqual?: (previous: T, next: T) => boolean } = {},

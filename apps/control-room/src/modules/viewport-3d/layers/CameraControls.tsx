@@ -673,7 +673,7 @@ export function OrbitCameraControls({
     tracker.recordDirtyFrame("camera-orbit-debug");
   });
 
-  const handleChange = useCallback(() => {
+  const recordOrbitControlFrame = useCallback(() => {
     invalidate();
     tracker.recordDirtyFrame("camera-control");
   }, [invalidate, tracker]);
@@ -762,7 +762,7 @@ export function OrbitCameraControls({
       rotateSpeed={options.rotateSpeed}
       screenSpacePanning={options.screenSpacePanning}
       zoomToCursor
-      onChange={handleChange}
+      onChange={recordOrbitControlFrame}
       onEnd={debouncedHandleEnd}
       onStart={handleStart}
     />

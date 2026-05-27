@@ -26,6 +26,14 @@ export function resolveStaleTopologyVisualizationSettings(
   return resolveTopologyConstrainedVisualizationSettings(settings);
 }
 
+export function resolveViewport3DTopologyFreshnessLabel(
+  freshness: Viewport3DTopologyFreshness,
+): string | null {
+  if (freshness === "current") return null;
+  if (freshness === "stale") return "topology stale";
+  return "topology freshness unknown";
+}
+
 export function resolveUnknownTopologyProvenanceRefreshKey(
   scene: unknown,
   manifest: unknown,
