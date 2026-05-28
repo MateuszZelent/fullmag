@@ -153,7 +153,9 @@ export function resolveHeaderSessionDisplay(
   status: HeaderSessionSource,
   detailedRuntimeState?: string | null,
 ): HeaderSessionDisplay {
-  const connected = status.status === "ready";
+  const hasSessionData = status.data !== null;
+  const connected =
+    status.status === "ready" || (status.status === "stale" && hasSessionData);
   const failed = status.status === "error";
   const runtimeState = resolveEffectiveRuntimeState({
     detailedRuntimeState,

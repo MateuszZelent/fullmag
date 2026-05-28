@@ -39,6 +39,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   shouldLoadRuntimeCurrentRun,
+  shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
@@ -245,6 +246,7 @@ type StudyInspectorRuntimeStatus = {
     LiveStatusResource["resources"],
     | "mesh_build_revision"
     | "mesh_revision"
+    | "commands_revision"
     | "scalars_revision"
     | "scene_revision"
     | "stages_revision"
@@ -267,6 +269,7 @@ function selectStudyInspectorRuntimeStatus(status: {
     resources: {
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
+      commands_revision: status.data.resources.commands_revision,
       scalars_revision: status.data.resources.scalars_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
@@ -306,6 +309,7 @@ function studyInspectorRuntimeStatusEquals(
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
+    previous.resources.commands_revision === next.resources.commands_revision &&
     previous.resources.scalars_revision === next.resources.scalars_revision &&
     previous.resources.scene_revision === next.resources.scene_revision &&
     previous.resources.stages_revision === next.resources.stages_revision &&
@@ -331,7 +335,9 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     enabled: shouldLoadRuntimeStageExecution(true, runtimeStatus),
   });
   const solverStatus = useSolverStatusResource();
-  const commandQueue = useCommandQueueResource();
+  const commandQueue = useCommandQueueResource({
+    enabled: shouldLoadRuntimeCommandQueue(true, runtimeStatus),
+  });
   const checkpointCatalog = useCheckpointCatalogResource();
   const geometryValidation = useGeometryValidationResource();
   const meshBuildCurrent = useMeshBuildCurrent({

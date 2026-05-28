@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import {
+  DATA_FIELDS_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -14,6 +15,7 @@ import {
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
+  ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
@@ -91,8 +93,13 @@ export async function loadCachedBinaryResource<TData>(
   cache: ResourceCache<TData>,
   key: string,
   request: (etag?: string | null) => Promise<BinaryResourceResult<TData>>,
+  options: { preferCached?: boolean } = {},
 ): Promise<TData | null> {
   const cached = cache.get(key);
+  if (cached && options.preferCached) {
+    return cached.data;
+  }
+
   const result = await request(cached?.etag);
 
   if (result.status === "not-modified") {
@@ -113,6 +120,30 @@ export async function loadCachedBinaryResource<TData>(
     etag: result.etag,
   });
   return result.data;
+}
+
+function resolveRevisionedFieldVectorCacheKey(
+  resourceKey: string,
+  fieldsRevision: ResourceRevision | null,
+): string {
+  return fieldsRevision === null
+    ? resourceKey
+    : `${resourceKey}#fields=${encodeURIComponent(String(fieldsRevision))}`;
+}
+
+function useResourceRevision(resourceKey: string): ResourceRevision | null {
+  const { resources } = useKernel();
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      resources.subscribe(resourceKey, onStoreChange),
+    [resourceKey, resources],
+  );
+  const getSnapshot = useCallback(
+    () => resources.getRevision(resourceKey),
+    [resourceKey, resources],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function resolveViewport3DFieldVectorResourceKey(
@@ -203,6 +234,7 @@ export function useViewport3DFieldVector(
   enabled = true,
 ) {
   const { api } = useKernel();
+  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
   const component = fieldQuery.component ?? "full";
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
@@ -214,14 +246,21 @@ export function useViewport3DFieldVector(
     }),
     [component, scopeId, scopeKind],
   );
-  const resourceKey = useMemo(
+  const requestKey = useMemo(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, query),
     [quantityId, query],
   );
+  const resourceKey = useMemo(
+    () => resolveRevisionedFieldVectorCacheKey(requestKey, fieldsRevision),
+    [fieldsRevision, requestKey],
+  );
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      loadCachedBinaryResource(fieldVectorCache, resourceKey, (etag) =>
-        api.data.fields.vector(quantityId, query, { etag, signal }),
+      loadCachedBinaryResource(
+        fieldVectorCache,
+        resourceKey,
+        (etag) => api.data.fields.vector(quantityId, query, { etag, signal }),
+        { preferCached: true },
       ),
     [api, quantityId, query, resourceKey],
   );
@@ -244,9 +283,20 @@ export function useViewport3DAirboxFieldVectors(
   enabled = true,
 ) {
   const { api } = useKernel();
-  const resourceKeys = useMemo(
+  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
+  const requestKeys = useMemo(
     () => resolveViewport3DAirboxFieldVectorResourceKeys(quantityId, airboxParts),
     [airboxParts, quantityId],
+  );
+  const resourceKeys = useMemo(
+    () =>
+      new Map(
+        Array.from(requestKeys, ([partId, key]) => [
+          partId,
+          resolveRevisionedFieldVectorCacheKey(key, fieldsRevision),
+        ]),
+      ),
+    [fieldsRevision, requestKeys],
   );
   const resourceKey = useMemo(() => {
     const suffix = Array.from(resourceKeys.values()).join("|");
@@ -271,6 +321,7 @@ export function useViewport3DAirboxFieldVectors(
                 },
                 { etag, signal },
               ),
+            { preferCached: true },
           );
           return [partId, data] as const;
         }),
@@ -305,9 +356,20 @@ export function useViewport3DQuantityFieldVectors(
   enabled = true,
 ) {
   const { api } = useKernel();
-  const resourceKeys = useMemo(
+  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
+  const requestKeys = useMemo(
     () => resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds),
     [quantityIds],
+  );
+  const resourceKeys = useMemo(
+    () =>
+      new Map(
+        Array.from(requestKeys, ([quantityId, key]) => [
+          quantityId,
+          resolveRevisionedFieldVectorCacheKey(key, fieldsRevision),
+        ]),
+      ),
+    [fieldsRevision, requestKeys],
   );
   const resourceKey = useMemo(() => {
     const suffix = Array.from(resourceKeys.values()).join("|");
@@ -331,6 +393,7 @@ export function useViewport3DQuantityFieldVectors(
                 },
                 { etag, signal },
               ),
+            { preferCached: true },
           );
           return [quantityId, data] as const;
         }),

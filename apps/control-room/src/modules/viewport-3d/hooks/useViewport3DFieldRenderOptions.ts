@@ -58,10 +58,11 @@ export function useViewport3DFieldRenderOptions({
     let fullVectorAnchorMode: "center" | "tail" = "center";
     let fullVectorSurfaceOffsetScale = 0;
     const magneticVectorsAllowed = vectorDomain !== "airbox_only";
-    const airboxVectorsAllowed =
-      vectorDomain !== "magnetic_only" &&
-      vectorDomain !== "object" &&
-      vectorDomain !== "part";
+    const airboxVectorsVisible = viewport3DAirboxVectorsVisible(
+      airboxSettings.visible,
+      airboxSettings.vectorsVisible,
+      vectorDomain,
+    );
 
     if (topologyRenderModel.magneticParts.length > 0) {
       for (const partModel of topologyRenderModel.magneticParts) {
@@ -139,10 +140,7 @@ export function useViewport3DFieldRenderOptions({
       if (airboxSettings.vectorSurfaceOffsetEnabled) {
         partVectorSurfaceOffsetScales.set(partId, airboxSettings.vectorSurfaceOffsetScale);
       }
-      const airboxVisible =
-        airboxVectorsAllowed &&
-        airboxSettings.vectorsVisible;
-      if (airboxVisible && airboxSettings.vectorBudget > 0) {
+      if (airboxVectorsVisible && airboxSettings.vectorBudget > 0) {
         partVectorBudgets.set(partId, airboxSettings.vectorBudget);
       }
       if (airboxSettings.vectorLengthScale !== 1) {
@@ -193,6 +191,20 @@ export function useViewport3DFieldRenderOptions({
     vectorColorMode,
     vectorDomain,
   ]);
+}
+
+export function viewport3DAirboxVectorsVisible(
+  visible: boolean,
+  vectorsVisible: boolean,
+  vectorDomain: string,
+): boolean {
+  return (
+    visible &&
+    vectorsVisible &&
+    vectorDomain !== "magnetic_only" &&
+    vectorDomain !== "object" &&
+    vectorDomain !== "part"
+  );
 }
 
 function retainViewport3DFieldRenderOptions(

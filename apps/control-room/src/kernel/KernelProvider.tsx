@@ -200,6 +200,39 @@ function CameraRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const auditWindow = window as Window & {
+      __FULLMAG_CONFIG__?: { allowMissingSessionSmoke?: boolean };
+      __FULLMAG_CONTROL_ROOM_AUDIT__?: {
+        setGlobalQuantity: (quantityId: string) => Promise<void>;
+      };
+    };
+    if (!auditWindow.__FULLMAG_CONFIG__?.allowMissingSessionSmoke) {
+      return;
+    }
+
+    const auditApi = {
+      setGlobalQuantity: async (quantityId: string) => {
+        kernel.visualizationSync.queuePatch({
+          active_quantity_id: quantityId,
+          quantity: { active_quantity_id: quantityId },
+        });
+        await kernel.visualizationSync.flushNow();
+      },
+    };
+    auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;
+    return () => {
+      if (auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ === auditApi) {
+        delete auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      }
+    };
+  }, [kernel]);
+
+  return null;
+}
+
 function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(
     () => startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics }),
@@ -218,6 +251,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
       <CommandShortcutConnector kernel={kernel} />
       <VisualizationRegistrySyncConnector kernel={kernel} />
       <CameraRegistrySyncConnector kernel={kernel} />
+      <BrowserAuditConnector kernel={kernel} />
       <PerformanceDiagnosticsConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>

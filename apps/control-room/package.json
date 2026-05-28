@@ -7,6 +7,7 @@
     "dev:binary": "node dev-server.mjs",
     "audit:idle-performance": "node scripts/audit-idle-performance.mjs",
     "audit:compute-performance": "node scripts/audit-compute-performance.mjs",
+    "audit:viewport-3d-memory-churn": "node scripts/audit-viewport-3d-memory-churn.mjs",
     "audit:viewport-3d-profile-switch": "node scripts/audit-viewport-3d-profile-switch.mjs",
     "build": "next build",
     "build:webpack": "next build --webpack",

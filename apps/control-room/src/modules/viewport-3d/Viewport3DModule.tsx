@@ -572,6 +572,7 @@ const Viewport3DFieldRefreshCountdown = memo(
         return () => window.clearTimeout(timeoutId);
       }
 
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const tick = () => {
         const nowMs = Date.now();
         setCountdown((current) => ({
@@ -582,15 +583,14 @@ const Viewport3DFieldRefreshCountdown = memo(
             status: refresh.status,
           }),
         }));
+        timeoutId = setTimeout(tick, VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS);
       };
-      const timeoutId = window.setTimeout(tick, 0);
-      const intervalId = window.setInterval(
-        tick,
-        VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS,
-      );
+      const initialTimeoutId = setTimeout(tick, 0);
       return () => {
-        window.clearInterval(intervalId);
-        window.clearTimeout(timeoutId);
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+        }
+        clearTimeout(initialTimeoutId);
       };
     }, [refresh.enabled, refresh.revision, refresh.status]);
 

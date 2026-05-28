@@ -2239,7 +2239,7 @@ function buildCameraRotationModeAction({
     activeCommandValue(commands, commandContext, [
       ["viewport-3d.rotation-camera", "camera"],
       ["viewport-3d.rotation-object", "object"],
-    ]) ?? "camera";
+    ]) ?? "object";
 
   return {
     id: "home-camera-rotation",
@@ -2278,7 +2278,7 @@ function buildViewCameraAction({
     activeCommandValue(commands, commandContext, [
       ["viewport-3d.rotation-camera", "camera"],
       ["viewport-3d.rotation-object", "object"],
-    ]) ?? "camera";
+    ]) ?? "object";
 
   return {
     id: "view-camera",

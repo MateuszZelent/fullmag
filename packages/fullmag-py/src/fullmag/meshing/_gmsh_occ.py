@@ -43,6 +43,18 @@ def _component_interface_size_targets(options: MeshOptions) -> dict[str, float]:
     return targets
 
 
+def _airbox_interface_dist_max(
+    *,
+    default_h_inner: float,
+    h_inner: float,
+    fallback_dist_max: float,
+    has_explicit_hmin: bool,
+) -> float:
+    if not has_explicit_hmin:
+        return fallback_dist_max
+    return min(fallback_dist_max, max(default_h_inner, h_inner))
+
+
 def is_occ_compatible(geometries: list[Geometry]) -> bool:
     """Check if all geometries are standard shapes compatible with native OCC pipeline."""
     for geometry in geometries:
@@ -284,6 +296,8 @@ def generate_shared_domain_mesh_via_occ(
 
             component_size_targets = _component_interface_size_targets(opts)
             covered_interface_tags: set[int] = set()
+            fallback_dist_max = max(d_outer, hmax * SCALE)
+            has_explicit_airbox_hmin = airbox_scaled.minimum_element_size is not None
             for geom in geometries:
                 geom_interface = sorted(
                     set(component_surface_tags.get(geom.geometry_name, []))
@@ -307,7 +321,12 @@ def generate_shared_domain_mesh_via_occ(
                 gmsh.model.mesh.field.setNumber(
                     f_thresh,
                     "DistMax",
-                    max(d_outer, hmax * SCALE),
+                    _airbox_interface_dist_max(
+                        default_h_inner=default_h_inner,
+                        h_inner=h_inner,
+                        fallback_dist_max=fallback_dist_max,
+                        has_explicit_hmin=has_explicit_airbox_hmin,
+                    ),
                 )
                 airbox_field_ids.append(f_thresh)
 
@@ -329,7 +348,12 @@ def generate_shared_domain_mesh_via_occ(
                 gmsh.model.mesh.field.setNumber(
                     f_thresh,
                     "DistMax",
-                    max(d_outer, hmax * SCALE),
+                    _airbox_interface_dist_max(
+                        default_h_inner=default_h_inner,
+                        h_inner=default_h_inner,
+                        fallback_dist_max=fallback_dist_max,
+                        has_explicit_hmin=has_explicit_airbox_hmin,
+                    ),
                 )
                 airbox_field_ids.append(f_thresh)
 

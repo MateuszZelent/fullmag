@@ -1,7 +1,7 @@
 "use client";
 
 import { useThree } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, memo } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -48,7 +48,7 @@ interface DimensionFrameLayerColors {
 
 const DIMENSION_FRAME_RENDER_ORDER = 4;
 
-export function DimensionFrameLayer({
+export const DimensionFrameLayer = memo(function DimensionFrameLayer({
   bounds,
   cameraProjection,
   cameraState,
@@ -167,7 +167,7 @@ export function DimensionFrameLayer({
       ))}
     </group>
   );
-}
+})
 
 export function createDimensionFrameLineGeometry(
   positions: Float32Array,

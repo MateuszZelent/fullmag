@@ -144,11 +144,11 @@ describe("FooterTelemetry", () => {
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(model.statusTitle).toBe("System Status: Running");
-    expect(byId["avg-mx"]?.value).toBe("0.250");
-    expect(byId["avg-my"]?.value).toBe("-0.500");
-    expect(byId["avg-mz"]?.value).toBe("0.750");
+    expect(byId["avg-mx"]?.value).toBe("0.250000");
+    expect(byId["avg-my"]?.value).toBe("-0.500000");
+    expect(byId["avg-mz"]?.value).toBe("0.750000");
     expect(byId["energy-total"]?.value).toBe("15");
-    expect(byId["max-torque"]?.value).toBe("6.000e-3 T");
+    expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
   });
 

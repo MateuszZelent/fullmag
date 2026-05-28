@@ -33,6 +33,7 @@ import {
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
   shouldLoadRuntimeMeshSummary,
+  shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeStageExecution,
   useCommandQueueResource,
   useCommandDetailResource,
@@ -84,6 +85,7 @@ type RibbonRuntimeStatus = {
     LiveStatusResource["resources"],
     | "field_revision"
     | "fields_revision"
+    | "commands_revision"
     | "mesh_build_revision"
     | "mesh_revision"
     | "scene_revision"
@@ -106,6 +108,7 @@ function selectRibbonRuntimeStatus(status: {
     resources: {
       field_revision: status.data.resources.field_revision,
       fields_revision: status.data.resources.fields_revision,
+      commands_revision: status.data.resources.commands_revision,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
       scene_revision: status.data.resources.scene_revision,
@@ -127,6 +130,7 @@ function ribbonRuntimeStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.field_revision === next.resources.field_revision &&
     previous.resources.fields_revision === next.resources.fields_revision &&
+    previous.resources.commands_revision === next.resources.commands_revision &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
@@ -192,7 +196,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     enabled: needsMeshResources,
   });
   const commandQueue = useCommandQueueResource({
-    enabled: needsRuntimeResources,
+    enabled: shouldLoadRuntimeCommandQueue(
+      needsRuntimeResources,
+      sessionStatusData,
+    ),
   });
   const solverStatus = useSolverStatusResource({
     enabled: needsRuntimeResources,

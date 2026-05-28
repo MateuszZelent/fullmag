@@ -96,33 +96,16 @@ function renderNode(
       return (
         <div key={node.id}>
           {node.label ? <DropdownMenuLabel>{node.label}</DropdownMenuLabel> : null}
-          <DropdownMenuRadioGroup
-            value={node.value}
-            onValueChange={(value) => {
-              const item = node.items.find((entry) => entry.value === value);
-              if (item?.commandId) {
-                onCommand?.(
-                  item.commandId,
-                  item.commandInput ??
-                    resolveCommandInput(node.commandInput, value),
-                );
-                return;
-              }
-              if (node.commandId) {
-                onCommand?.(
-                  node.commandId,
-                  resolveCommandInput(node.commandInput, value),
-                );
-                return;
-              }
-              onCommand?.(node.id, resolveCommandInput(node.commandInput, value));
-            }}
-          >
+          <DropdownMenuRadioGroup value={node.value}>
             {node.items.map((item) => (
               <DropdownMenuRadioItem
                 key={`${node.id}:${item.value}`}
                 disabled={node.disabled || item.disabled}
                 value={item.value}
+                onSelect={() => {
+                  if (item.value === node.value) return;
+                  runRadioCommand(node, item.value, onCommand);
+                }}
               >
                 {item.label}
               </DropdownMenuRadioItem>
@@ -176,6 +159,26 @@ function resolveCommandInput<T>(
   return typeof input === "function"
     ? (input as (value: T) => unknown)(value)
     : input ?? value;
+}
+
+function runRadioCommand(
+  node: Extract<RibbonMenuNode, { type: "radio-group" }>,
+  value: string,
+  onCommand?: (commandId: string, input?: unknown) => void,
+): void {
+  const item = node.items.find((entry) => entry.value === value);
+  if (item?.commandId) {
+    onCommand?.(
+      item.commandId,
+      item.commandInput ?? resolveCommandInput(node.commandInput, value),
+    );
+    return;
+  }
+  if (node.commandId) {
+    onCommand?.(node.commandId, resolveCommandInput(node.commandInput, value));
+    return;
+  }
+  onCommand?.(node.id, resolveCommandInput(node.commandInput, value));
 }
 
 // ── Slider ────────────────────────────────────────────────────────────────────

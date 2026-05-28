@@ -16,9 +16,9 @@ describe("torqueUnits", () => {
   });
 
   it("formats torque values with explicit units", () => {
-    expect(formatTorqueT(1e-5)).toBe("1.000e-5 T");
+    expect(formatTorqueT(1e-5)).toBe("1.000000e-5 T");
     expect(formatTorquePairFromApm(apmFromTesla(1e-5))).toBe(
-      "1.000e-5 T / 7.958e0 A/m",
+      "1.000000e-5 T / 7.957747e0 A/m",
     );
   });
 });

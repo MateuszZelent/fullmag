@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace as _dc_replace
 import math
 import tempfile
 from pathlib import Path
@@ -25,6 +26,9 @@ from fullmag.model.geometry import (
 )
 
 from .gmsh_bridge import (
+    ALGO_3D_DELAUNAY,
+    ALGO_3D_FRONTAL,
+    ALGO_3D_HXT,
     AirboxOptions,
     ComponentDescriptor,
     MeshData,
@@ -72,6 +76,26 @@ from ._size_field_plan import (
 
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
+
+
+def _conformal_occ_degenerate_retry(
+    algorithm_3d: int,
+) -> tuple[int, str, str] | None:
+    if int(algorithm_3d) == ALGO_3D_HXT:
+        return (
+            ALGO_3D_DELAUNAY,
+            "Conformal OCC mesh: HXT produced a degenerate thin-film tetra; "
+            "retrying with Delaunay",
+            "conformal_occ_hxt_degenerate_retry_delaunay",
+        )
+    if int(algorithm_3d) == ALGO_3D_DELAUNAY:
+        return (
+            ALGO_3D_FRONTAL,
+            "Conformal OCC mesh: Delaunay produced a degenerate thin-film tetra; "
+            "retrying with Frontal",
+            "conformal_occ_delaunay_degenerate_retry_frontal",
+        )
+    return None
 
 
 def _surface_trimesh_kwargs_from_mesh_options(opts: MeshOptions) -> dict[str, object]:
@@ -1087,7 +1111,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 existing = _strip_overridden_geometry_fields(
                     list(mesh_options.size_fields), per_object_recipes
                 )
-                from dataclasses import replace as _dc_replace
                 mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
         effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
             geometries,
@@ -1182,13 +1205,34 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 "message": "Generating native OCC-conformal 3D tetrahedral mesh",
                             }
                         )
-                        result = generate_shared_domain_mesh_via_occ(
-                            geometries,
-                            hmax=effective_hmax,
-                            order=hints.order,
-                            airbox=airbox,
-                            options=mesh_options,
-                        )
+                        while True:
+                            result = generate_shared_domain_mesh_via_occ(
+                                geometries,
+                                hmax=effective_hmax,
+                                order=hints.order,
+                                airbox=airbox,
+                                options=mesh_options,
+                            )
+                            try:
+                                result.mesh.validate_strict(
+                                    require_positive_orientation=True
+                                )
+                                break
+                            except ValueError as exc:
+                                retry = (
+                                    _conformal_occ_degenerate_retry(mesh_options.algorithm_3d)
+                                    if "degenerate tetra volume" in str(exc)
+                                    else None
+                                )
+                                if retry is None:
+                                    raise
+                                retry_algorithm, retry_message, retry_marker = retry
+                                emit_progress(retry_message)
+                                fallbacks_triggered.append(retry_marker)
+                                mesh_options = _dc_replace(
+                                    mesh_options,
+                                    algorithm_3d=retry_algorithm,
+                                )
                         mesh = result.mesh
                         emit_progress(
                             f"Conformal OCC mesh: geometry→volume mapping established for "
@@ -1280,7 +1324,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 existing = _strip_overridden_geometry_fields(
                                     list(mesh_options.size_fields), per_object_recipes
                                 )
-                                from dataclasses import replace as _dc_replace
                                 mesh_options = _dc_replace(
                                     mesh_options, size_fields=recipe_fields + existing
                                 )

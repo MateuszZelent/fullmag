@@ -754,6 +754,7 @@ export function OrbitCameraControls({
   return (
     <OrbitControls
       ref={controlsRef}
+      makeDefault
       enableDamping={options.enableDamping}
       enablePan={options.enablePan}
       enableZoom={options.enableZoom}

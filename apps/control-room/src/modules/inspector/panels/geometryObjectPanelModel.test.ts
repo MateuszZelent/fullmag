@@ -296,16 +296,16 @@ describe("resolveGeometryObjectPanelModel", () => {
         time_seconds: 4.2e-12,
       }),
     ).toEqual({
-      anisotropy: "4.000e+0 J",
-      demag: "2.000e+0 J",
-      dmi: "5.000e+0 J",
-      exchange: "1.000e+0 J",
-      magnetization: "(0.250, 0.500, 0.750)",
-      sample: "step 7 @ 4.200e-12 s",
+      anisotropy: "4.000000e+0 J",
+      demag: "2.000000e+0 J",
+      dmi: "5.000000e+0 J",
+      exchange: "1.000000e+0 J",
+      magnetization: "(0.250000, 0.500000, 0.750000)",
+      sample: "step 7 @ 4.200000e-12 s",
       source: "solver_per_object",
       status: "computed",
-      total: "1.500e+1 J",
-      zeeman: "3.000e+0 J",
+      total: "1.500000e+1 J",
+      zeeman: "3.000000e+0 J",
     });
   });
 });

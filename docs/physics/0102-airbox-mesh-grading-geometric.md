@@ -1,7 +1,7 @@
 # Airbox mesh grading: geometric vs linear
 
 - Status: draft
-- Last updated: 2026-04-14
+- Last updated: 2026-05-27
 - Related specs: `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
 - Related code: `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
 
@@ -124,7 +124,22 @@ gmsh.model.mesh.field.setNumbers(f_cap, "FieldsList", [f_growth, f_const_hmax])
 | h_inner      | Element size at magnetic interface   | hmax    | > 0       |
 | airbox_hmax  | Maximum element size in far field    | 10×hmax | > h_inner |
 
-### 4.3 Comparison
+### 4.3 Conformal shared-domain constraint
+
+For FEM Poisson-airbox demagnetics, the magnetic body and airbox are meshed as
+one conforming shared domain. The airbox must therefore reuse the magnetic
+surface triangulation on the body-air interface. `airbox_hmax` is a far-field
+target; it must not coarsen the interface below the per-object magnetic target,
+and it cannot reduce the number of interface vertices already required by the
+magnetic body.
+
+Thin-film bodies amplify this effect. If a 2 nm film has a large in-plane
+surface and requests an 8 nm magnetic surface scale, the top and bottom
+interface surfaces alone require O(area / h^2) triangles. A very thin airbox in
+z also leaves little distance for grading to relax from the interface scale to
+`airbox_hmax`.
+
+### 4.4 Comparison
 
 For a 100 nm object with 5 nm interface mesh and 500 nm airbox radius:
 

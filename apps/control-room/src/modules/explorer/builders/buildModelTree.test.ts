@@ -299,7 +299,7 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === "model:study:stage:stage-relax"),
     ).toMatchObject({
-      badge: "tau 1.000e-4 T",
+      badge: "tau 1.000000e-4 T",
       kind: "study.stage.relax",
       label: "Relax 1",
     });

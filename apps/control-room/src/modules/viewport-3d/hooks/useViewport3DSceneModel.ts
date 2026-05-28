@@ -38,7 +38,10 @@ import {
   mergeViewport3DFieldScalarColors,
   useViewport3DChunkedScalarColors,
 } from "./useViewport3DChunkedScalarColors";
-import { useViewport3DFieldRenderOptions } from "./useViewport3DFieldRenderOptions";
+import {
+  useViewport3DFieldRenderOptions,
+  viewport3DAirboxVectorsVisible,
+} from "./useViewport3DFieldRenderOptions";
 import {
   FULL_FIELD_QUERY,
   resolveViewport3DSelectionBounds,
@@ -440,9 +443,12 @@ export function useViewport3DSceneModel({
       vectorLengthScale,
     1e-12,
   );
-  const selectionBounds =
-    resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
-    resolveViewport3DSelectionBounds(selection, femDomain, bounds);
+  const selectionBounds = useMemo(
+    () =>
+      resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
+      resolveViewport3DSelectionBounds(selection, femDomain, bounds),
+    [selection, primitiveModel, femDomain, bounds],
+  );
   const globalLayers = renderingState?.layers;
   const globalObjectBaseSettings = useMemo(
     () => resolveGlobalObjectVisualizationSettings(renderingState),
@@ -572,10 +578,11 @@ export function useViewport3DSceneModel({
       }).effectiveSettings,
     [objectVisualizationSnapshot, renderingState],
   );
-  const airboxVectorsAllowed =
-    vectorDomain !== "magnetic_only" &&
-    vectorDomain !== "object" &&
-    vectorDomain !== "part";
+  const airboxVectorsVisible = viewport3DAirboxVectorsVisible(
+    airboxSettings.visible,
+    airboxSettings.vectorsVisible,
+    vectorDomain,
+  );
   const airboxFieldVectorParts = useMemo(
     () =>
       currentTopologyRenderModel?.airboxParts.map((partModel) => partModel.part) ??
@@ -630,11 +637,7 @@ export function useViewport3DSceneModel({
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
-    Boolean(
-      airboxVectorsAllowed &&
-        airboxSettings.vectorsVisible &&
-        airboxFieldVectorParts.length > 0,
-    ),
+    airboxVectorsVisible && airboxFieldVectorParts.length > 0,
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,

@@ -85,11 +85,11 @@ describe("viewport3dManifest", () => {
     expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
       .toBe(true);
 
-    expect(registry.isActive("viewport-3d.rotation-camera", { source: "test" }))
-      .toBe(true);
-    await registry.execute("viewport-3d.rotation-object", { source: "test" });
-    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
     expect(registry.isActive("viewport-3d.rotation-object", { source: "test" }))
+      .toBe(true);
+    await registry.execute("viewport-3d.rotation-camera", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
+    expect(registry.isActive("viewport-3d.rotation-camera", { source: "test" }))
       .toBe(true);
 
     await registry.execute("viewport-3d.fdm-topography-toggle", { source: "test" });

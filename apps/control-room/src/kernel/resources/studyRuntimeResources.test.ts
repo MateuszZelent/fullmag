@@ -15,6 +15,7 @@ import type { LiveStatusResource } from "../api/apiTypes";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeMeshBuild,
   shouldLoadRuntimeMeshManifest,
@@ -155,6 +156,19 @@ describe("study runtime command resource bundles", () => {
       shouldLoadRuntimeStageExecution(
         true,
         statusWith({ resources: { stages_revision: 9 } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("loads command queue only after status reports a command revision", () => {
+    expect(shouldLoadRuntimeCommandQueue(true, statusWith())).toBe(false);
+    expect(shouldLoadRuntimeCommandQueue(false, statusWith({
+      resources: { commands_revision: 3 },
+    }))).toBe(false);
+    expect(
+      shouldLoadRuntimeCommandQueue(
+        true,
+        statusWith({ resources: { commands_revision: 3 } }),
       ),
     ).toBe(true);
   });

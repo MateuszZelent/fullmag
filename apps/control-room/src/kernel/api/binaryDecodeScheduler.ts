@@ -38,6 +38,8 @@ type BinaryDecodeWorkerResponse =
   | BinaryDecodeWorkerErrorResponse
   | BinaryDecodeWorkerOkResponse;
 
+const BINARY_DECODE_WORKER_IDLE_TIMEOUT_MS = 30_000;
+
 interface PendingDecode {
   reject: (reason: unknown) => void;
   resolve: (value: BinaryDecodedPayload) => void;
@@ -54,6 +56,11 @@ export function createBinaryDecodeScheduler(): BinaryDecodeScheduler {
 
     return decodeInline(buffer);
   };
+}
+
+export function disposeBinaryDecodeWorkerForTests(): void {
+  workerClient?.dispose();
+  workerClient = undefined;
 }
 
 function getBinaryDecodeWorkerClient(): BinaryDecodeWorkerClient | null {
@@ -75,6 +82,8 @@ function getBinaryDecodeWorkerClient(): BinaryDecodeWorkerClient | null {
 }
 
 class BinaryDecodeWorkerClient {
+  private disposed = false;
+  private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingDecode>();
   private readonly worker: Worker;
@@ -90,6 +99,10 @@ class BinaryDecodeWorkerClient {
   }
 
   decode(kind: BinaryDecoderKind, buffer: ArrayBuffer): Promise<BinaryDecodedPayload> {
+    if (this.disposed) {
+      return Promise.reject(new Error("Binary decode worker has been disposed."));
+    }
+    this.clearIdleDisposeTimer();
     const id = this.nextId++;
     const message: BinaryDecodeWorkerRequest = { buffer, id, kind };
     return new Promise((resolve, reject) => {
@@ -98,14 +111,37 @@ class BinaryDecodeWorkerClient {
         this.worker.postMessage(message, [buffer]);
       } catch (error) {
         this.pending.delete(id);
+        this.dispose(error);
         reject(error);
       }
     });
   }
 
+  dispose(reason?: unknown): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clearIdleDisposeTimer();
+    const error =
+      reason instanceof Error
+        ? reason
+        : new Error("Binary decode worker has been disposed.");
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+    this.worker.removeEventListener("message", this.handleMessage);
+    this.worker.removeEventListener("error", this.handleError);
+    this.worker.removeEventListener("messageerror", this.handleError);
+    this.worker.terminate();
+    if (workerClient === this) {
+      workerClient = undefined;
+    }
+  }
+
   private readonly handleMessage = (
     event: MessageEvent<BinaryDecodeWorkerResponse>,
   ): void => {
+    if (this.disposed) return;
     const response = event.data;
     const pending = this.pending.get(response.id);
     if (!pending) {
@@ -115,23 +151,37 @@ class BinaryDecodeWorkerClient {
     this.pending.delete(response.id);
     if (response.ok) {
       pending.resolve(response.data);
+      this.scheduleIdleDispose();
       return;
     }
 
     const error = new Error(response.error.message);
     error.name = response.error.name;
     pending.reject(error);
+    this.scheduleIdleDispose();
   };
 
   private readonly handleError = (event: Event): void => {
     const message =
-      event instanceof ErrorEvent ? event.message : "Binary decode worker failed.";
+      typeof ErrorEvent !== "undefined" && event instanceof ErrorEvent
+        ? event.message
+        : "Binary decode worker failed.";
     const error = new Error(message);
     error.name = "BinaryDecodeWorkerError";
-    for (const pending of this.pending.values()) {
-      pending.reject(error);
-    }
-    this.pending.clear();
-    workerClient = null;
+    this.dispose(error);
   };
+
+  private scheduleIdleDispose(): void {
+    if (this.pending.size > 0 || this.idleTimeoutId !== null) return;
+    this.idleTimeoutId = setTimeout(() => {
+      this.idleTimeoutId = null;
+      this.dispose();
+    }, BINARY_DECODE_WORKER_IDLE_TIMEOUT_MS);
+  }
+
+  private clearIdleDisposeTimer(): void {
+    if (this.idleTimeoutId === null) return;
+    clearTimeout(this.idleTimeoutId);
+    this.idleTimeoutId = null;
+  }
 }

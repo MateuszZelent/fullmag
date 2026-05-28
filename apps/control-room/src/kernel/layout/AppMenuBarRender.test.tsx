@@ -85,6 +85,41 @@ describe("AppMenuBar", () => {
     });
   });
 
+  it("keeps the API connection label stable while cached status is refreshing", () => {
+    expect(
+      resolveHeaderSessionDisplay({
+        data: {
+          session: {
+            name: "Spin-torque run",
+          },
+          solver: { state: "running" },
+        },
+        status: "stale",
+      }),
+    ).toMatchObject({
+      connectionLabel: "Local API",
+      indicatorLabel: "Session connected",
+      indicatorStatus: "connected",
+      sessionBadge: "Running",
+      subtitle: "Spin-torque run",
+    });
+  });
+
+  it("keeps the API pending label before any session status has loaded", () => {
+    expect(
+      resolveHeaderSessionDisplay({
+        data: null,
+        status: "loading",
+      }),
+    ).toMatchObject({
+      connectionLabel: "API pending",
+      indicatorLabel: "Session connecting",
+      indicatorStatus: "connecting",
+      sessionBadge: "loading",
+      subtitle: "Loading session",
+    });
+  });
+
   it("keeps the first client header render aligned with SSR session fallback", () => {
     const readyStatus = {
       data: {

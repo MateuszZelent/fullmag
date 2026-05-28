@@ -217,6 +217,7 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
   const state: SimulationStartupOverlayState = allowMissingSessionSmoke
     ? { isVisible: false }
     : startupResource.state;
+  const startupRefetch = startupResource.refetch;
   const shouldRefresh = shouldRefreshSimulationStartupStatus(state);
 
   useEffect(() => {
@@ -224,12 +225,21 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
       return;
     }
 
-    const intervalId = window.setInterval(
-      startupResource.refetch,
-      SIMULATION_STARTUP_STATUS_REFRESH_MS,
-    );
-    return () => window.clearInterval(intervalId);
-  }, [startupResource.refetch, shouldRefresh]);
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      if (cancelled) return;
+      startupRefetch();
+      timeoutId = setTimeout(tick, SIMULATION_STARTUP_STATUS_REFRESH_MS);
+    };
+    timeoutId = setTimeout(tick, SIMULATION_STARTUP_STATUS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [startupRefetch, shouldRefresh]);
 
   return state;
 }

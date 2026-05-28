@@ -38,6 +38,7 @@ interface UseResourceSelectorOptions<TData, TSelected>
 
 /** Minimum delay before retrying after a network/fetch error (ms). */
 const ERROR_RETRY_DELAY_MS = 1_000;
+const NOOP_SUBSCRIBE = () => undefined;
 
 export function useResource<TData>({
   enabled = true,
@@ -52,8 +53,10 @@ export function useResource<TData>({
   // unsubscribe/resubscribe on every render.
   const subscribeStable = useCallback(
     (onStoreChange: () => void) =>
-      resources.subscribe(resourceKey, onStoreChange),
-    [resources, resourceKey],
+      enabled
+        ? resources.subscribe(resourceKey, onStoreChange)
+        : NOOP_SUBSCRIBE,
+    [enabled, resources, resourceKey],
   );
   const getSnapshot = useCallback(
     () => resources.getRevision(resourceKey),
@@ -68,8 +71,10 @@ export function useResource<TData>({
 
   const subscribeRuntime = useCallback(
     (onStoreChange: () => void) =>
-      runtimeStore.subscribe(resourceKey, onStoreChange),
-    [resourceKey, runtimeStore],
+      enabled
+        ? runtimeStore.subscribe(resourceKey, onStoreChange)
+        : NOOP_SUBSCRIBE,
+    [enabled, resourceKey, runtimeStore],
   );
   const getRuntimeSnapshot = useCallback(
     () => runtimeStore.getSnapshot(resourceKey),
@@ -138,8 +143,10 @@ export function useResourceSelector<TData, TSelected>({
 
   const subscribeStable = useCallback(
     (onStoreChange: () => void) =>
-      resources.subscribe(resourceKey, onStoreChange),
-    [resources, resourceKey],
+      enabled
+        ? resources.subscribe(resourceKey, onStoreChange)
+        : NOOP_SUBSCRIBE,
+    [enabled, resources, resourceKey],
   );
   const getSnapshot = useCallback(
     () => resources.getRevision(resourceKey),
@@ -159,8 +166,10 @@ export function useResourceSelector<TData, TSelected>({
 
   const subscribeRuntime = useCallback(
     (onStoreChange: () => void) =>
-      runtimeStore.subscribe(resourceKey, onStoreChange),
-    [resourceKey, runtimeStore],
+      enabled
+        ? runtimeStore.subscribe(resourceKey, onStoreChange)
+        : NOOP_SUBSCRIBE,
+    [enabled, resourceKey, runtimeStore],
   );
   const getRuntimeSelectedSnapshot = useCallback(() => {
     const state = runtimeStore.getSnapshot<TData>(resourceKey);

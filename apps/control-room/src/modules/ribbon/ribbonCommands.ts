@@ -201,7 +201,7 @@ async function patchVisualizationStateFromCommand(
     return { message: "Visualization state patch is missing.", status: "failed" };
   }
 
-  await patchVisualizationState(context, patch);
+  await patchVisualizationState(context, patch, { flush: true });
   return { status: "completed" };
 }
 
@@ -234,7 +234,7 @@ async function applyGlobalQuantityFromCommand(
     }
   }
 
-  await patchVisualizationState(context, patch);
+  await patchVisualizationState(context, patch, { flush: true });
   return { status: "completed" };
 }
 
@@ -407,9 +407,13 @@ async function patchAirboxVisualization(
 async function patchVisualizationState(
   context: CommandContext,
   patch: VisualizationStatePatch,
+  options: { flush?: boolean } = {},
 ): Promise<void> {
   if (context.visualizationSync) {
     context.visualizationSync.queuePatch(patch);
+    if (options.flush) {
+      await context.visualizationSync.flushNow();
+    }
     return;
   }
 

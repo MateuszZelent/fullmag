@@ -39,6 +39,14 @@ interface ResourceRuntimeEntry<TData> {
 
 type StoredResourceRuntimeEntry = ResourceRuntimeEntry<never>;
 
+export interface ResourceRuntimeStoreStats {
+  entryCount: number;
+  inflightCount: number;
+  listenerCount: number;
+  pendingRequestCount: number;
+  readyCount: number;
+}
+
 const INITIAL_RUNTIME_SNAPSHOT: ResourceRuntimeSnapshot<unknown> = {
   data: null,
   error: null,
@@ -84,6 +92,33 @@ function settledForExternalRevision<TData>(
 export class ResourceRuntimeStore<TData = unknown> {
   private readonly entries = new Map<ResourceKey, StoredResourceRuntimeEntry>();
 
+  stats(): ResourceRuntimeStoreStats {
+    let inflightCount = 0;
+    let listenerCount = 0;
+    let pendingRequestCount = 0;
+    let readyCount = 0;
+    for (const stored of this.entries.values()) {
+      const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+      if (entry.inflight) {
+        inflightCount += 1;
+      }
+      listenerCount += entry.listeners.size;
+      if (entry.pendingRequest) {
+        pendingRequestCount += 1;
+      }
+      if (entry.snapshot.status === "ready") {
+        readyCount += 1;
+      }
+    }
+    return {
+      entryCount: this.entries.size,
+      inflightCount,
+      listenerCount,
+      pendingRequestCount,
+      readyCount,
+    };
+  }
+
   getSnapshot<TSnapshotData = TData>(
     resourceKey: ResourceKey,
   ): ResourceRuntimeSnapshot<TSnapshotData> {
@@ -122,6 +157,9 @@ export class ResourceRuntimeStore<TData = unknown> {
 
     return () => {
       entry.listeners.delete(listener);
+      if (entry.listeners.size === 0) {
+        this.releaseUnobservedEntry(resourceKey, entry);
+      }
     };
   }
 
@@ -265,6 +303,20 @@ export class ResourceRuntimeStore<TData = unknown> {
     for (const listener of entry.listeners) {
       listener();
     }
+  }
+
+  private releaseUnobservedEntry<TEntryData>(
+    resourceKey: ResourceKey,
+    entry: ResourceRuntimeEntry<TEntryData>,
+  ): void {
+    if (entry.listeners.size > 0) return;
+    entry.controller?.abort();
+    entry.controller = null;
+    entry.inflight = null;
+    entry.inflightExternalRevision = null;
+    entry.pendingRequest = null;
+    entry.sequence += 1;
+    this.entries.delete(resourceKey);
   }
 }
 

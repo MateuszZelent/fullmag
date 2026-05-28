@@ -78,6 +78,28 @@ describe("viewport3dResources", () => {
     expect(request).toHaveBeenCalledWith('"topology-1"');
   });
 
+  it("can reuse cached binary data without a conditional request", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    cache.set("field:m", {
+      byteLength: 4,
+      data: "cached-field",
+      etag: '"field-1"',
+    });
+    const request = vi.fn(async () => ({
+      byteLength: 5,
+      data: "fresh",
+      etag: '"field-2"',
+      status: "ready" as const,
+    }));
+
+    await expect(
+      loadCachedBinaryResource(cache, "field:m", request, {
+        preferCached: true,
+      }),
+    ).resolves.toBe("cached-field");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("stores decoded binary data returned by the API", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 32 });
 

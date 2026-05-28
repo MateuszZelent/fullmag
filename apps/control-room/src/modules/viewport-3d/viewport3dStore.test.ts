@@ -58,7 +58,7 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
       hslReferenceMode: "auto",
-      rotationMode: "camera",
+      rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
       settingsDialogOpen: false,
@@ -85,7 +85,7 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
       hslReferenceMode: "off",
-      rotationMode: "camera",
+      rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
       settingsDialogOpen: false,
@@ -112,13 +112,13 @@ describe("viewport3dStore", () => {
   it("switches between free-camera and object-bound rotation modes", () => {
     viewport3dStore.resetForTest();
 
-    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
-
-    viewport3dStore.setRotationMode("object");
     expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
 
     viewport3dStore.setRotationMode("camera");
     expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
+
+    viewport3dStore.setRotationMode("object");
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
   });
 
   it("updates FDM topography preferences", () => {

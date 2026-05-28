@@ -670,7 +670,7 @@ function lerp(start: number, end: number, factor: number): number {
   return start + (end - start) * factor;
 }
 
-export function DomainBoxLayer({
+export const DomainBoxLayer = memo(function DomainBoxLayer({
   bounds,
   boundsVisible = true,
   colors,
@@ -706,9 +706,9 @@ export function DomainBoxLayer({
       />
     </mesh>
   );
-}
+});
 
-export function AirboxLayer({
+export function AirboxLayerContent({
   colors,
   vectorColorMode,
   fieldModel,
@@ -762,7 +762,9 @@ export function AirboxLayer({
   );
 }
 
-export function SelectionHighlightLayer({
+export const AirboxLayer = memo(AirboxLayerContent);
+
+export function SelectionHighlightLayerContent({
   bounds,
   colors,
   materialProfile,
@@ -779,3 +781,5 @@ export function SelectionHighlightLayer({
     />
   );
 }
+
+export const SelectionHighlightLayer = memo(SelectionHighlightLayerContent);

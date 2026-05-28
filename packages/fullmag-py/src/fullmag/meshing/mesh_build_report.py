@@ -64,9 +64,16 @@ def _build_shared_domain_build_report(
                 per_object_targets[geometry_name],
                 marker=int(marker) if isinstance(marker, (int, np.integer)) else None,
             )
-    # degraded = True when a fallback was triggered or size fields had to be
-    # simplified (component identity lost).
-    degraded = bool(fallbacks_triggered) or build_mode == "concatenated_stl_fallback"
+    # degraded = True when topology/identity had to be simplified.  A retry
+    # with another OCC tetrahedral algorithm preserves the conformal CAD path.
+    non_degrading_fallbacks = {
+        "conformal_occ_delaunay_degenerate_retry_frontal",
+        "conformal_occ_hxt_degenerate_retry_delaunay",
+    }
+    degraded = (
+        any(fallback not in non_degrading_fallbacks for fallback in fallbacks_triggered)
+        or build_mode == "concatenated_stl_fallback"
+    )
     operation_statuses = _build_mesh_operation_statuses(
         geometries,
         mesh_options,

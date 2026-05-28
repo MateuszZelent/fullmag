@@ -2,7 +2,7 @@
 
 import { Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, memo, type ReactNode } from "react";
 import {
   BackSide,
   BufferAttribute,
@@ -58,7 +58,7 @@ interface AnchorVectors {
   up: Vector3;
 }
 
-export function OrientationHudLayer({
+export const OrientationHudLayer = memo(function OrientationHudLayer({
   colors,
   hslReferenceVisible,
   onCameraChange,
@@ -193,7 +193,7 @@ export function OrientationHudLayer({
       ) : null}
     </>
   );
-}
+})
 
 function ScreenAnchoredGroup({
   anchor,

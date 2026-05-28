@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { sameViewport3DFieldRenderOptions } from "./useViewport3DFieldRenderOptions";
+import {
+  sameViewport3DFieldRenderOptions,
+  viewport3DAirboxVectorsVisible,
+} from "./useViewport3DFieldRenderOptions";
 
 describe("sameViewport3DFieldRenderOptions", () => {
   it("treats equivalent field render options as stable despite fresh maps", () => {
@@ -64,5 +67,23 @@ describe("sameViewport3DFieldRenderOptions", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("does not request airbox vector fields when the airbox target is hidden", () => {
+    expect(
+      viewport3DAirboxVectorsVisible(
+        false,
+        true,
+        "all",
+      ),
+    ).toBe(false);
+  });
+
+  it("allows airbox vector fields only for visible airbox-compatible domains", () => {
+    expect(viewport3DAirboxVectorsVisible(true, true, "all")).toBe(true);
+    expect(viewport3DAirboxVectorsVisible(true, true, "airbox_only")).toBe(true);
+    expect(viewport3DAirboxVectorsVisible(true, true, "magnetic_only")).toBe(false);
+    expect(viewport3DAirboxVectorsVisible(true, true, "object")).toBe(false);
+    expect(viewport3DAirboxVectorsVisible(true, true, "part")).toBe(false);
   });
 });

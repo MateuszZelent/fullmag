@@ -1392,6 +1392,51 @@ describe("ribbon structure", () => {
     );
   });
 
+  it("flushes global Quantity changes immediately through visualization sync", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      active_quantity_id: "m",
+      quantity: {
+        active_quantity_id: "m",
+        auto_contrast: true,
+        colormap: "viridis",
+        field_component: "magnitude",
+      },
+      revision: 7,
+    });
+    const queuedPatches: VisualizationStatePatch[] = [];
+    const flushNow = vi.fn(async () => undefined);
+    const content = buildRibbonTabContent("view", context);
+    const quantityAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-quantity");
+    const sourceNode = quantityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "quantity:source",
+    );
+
+    if (sourceNode?.type !== "radio-group") {
+      throw new Error("Expected quantity source control");
+    }
+
+    await runRibbonNode(sourceNode, "H_eff", {
+      ...context,
+      visualizationSync: {
+        flushNow,
+        queuePatch: (patch: VisualizationStatePatch) => {
+          queuedPatches.push(patch);
+        },
+      } as never,
+    });
+
+    expect(queuedPatches).toEqual([
+      {
+        active_quantity_id: "H_eff",
+        quantity: { active_quantity_id: "H_eff" },
+      },
+    ]);
+    expect(flushNow).toHaveBeenCalledTimes(1);
+    expect(patches).toEqual([]);
+  });
+
   it("marks global Quantity controls as mixed and can clear per-target quantities", async () => {
     const { context, invalidations, patches } =
       createVisualizationRibbonContext({

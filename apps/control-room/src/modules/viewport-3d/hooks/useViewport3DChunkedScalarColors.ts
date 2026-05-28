@@ -16,10 +16,15 @@ import type {
 } from "../viewport3dRenderModel";
 
 interface ChunkedScalarColorState {
-  buffers: Map<string, ScalarColorBuffer>;
   colorPalette: string;
+  token: object;
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>;
 }
+
+const chunkedScalarColorBuffers = new WeakMap<
+  object,
+  ReadonlyMap<string, ScalarColorBuffer>
+>();
 
 export function mergeViewport3DFieldScalarColors(
   base: Viewport3DFieldRenderModel | null,
@@ -96,21 +101,26 @@ export function useViewport3DChunkedScalarColors({
       );
 
       if (!cancelled) {
+        const token = {};
+        chunkedScalarColorBuffers.set(token, new Map(entries));
         setState({
-          buffers: new Map(entries),
           colorPalette,
+          token,
           topology,
         });
       }
     })().catch(() => {
-      if (!controller.signal.aborted && !cancelled) {
-        setState((current) => current);
-      }
+      return undefined;
     });
 
     return () => {
       cancelled = true;
       controller.abort();
+      setState((current) => {
+        if (current?.topology !== topology) return current;
+        chunkedScalarColorBuffers.delete(current.token);
+        return null;
+      });
     };
   }, [colorPalette, enabled, fieldVector, modes, topology]);
 
@@ -123,7 +133,7 @@ export function useViewport3DChunkedScalarColors({
     return EMPTY_SCALAR_COLOR_MAP;
   }
 
-  return state.buffers;
+  return chunkedScalarColorBuffers.get(state.token) ?? EMPTY_SCALAR_COLOR_MAP;
 }
 
 const EMPTY_SCALAR_COLOR_MAP = new Map<string, ScalarColorBuffer>();

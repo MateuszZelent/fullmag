@@ -15,8 +15,8 @@ import type {
 } from "../viewport3dRenderModel";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import {
-  AirboxLayer,
-  SelectionHighlightLayer,
+  AirboxLayerContent,
+  SelectionHighlightLayerContent,
   airboxWireframeOpacityFromSettings,
   buildBoundsVolumeWireframePositions,
   resolveAirboxSurfaceColorState,
@@ -271,7 +271,7 @@ describe("AirboxLayer", () => {
   it("passes the airbox selection handler into mesh part layers", () => {
     const onSelectPart = vi.fn();
     const topologyModel = airboxTopology();
-    const element = AirboxLayer({
+    const element = AirboxLayerContent({
       colors,
       fieldModel: null,
       materialProfile,
@@ -301,7 +301,7 @@ describe("AirboxLayer", () => {
 
 describe("SelectionHighlightLayer", () => {
   it("renders a high-emphasis bounds box for selected primitive or mesh bounds", () => {
-    const element = SelectionHighlightLayer({
+    const element = SelectionHighlightLayerContent({
       bounds: {
         center: [1, 2, 3],
         radius: 4,
@@ -333,7 +333,7 @@ describe("SelectionHighlightLayer", () => {
   });
 
   it("passes null bounds through to the bounds renderer for no selection", () => {
-    const element = SelectionHighlightLayer({
+    const element = SelectionHighlightLayerContent({
       bounds: null,
       colors,
       materialProfile,

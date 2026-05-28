@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import { mergeViewport3DFieldScalarColors } from "./useViewport3DChunkedScalarColors";
+
+const sourceUrl = new URL("./useViewport3DChunkedScalarColors.ts", import.meta.url);
 
 function colorBuffer(value: number): ScalarColorBuffer {
   return {
@@ -31,5 +35,13 @@ describe("useViewport3DChunkedScalarColors", () => {
 
     expect(result?.scalarColors).toBe(asyncOrientation);
     expect(result?.scalarColorsByMode.get("orientation")).toBe(asyncOrientation);
+  });
+
+  it("keeps chunked buffers out of React state and clears them on cleanup", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
+    expect(source).toContain("chunkedScalarColorBuffers.delete(current.token)");
+    expect(source).not.toContain("buffers: Map<string, ScalarColorBuffer>");
   });
 });

@@ -20,12 +20,13 @@ HBAR = 1.054_571_817e-34
 LENGTH = 2500e-9
 WIDTH = 1000e-9
 HEIGHT = 2e-9
+AIRBOX_Z = 500e-9
 AIRBOX_HMAX = 500e-9
 AIRBOX_HMIN = 150e-9
 
 WAVEGUIDE_BULK_HMAX = 20e-9
 WAVEGUIDE_LOCAL_HMAX = 12e-9
-WAVEGUIDE_HMIN = 4e-9
+WAVEGUIDE_HMIN = HEIGHT
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -55,7 +56,7 @@ study.airbox.visualization(show=True, mode="vectors")
 
 study.universe(
     mode="auto",
-    size=(3500e-9, 2000e-9, 120e-9),
+    size=(3500e-9, 2000e-9, AIRBOX_Z),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
@@ -75,8 +76,6 @@ study.objects.mesh.defaults(
     algorithm_3d=1,
     smoothing_steps=1,
     maximum_element_growth_rate=1.3,
-    optimize="Netgen",
-    optimize_iterations=4,
     compute_quality=True,
     per_element_quality=False,
 )

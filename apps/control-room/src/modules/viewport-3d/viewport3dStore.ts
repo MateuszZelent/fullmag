@@ -83,7 +83,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     fdmTopographyComponent: "z",
     fdmTopographyEnabled: false,
     hslReferenceMode: "auto",
-    rotationMode: "camera",
+    rotationMode: "object",
     scaleLabelsVisible: true,
     scaleUnitMode: "auto",
     settingsDialogOpen: false,

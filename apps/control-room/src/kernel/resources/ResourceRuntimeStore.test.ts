@@ -193,4 +193,74 @@ describe("ResourceRuntimeStore", () => {
       status: "ready",
     });
   });
+
+  it("releases unobserved resource snapshots after the last subscriber leaves", async () => {
+    const store = new ResourceRuntimeStore<{ buffer: ArrayBuffer }>();
+    const unsubscribe = store.subscribe("data/fields/m", () => undefined);
+    const data = { buffer: new ArrayBuffer(1024) };
+
+    await store.ensureLoad({
+      externalRevision: 1,
+      load: async () => data,
+      resourceKey: "data/fields/m",
+      resolveRevision: () => 1,
+    });
+
+    expect(store.getSnapshot("data/fields/m")).toMatchObject({
+      data,
+      revision: 1,
+      status: "ready",
+    });
+    expect(store.stats()).toMatchObject({
+      entryCount: 1,
+      listenerCount: 1,
+      readyCount: 1,
+    });
+
+    unsubscribe();
+
+    expect(store.getSnapshot("data/fields/m")).toMatchObject({
+      data: null,
+      revision: null,
+      status: "loading",
+    });
+    expect(store.stats()).toEqual({
+      entryCount: 0,
+      inflightCount: 0,
+      listenerCount: 0,
+      pendingRequestCount: 0,
+      readyCount: 0,
+    });
+  });
+
+  it("aborts an in-flight load when the last subscriber leaves", async () => {
+    const store = new ResourceRuntimeStore<string>();
+    const pending = deferred<string>();
+    const signals: AbortSignal[] = [];
+    const unsubscribe = store.subscribe("data/fields/m", () => undefined);
+
+    void store.ensureLoad({
+      externalRevision: 1,
+      load: ({ signal: requestSignal }) => {
+        signals.push(requestSignal);
+        return pending.promise;
+      },
+      resourceKey: "data/fields/m",
+      resolveRevision: () => 1,
+    });
+
+    await Promise.resolve();
+    expect(signals[0]?.aborted).toBe(false);
+
+    unsubscribe();
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(store.stats()).toEqual({
+      entryCount: 0,
+      inflightCount: 0,
+      listenerCount: 0,
+      pendingRequestCount: 0,
+      readyCount: 0,
+    });
+  });
 });
