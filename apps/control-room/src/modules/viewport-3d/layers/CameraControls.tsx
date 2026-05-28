@@ -674,9 +674,8 @@ export function OrbitCameraControls({
   });
 
   const recordOrbitControlFrame = useCallback(() => {
-    invalidate();
     tracker.recordDirtyFrame("camera-control");
-  }, [invalidate, tracker]);
+  }, [tracker]);
 
   // Performance Optimization: Debounce handleEnd for zoom/wheel interactions.
   // OrbitControls dispatches start and end events back-to-back synchronously

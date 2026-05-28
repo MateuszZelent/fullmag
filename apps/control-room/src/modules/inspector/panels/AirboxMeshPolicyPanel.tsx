@@ -8,12 +8,16 @@ import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_UNIVERSE_POLICY_RESOURCE_KEY,
+  useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
   useMeshUniverseQualityResource,
   useMeshUniverseReportResource,
   useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { shouldLoadRuntimeMeshSummary } from "@/kernel/resources/studyRuntimeResources";
+import {
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+} from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
@@ -55,6 +59,8 @@ type Feedback =
   | null;
 
 type AirboxMeshPolicyRuntimeStatus = {
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
     "mesh_build_revision" | "mesh_revision"
@@ -66,6 +72,12 @@ function selectAirboxMeshPolicyRuntimeStatus(status: {
 }): AirboxMeshPolicyRuntimeStatus | null {
   if (!status.data) return null;
   return {
+    capabilities: {
+      explicit_topology: status.data.capabilities?.explicit_topology ?? false,
+    },
+    domain: {
+      discretization: status.data.domain?.discretization ?? "",
+    },
     resources: {
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
@@ -80,6 +92,9 @@ function airboxMeshPolicyRuntimeStatusEquals(
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
   return (
+    previous.capabilities.explicit_topology ===
+      next.capabilities.explicit_topology &&
+    previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision
@@ -88,6 +103,18 @@ function airboxMeshPolicyRuntimeStatusEquals(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isAirboxPart(part: {
+  id: string;
+  label: string;
+  role: string;
+}): boolean {
+  return (
+    part.id === "part:__air__" ||
+    part.role === "air" ||
+    part.label.toLowerCase() === "airbox"
+  );
 }
 
 export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
@@ -107,6 +134,9 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const summary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+  });
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
   const baseDraft = useMemo(
     () => draftFromUniverseMeshPolicyResource(resource),
@@ -123,6 +153,19 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const effectiveAirbox = asRecord(summary.data?.effective_airbox_target);
   const qualityRecord = asRecord(quality.data?.quality);
   const qualityStatistics = normalizeMeshQualityStatistics(quality.data?.quality);
+  const airboxPart = useMemo(
+    () => manifest.data?.mesh_parts?.find(isAirboxPart) ?? null,
+    [manifest.data?.mesh_parts],
+  );
+  const airboxNodeIndices = airboxPart?.node_indices ?? [];
+  const airboxBoundaryFaceIndices = airboxPart?.boundary_face_indices ?? [];
+  const airboxSurfaceFaces = airboxPart?.surface_faces ?? [];
+  const airboxNodeSource =
+    airboxNodeIndices.length > 0
+      ? "explicit node_indices"
+      : airboxPart
+        ? "node_start/node_count range"
+        : "not available";
 
   function updateDraft(patch: Partial<AirboxMeshPolicyDraft>): void {
     setDraftState((current) => ({
@@ -159,7 +202,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "controls", "geometry", "target", "quality-statistics", "transactions"]}
+      defaultValue={["summary", "controls", "geometry", "target", "mesh-part", "quality-statistics", "transactions"]}
     >
       <InspectorSection value="summary" title="Universe / Airbox Mesh Policy" badge={policy.status} collapsible defaultCollapsed={false}>
         <FieldRow label="Revision" value={String(resource.revision)} />
@@ -319,6 +362,62 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
             {
               label: "Quality status",
               value: String(recordField(qualityRecord, "status") ?? quality.status),
+            },
+          ]}
+        />
+      </InspectorSection>
+
+      <InspectorSection
+        value="mesh-part"
+        title="Airbox Mesh Part"
+        badge={airboxPart ? formatCount(airboxPart.node_count) : manifest.status}
+        collapsible
+        defaultCollapsed={false}
+      >
+        <MeshResourceFields
+          fields={[
+            {
+              label: "Points / nodes",
+              value: formatCount(airboxPart?.node_count),
+            },
+            {
+              label: "Tetrahedra",
+              value: formatCount(airboxPart?.element_count),
+            },
+            {
+              label: "Boundary faces",
+              value: formatCount(airboxPart?.boundary_face_count),
+            },
+            {
+              label: "Surface faces",
+              value: formatCount(airboxSurfaceFaces.length),
+            },
+            {
+              label: "Part id",
+              value: airboxPart?.id ?? "not available",
+            },
+            {
+              label: "Role",
+              value: airboxPart?.role ?? "not available",
+            },
+            {
+              label: "Node source",
+              value: airboxNodeSource,
+            },
+            {
+              label: "Node range start",
+              value:
+                airboxPart && airboxNodeIndices.length === 0
+                  ? formatCount(airboxPart.node_start)
+                  : "not used",
+            },
+            {
+              label: "Explicit node indices",
+              value: formatCount(airboxNodeIndices.length),
+            },
+            {
+              label: "Explicit boundary indices",
+              value: formatCount(airboxBoundaryFaceIndices.length),
             },
           ]}
         />

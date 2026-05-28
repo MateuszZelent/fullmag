@@ -5135,6 +5135,7 @@ void cuda_demag_kernels_are_owned_by_cuda_demag_kernel_module() {
 void managed_runtime_export_keeps_mfem_headers_linkable() {
     const std::string export_script =
         read_text_file(repo_root() / "scripts" / "export_fem_gpu_runtime.sh");
+    const std::string justfile = read_text_file(repo_root() / "justfile");
 
     check(
         export_script.find("${RUNTIME_ROOT}/include") != std::string::npos ||
@@ -5174,6 +5175,37 @@ void managed_runtime_export_keeps_mfem_headers_linkable() {
         export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/include") !=
             std::string::npos,
         "FEM runtime export must bundle CUDA headers included by MFEM headers");
+    check(
+        export_script.find("performing full cargo clean") == std::string::npos,
+        "FEM runtime export must not claim to run cargo clean when using the cached cargo target");
+    check(
+        export_script.find("manifest.json") != std::string::npos &&
+            export_script.find("docker_image_id") != std::string::npos &&
+            export_script.find("created_at") != std::string::npos,
+        "FEM runtime export must write a manifest that identifies the exported runtime bundle");
+
+    const std::string ensure_marker = "ensure-managed-fem-runtime:\n";
+    const std::size_t ensure_start = justfile.find(ensure_marker);
+    check(
+        ensure_start != std::string::npos,
+        "justfile must define ensure-managed-fem-runtime");
+    const std::size_t ensure_end =
+        justfile.find("\n\nrun-stno-interactive-managed", ensure_start);
+    check(
+        ensure_end != std::string::npos,
+        "justfile managed FEM runtime freshness recipe must remain bounded");
+    const std::string ensure_recipe =
+        justfile.substr(ensure_start, ensure_end - ensure_start);
+    check(
+        ensure_recipe.find("packages/fullmag-py/src") == std::string::npos,
+        "Python DSL-only source changes must not force a managed FEM runtime rebuild");
+    check(
+        ensure_recipe.find("docker/fem-gpu/Dockerfile") != std::string::npos &&
+            ensure_recipe.find("compose.yaml") != std::string::npos,
+        "managed FEM runtime freshness must include Docker image inputs");
+    check(
+        ensure_recipe.find("gpu_runtime_manifest") != std::string::npos,
+        "managed FEM runtime freshness must require the exported runtime manifest");
 }
 
 void progress_report_marks_device_runtime_split_contract_covered() {

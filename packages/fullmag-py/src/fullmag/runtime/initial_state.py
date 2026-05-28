@@ -267,9 +267,13 @@ def filter_fem_magnetic_points(
             continue
         if object_name is not None and part.get("object_name") != object_name:
             continue
-        node_start = int(part.get("node_start", 0))
-        node_count = int(part.get("node_count", 0))
-        indices.extend(range(node_start, node_start + node_count))
+        node_indices = part.get("node_indices")
+        if isinstance(node_indices, (list, tuple, np.ndarray)):
+            indices.extend(int(index) for index in node_indices)
+        else:
+            node_start = int(part.get("node_start", 0))
+            node_count = int(part.get("node_count", 0))
+            indices.extend(range(node_start, node_start + node_count))
 
     if not indices:
         return np.zeros((0, 3), dtype=np.float64), np.array([], dtype=np.intp)

@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { APP_DROPDOWN_ITEMS, MAIN_MENUS, QUICK_ACTIONS, type AppMenuNode } from "./appMenuModel";
+import {
+  APP_DROPDOWN_ITEMS,
+  MAIN_MENUS,
+  QUICK_ACTIONS,
+  type AppMenuNode,
+} from "./appMenuModel";
 import { SHELL_COMMANDS } from "./shellCommands";
 
 const headerCss = readFileSync(
@@ -74,8 +79,9 @@ describe("app menu command model", () => {
       id: "study.import-state",
       label: "Import .fms State",
     });
-    expect(SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"))
-      .toBe(false);
+    expect(
+      SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"),
+    ).toBe(false);
   });
 
   it("exposes the solver profiler toggle from the Tools menu", () => {
@@ -87,6 +93,17 @@ describe("app menu command model", () => {
     expect(profilerItem).toMatchObject({
       checkable: true,
       label: "Solver Profiler",
+    });
+  });
+
+  it("exposes the thread manager from the Tools menu", () => {
+    const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
+    const threadManagerItem = toolsMenu?.children?.find(
+      (item) => item.id === "tools.thread-manager",
+    );
+
+    expect(threadManagerItem).toMatchObject({
+      label: "Thread Manager",
     });
   });
 });

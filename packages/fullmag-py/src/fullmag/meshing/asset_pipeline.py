@@ -646,6 +646,12 @@ def _count_nodes_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> i
     return int(np.unique(mesh.elements[element_mask].reshape(-1)).size)
 
 
+def _node_indices_for_element_mask(mesh: MeshData, element_mask: np.ndarray) -> np.ndarray:
+    if mesh.elements.size == 0 or not np.any(element_mask):
+        return np.asarray([], dtype=np.int64)
+    return np.unique(mesh.elements[element_mask].reshape(-1))
+
+
 def _format_length_m(value: float) -> str:
     abs_value = abs(float(value))
     if abs_value == 0.0:
@@ -836,6 +842,23 @@ def _emit_shared_domain_mesh_summary(
 
     element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
     air_mask = element_markers == 0
+    region_masks: list[tuple[str, str, np.ndarray]] = []
+    for entry in region_markers:
+        geometry_name = entry.get("geometry_name")
+        marker = entry.get("marker")
+        if not isinstance(geometry_name, str) or not isinstance(marker, int):
+            continue
+        part_label = _display_mesh_partition_name(geometry_name)
+        region_masks.append((geometry_name, part_label, element_markers == int(marker)))
+    if region_masks or np.any(air_mask):
+        covered_count = int(np.count_nonzero(air_mask))
+        for _geometry_name, _label, part_mask in region_masks:
+            covered_count += int(np.count_nonzero(part_mask))
+        emit_progress(
+            "Mesh partition check: "
+            f"{covered_count}/{mesh.elements.shape[0]} tetrahedra covered by "
+            "mutually exclusive region markers"
+        )
     if np.any(air_mask):
         air_metrics = _element_metric_summary_for_mask(mesh, air_mask)
         air_size_suffix = ""
@@ -870,13 +893,8 @@ def _emit_shared_domain_mesh_summary(
             f"{air_size_suffix}"
         )
 
-    for entry in region_markers:
-        geometry_name = entry.get("geometry_name")
-        marker = entry.get("marker")
-        if not isinstance(geometry_name, str) or not isinstance(marker, int):
-            continue
-        part_mask = element_markers == int(marker)
-        part_label = _display_mesh_partition_name(geometry_name)
+    air_nodes = _node_indices_for_element_mask(mesh, air_mask)
+    for geometry_name, part_label, part_mask in region_masks:
         part_metrics = _element_metric_summary_for_mask(mesh, part_mask)
         part_size_suffix = ""
         parts: list[str] = []
@@ -914,6 +932,17 @@ def _emit_shared_domain_mesh_summary(
             f"{_count_nodes_for_element_mask(mesh, part_mask)} nodes"
             f"{part_size_suffix}"
         )
+        if np.any(air_mask):
+            part_nodes = _node_indices_for_element_mask(mesh, part_mask)
+            shared_nodes = np.intersect1d(air_nodes, part_nodes, assume_unique=True)
+            part_only_nodes = np.setdiff1d(part_nodes, air_nodes, assume_unique=True)
+            air_only_nodes = np.setdiff1d(air_nodes, part_nodes, assume_unique=True)
+            emit_progress(
+                f"Mesh node sharing {part_label}: "
+                f"shared_with_airbox={int(shared_nodes.size)}, "
+                f"object_only={int(part_only_nodes.size)}, "
+                f"airbox_only={int(air_only_nodes.size)}"
+            )
 
 
 def _strip_overridden_geometry_fields(

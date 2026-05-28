@@ -44,6 +44,7 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
   opacityFromSettings,
   percentToUnit,
+  resolveCameraInteractionSettings,
   shaderColorFromSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
@@ -167,6 +168,7 @@ function BoundsVolumeWireframe({
 const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   colors,
   fieldModel,
+  interactionActive,
   materialProfile,
   onSelectPart,
   partModel,
@@ -179,6 +181,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
 }: {
   colors: Viewport3DColors;
   fieldModel: Viewport3DFieldRenderModel | null;
+  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
@@ -192,6 +195,10 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const invalidate = useBatchedInvalidate();
   const resolvedSettings =
     resolveAirboxTopologyVisualizationSettings(settings, topologyFreshness);
+  const renderSettings = useMemo(
+    () => resolveCameraInteractionSettings(resolvedSettings, interactionActive),
+    [interactionActive, resolvedSettings],
+  );
   const geometry = useMemo(() => {
     const { surfaceIndices } = partModel;
     if (!surfaceIndices?.length) return null;
@@ -203,19 +210,19 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
     const edgeIndices = resolveAirboxWireframeEdgeIndices(
-      resolvedSettings.geometryScope,
+      renderSettings.geometryScope,
       partModel,
     );
     const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
     return next ? tracker.track("geometry", next) : null;
   }, [
     partModel,
-    resolvedSettings.geometryScope,
+    renderSettings.geometryScope,
     topologyModel.positions,
     tracker,
   ]);
   const pointsGeometry = useMemo(() => {
-    const indices = resolvedSettings.geometryScope === "full"
+    const indices = renderSettings.geometryScope === "full"
       ? resolvePartNodeIndices(partModel.part, topologyModel.nodeCount)
       : (partModel.surfaceIndices ? getUniqueSortedIndices(partModel.surfaceIndices) : null);
 
@@ -224,7 +231,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
     next.setIndex(new BufferAttribute(indices, 1));
     return next;
-  }, [partModel, topologyModel, resolvedSettings.geometryScope, tracker]);
+  }, [partModel, topologyModel, renderSettings.geometryScope, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -236,19 +243,19 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     [pointsGeometry, tracker],
   );
 
-  const opacity = opacityFromSettings(resolvedSettings);
+  const opacity = opacityFromSettings(renderSettings);
   const part = partModel.part;
   const airboxWireframeSemantic =
-    resolveAirboxWireframeSemantic(resolvedSettings);
+    resolveAirboxWireframeSemantic(renderSettings);
   const surfaceColorState = resolveAirboxSurfaceColorState(
-    resolvedSettings,
+    renderSettings,
     fieldModel,
     topologyModel.nodeCount,
     colors.mesh,
   );
   useEffect(() => {
     if (!geometry) return;
-    if (!resolvedSettings.shaderVisible) return;
+    if (!renderSettings.shaderVisible) return;
     applyVertexScalarColorBuffer(
       geometry,
       surfaceColorState.vertexColorsEnabled
@@ -261,7 +268,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   }, [
     geometry,
     invalidate,
-    resolvedSettings.shaderVisible,
+    renderSettings.shaderVisible,
     surfaceColorState.scalarColors,
     topologyModel.nodeCount,
     tracker,
@@ -275,15 +282,15 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   if (!geometry) {
     return (
       <group onPointerDown={handlePointerDown}>
-        {resolvedSettings.shaderVisible ? (
+        {renderSettings.shaderVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={shaderColorFromSettings(resolvedSettings, colors.accent)}
+            color={shaderColorFromSettings(renderSettings, colors.accent)}
             opacity={opacity}
             wireframe={false}
           />
         ) : null}
-        {resolvedSettings.wireframeVisible && (
+        {renderSettings.wireframeVisible && (
           <>
             {edgeGeometry && (
               <lineSegments
@@ -291,29 +298,29 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
                 renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
               >
                 <lineBasicMaterial
-                  color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+                  color={wireframeColorFromSettings(renderSettings, colors.wire)}
                   opacity={airboxWireframeOpacityFromSettings(
-                    resolvedSettings,
+                    renderSettings,
                     materialProfile.featureEdges,
                   )}
                   {...materialPolicyProps(airboxWireframeSemantic)}
                 />
               </lineSegments>
             )}
-            {(resolvedSettings.geometryScope === "full" || !edgeGeometry) && (
+            {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
               <AirboxWireframeFallback
                 bounds={resolveMeshPartBounds(part)}
-                color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-                opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
+                color={wireframeColorFromSettings(renderSettings, colors.wire)}
+                opacity={airboxWireframeOpacityFromSettings(renderSettings)}
                 policySemantic={airboxWireframeSemantic}
-                settings={resolvedSettings}
+                settings={renderSettings}
                 tracker={tracker}
               />
             )}
           </>
         )}
 
-        {resolvedSettings.boundsVisible ? (
+        {renderSettings.boundsVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
             color={colors.accent}
@@ -321,14 +328,14 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
             policySemantic="hiddenEdges"
           />
         ) : null}
-        {resolvedSettings.pointsVisible ? (
+        {renderSettings.pointsVisible ? (
           pointsGeometry ? (
             <points
               geometry={pointsGeometry}
               renderOrder={RENDER_POLICIES.points.renderOrder}
             >
               <pointsMaterial
-                color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+                color={wireframeColorFromSettings(renderSettings, colors.wire)}
                 opacity={opacity}
                 sizeAttenuation={false}
                 size={3}
@@ -338,19 +345,19 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           ) : (
             <BoundsPoints
               bounds={resolveMeshPartBounds(part)}
-              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+              color={wireframeColorFromSettings(renderSettings, colors.wire)}
               opacity={opacity}
             />
           )
         ) : null}
-        {resolvedSettings.vectorsVisible ? (
+        {renderSettings.vectorsVisible ? (
           <VectorFieldLayer
             colors={colors}
-            colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
+            colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
             materialProfile={materialProfile.glyphs}
             opacity={opacity}
             segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-            style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
+            style={vectorStyleFromSettings(renderSettings, vectorStyle)}
             tracker={tracker}
           />
         ) : null}
@@ -360,7 +367,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {resolvedSettings.shaderVisible ? (
+      {renderSettings.shaderVisible ? (
         <mesh
           geometry={geometry}
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
@@ -374,7 +381,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           />
         </mesh>
       ) : null}
-      {resolvedSettings.wireframeVisible && (
+      {renderSettings.wireframeVisible && (
         <>
           {edgeGeometry && (
             <lineSegments
@@ -382,28 +389,28 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
               renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
             >
               <lineBasicMaterial
-                color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+                color={wireframeColorFromSettings(renderSettings, colors.wire)}
                 opacity={airboxWireframeOpacityFromSettings(
-                  resolvedSettings,
+                  renderSettings,
                   materialProfile.featureEdges,
                 )}
                 {...materialPolicyProps(airboxWireframeSemantic)}
               />
             </lineSegments>
           )}
-          {(resolvedSettings.geometryScope === "full" || !edgeGeometry) && (
+          {(renderSettings.geometryScope === "full" || !edgeGeometry) && (
             <AirboxWireframeFallback
               bounds={resolveMeshPartBounds(part)}
-              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-              opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
+              color={wireframeColorFromSettings(renderSettings, colors.wire)}
+              opacity={airboxWireframeOpacityFromSettings(renderSettings)}
               policySemantic={airboxWireframeSemantic}
-              settings={resolvedSettings}
+              settings={renderSettings}
               tracker={tracker}
             />
           )}
         </>
       )}
-      {resolvedSettings.boundsVisible ? (
+      {renderSettings.boundsVisible ? (
         <BoundsBox
           bounds={resolveMeshPartBounds(part)}
           color={colors.accent}
@@ -411,14 +418,14 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           policySemantic="hiddenEdges"
         />
       ) : null}
-      {resolvedSettings.pointsVisible ? (
+      {renderSettings.pointsVisible ? (
         pointsGeometry ? (
           <points
             geometry={pointsGeometry}
             renderOrder={RENDER_POLICIES.points.renderOrder}
           >
             <pointsMaterial
-              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+                color={wireframeColorFromSettings(renderSettings, colors.wire)}
               opacity={opacity}
               sizeAttenuation={false}
               size={3}
@@ -428,19 +435,19 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         ) : (
           <BoundsPoints
             bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+            color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={opacity}
           />
         )
       ) : null}
-      {resolvedSettings.vectorsVisible ? (
+      {renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
+          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={opacity}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-          style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}
@@ -712,6 +719,7 @@ export function AirboxLayerContent({
   colors,
   vectorColorMode,
   fieldModel,
+  interactionActive,
   materialProfile,
   onSelectPart,
   settings,
@@ -723,6 +731,7 @@ export function AirboxLayerContent({
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
+  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   settings: VisualizationTargetSettings;
@@ -747,6 +756,7 @@ export function AirboxLayerContent({
           key={partModel.part.id}
           colors={colors}
           fieldModel={fieldModel}
+          interactionActive={interactionActive}
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}
           partModel={partModel}

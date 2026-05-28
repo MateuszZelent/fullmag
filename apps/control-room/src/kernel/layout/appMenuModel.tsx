@@ -147,6 +147,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     id: "tools",
     label: "Tools",
     children: [
+      { id: "tools.thread-manager", label: "Thread Manager", icon: <Cpu size={14} /> },
       { id: "diagnostics.toggle-solver-profiler", label: "Solver Profiler", icon: <Timer size={14} />, checkable: true },
       { id: "workspace.diagnostics", label: "Diagnostics", icon: <Gauge size={14} /> },
       { id: "workspace.api-console", label: "API Console", icon: <TerminalSquare size={14} /> },

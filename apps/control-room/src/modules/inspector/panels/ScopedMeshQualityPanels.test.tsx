@@ -21,11 +21,18 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  shouldLoadRuntimeMeshManifest: () => true,
   shouldLoadRuntimeMeshSummary: () => true,
 }));
 
 const sessionStatusMock = {
   data: {
+    capabilities: {
+      explicit_topology: true,
+    },
+    domain: {
+      discretization: "fem",
+    },
     resources: {
       mesh_build_revision: 3,
       mesh_revision: 3,
@@ -111,6 +118,39 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
         maximum_element_size: 2e-8,
         minimum_element_size: 4e-9,
       },
+      revision: 3,
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 3,
+    status: "ready",
+  }),
+  useMeshSharedDomainManifestResource: () => ({
+    data: {
+      domain_mesh_mode: "shared_domain_mesh_with_air",
+      mesh_id: "study_domain:3",
+      mesh_name: "study_domain",
+      mesh_parts: [
+        {
+          boundary_face_count: 12,
+          boundary_face_indices: [0, 1, 2],
+          boundary_face_start: 0,
+          element_count: 59_244,
+          element_start: 0,
+          id: "part:__air__",
+          label: "Airbox",
+          node_count: 12_345,
+          node_indices: [0, 1, 2, 3],
+          node_start: 0,
+          role: "air",
+          surface_faces: [
+            [0, 1, 2],
+            [0, 2, 3],
+          ],
+        },
+      ],
+      object_segments: [],
+      regions: [],
       revision: 3,
     },
     error: null,
@@ -310,5 +350,11 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Gamma");
     expect(html).toContain("Below target");
     expect(html).toContain("Element size distributions");
+    expect(html).toContain("Airbox Mesh Part");
+    expect(html).toContain("Points / nodes");
+    expect(html).toContain("12,345");
+    expect(html).toContain("Tetrahedra");
+    expect(html).toContain("59,244");
+    expect(html).toContain("explicit node_indices");
   });
 });

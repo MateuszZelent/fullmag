@@ -159,10 +159,38 @@ describe("footerModel", () => {
     ).toEqual(["http-rx"]);
     expect(
       filterTransportEntries(entries, {
+        channel: "transport",
+        direction: "rx",
+      }).map((item) => item.id),
+    ).toEqual(["http-rx", "ws-rx"]);
+    expect(
+      filterTransportEntries(entries, {
         channel: "performance",
         direction: "rx",
       }).map((item) => item.id),
     ).toEqual(["perf-rx"]);
+  });
+
+  it("excludes React render profiler samples from footer logs", () => {
+    const entries = [
+      entry({
+        channel: "performance",
+        id: "react-render",
+        path: "fullmag.react.render.WorkspaceDockLayout.update",
+      }),
+      entry({
+        channel: "performance",
+        id: "viewport-work",
+        path: "fullmag.viewport3d.buildTopology",
+      }),
+    ];
+
+    expect(
+      filterTransportEntries(entries, {
+        channel: "performance",
+        direction: "rx",
+      }).map((item) => item.id),
+    ).toEqual(["viewport-work"]);
   });
 
   it("shows websocket message types as row targets", () => {

@@ -169,14 +169,29 @@ describe("CameraControls", () => {
     expect(changeBlock).not.toContain("onOrbitDebugAnglesChange");
   });
 
+  it("does not duplicate Drei OrbitControls invalidation on every change event", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const changeBlock = source.slice(
+      source.indexOf("const recordOrbitControlFrame = useCallback"),
+      source.indexOf("const endTimeoutRef = useRef"),
+    );
+
+    expect(changeBlock).toContain('tracker.recordDirtyFrame("camera-control")');
+    expect(changeBlock).not.toContain("invalidate();");
+  });
+
   it("does not clamp OrbitControls zoom distance so users can enter the scene interior", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
+    const orbitControlsStart = source.indexOf("<OrbitControls");
     const orbitControlsBlock = source.slice(
-      source.indexOf("<OrbitControls"),
-      source.indexOf("</OrbitControls>"),
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
     );
 
     expect(orbitControlsBlock).toContain("zoomToCursor");
@@ -193,9 +208,10 @@ describe("CameraControls", () => {
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 520,
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') + 90,
     );
+    const orbitControlsStart = source.indexOf("<OrbitControls");
     const orbitControlsBlock = source.slice(
-      source.indexOf("<OrbitControls"),
-      source.indexOf("</OrbitControls>"),
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
     );
 
     expect(targetSyncBlock).toContain("if (interactionActive) return;");

@@ -78,4 +78,53 @@ describe("performance measure diagnostics", () => {
     stop();
     expect(observer?.disconnect).toHaveBeenCalledTimes(1);
   });
+
+  it("samples React render measures to avoid profiler feedback loops", () => {
+    const records: RequestDiagnosticRecord[] = [];
+    const stop = startPerformanceMeasureDiagnostics({
+      diagnostics: {
+        record: (entry) => records.push(entry),
+      },
+      observerConstructor: FakePerformanceObserver,
+      timeOrigin: 1_000,
+    });
+
+    FakePerformanceObserver.latest?.emit([
+      {
+        duration: 1,
+        entryType: "measure",
+        name: "fullmag.react.render.Viewport3DModule.update",
+        startTime: 50,
+      },
+      {
+        duration: 2,
+        entryType: "measure",
+        name: "fullmag.react.render.Viewport3DModule.update",
+        startTime: 500,
+      },
+      {
+        duration: 3,
+        entryType: "measure",
+        name: "fullmag.react.render.Viewport3DModule.update",
+        startTime: 1_100,
+      },
+    ]);
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        detail: "performance measure",
+        durationMs: 1,
+        path: "fullmag.react.render.Viewport3DModule.update",
+        timestampMs: 1_050,
+      }),
+      expect.objectContaining({
+        detail: "performance measure;suppressedSinceLast=1",
+        durationMs: 3,
+        path: "fullmag.react.render.Viewport3DModule.update",
+        timestampMs: 2_100,
+      }),
+    ]);
+
+    stop();
+  });
 });

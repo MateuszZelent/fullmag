@@ -34,6 +34,7 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/footer.css";',
         '@import "../src/design/styles/command-palette.css";',
         '@import "../src/design/styles/registry-inspector.css";',
+        '@import "../src/design/styles/thread-manager.css";',
       ].join("\n"),
     );
   });

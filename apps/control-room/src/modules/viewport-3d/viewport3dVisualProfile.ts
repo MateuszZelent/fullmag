@@ -36,6 +36,7 @@ export interface Viewport3DVisualProfile {
 
 export const DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID: Viewport3DVisualProfileId =
   "interactive";
+const VIEWPORT_3D_INTERACTION_DPR_CAP = 0.75;
 
 const VIEWPORT_3D_VISUAL_PROFILES: Record<
   Viewport3DVisualProfileId,
@@ -158,15 +159,20 @@ export function getViewport3DVisualProfile(
 
 export function resolveViewport3DCanvasDpr({
   devicePixelRatio,
+  interactionActive = false,
   profile,
 }: {
   devicePixelRatio: number;
+  interactionActive?: boolean;
   profile: Viewport3DVisualProfile;
 }): number {
   const safeRatio = Number.isFinite(devicePixelRatio)
     ? Math.max(1, devicePixelRatio)
     : 1;
-  return Math.min(safeRatio, profile.dprCap);
+  const profileDpr = Math.min(safeRatio, profile.dprCap);
+  return interactionActive
+    ? Math.min(profileDpr, VIEWPORT_3D_INTERACTION_DPR_CAP)
+    : profileDpr;
 }
 
 export function resolveViewport3DCanvasGlOptions(

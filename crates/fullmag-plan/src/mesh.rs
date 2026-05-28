@@ -56,7 +56,16 @@ pub(crate) fn build_mesh_parts_from_segments(
             } else {
                 FemMeshPartRole::MagneticObject
             };
-            let bounds = compute_segment_bounds(mesh, segment);
+            let node_indices = if role == FemMeshPartRole::Air {
+                explicit_node_indices_for_segment(mesh, segment)
+            } else {
+                Vec::new()
+            };
+            let bounds = if node_indices.is_empty() {
+                compute_segment_bounds(mesh, segment)
+            } else {
+                mesh_bounds_from_node_indices(mesh, &node_indices)
+            };
             let label = if role == FemMeshPartRole::Air {
                 "Airbox".to_string()
             } else {
@@ -85,7 +94,7 @@ pub(crate) fn build_mesh_parts_from_segments(
                     count: segment.node_count,
                 },
                 boundary_face_indices: Vec::new(),
-                node_indices: Vec::new(),
+                node_indices,
                 surface_faces: Vec::new(),
                 bounds_min: bounds.map(|(min, _)| min),
                 bounds_max: bounds.map(|(_, max)| max),
@@ -114,6 +123,45 @@ pub(crate) fn compute_segment_bounds(
         }
     }
     Some((min, max))
+}
+
+fn collect_element_node_indices(mesh: &MeshIR, element_start: u32, element_count: u32) -> Vec<u32> {
+    let start = element_start as usize;
+    let end = start
+        .saturating_add(element_count as usize)
+        .min(mesh.elements.len());
+    if start >= end {
+        return Vec::new();
+    }
+
+    let mut unique = BTreeSet::new();
+    for element in &mesh.elements[start..end] {
+        unique.insert(element[0]);
+        unique.insert(element[1]);
+        unique.insert(element[2]);
+        unique.insert(element[3]);
+    }
+    unique.into_iter().collect()
+}
+
+fn node_indices_match_range(node_indices: &[u32], start: u32, count: u32) -> bool {
+    if node_indices.len() != count as usize {
+        return false;
+    }
+    node_indices
+        .iter()
+        .enumerate()
+        .all(|(offset, index)| *index == start + offset as u32)
+}
+
+fn explicit_node_indices_for_segment(mesh: &MeshIR, segment: &FemObjectSegmentIR) -> Vec<u32> {
+    let node_indices =
+        collect_element_node_indices(mesh, segment.element_start, segment.element_count);
+    if node_indices_match_range(&node_indices, segment.node_start, segment.node_count) {
+        Vec::new()
+    } else {
+        node_indices
+    }
 }
 
 #[derive(Debug, Clone)]

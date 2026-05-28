@@ -14,9 +14,14 @@ declare global {
 }
 
 export const REACT_RENDER_PROFILE_MEASURE_PREFIX = "fullmag.react.render.";
+export const REACT_RENDER_PROFILE_STORAGE_KEY = "fullmag:react-profiler";
+const MIN_REACT_RENDER_MEASURE_INTERVAL_MS = 1_000;
+const lastReactRenderMeasureAtByName = new Map<string, number>();
 
 export type ReactRenderProfilerId =
   | "ExplorerModule"
+  | "FooterModule"
+  | "InspectorModule"
   | "RibbonModule"
   | "Viewport3DModule"
   | "WorkspaceDockLayout";
@@ -70,10 +75,12 @@ export function recordReactRenderMeasure({
   if (!performanceTarget) return;
   if (!Number.isFinite(actualDuration) || actualDuration < 0) return;
   if (!Number.isFinite(startTime) || startTime < 0) return;
+  const measureName = `${REACT_RENDER_PROFILE_MEASURE_PREFIX}${id}.${phase}`;
+  if (!shouldRecordReactRenderMeasure(measureName, startTime)) return;
 
   try {
     performanceTarget.measure(
-      `${REACT_RENDER_PROFILE_MEASURE_PREFIX}${id}.${phase}`,
+      measureName,
       {
         duration: actualDuration,
         start: startTime,
@@ -112,6 +119,19 @@ function createOnRender(id: ReactRenderProfilerId): ProfilerOnRenderCallback {
   };
 }
 
+function shouldRecordReactRenderMeasure(name: string, startTime: number): boolean {
+  const last = lastReactRenderMeasureAtByName.get(name);
+  if (
+    last !== undefined &&
+    startTime - last < MIN_REACT_RENDER_MEASURE_INTERVAL_MS
+  ) {
+    return false;
+  }
+
+  lastReactRenderMeasureAtByName.set(name, startTime);
+  return true;
+}
+
 function defaultReactProfilerFlag(): unknown {
   return typeof window === "undefined" ? undefined : window.__FULLMAG_REACT_PROFILER__;
 }
@@ -123,7 +143,7 @@ function defaultLocationSearch(): string {
 function defaultStorageValue(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem("fullmag:react-profiler");
+    return window.localStorage.getItem(REACT_RENDER_PROFILE_STORAGE_KEY);
   } catch {
     return null;
   }

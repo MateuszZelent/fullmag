@@ -1,5 +1,6 @@
 "use client";
 
+import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import {
   selectionSnapshotEquals,
   useSelectionSelector,
@@ -15,27 +16,31 @@ export default function InspectorModule() {
 
   if (!panel) {
     return (
-      <section className="fm-inspector" aria-label="Inspector">
-        <header className="fm-inspector__header">
-          <h2>Inspector</h2>
-          <span>No selection</span>
-        </header>
-        <div className="fm-inspector__empty">Select an explorer node.</div>
-      </section>
+      <WorkspaceRenderProfiler id="InspectorModule">
+        <section className="fm-inspector" aria-label="Inspector">
+          <header className="fm-inspector__header">
+            <h2>Inspector</h2>
+            <span>No selection</span>
+          </header>
+          <div className="fm-inspector__empty">Select an explorer node.</div>
+        </section>
+      </WorkspaceRenderProfiler>
     );
   }
 
   const Panel = panel.component;
 
   return (
-    <section className="fm-inspector" aria-label="Inspector">
-      <header className="fm-inspector__header">
-        <h2>{panel.title}</h2>
-        <span>{selection.kind}</span>
-      </header>
-      <div className="fm-inspector__body">
-        <Panel selection={selection} />
-      </div>
-    </section>
+    <WorkspaceRenderProfiler id="InspectorModule">
+      <section className="fm-inspector" aria-label="Inspector">
+        <header className="fm-inspector__header">
+          <h2>{panel.title}</h2>
+          <span>{selection.kind}</span>
+        </header>
+        <div className="fm-inspector__body">
+          <Panel selection={selection} />
+        </div>
+      </section>
+    </WorkspaceRenderProfiler>
   );
 }

@@ -530,11 +530,12 @@ fn build_region_material_fields(
     base_material: &fullmag_ir::MaterialIR,
     mesh: &fullmag_ir::MeshIR,
     object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnet_materials: &BTreeMap<String, fullmag_ir::MaterialIR>,
-) -> fullmag_ir::MaterialIR {
+) -> Result<fullmag_ir::MaterialIR, PlanError> {
     let node_count = mesh.nodes.len();
     if node_count == 0 {
-        return base_material.clone();
+        return Ok(base_material.clone());
     }
 
     let mut material = base_material.clone();
@@ -556,11 +557,8 @@ fn build_region_material_fields(
         let Some(region_material) = magnet_materials.get(&segment.object_id) else {
             continue;
         };
-        let start = segment.node_start as usize;
-        let end = start
-            .saturating_add(segment.node_count as usize)
-            .min(node_count);
-        for index in start..end {
+        let node_indices = segment_node_indices(mesh_parts, segment, node_count)?;
+        for index in node_indices {
             ms_values[index] = region_material.saturation_magnetisation;
             a_values[index] = region_material.exchange_stiffness;
             alpha_values[index] = region_material.damping;
@@ -606,7 +604,7 @@ fn build_region_material_fields(
         .then_some(dind_values);
     material.dbulk_field =
         values_differ(&dbulk_values, base_material.bulk_dmi.unwrap_or(0.0)).then_some(dbulk_values);
-    material
+    Ok(material)
 }
 
 pub(crate) fn plan_fem(
@@ -1070,7 +1068,13 @@ pub(crate) fn plan_fem(
         Vec::new()
     };
     let material = if has_heterogeneous_materials {
-        build_region_material_fields(&base_material, &mesh, &object_segments, &magnet_materials)
+        build_region_material_fields(
+            &base_material,
+            &mesh,
+            &object_segments,
+            &resolved_mesh_parts,
+            &magnet_materials,
+        )?
     } else {
         base_material.clone()
     };

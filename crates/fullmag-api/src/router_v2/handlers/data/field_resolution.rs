@@ -142,6 +142,17 @@ fn mark_magnetic_object_segments(mesh: &FemMeshPayload, active: &mut [bool]) -> 
             segment.node_start as usize,
             segment.node_count as usize,
         );
+        let element_start = segment.element_start as usize;
+        let element_end = element_start
+            .saturating_add(segment.element_count as usize)
+            .min(mesh.elements.len());
+        for element in &mesh.elements[element_start..element_end] {
+            for node_index in element {
+                if let Some(slot) = active.get_mut(*node_index as usize) {
+                    *slot = true;
+                }
+            }
+        }
     }
     saw_magnetic_segment
 }

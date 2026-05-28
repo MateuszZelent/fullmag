@@ -23,6 +23,7 @@ import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
 import { ModuleRegistry } from "./module/ModuleRegistry";
+import { startBrowserActivityDiagnostics } from "./performance/browserActivityDiagnostics";
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
 import { installPerformanceMeasureGuard } from "./performance/performanceMeasureGuard";
 import { RealtimeClient } from "./realtime/RealtimeClient";
@@ -235,7 +236,18 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
 
 function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(
-    () => startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics }),
+    () => {
+      const stopMeasures = startPerformanceMeasureDiagnostics({
+        diagnostics: kernel.diagnostics,
+      });
+      const stopBrowserActivity = startBrowserActivityDiagnostics({
+        diagnostics: kernel.diagnostics,
+      });
+      return () => {
+        stopMeasures();
+        stopBrowserActivity();
+      };
+    },
     [kernel.diagnostics],
   );
 

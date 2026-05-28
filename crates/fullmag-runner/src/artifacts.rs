@@ -591,6 +591,122 @@ fn artifacts_object_ids_match(a: &str, b: &str) -> bool {
     clean_a == clean_b
 }
 
+fn fem_mesh_part_matches_segment(
+    part: &fullmag_ir::FemMeshPartIR,
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> bool {
+    part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+        && (part
+            .object_id
+            .as_deref()
+            .is_some_and(|id| artifacts_object_ids_match(id, &segment.object_id))
+            || part
+                .geometry_id
+                .as_deref()
+                .zip(segment.geometry_id.as_deref())
+                .is_some_and(|(part_geometry, segment_geometry)| {
+                    artifacts_object_ids_match(part_geometry, segment_geometry)
+                })
+            || artifacts_object_ids_match(&part.id, &segment.object_id))
+}
+
+fn fem_part_node_indices_for_artifact(
+    fem: &fullmag_ir::FemPlanIR,
+    part: &fullmag_ir::FemMeshPartIR,
+) -> Vec<usize> {
+    let mut nodes = BTreeSet::new();
+    nodes.extend(part.node_indices.iter().map(|index| *index as usize));
+
+    match &part.node_selector {
+        fullmag_ir::FemMeshPartSelector::NodeRange { start, count }
+            if part.node_indices.is_empty() =>
+        {
+            let start = *start as usize;
+            let end = start
+                .saturating_add(*count as usize)
+                .min(fem.mesh.nodes.len());
+            nodes.extend(start..end);
+        }
+        _ => {}
+    }
+
+    match &part.element_selector {
+        fullmag_ir::FemMeshPartSelector::ElementRange { start, count } => {
+            let start = *start as usize;
+            let end = start
+                .saturating_add(*count as usize)
+                .min(fem.mesh.elements.len());
+            for element in &fem.mesh.elements[start..end] {
+                nodes.extend(element.iter().map(|index| *index as usize));
+            }
+        }
+        fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => {
+            let markers = markers.iter().copied().collect::<BTreeSet<_>>();
+            for (index, element) in fem.mesh.elements.iter().enumerate() {
+                if fem
+                    .mesh
+                    .element_markers
+                    .get(index)
+                    .is_some_and(|marker| markers.contains(marker))
+                {
+                    nodes.extend(element.iter().map(|index| *index as usize));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for face_index in &part.boundary_face_indices {
+        if let Some(face) = fem.mesh.boundary_faces.get(*face_index as usize) {
+            nodes.extend(face.iter().map(|index| *index as usize));
+        }
+    }
+    match &part.boundary_face_selector {
+        fullmag_ir::FemMeshPartSelector::BoundaryFaceRange { start, count }
+            if part.boundary_face_indices.is_empty() =>
+        {
+            let start = *start as usize;
+            let end = start
+                .saturating_add(*count as usize)
+                .min(fem.mesh.boundary_faces.len());
+            for face in &fem.mesh.boundary_faces[start..end] {
+                nodes.extend(face.iter().map(|index| *index as usize));
+            }
+        }
+        _ => {}
+    }
+    for face in &part.surface_faces {
+        nodes.extend(face.iter().map(|index| *index as usize));
+    }
+
+    nodes
+        .into_iter()
+        .filter(|index| *index < fem.mesh.nodes.len())
+        .collect()
+}
+
+fn fem_segment_node_indices_for_artifact(
+    fem: &fullmag_ir::FemPlanIR,
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Vec<usize> {
+    if let Some(part) = fem
+        .mesh_parts
+        .iter()
+        .find(|part| fem_mesh_part_matches_segment(part, segment))
+    {
+        let node_indices = fem_part_node_indices_for_artifact(fem, part);
+        if !node_indices.is_empty() {
+            return node_indices;
+        }
+    }
+
+    let start = segment.node_start as usize;
+    let end = start
+        .saturating_add(segment.node_count as usize)
+        .min(fem.mesh.nodes.len());
+    (start..end).collect()
+}
+
 fn write_prescribed_current_transport_artifacts(
     output_dir: &Path,
     problem: &fullmag_ir::ProblemIR,
@@ -637,23 +753,23 @@ fn write_prescribed_current_transport_artifacts(
                     resolve_current_transport_geometry(problem, region_name)
                 });
                 for segment in &fem.object_segments {
-                    let matches_region = solve_region
-                        .as_deref()
-                        .is_some_and(|region| artifacts_object_ids_match(&segment.object_id, region));
+                    let matches_region = solve_region.as_deref().is_some_and(|region| {
+                        artifacts_object_ids_match(&segment.object_id, region)
+                    });
                     let matches_geometry = target_geometry.is_some_and(|geometry_name| {
-                        segment.geometry_id.as_deref().map(|g_id| artifacts_object_ids_match(g_id, geometry_name)).unwrap_or(false)
+                        segment
+                            .geometry_id
+                            .as_deref()
+                            .map(|g_id| artifacts_object_ids_match(g_id, geometry_name))
+                            .unwrap_or(false)
                     });
                     let matches = solve_region.is_none() || matches_region || matches_geometry;
                     if !matches {
                         continue;
                     }
                     matched_any_segment = true;
-                    let start = segment.node_start as usize;
-                    let end = start
-                        .saturating_add(segment.node_count as usize)
-                        .min(values.len());
-                    for value in &mut values[start..end] {
-                        *value = *current_density;
+                    for index in fem_segment_node_indices_for_artifact(fem, segment) {
+                        values[index] = *current_density;
                     }
                 }
                 if solve_region.is_none() || !matched_any_segment {
@@ -1115,8 +1231,9 @@ mod tests {
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
         ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
-        FdmMultilayerSummaryIR, FdmPlanIR, FemDomainMeshModeIR, FemObjectSegmentIR, FemPlanIR,
-        GridDimensions, IntegratorChoice, MaterialIR, MeshIR, OutputPlanIR, ProvenancePlanIR,
+        FdmMultilayerSummaryIR, FdmPlanIR, FemDomainMeshModeIR, FemMeshPartIR, FemMeshPartRole,
+        FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, GridDimensions, IntegratorChoice,
+        MaterialIR, MeshIR, OutputPlanIR, ProvenancePlanIR,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -1731,6 +1848,98 @@ mod tests {
         let values = artifact["values"].as_array().expect("values should exist");
         assert_eq!(values.len(), 4);
         assert_eq!(values[0], serde_json::json!([0.0, 0.0, 5e10]));
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fem_prescribed_current_transport_artifact_uses_mesh_part_node_indices() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .current_modules
+            .push(fullmag_ir::CurrentModuleIR::CurrentTransport {
+                name: "drive".to_string(),
+                model: fullmag_ir::CurrentTransportModelIR::PrescribedDensity,
+                current_density: Some([0.0, 0.0, 5e10]),
+                solve_region: Some("pillar_region".to_string()),
+                conductivity_s_per_m: None,
+            });
+        problem.regions = vec![fullmag_ir::RegionIR {
+            name: "pillar_region".to_string(),
+            geometry: "pillar".to_string(),
+        }];
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ];
+        fem.mesh.elements = vec![[1, 3, 5, 4]];
+        fem.mesh.boundary_faces = vec![[1, 3, 5]];
+        fem.initial_magnetization = vec![[1.0, 0.0, 0.0]; 6];
+        fem.object_segments[0].node_start = 0;
+        fem.object_segments[0].node_count = 3;
+        fem.mesh_parts = vec![FemMeshPartIR {
+            id: "free".to_string(),
+            label: "free".to_string(),
+            role: FemMeshPartRole::MagneticObject,
+            object_id: Some("free".to_string()),
+            geometry_id: Some("pillar".to_string()),
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 1 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
+            boundary_face_indices: vec![0],
+            node_indices: vec![1, 3, 4, 5],
+            surface_faces: vec![[1, 3, 5]],
+            bounds_min: Some([0.0, 0.0, 0.0]),
+            bounds_max: Some([1.0, 1.0, 1.0]),
+            parent_id: None,
+        }];
+        let context = build_field_context(&problem, &plan);
+        let provenance = crate::types::ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..Default::default()
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-current-transport-indices-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_prescribed_current_transport_artifacts(
+            &output_dir,
+            &problem,
+            &plan,
+            &context,
+            &provenance,
+        )
+        .expect("fem current transport artifact should be written");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("current_transport/drive.json"))
+                .expect("artifact should exist"),
+        )
+        .expect("artifact should parse");
+        let values = artifact["values"].as_array().expect("values should exist");
+        assert_eq!(values.len(), 6);
+        assert_eq!(values[0], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(values[1], serde_json::json!([0.0, 0.0, 5e10]));
+        assert_eq!(values[2], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(values[3], serde_json::json!([0.0, 0.0, 5e10]));
+        assert_eq!(values[4], serde_json::json!([0.0, 0.0, 5e10]));
+        assert_eq!(values[5], serde_json::json!([0.0, 0.0, 5e10]));
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

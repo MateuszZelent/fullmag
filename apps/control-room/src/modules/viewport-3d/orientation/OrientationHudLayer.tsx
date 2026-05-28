@@ -14,6 +14,7 @@ import {
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
+import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DCameraState,
   Viewport3DRotationMode,
@@ -47,6 +48,7 @@ interface OrientationHudLayerProps {
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
   rotationMode: Viewport3DRotationMode;
+  tracker: Viewport3DResourceTracker;
   viewCubeVisible: boolean;
 }
 
@@ -65,6 +67,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   onCameraInteractionEnd,
   onCameraInteractionStart,
   rotationMode,
+  tracker,
   viewCubeVisible,
 }: OrientationHudLayerProps) {
   const camera = useThree((state) => state.camera);
@@ -111,9 +114,10 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       controls?.update?.();
       viewport3dStore.setCamera(nextCamera);
       commitCameraChange(nextCamera);
+      tracker.recordDirtyFrame("orientation-hud-snap");
       invalidate();
     },
-    [camera, commitCameraChange, controls, getCurrentCamera, invalidate, rotationMode],
+    [camera, commitCameraChange, controls, getCurrentCamera, invalidate, rotationMode, tracker],
   );
 
   const onOrbit = useCallback(
@@ -135,6 +139,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
         onCameraInteractionStart?.();
       }
       pendingOrbitCameraRef.current = nextCamera;
+      tracker.recordDirtyFrame("orientation-hud-orbit");
       invalidate();
     },
     [
@@ -144,6 +149,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       invalidate,
       onCameraInteractionStart,
       rotationMode,
+      tracker,
     ],
   );
   const commitOrbit = useCallback(() => {
@@ -176,7 +182,11 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   return (
     <>
       {viewCubeVisible ? (
-        <ScreenAnchoredGroup anchor="viewCube" pixelScale={1.15}>
+        <ScreenAnchoredGroup
+          anchor="viewCube"
+          pixelScale={1.15}
+          tracker={tracker}
+        >
           <ViewCube3DBox
             colors={colors}
             controls={controls}
@@ -187,7 +197,11 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
         </ScreenAnchoredGroup>
       ) : null}
       {hslReferenceVisible ? (
-        <ScreenAnchoredGroup anchor="hslReference" pixelScale={1}>
+        <ScreenAnchoredGroup
+          anchor="hslReference"
+          pixelScale={1}
+          tracker={tracker}
+        >
           <HslReferenceSphere colors={colors} />
         </ScreenAnchoredGroup>
       ) : null}
@@ -199,10 +213,12 @@ function ScreenAnchoredGroup({
   anchor,
   children,
   pixelScale,
+  tracker,
 }: {
   anchor: keyof ReturnType<typeof resolveOrientationHudAnchors>;
   children: ReactNode;
   pixelScale: number;
+  tracker: Viewport3DResourceTracker;
 }) {
   const ref = useRef<Group>(null);
   const camera = useThree((state) => state.camera);
@@ -221,9 +237,9 @@ function ScreenAnchoredGroup({
   );
 
   useEffect(() => {
+    tracker.recordDirtyFrame("orientation-hud-mounted");
     invalidate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [invalidate, tracker]);
 
   useFrame(() => {
     const group = ref.current;
@@ -378,6 +394,7 @@ function updateScreenAnchor(
   anchor: readonly [number, number, number],
   vectors: AnchorVectors,
 ): number {
+  camera.updateMatrixWorld(true);
   const near = cameraNear(camera);
   const far = cameraFar(camera);
   // Place the widget at 90% of far — leaving 10% depth headroom for the

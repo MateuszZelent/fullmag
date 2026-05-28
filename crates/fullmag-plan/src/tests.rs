@@ -217,6 +217,63 @@ fn mesh_parts_from_shared_domain_produces_air_and_magnetic() {
 }
 
 #[test]
+fn mesh_part_node_indices_cover_air_elements_with_shared_interface_nodes() {
+    let mesh = MeshIR {
+        mesh_name: "shared_air_interface".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        element_markers: vec![1, 0],
+        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        boundary_markers: vec![10, 99],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let object_segments = vec![
+        fullmag_ir::FemObjectSegmentIR {
+            object_id: "flower".to_string(),
+            geometry_id: Some("flower_geom".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        },
+        fullmag_ir::FemObjectSegmentIR {
+            object_id: crate::mesh::AIR_OBJECT_SEGMENT_ID.to_string(),
+            geometry_id: None,
+            node_start: 4,
+            node_count: 1,
+            element_start: 1,
+            element_count: 1,
+            boundary_face_start: 1,
+            boundary_face_count: 1,
+        },
+    ];
+
+    let parts = crate::mesh::build_mesh_parts_from_segments(
+        &mesh,
+        &object_segments,
+        fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir,
+    );
+
+    let air_part = parts
+        .iter()
+        .find(|part| part.role == fullmag_ir::FemMeshPartRole::Air)
+        .expect("airbox part should exist");
+    assert_eq!(air_part.node_indices, vec![0, 1, 2, 4]);
+    assert_eq!(air_part.bounds_min, Some([0.0, 0.0, -1.0]));
+    assert_eq!(air_part.bounds_max, Some([1.0, 1.0, 0.0]));
+}
+
+#[test]
 fn mesh_parts_from_merged_magnetic_has_no_air() {
     let mesh = MeshIR {
         mesh_name: "merged".to_string(),

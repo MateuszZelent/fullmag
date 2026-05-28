@@ -33,6 +33,7 @@ FIELD_SCHEMAS: dict[str, set[str]] = {
     "Box": {"VIn", "VOut", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
     "ComponentVolumeConstant": {"GeometryName", "VIn"},
     "ComponentRestrictedBox": {"GeometryName", "VIn", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
+    "ComponentRestrictedCylinder": {"GeometryName", "VIn", "Radius", "XCenter", "YCenter"},
     "SurfaceDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "InterfaceShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "TransitionShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
@@ -601,7 +602,6 @@ def _add_edge_distance_threshold_field(
     dist_min: float,
     dist_max: float,
     params: dict[str, Any],
-    component_volume_tags: dict[str, list[int]] | None,
     component_surface_tags: dict[str, list[int]] | None,
     sampling: int = 40,
     hscale: float = 1.0,
@@ -628,13 +628,9 @@ def _add_edge_distance_threshold_field(
     gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", float(size_max) * hscale)
     gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", float(dist_min) * hscale)
     gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", float(dist_max) * hscale)
-
-    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
-    if volume_tags:
-        restricted = gmsh.model.mesh.field.add("Restrict")
-        gmsh.model.mesh.field.setNumber(restricted, "InField", f_thresh)
-        gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
-        return restricted
+    # Edge fields intentionally cross the conformal component/air interface:
+    # restricting them to the magnetic volume leaves the neighboring air coarse
+    # exactly where demag needs near-edge resolution.
     return f_thresh
 
 
@@ -694,6 +690,43 @@ def _add_component_restricted_box_field(
     gmsh.model.mesh.field.setNumber(field_id, "YMax", float(ymax) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "ZMin", float(zmin) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "ZMax", float(zmax) * hscale)
+
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+    return restricted
+
+
+def _add_component_restricted_cylinder_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    vin: float,
+    vout: float,
+    radius: float,
+    xcenter: float,
+    ycenter: float,
+    zcenter: float,
+    component_volume_tags: dict[str, list[int]] | None,
+    hscale: float = 1.0,
+) -> int | None:
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if not volume_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered component volumes for '{geometry_name}', skipping restricted cylinder refinement"
+        )
+        return None
+
+    field_id = gmsh.model.mesh.field.add("Cylinder")
+    gmsh.model.mesh.field.setNumber(field_id, "VIn", float(vin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "VOut", float(vout) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "Radius", float(radius) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "XCenter", float(xcenter) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "YCenter", float(ycenter) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "ZCenter", float(zcenter) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "XAxis", 0.0)
+    gmsh.model.mesh.field.setNumber(field_id, "YAxis", 0.0)
+    gmsh.model.mesh.field.setNumber(field_id, "ZAxis", 1.0)
 
     restricted = gmsh.model.mesh.field.add("Restrict")
     gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
@@ -763,6 +796,8 @@ def _configure_mesh_size_fields(
         "vin", "vout", "hmin", "hmax", "hbulk",
         "sizemin", "sizemax", "distmin", "distmax",
         "radius", "thickness",
+        "xmin", "xmax", "ymin", "ymax", "zmin", "zmax",
+        "xcenter", "ycenter", "zcenter",
         "sizeminnormal", "sizemintangent",
         "sizemaxnormal", "sizemaxtangent",
     }
@@ -835,6 +870,30 @@ def _configure_mesh_size_fields(
             else:
                 _mark_field(config, status="ignored", reason="no recovered component volumes")
             continue
+        if kind == "ComponentRestrictedCylinder":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedCylinder is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            fid = _add_component_restricted_cylinder_field(
+                gmsh,
+                geometry_name=geometry_name,
+                vin=float(params.get("VIn")),
+                vout=float(params.get("VOut", 1.0e22)),
+                radius=float(params.get("Radius")),
+                xcenter=float(params.get("XCenter")),
+                ycenter=float(params.get("YCenter")),
+                zcenter=float(params.get("ZCenter", 0.0)),
+                component_volume_tags=component_volume_tags,
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
         if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold", "TransitionShellThreshold"}:
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
@@ -872,7 +931,6 @@ def _configure_mesh_size_fields(
                 dist_min=float(params.get("DistMin", 0.0)),
                 dist_max=float(params.get("DistMax")),
                 params=params,
-                component_volume_tags=component_volume_tags,
                 component_surface_tags=component_surface_tags,
                 sampling=int(params.get("Sampling", 40)),
                 hscale=hscale,

@@ -32,6 +32,7 @@ interface DisposableResource {
 }
 
 type TrackerListener = () => void;
+export type Viewport3DDirtyReasonCounts = Record<string, number>;
 
 const EMPTY_COUNTS: Viewport3DResourceCounts = {
   contextLosses: 0,
@@ -45,6 +46,7 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
 };
 
 export class Viewport3DResourceTracker {
+  private readonly dirtyReasonCounts = new Map<string, number>();
   private readonly disposables = new Map<object, () => void>();
   private readonly listeners = new Set<TrackerListener>();
   private counts: Viewport3DResourceCounts = { ...EMPTY_COUNTS };
@@ -72,11 +74,21 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: string): void {
+    this.dirtyReasonCounts.set(
+      reason,
+      (this.dirtyReasonCounts.get(reason) ?? 0) + 1,
+    );
     this.counts = {
       ...this.counts,
       dirtyReason: reason,
       frames: this.counts.frames + 1,
     };
+  }
+
+  consumeDirtyReasonCounts(): Viewport3DDirtyReasonCounts {
+    const counts = Object.fromEntries(this.dirtyReasonCounts);
+    this.dirtyReasonCounts.clear();
+    return counts;
   }
 
   track<TResource extends DisposableResource>(

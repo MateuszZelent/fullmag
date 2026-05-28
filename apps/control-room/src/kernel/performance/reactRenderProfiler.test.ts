@@ -46,4 +46,47 @@ describe("react render profiler", () => {
       ],
     ]);
   });
+
+  it("samples render duration measures before they reach PerformanceObserver", () => {
+    const measures: Array<[string, PerformanceMeasureOptions]> = [];
+    const performanceTarget = {
+      measure: (name: string, options: PerformanceMeasureOptions) => {
+        measures.push([name, options]);
+        return {} as PerformanceMeasure;
+      },
+    };
+
+    recordReactRenderMeasure({
+      actualDuration: 1,
+      id: "FooterModule",
+      performanceTarget,
+      phase: "update",
+      startTime: 10_000,
+    });
+    recordReactRenderMeasure({
+      actualDuration: 2,
+      id: "FooterModule",
+      performanceTarget,
+      phase: "update",
+      startTime: 10_400,
+    });
+    recordReactRenderMeasure({
+      actualDuration: 3,
+      id: "FooterModule",
+      performanceTarget,
+      phase: "update",
+      startTime: 11_050,
+    });
+
+    expect(measures).toEqual([
+      [
+        "fullmag.react.render.FooterModule.update",
+        { duration: 1, start: 10_000 },
+      ],
+      [
+        "fullmag.react.render.FooterModule.update",
+        { duration: 3, start: 11_050 },
+      ],
+    ]);
+  });
 });

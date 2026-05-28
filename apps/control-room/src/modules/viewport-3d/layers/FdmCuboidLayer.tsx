@@ -29,6 +29,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
+  resolveCameraInteractionSettings,
   surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -598,6 +599,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   vectorStyle,
   fieldVector,
   instanceModel,
+  interactionActive,
   maxVectorGlyphs,
   voxelFillRatio,
   voxelMagnitudeThreshold,
@@ -607,6 +609,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   domain: FdmGridRenderDomain | null;
   fieldVector: DecodedFieldVector | null | undefined;
   instanceModel?: FdmCuboidInstanceModel | null;
+  interactionActive: boolean;
   maxVectorGlyphs: number;
   materialProfile: Viewport3DMaterialProfile;
   onSelectDomain: () => void;
@@ -623,6 +626,10 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const invalidate = useBatchedInvalidate();
   const surfaceRef = useRef<InstancedMesh>(null);
   const wireframeRef = useRef<InstancedMesh>(null);
+  const renderSettings = useMemo(
+    () => resolveCameraInteractionSettings(settings, interactionActive),
+    [interactionActive, settings],
+  );
   const model = useMemo(
     () =>
       instanceModel !== undefined
@@ -653,17 +660,17 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         fieldVector,
         resolveFdmVectorGlyphScale(model, vectorScale),
         maxVectorGlyphs,
-        { anchorMode: settings.vectorCenteringEnabled ? "center" : "tail" },
+        { anchorMode: renderSettings.vectorCenteringEnabled ? "center" : "tail" },
       ),
     [
       fieldVector,
       maxVectorGlyphs,
       model,
-      settings.vectorCenteringEnabled,
+      renderSettings.vectorCenteringEnabled,
       vectorScale,
     ],
   );
-  const surfaceOpacity = opacityFromSettings(settings);
+  const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const usesInstanceColors = Boolean(
     surfaceColors && surfaceColors.colors.length === (model?.count ?? 0) * 3,
@@ -674,7 +681,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         "material",
         new MeshStandardMaterial({
           color: surfaceMaterialColorFromSettings(
-            settings,
+            renderSettings,
             colors.mesh,
             usesInstanceColors,
           ),
@@ -687,7 +694,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     [
       colors.mesh,
       materialProfile.magneticSurface,
-      settings,
+      renderSettings,
       surfaceOpacity,
       tracker,
       usesInstanceColors,
@@ -699,9 +706,9 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: wireframeColorFromSettings(settings, colors.wire),
+          color: wireframeColorFromSettings(renderSettings, colors.wire),
           opacity: wireframeOpacityFromSettings(
-            settings,
+            renderSettings,
             materialProfile.featureEdges,
           ),
           transparent: wireframePolicy.transparent,
@@ -711,7 +718,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           wireframe: true,
         }),
       ),
-    [colors.wire, materialProfile.featureEdges, settings, tracker, wireframePolicy],
+    [colors.wire, materialProfile.featureEdges, renderSettings, tracker, wireframePolicy],
   );
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
@@ -727,12 +734,12 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   useFdmCuboidMatrixUpload({
     invalidate,
     model,
-    shaderVisible: settings.shaderVisible,
+    shaderVisible: renderSettings.shaderVisible,
     surfaceRef,
     tracker,
     usesInstanceColors,
     wireframeRef,
-    wireframeVisible: settings.wireframeVisible,
+    wireframeVisible: renderSettings.wireframeVisible,
   });
 
   useFdmCuboidColorUpload({
@@ -746,8 +753,8 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 
   if (
     !model ||
-    !settings.visible ||
-    (!settings.shaderVisible && !settings.wireframeVisible)
+    !renderSettings.visible ||
+    (!renderSettings.shaderVisible && !renderSettings.wireframeVisible)
   ) {
     return null;
   }
@@ -759,7 +766,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {settings.shaderVisible ? (
+      {renderSettings.shaderVisible ? (
         <instancedMesh
           args={[geometry, surfaceMaterial, model.count]}
           frustumCulled={false}
@@ -768,7 +775,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           renderOrder={surfacePolicy.renderOrder}
         />
       ) : null}
-      {settings.wireframeVisible ? (
+      {renderSettings.wireframeVisible ? (
         <instancedMesh
           args={[geometry, wireframeMaterial, model.count]}
           frustumCulled={false}
@@ -777,14 +784,14 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           renderOrder={wireframePolicy.renderOrder}
         />
       ) : null}
-      {settings.vectorsVisible ? (
+      {renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
+          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
-          opacity={opacityFromSettings(settings)}
+          opacity={opacityFromSettings(renderSettings)}
           segments={vectorSegments}
-          style={vectorStyleFromSettings(settings, vectorStyle)}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}

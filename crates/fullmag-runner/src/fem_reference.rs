@@ -34,8 +34,9 @@ use crate::relaxation::{
     llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
 };
 use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
-    set_object_average_m, single_object_scalars, weighted_object_scalars,
+    apply_average_m_to_step_stats, average_magnetization_components,
+    scalar_outputs_request_average_m, scalar_row_due, set_object_average_m, single_object_scalars,
+    weighted_object_scalars,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -428,6 +429,7 @@ fn execute_reference_fem_impl(
             &state,
             &ant,
             &plan.object_segments,
+            &plan.mesh_parts,
             0,
             0.0,
             0,
@@ -441,6 +443,7 @@ fn execute_reference_fem_impl(
             &state,
             &ant,
             &plan.object_segments,
+            &plan.mesh_parts,
             0,
             0.0,
             0,
@@ -468,6 +471,7 @@ fn execute_reference_fem_impl(
         0,
         &current_observables,
         &plan.object_segments,
+        &plan.mesh_parts,
     );
 
     let until_label = if until_seconds.is_finite() {
@@ -574,6 +578,7 @@ fn execute_reference_fem_impl(
             latest_stats.clone(),
             state.magnetization(),
             &plan.object_segments,
+            &plan.mesh_parts,
         );
 
         if !default_scalar_trace || !field_schedules.is_empty() {
@@ -605,6 +610,7 @@ fn execute_reference_fem_impl(
                 &state,
                 &ant,
                 &plan.object_segments,
+                &plan.mesh_parts,
                 step_count,
                 dt_step,
                 wall_elapsed,
@@ -804,6 +810,7 @@ fn execute_reference_fem_impl(
         &state,
         &final_ant,
         &plan.object_segments,
+        &plan.mesh_parts,
         step_count,
         dt,
         default_scalar_trace,
@@ -848,6 +855,7 @@ fn record_due_outputs(
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     step: u64,
     solver_dt: f64,
     wall_time_ns: u64,
@@ -898,6 +906,7 @@ fn record_due_outputs(
             wall_time_ns,
             &observables,
             object_segments,
+            mesh_parts,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -925,6 +934,7 @@ fn record_scalar_snapshot(
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     step: u64,
     solver_dt: f64,
     wall_time_ns: u64,
@@ -939,6 +949,7 @@ fn record_scalar_snapshot(
         wall_time_ns,
         &observables,
         object_segments,
+        mesh_parts,
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -950,6 +961,7 @@ fn record_final_outputs(
     state: &FemLlgState,
     antenna_field: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     step: u64,
     solver_dt: f64,
     default_scalar_trace: bool,
@@ -997,6 +1009,7 @@ fn record_final_outputs(
             0,
             &observables,
             object_segments,
+            mesh_parts,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1018,9 +1031,11 @@ fn enrich_step_stats_from_magnetization(
     mut stats: StepStats,
     magnetization: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
 ) -> StepStats {
     apply_average_m_to_step_stats(&mut stats, magnetization);
-    stats.per_object_scalars = fem_per_object_scalars(object_segments, magnetization, &stats);
+    stats.per_object_scalars =
+        fem_per_object_scalars(object_segments, mesh_parts, magnetization, &stats);
     stats
 }
 
@@ -1079,6 +1094,7 @@ fn make_step_stats(
     wall_time_ns: u64,
     observables: &StateObservables,
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -1099,13 +1115,18 @@ fn make_step_stats(
         ..StepStats::default()
     };
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
-    stats.per_object_scalars =
-        fem_per_object_scalars(object_segments, &observables.magnetization, &stats);
+    stats.per_object_scalars = fem_per_object_scalars(
+        object_segments,
+        mesh_parts,
+        &observables.magnetization,
+        &stats,
+    );
     stats
 }
 
 fn fem_per_object_scalars(
     object_segments: &[FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetization: &[[f64; 3]],
     stats: &StepStats,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
@@ -1116,7 +1137,9 @@ fn fem_per_object_scalars(
     let mut weights_by_object: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     for segment in object_segments {
-        let weight = f64::from(segment.node_count.max(1));
+        let weight = fem_segment_node_indices(mesh_parts, segment, magnetization.len())
+            .len()
+            .max(1) as f64;
         *weights_by_object
             .entry(segment.object_id.clone())
             .or_insert(0.0) += weight;
@@ -1124,18 +1147,105 @@ fn fem_per_object_scalars(
     let weights = weights_by_object.into_iter().collect::<Vec<_>>();
     let mut per_object = weighted_object_scalars(stats, &weights);
     for segment in object_segments {
-        set_object_average_m(
-            &mut per_object,
-            &segment.object_id,
-            magnetization,
-            segment.node_start as usize,
-            segment.node_count as usize,
-        );
+        let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
+        if node_indices.is_empty() {
+            set_object_average_m(
+                &mut per_object,
+                &segment.object_id,
+                magnetization,
+                segment.node_start as usize,
+                segment.node_count as usize,
+            );
+        } else {
+            set_object_average_m_by_indices(
+                &mut per_object,
+                &segment.object_id,
+                magnetization,
+                &node_indices,
+            );
+        }
     }
     if per_object.is_empty() {
         return single_object_scalars("free", stats);
     }
     per_object
+}
+
+fn runtime_object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
+}
+
+fn fem_mesh_part_matches_segment(
+    part: &fullmag_ir::FemMeshPartIR,
+    segment: &FemObjectSegmentIR,
+) -> bool {
+    part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+        && (part
+            .object_id
+            .as_deref()
+            .is_some_and(|id| runtime_object_ids_match(id, &segment.object_id))
+            || part
+                .geometry_id
+                .as_deref()
+                .zip(segment.geometry_id.as_deref())
+                .is_some_and(|(part_geometry, segment_geometry)| {
+                    runtime_object_ids_match(part_geometry, segment_geometry)
+                })
+            || runtime_object_ids_match(&part.id, &segment.object_id))
+}
+
+fn fem_segment_node_indices(
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segment: &FemObjectSegmentIR,
+    total_nodes: usize,
+) -> Vec<usize> {
+    if let Some(part) = mesh_parts
+        .iter()
+        .find(|part| fem_mesh_part_matches_segment(part, segment))
+    {
+        let node_indices = part
+            .node_indices
+            .iter()
+            .map(|index| *index as usize)
+            .filter(|index| *index < total_nodes)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !node_indices.is_empty() {
+            return node_indices;
+        }
+    }
+
+    let start = segment.node_start as usize;
+    let end = start
+        .saturating_add(segment.node_count as usize)
+        .min(total_nodes);
+    (start..end).collect()
+}
+
+fn set_object_average_m_by_indices(
+    per_object: &mut std::collections::HashMap<String, std::collections::HashMap<String, f64>>,
+    object_id: &str,
+    magnetization: &[[f64; 3]],
+    node_indices: &[usize],
+) {
+    let values = node_indices
+        .iter()
+        .filter_map(|index| magnetization.get(*index).copied())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return;
+    }
+    let [mx, my, mz] = average_magnetization_components(&values);
+    let entry = per_object.entry(object_id.to_string()).or_default();
+    entry.insert("mx".to_string(), mx);
+    entry.insert("my".to_string(), my);
+    entry.insert("mz".to_string(), mz);
 }
 
 fn select_field_values(
@@ -1190,7 +1300,8 @@ fn select_base_field(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision, FemPlanIR, IntegratorChoice,
+        AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision, FemMeshPartIR,
+        FemMeshPartRole, FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, IntegratorChoice,
         MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
@@ -1790,6 +1901,53 @@ mod tests {
             provenance.demag_operator_kind.as_deref(),
             Some("fem_poisson")
         );
+    }
+
+    #[test]
+    fn fem_per_object_scalars_uses_mesh_part_node_indices_for_shared_nodes() {
+        let segment = FemObjectSegmentIR {
+            object_id: "body".to_string(),
+            geometry_id: Some("body".to_string()),
+            node_start: 0,
+            node_count: 3,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        };
+        let mesh_part = FemMeshPartIR {
+            id: "body".to_string(),
+            label: "body".to_string(),
+            role: FemMeshPartRole::MagneticObject,
+            object_id: Some("body".to_string()),
+            geometry_id: Some("body".to_string()),
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 1 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 3 },
+            boundary_face_indices: Vec::new(),
+            node_indices: vec![1, 3, 5],
+            surface_faces: Vec::new(),
+            bounds_min: None,
+            bounds_max: None,
+            parent_id: None,
+        };
+        let stats = StepStats {
+            e_total: 100.0,
+            ..StepStats::default()
+        };
+        let magnetization = vec![
+            [10.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+        ];
+
+        let per_object = fem_per_object_scalars(&[segment], &[mesh_part], &magnetization, &stats);
+
+        assert_eq!(per_object["body"]["mx"], 3.0);
     }
 
     #[test]

@@ -59,6 +59,10 @@ const performanceMeasureDiagnosticsPath = path.join(
   appRoot,
   "src/kernel/performance/performanceMeasureDiagnostics.ts",
 );
+const browserActivityDiagnosticsPath = path.join(
+  appRoot,
+  "src/kernel/performance/browserActivityDiagnostics.ts",
+);
 const reactRenderProfilerPath = path.join(
   appRoot,
   "src/kernel/performance/reactRenderProfiler.tsx",
@@ -1022,6 +1026,10 @@ function checkPerformanceDiagnosticsExport() {
     performanceMeasureDiagnosticsPath,
     "utf8",
   );
+  const browserActivityDiagnostics = readFileSync(
+    browserActivityDiagnosticsPath,
+    "utf8",
+  );
   const kernelProvider = readFileSync(kernelProviderPath, "utf8");
   const requestDiagnostics = readFileSync(requestDiagnosticsControllerPath, "utf8");
   const footer = readFileSync(footerModulePath, "utf8");
@@ -1039,7 +1047,17 @@ function checkPerformanceDiagnosticsExport() {
   ]);
   requireTokens(kernelProvider, "KernelProvider performance diagnostics", [
     "PerformanceDiagnosticsConnector",
-    "startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics })",
+    "startPerformanceMeasureDiagnostics",
+    "startBrowserActivityDiagnostics",
+    "stopMeasures();",
+    "stopBrowserActivity();",
+  ]);
+  requireTokens(browserActivityDiagnostics, "browser activity diagnostics", [
+    "startBrowserActivityDiagnostics",
+    'observer.observe({ buffered: true, type: "longtask" })',
+    'path: LONG_TASK_PATH',
+    'LONG_TASK_PATH = "fullmag.browser.longtask"',
+    'messageType: "longtask"',
   ]);
   requireTokens(requestDiagnostics, "RequestDiagnosticsController performance channel", [
     'export type TransportChannel = "http" | "performance" | "websocket"',
@@ -1072,6 +1090,10 @@ function checkReactRenderProfilerInstrumentation() {
     path.join(appRoot, "src/modules/viewport-3d/Viewport3DModule.tsx"),
     "utf8",
   );
+  const footer = readFileSync(
+    path.join(appRoot, "src/modules/footer/FooterModule.tsx"),
+    "utf8",
+  );
   const smoke = readFileSync(viewportSmokePath, "utf8");
 
   requireTokens(profiler, "react render profiler", [
@@ -1098,12 +1120,17 @@ function checkReactRenderProfilerInstrumentation() {
     "WorkspaceRenderProfiler",
     'id="Viewport3DModule"',
   ]);
+  requireTokens(footer, "FooterModule React profiler", [
+    "WorkspaceRenderProfiler",
+    'id="FooterModule"',
+  ]);
   requireTokens(smoke, "viewport smoke React render metrics", [
     "REACT_RENDER_MEASURE_NAMES",
     "window.__FULLMAG_REACT_PROFILER__ = true",
     "fullmag.react.render.RibbonModule",
     "fullmag.react.render.ExplorerModule",
     "fullmag.react.render.Viewport3DModule",
+    "fullmag.react.render.FooterModule",
     "fullmag.react.render.WorkspaceDockLayout",
     "reactRenderMeasureCount",
     "reactRenderMeasureTotals",

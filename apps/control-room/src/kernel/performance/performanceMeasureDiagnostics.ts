@@ -34,6 +34,8 @@ interface PerformanceMeasureDiagnosticsOptions {
 }
 
 const DEFAULT_PERFORMANCE_MEASURE_PREFIX = "fullmag.";
+const REACT_RENDER_MEASURE_PREFIX = "fullmag.react.render.";
+const MIN_REACT_RENDER_SAMPLE_INTERVAL_MS = 1_000;
 
 export function startPerformanceMeasureDiagnostics({
   diagnostics,
@@ -51,16 +53,27 @@ export function startPerformanceMeasureDiagnostics({
     return noop;
   }
 
+  const sampler = createPerformanceMeasureSampler();
   const observer = new observerConstructor((list) => {
     for (const entry of list.getEntries()) {
       if (entry.entryType !== "measure") continue;
       if (!entry.name.startsWith(namePrefix)) continue;
+      const timestampMs = resolvePerformanceTimestamp({
+        entryStartTime: entry.startTime,
+        now,
+        timeOrigin,
+      });
+      const sample = sampler.sample(entry.name, timestampMs);
+      if (!sample.record) continue;
 
       diagnostics.record({
         byteLength: null,
         channel: "performance",
         contentType: null,
-        detail: "performance measure",
+        detail:
+          sample.suppressedSinceLast > 0
+            ? `performance measure;suppressedSinceLast=${sample.suppressedSinceLast}`
+            : "performance measure",
         direction: "rx",
         durationMs: normalizePerformanceDuration(entry.duration),
         messageType: "measure",
@@ -69,11 +82,7 @@ export function startPerformanceMeasureDiagnostics({
         path: entry.name,
         requestId: "performance-measure",
         status: null,
-        timestampMs: resolvePerformanceTimestamp({
-          entryStartTime: entry.startTime,
-          now,
-          timeOrigin,
-        }),
+        timestampMs,
       });
     }
   });
@@ -86,6 +95,37 @@ export function startPerformanceMeasureDiagnostics({
   }
 
   return () => observer.disconnect();
+}
+
+function createPerformanceMeasureSampler(): {
+  sample: (
+    path: string,
+    timestampMs: number,
+  ) => { record: boolean; suppressedSinceLast: number };
+} {
+  const lastRecordedAt = new Map<string, number>();
+  const suppressed = new Map<string, number>();
+  return {
+    sample(path, timestampMs) {
+      if (!path.startsWith(REACT_RENDER_MEASURE_PREFIX)) {
+        return { record: true, suppressedSinceLast: 0 };
+      }
+
+      const last = lastRecordedAt.get(path);
+      if (
+        last !== undefined &&
+        timestampMs - last < MIN_REACT_RENDER_SAMPLE_INTERVAL_MS
+      ) {
+        suppressed.set(path, (suppressed.get(path) ?? 0) + 1);
+        return { record: false, suppressedSinceLast: 0 };
+      }
+
+      const suppressedSinceLast = suppressed.get(path) ?? 0;
+      suppressed.set(path, 0);
+      lastRecordedAt.set(path, timestampMs);
+      return { record: true, suppressedSinceLast };
+    },
+  };
 }
 
 function normalizePerformanceDuration(durationMs: number): number | null {

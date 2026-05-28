@@ -5,7 +5,7 @@ import type {
 } from "@/kernel/api/RequestDiagnosticsController";
 
 export type FooterDirectionFilter = "all" | TransportDirection;
-export type FooterChannelFilter = "all" | TransportChannel;
+export type FooterChannelFilter = "all" | "transport" | TransportChannel;
 type FooterLogSortDirection = "asc" | "desc";
 export type FooterLogSortKey =
   | "channel"
@@ -30,8 +30,16 @@ export function filterTransportEntries(
   filters: FooterLogFilters,
 ): RequestDiagnosticEntry[] {
   return entries.filter((entry) => {
+    if (!isFooterLogEntry(entry)) {
+      return false;
+    }
+
     if (filters.direction !== "all" && entry.direction !== filters.direction) {
       return false;
+    }
+
+    if (filters.channel === "transport") {
+      return entry.channel === "http" || entry.channel === "websocket";
     }
 
     if (filters.channel !== "all" && entry.channel !== filters.channel) {
@@ -40,6 +48,13 @@ export function filterTransportEntries(
 
     return true;
   });
+}
+
+export function isFooterLogEntry(entry: RequestDiagnosticEntry): boolean {
+  return !(
+    entry.channel === "performance" &&
+    entry.path.startsWith("fullmag.react.render.")
+  );
 }
 
 export function sortTransportEntries(

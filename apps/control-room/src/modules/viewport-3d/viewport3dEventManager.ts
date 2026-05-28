@@ -46,6 +46,18 @@ export function createViewport3DMissedClickHandler(
   };
 }
 
+export function createViewport3DPointerMoveHandler(
+  handler: EventListener | undefined,
+): EventListener | undefined {
+  if (!handler) return undefined;
+
+  return (event) => {
+    const pointerEvent = event as PointerEvent;
+    if (pointerEvent.buttons !== 0) return;
+    handler(event);
+  };
+}
+
 export function createViewport3DEventManager(
   store: Parameters<typeof createPointerEvents>[0],
 ): EventManager<HTMLElement> {
@@ -55,6 +67,9 @@ export function createViewport3DEventManager(
     ...manager,
     handlers: {
       ...pickedHandlers,
+      onPointerMove: createViewport3DPointerMoveHandler(
+        pickedHandlers?.onPointerMove,
+      ),
       onWheel: () => {
         // Native wheel event is allowed to propagate for OrbitControls, but we
         // bypass R3F's internal raycasting/event-handling on scroll to avoid lag.

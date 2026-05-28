@@ -194,7 +194,7 @@ fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
     }
     let mut weights: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for segment in &plan.object_segments {
-        let weight = f64::from(segment.node_count.max(1));
+        let weight = fem_segment_weight(plan, segment);
         *weights.entry(segment.object_id.clone()).or_insert(0.0) += weight;
     }
     let weighted = weighted_object_scalars(stats, &weights.into_iter().collect::<Vec<_>>());
@@ -203,6 +203,51 @@ fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
     } else {
         weighted
     };
+}
+
+#[cfg(feature = "fem-gpu")]
+fn fem_segment_weight(plan: &FemPlanIR, segment: &fullmag_ir::FemObjectSegmentIR) -> f64 {
+    let explicit_count = plan
+        .mesh_parts
+        .iter()
+        .find(|part| {
+            part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+                && (part
+                    .object_id
+                    .as_deref()
+                    .is_some_and(|id| dispatch_object_ids_match(id, &segment.object_id))
+                    || part
+                        .geometry_id
+                        .as_deref()
+                        .zip(segment.geometry_id.as_deref())
+                        .is_some_and(|(part_geometry, segment_geometry)| {
+                            dispatch_object_ids_match(part_geometry, segment_geometry)
+                        })
+                    || dispatch_object_ids_match(&part.id, &segment.object_id))
+        })
+        .map(|part| {
+            part.node_indices
+                .iter()
+                .filter(|index| (**index as usize) < plan.mesh.nodes.len())
+                .collect::<BTreeSet<_>>()
+                .len()
+        })
+        .unwrap_or(0);
+    if explicit_count > 0 {
+        explicit_count as f64
+    } else {
+        f64::from(segment.node_count.max(1))
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn dispatch_object_ids_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let clean_a = a.strip_suffix("_geom").unwrap_or(a);
+    let clean_b = b.strip_suffix("_geom").unwrap_or(b);
+    clean_a == clean_b
 }
 
 fn runtime_warn_once(message: &str) {

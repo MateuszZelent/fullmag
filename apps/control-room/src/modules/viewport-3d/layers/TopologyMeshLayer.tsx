@@ -32,6 +32,7 @@ export function TopologyMeshLayer({
   femDomain,
   fieldModel,
   getPartSettings,
+  interactionActive,
   materialProfile,
   magnetizationTexturePreviews,
   meshQualityColors,
@@ -49,6 +50,7 @@ export function TopologyMeshLayer({
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   meshQualityColors: ScalarColorBuffer | null;
@@ -72,6 +74,7 @@ export function TopologyMeshLayer({
             <MeshPartLayer
               colors={colors}
               fieldModel={resolvedFieldModel}
+              interactionActive={interactionActive}
               key={partModel.part.id}
               magnetizationTexturePreview={(() => {
                 const objectId = partModel.part.object_id;
@@ -128,6 +131,7 @@ export function TopologyMeshLayer({
       }
       femDomain={femDomain}
       fieldModel={resolvedFieldModel}
+      interactionActive={interactionActive}
       materialProfile={materialProfile}
       meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
       onSelectDomain={onSelectDomain}

@@ -260,6 +260,7 @@ export function VectorFieldLayer({
       toneMapped: materialProfile?.toneMapped ?? false,
       useInstanceColors,
     });
+    tracker.recordDirtyFrame("vector-glyph-material");
     invalidate();
   }, [
     material,
@@ -269,6 +270,7 @@ export function VectorFieldLayer({
     useInstanceColors,
     resolvedStyle.materialColor,
     invalidate,
+    tracker,
   ]);
 
   const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);

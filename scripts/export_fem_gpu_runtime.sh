@@ -16,7 +16,7 @@ echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
 mkdir -p .fullmag/runtimes/fem-gpu-host/bin .fullmag/runtimes/fem-gpu-host/lib .fullmag/runtimes/fem-gpu-host/include
 rm -rf .fullmag/runtimes/fem-gpu-host/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/bin
-echo "[export_fem_gpu_runtime] performing full cargo clean to ensure compiler cache consistency"
+echo "[export_fem_gpu_runtime] using cached cargo target when available; no cargo clean is performed"
 
 echo "[export_fem_gpu_runtime] building fullmag-cli and fullmag-api with cuda fem-gpu release features"
 FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j 2 -p fullmag-cli -p fullmag-api --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-api/cuda fullmag-api/fem-gpu" --release 2>&1 | tee /tmp/fullmag-build.log
@@ -156,6 +156,23 @@ exec "${SELF_DIR}/fullmag-fem-gpu-bin" "$@"
 EOF
 
 chmod +x "${RUNTIME_ROOT}/bin/fullmag-fem-gpu"
+
+docker_image_id="$(docker image inspect fullmag/fem-gpu:local --format '{{.Id}}' 2>/dev/null || true)"
+created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+cat > "${RUNTIME_ROOT}/manifest.json" <<EOF
+{
+  "schema": 1,
+  "runtime": "fem-gpu-host",
+  "docker_image": "fullmag/fem-gpu:local",
+  "docker_image_id": "${docker_image_id}",
+  "created_at": "${created_at}",
+  "binaries": {
+    "launcher": "bin/fullmag-fem-gpu",
+    "worker": "bin/fullmag-fem-gpu-bin",
+    "api": "bin/fullmag-api"
+  }
+}
+EOF
 
 cat > "${RUNTIME_ROOT}/README.md" <<EOF
 # Managed FEM host runtime bundle

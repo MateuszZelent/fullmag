@@ -1,0 +1,237 @@
+.fm-thread-manager.fm-dialog {
+  width: min(960px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.fm-thread-manager__close {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 6px;
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-elevated);
+}
+
+.fm-thread-manager__close:hover {
+  color: var(--fm-text-primary);
+  border-color: var(--fm-border-strong);
+}
+
+.fm-thread-manager__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.fm-thread-manager__metric {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  background: var(--fm-bg-surface);
+}
+
+.fm-thread-manager__metric span,
+.fm-thread-manager__toolbar,
+.fm-thread-manager__worker small {
+  color: var(--fm-text-muted);
+  font-size: 12px;
+}
+
+.fm-thread-manager__metric strong {
+  color: var(--fm-text-primary);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.fm-thread-manager__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.fm-thread-manager__toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fm-thread-manager__toolbar-actions .fm-button {
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.fm-thread-manager__section {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.fm-thread-manager__section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fm-text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.fm-thread-manager__table {
+  display: grid;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  background: var(--fm-bg-surface);
+}
+
+.fm-thread-manager__row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.4fr) 92px 72px 84px 84px 84px minmax(110px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--fm-border-subtle);
+  color: var(--fm-text-secondary);
+  font-size: 12px;
+}
+
+.fm-thread-manager__row:first-child {
+  border-top: 0;
+}
+
+.fm-thread-manager__row--header {
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-elevated);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.fm-thread-manager__row [role="cell"]:first-child {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-thread-manager__row [data-lane] {
+  width: max-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--fm-border-subtle);
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-app);
+}
+
+.fm-thread-manager__row [data-lane="main"] {
+  color: var(--fm-warning);
+}
+
+.fm-thread-manager__row [data-lane="aggregate"] {
+  color: var(--fm-info);
+}
+
+.fm-thread-manager__row [data-lane="worker-io"] {
+  color: var(--fm-success);
+}
+
+.fm-thread-manager__row [data-lane="react"] {
+  color: var(--fm-accent);
+}
+
+.fm-thread-manager__share {
+  display: inline-block;
+  width: 54px;
+  height: 5px;
+  margin-right: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fm-bg-app);
+  vertical-align: middle;
+}
+
+.fm-thread-manager__share-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--fm-accent);
+}
+
+.fm-thread-manager__row--activity {
+  grid-template-columns: minmax(160px, 1.4fr) 92px 72px 84px 84px minmax(110px, 1fr);
+}
+
+.fm-thread-manager__workers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.fm-thread-manager__worker {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: 8px;
+  background: var(--fm-bg-surface);
+}
+
+.fm-thread-manager__worker span {
+  color: var(--fm-text-primary);
+  font-weight: 600;
+}
+
+.fm-thread-manager__worker strong {
+  width: max-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-app);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.fm-thread-manager__worker[data-status="active"] strong {
+  color: var(--fm-success);
+}
+
+.fm-thread-manager__empty {
+  padding: 20px;
+  border: 1px dashed var(--fm-border-subtle);
+  border-radius: 8px;
+  color: var(--fm-text-muted);
+  background: var(--fm-bg-surface);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .fm-thread-manager__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fm-thread-manager__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .fm-thread-manager__row {
+    grid-template-columns: minmax(140px, 1.2fr) 88px 64px 76px 76px 76px 100px;
+    overflow-x: auto;
+  }
+
+  .fm-thread-manager__row--activity {
+    grid-template-columns: minmax(140px, 1.2fr) 88px 64px 76px 76px 100px;
+  }
+}

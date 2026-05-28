@@ -1119,6 +1119,7 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
 
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
     fn from(part: &fullmag_ir::FemMeshPartIR) -> Self {
+        let has_explicit_node_indices = !part.node_indices.is_empty();
         Self {
             id: part.id.clone(),
             label: part.label.clone(),
@@ -1132,7 +1133,11 @@ impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
             boundary_face_count: selector_count(&part.boundary_face_selector),
             boundary_face_indices: part.boundary_face_indices.clone(),
             node_start: selector_start(&part.node_selector),
-            node_count: selector_count(&part.node_selector),
+            node_count: if has_explicit_node_indices {
+                part.node_indices.len() as u32
+            } else {
+                selector_count(&part.node_selector)
+            },
             node_indices: part.node_indices.clone(),
             surface_faces: part.surface_faces.clone(),
             bounds_min: part.bounds_min,
@@ -1493,12 +1498,12 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalized_payload_element_markers, FemMeshPayload, LivePreviewField, StepStats,
-        StepUpdate,
+        normalized_payload_element_markers, FemMeshPartPayload, FemMeshPayload, LivePreviewField,
+        StepStats, StepUpdate,
     };
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemPlanIR,
-        IntegratorChoice, MaterialIR, MeshIR,
+        ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
+        FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
     };
     use std::collections::BTreeSet;
 
@@ -1641,6 +1646,33 @@ mod tests {
             normalized_payload_element_markers(&[5, 5], None),
             vec![1, 1]
         );
+    }
+
+    #[test]
+    fn fem_mesh_part_payload_counts_explicit_node_indices() {
+        let part = FemMeshPartIR {
+            id: "part:__air__".to_string(),
+            label: "Airbox".to_string(),
+            role: FemMeshPartRole::Air,
+            object_id: None,
+            geometry_id: None,
+            material_id: None,
+            element_selector: FemMeshPartSelector::ElementRange { start: 8, count: 2 },
+            boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 4, count: 1 },
+            node_selector: FemMeshPartSelector::NodeRange { start: 4, count: 1 },
+            boundary_face_indices: Vec::new(),
+            node_indices: vec![0, 1, 2, 4],
+            surface_faces: Vec::new(),
+            bounds_min: None,
+            bounds_max: None,
+            parent_id: None,
+        };
+
+        let payload = FemMeshPartPayload::from(&part);
+
+        assert_eq!(payload.node_start, 4);
+        assert_eq!(payload.node_count, 4);
+        assert_eq!(payload.node_indices, vec![0, 1, 2, 4]);
     }
 
     #[test]

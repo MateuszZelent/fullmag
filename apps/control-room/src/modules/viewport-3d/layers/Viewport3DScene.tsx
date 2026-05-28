@@ -1,5 +1,6 @@
 "use client";
 
+import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
@@ -111,6 +112,7 @@ interface Viewport3DSceneProps {
   fallbackSettings: VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
+  requestDiagnostics: RequestDiagnosticsController;
   resourceFrameKey: string;
   rotationMode: Viewport3DRotationMode;
   selectionBounds: Viewport3DBounds | null;
@@ -383,6 +385,7 @@ export function Viewport3DScene({
   orbitDebugRevision,
   primitiveModel,
   resetCameraRevision,
+  requestDiagnostics,
   resourceFrameKey,
   rotationMode,
   selectionBounds,
@@ -462,7 +465,7 @@ export function Viewport3DScene({
     <>
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
-      <CanvasLifecycleProbe tracker={tracker} />
+      <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       <OrthographicCamera
         key="viewport-3d-orthographic-camera"
         ref={orthographicCameraRef}
@@ -501,6 +504,7 @@ export function Viewport3DScene({
         domain={fdmDomain}
         fieldVector={fieldVector}
         instanceModel={fdmInstanceModel}
+        interactionActive={interactionActive}
         maxVectorGlyphs={maxVectorGlyphs}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
@@ -523,6 +527,7 @@ export function Viewport3DScene({
       <AirboxLayer
         colors={colors}
         fieldModel={fieldModel}
+        interactionActive={interactionActive}
         materialProfile={materialProfile}
         onSelectPart={onSelectPart}
         settings={airboxSettings}
@@ -546,6 +551,7 @@ export function Viewport3DScene({
         femDomain={femDomain}
         fieldModel={fieldModel}
         getPartSettings={getPartSettings}
+        interactionActive={interactionActive}
         materialProfile={materialProfile}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         meshQualityColors={meshQualityColors}
@@ -596,6 +602,7 @@ export function Viewport3DScene({
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
         rotationMode={rotationMode}
+        tracker={tracker}
         viewCubeVisible={viewCubeVisible}
       />
       <PostProcessingLayer />

@@ -2222,6 +2222,18 @@ fn rebuild_live_scene_magnetization(
                 *slot = Some(owner_index);
             }
         }
+        let element_start = segment.element_start as usize;
+        let element_end = element_start
+            .saturating_add(segment.element_count as usize)
+            .min(mesh.elements.len());
+        for element in &mesh.elements[element_start..element_end] {
+            for node in element {
+                let node = *node as usize;
+                if node < node_count && node_owner[node].is_none() {
+                    node_owner[node] = Some(owner_index);
+                }
+            }
+        }
     }
 
     let mut nodes_by_object = vec![Vec::<usize>::new(); scene.objects.len()];

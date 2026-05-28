@@ -2,6 +2,7 @@ import type { ResourceRevision } from "../api/apiTypes";
 import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
@@ -305,5 +306,7 @@ export class RealtimeInvalidationBridge {
       resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
       revision,
     );
+    this.resources.invalidate(DATA_FIELDS_PATH, revision);
+    this.resources.invalidatePrefix(DATA_FIELDS_PATH, revision);
   }
 }

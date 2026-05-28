@@ -29,8 +29,8 @@ use crate::types::{
     SessionStateResponse, StageExecutionRecord, StageExecutionState, StageLifecycleState,
     StepUpdateView, TrackedCommandRecord,
 };
-use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 use fullmag_runner::LivePreviewField;
+use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, RuntimeStatus};
 
 use super::build_v2_router;
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -3634,9 +3634,11 @@ async fn mesh_universe_quality_returns_airbox_scope_statistics() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["revision"], 22);
+    assert_eq!(json["quality"]["quality_source"], "gmsh");
     assert_eq!(json["quality"]["global"]["kind"], "airbox");
     assert_eq!(json["quality"]["global"]["marker"], 0);
     assert_eq!(json["quality"]["global"]["element_count"], 5);
+    assert_eq!(json["quality"]["global"]["volume"]["ratio"], 4.0);
     assert_eq!(
         json["quality"]["global"]["gamma"]["histogram"][0]["count"],
         5
@@ -3649,6 +3651,96 @@ async fn mesh_universe_quality_returns_airbox_scope_statistics() {
         json["quality"]["worst_elements"].as_array().unwrap().len(),
         1
     );
+}
+
+#[tokio::test]
+async fn mesh_universe_quality_reads_scoped_statistics_from_last_build_summary() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_airbox_target": { "maximum_element_size": 1e-8 },
+            "last_build_summary": {
+                "kind": "mesh_build_summary",
+                "mesh_statistics": sample_scoped_mesh_statistics()
+            }
+        }));
+        snapshot.mesh_revision = 23;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/universe/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 23);
+    assert_eq!(json["quality"]["quality_source"], "gmsh");
+    assert_eq!(json["quality"]["global"]["kind"], "airbox");
+    assert_eq!(json["quality"]["global"]["element_count"], 5);
+    assert_eq!(json["quality"]["global"]["volume"]["ratio"], 4.0);
+}
+
+#[tokio::test]
+async fn mesh_universe_quality_fallback_reports_volume_ratio() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh_value =
+            serde_json::to_value(sample_fem_mesh_payload()).expect("sample mesh should serialize");
+        mesh_value["element_markers"] = serde_json::json!([0]);
+        mesh_value["per_domain_quality"] = serde_json::json!({
+            "0": {
+                "n_elements": 59244,
+                "sicn_min": 0.12,
+                "sicn_max": 0.98,
+                "sicn_mean": 0.72,
+                "sicn_p5": 0.31,
+                "sicn_histogram": [1, 2, 3],
+                "gamma_min": 0.22,
+                "gamma_mean": 0.81,
+                "gamma_histogram": [4, 5, 6],
+                "volume_min": 2.0e-27,
+                "volume_max": 1.0e-25,
+                "volume_mean": 5.0e-26,
+                "volume_std": 1.0e-26,
+                "avg_quality": 0.72
+            }
+        });
+        let mesh =
+            serde_json::from_value(mesh_value).expect("mesh quality payload should deserialize");
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_airbox_target": { "maximum_element_size": 5e-7 }
+        }));
+        snapshot.mesh_revision = 24;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/universe/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 24);
+    assert_eq!(json["quality"]["quality_source"], "per_domain_quality");
+    assert_eq!(json["quality"]["global"]["element_count"], 59_244);
+    let volume_ratio = json["quality"]["global"]["volume"]["ratio"]
+        .as_f64()
+        .expect("fallback quality should include volume ratio");
+    assert!((volume_ratio - 50.0).abs() < 1.0e-9);
 }
 
 #[tokio::test]
@@ -8207,6 +8299,112 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
     assert_eq!(json["energies"]["total"], 65.0);
 }
 
+#[tokio::test]
+async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_nodes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 4.2e-12,
+                dt: 1.0e-13,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 15.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: Some(FemMeshPayload {
+                    mesh_name: "shared-node-test-mesh".to_string(),
+                    mesh_id: "shared-node-test-mesh:1".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [1.0, 1.0, 0.0],
+                        [1.0, 0.0, 1.0],
+                    ],
+                    elements: vec![[1, 3, 5, 0]],
+                    element_markers: vec![7],
+                    boundary_faces: vec![[1, 3, 5]],
+                    boundary_markers: vec![3],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    object_segments: vec![FemMeshObjectSegment {
+                        object_id: "body".to_string(),
+                        geometry_id: Some("body".to_string()),
+                        node_start: 0,
+                        node_count: 3,
+                        element_start: 0,
+                        element_count: 1,
+                        boundary_face_start: 0,
+                        boundary_face_count: 1,
+                    }],
+                    mesh_parts: vec![FemMeshPartPayload {
+                        id: "body".to_string(),
+                        label: "body".to_string(),
+                        role: "magnetic_object".to_string(),
+                        object_id: Some("body".to_string()),
+                        geometry_id: Some("body".to_string()),
+                        material_id: Some("mat-body".to_string()),
+                        element_start: 0,
+                        element_count: 1,
+                        boundary_face_start: 0,
+                        boundary_face_count: 1,
+                        boundary_face_indices: vec![0],
+                        node_start: 0,
+                        node_count: 3,
+                        node_indices: vec![1, 3, 5],
+                        surface_faces: vec![[1, 3, 5]],
+                        bounds_min: Some([0.0, 0.0, 0.0]),
+                        bounds_max: Some([1.0, 1.0, 1.0]),
+                    }],
+                    domain_mesh_mode: Some("shared_domain".to_string()),
+                    domain_frame: None,
+                    generation_id: Some("shared-node-test".to_string()),
+                    per_domain_quality: Default::default(),
+                }),
+                magnetization: Some(vec![
+                    10.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 0.0, 0.0, 3.0, 0.0, 0.0, 30.0, 0.0, 0.0,
+                    5.0, 0.0, 0.0,
+                ]),
+                per_object_scalars: HashMap::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.scalar_revision = 21;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source"], "solver_global");
+    assert_eq!(json["magnetization_average"]["mx"], 3.0);
+}
+
 // ─── session endpoints ──────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -9753,6 +9951,63 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
     let second_x = f64::from_le_bytes(bytes[72..80].try_into().unwrap());
     assert_eq!(first_x, 3.0);
     assert_eq!(second_x, 1.0);
+}
+
+#[tokio::test]
+async fn v2_field_vector_object_scope_fallback_uses_segment_element_nodes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        mesh.object_segments[0].node_start = 3;
+        mesh.object_segments[0].node_count = 1;
+        mesh.elements[0] = [0, 1, 2, 3];
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("4")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let first_x = f64::from_le_bytes(bytes[48..56].try_into().unwrap());
+    let fourth_x = f64::from_le_bytes(bytes[120..128].try_into().unwrap());
+    assert_eq!(first_x, 0.0);
+    assert_eq!(fourth_x, 3.0);
 }
 
 #[tokio::test]

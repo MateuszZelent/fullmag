@@ -478,7 +478,7 @@ pub async fn get_mesh_shared_domain_report(
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     let report = Some(json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
-        "mesh_statistics": mesh_workspace.get("mesh_statistics").cloned().unwrap_or(Value::Null),
+        "mesh_statistics": workspace_mesh_statistics(mesh_workspace).cloned().unwrap_or(Value::Null),
         "mesh_cost_report": mesh_workspace.get("mesh_cost_report").cloned().unwrap_or(Value::Null),
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
@@ -1411,6 +1411,13 @@ fn first_workspace_value(root: &Value, paths: &[&[&str]]) -> Option<Value> {
         .find_map(|path| workspace_value_at(root, path).cloned())
 }
 
+fn workspace_mesh_statistics(mesh_workspace: &Value) -> Option<&Value> {
+    workspace_value_at(mesh_workspace, &["mesh_statistics"]).or_else(|| {
+        workspace_value_at(mesh_workspace, &["last_build_summary", "mesh_statistics"])
+            .filter(|value| !value.is_null())
+    })
+}
+
 fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &Value) -> Value {
     let mesh = snapshot.fem_mesh.as_ref();
     let element_count = mesh.map(|mesh| mesh.elements.len()).unwrap_or_default();
@@ -1448,7 +1455,7 @@ fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &V
             }
         ],
         "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
-        "mesh_statistics": mesh_workspace.get("mesh_statistics").cloned().unwrap_or(Value::Null)
+        "mesh_statistics": workspace_mesh_statistics(mesh_workspace).cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -1536,7 +1543,7 @@ fn scoped_mesh_statistics(
     marker: Option<u32>,
     kind: Option<&str>,
 ) -> Option<Value> {
-    let mesh_statistics = mesh_workspace.get("mesh_statistics")?;
+    let mesh_statistics = workspace_mesh_statistics(mesh_workspace)?;
     let scopes = mesh_statistics.get("scopes").and_then(Value::as_array)?;
     let scope = scopes.iter().find(|scope| {
         marker.is_some_and(|marker| scope_marker(scope) == Some(marker))
@@ -1576,6 +1583,18 @@ fn scoped_mesh_statistics(
     Some(Value::Object(projection))
 }
 
+fn legacy_domain_volume_ratio(quality: &Value) -> Value {
+    match (
+        quality.get("volume_min").and_then(Value::as_f64),
+        quality.get("volume_max").and_then(Value::as_f64),
+    ) {
+        (Some(min), Some(max)) if min.is_finite() && max.is_finite() && min > 0.0 => {
+            json!(max / min)
+        }
+        _ => Value::Null,
+    }
+}
+
 fn legacy_domain_quality_statistics(marker: u32, label: &str, quality: &Value) -> Option<Value> {
     if !quality.is_object() {
         return None;
@@ -1605,7 +1624,8 @@ fn legacy_domain_quality_statistics(marker: u32, label: &str, quality: &Value) -
                 "min": quality.get("volume_min").cloned().unwrap_or(Value::Null),
                 "max": quality.get("volume_max").cloned().unwrap_or(Value::Null),
                 "mean": quality.get("volume_mean").cloned().unwrap_or(Value::Null),
-                "std": quality.get("volume_std").cloned().unwrap_or(Value::Null)
+                "std": quality.get("volume_std").cloned().unwrap_or(Value::Null),
+                "ratio": legacy_domain_volume_ratio(quality)
             }
         }
     }))
@@ -2053,86 +2073,27 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
         .object_segments
         .iter()
         .find(|segment| object_ids_match(&segment.object_id, object_id))?;
-    let node_start = segment.node_start as usize;
-    let node_end = node_start.saturating_add(segment.node_count as usize);
-    let element_start = segment.element_start as usize;
-    let element_end = element_start.saturating_add(segment.element_count as usize);
-    let face_start = segment.boundary_face_start as usize;
-    let face_end = face_start.saturating_add(segment.boundary_face_count as usize);
+    let part = FemMeshPartPayload {
+        id: object_id.to_string(),
+        label: object_id.to_string(),
+        role: "magnetic_object".to_string(),
+        object_id: Some(object_id.to_string()),
+        geometry_id: segment.geometry_id.clone(),
+        material_id: None,
+        element_start: segment.element_start,
+        element_count: segment.element_count,
+        boundary_face_start: segment.boundary_face_start,
+        boundary_face_count: segment.boundary_face_count,
+        boundary_face_indices: Vec::new(),
+        node_start: segment.node_start,
+        node_count: segment.node_count,
+        node_indices: Vec::new(),
+        surface_faces: Vec::new(),
+        bounds_min: None,
+        bounds_max: None,
+    };
 
-    let nodes = mesh.nodes.get(node_start..node_end)?.to_vec();
-    let elements = mesh
-        .elements
-        .get(element_start..element_end)?
-        .iter()
-        .map(|element| {
-            [
-                element[0] - segment.node_start,
-                element[1] - segment.node_start,
-                element[2] - segment.node_start,
-                element[3] - segment.node_start,
-            ]
-        })
-        .collect::<Vec<_>>();
-    let boundary_faces = mesh
-        .boundary_faces
-        .get(face_start..face_end)?
-        .iter()
-        .map(|face| {
-            [
-                face[0] - segment.node_start,
-                face[1] - segment.node_start,
-                face[2] - segment.node_start,
-            ]
-        })
-        .collect::<Vec<_>>();
-    let element_markers = mesh
-        .element_markers
-        .get(element_start..element_end)
-        .map(|markers| markers.to_vec())
-        .unwrap_or_default();
-    let boundary_markers = mesh
-        .boundary_markers
-        .get(face_start..face_end)
-        .map(|markers| markers.to_vec())
-        .unwrap_or_default();
-    let quality_markers = element_markers.iter().copied().collect::<BTreeSet<_>>();
-    let per_domain_quality = quality_markers
-        .iter()
-        .filter_map(|marker| {
-            mesh.per_domain_quality
-                .get(marker)
-                .cloned()
-                .map(|quality| (*marker, quality))
-        })
-        .collect::<HashMap<_, _>>();
-
-    Some(FemMeshPayload {
-        mesh_name: format!("{}:{object_id}", mesh.mesh_name),
-        mesh_id: format!("{}:{object_id}", mesh.mesh_id),
-        nodes,
-        elements,
-        element_markers,
-        boundary_faces,
-        boundary_markers,
-        periodic_boundary_pairs: Vec::new(),
-        periodic_node_pairs: Vec::new(),
-        object_segments: vec![FemMeshObjectSegment {
-            object_id: object_id.to_string(),
-            geometry_id: segment.geometry_id.clone(),
-            node_start: 0,
-            node_count: segment.node_count,
-            element_start: 0,
-            element_count: segment.element_count,
-            boundary_face_start: 0,
-            boundary_face_count: segment.boundary_face_count,
-        }],
-        mesh_parts: Vec::new(),
-        domain_mesh_mode: mesh.domain_mesh_mode.clone(),
-        domain_frame: mesh.domain_frame.clone(),
-        generation_id: mesh.generation_id.clone(),
-        per_domain_quality,
-    })
+    subset_part_payload(mesh, &part, object_id)
 }
 
 fn interface_quality(mesh: &FemMeshPayload, interface_id: &str) -> Option<Value> {
@@ -2237,13 +2198,15 @@ fn bounds_for_surface_faces(
 
 fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPayload> {
     let part = mesh.mesh_parts.iter().find(|part| part.id == part_id)?;
-    let source_node_indices = if part.node_indices.is_empty() {
-        let start = part.node_start as usize;
-        let end = start.saturating_add(part.node_count as usize);
-        (start..end).map(|index| index as u32).collect::<Vec<_>>()
-    } else {
-        part.node_indices.clone()
-    };
+    subset_part_payload(mesh, part, &format!("part:{part_id}"))
+}
+
+fn subset_part_payload(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+    mesh_suffix: &str,
+) -> Option<FemMeshPayload> {
+    let source_node_indices = collect_part_source_node_indices(mesh, part)?;
     let mut node_map = HashMap::with_capacity(source_node_indices.len());
     let mut nodes = Vec::with_capacity(source_node_indices.len());
     for source_index in source_node_indices {
@@ -2311,6 +2274,9 @@ fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPaylo
             ])
         })
         .collect::<Vec<_>>();
+    if boundary_faces.is_empty() && !surface_faces.is_empty() {
+        boundary_faces.extend(surface_faces.iter().copied());
+    }
     let quality_markers = element_markers.iter().copied().collect::<BTreeSet<_>>();
     let per_domain_quality = quality_markers
         .iter()
@@ -2358,8 +2324,8 @@ fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPaylo
     };
 
     Some(FemMeshPayload {
-        mesh_name: format!("{}:part:{part_id}", mesh.mesh_name),
-        mesh_id: format!("{}:part:{part_id}", mesh.mesh_id),
+        mesh_name: format!("{}:{mesh_suffix}", mesh.mesh_name),
+        mesh_id: format!("{}:{mesh_suffix}", mesh.mesh_id),
         nodes,
         elements,
         element_markers,
@@ -2374,4 +2340,201 @@ fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPaylo
         generation_id: mesh.generation_id.clone(),
         per_domain_quality,
     })
+}
+
+fn collect_part_source_node_indices(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+) -> Option<Vec<u32>> {
+    let mut source_node_indices = BTreeSet::new();
+    if part.node_indices.is_empty() {
+        let node_start = part.node_start as usize;
+        let node_end = node_start.saturating_add(part.node_count as usize);
+        if node_start < node_end {
+            mesh.nodes.get(node_start..node_end)?;
+            source_node_indices.extend((node_start..node_end).map(|index| index as u32));
+        }
+    } else {
+        for node_index in &part.node_indices {
+            mesh.nodes.get(*node_index as usize)?;
+            source_node_indices.insert(*node_index);
+        }
+    }
+
+    let element_start = part.element_start as usize;
+    let element_end = element_start.saturating_add(part.element_count as usize);
+    if element_start < element_end {
+        for element in mesh.elements.get(element_start..element_end)? {
+            source_node_indices.extend(element.iter().copied());
+        }
+    }
+
+    if part.boundary_face_indices.is_empty() {
+        let face_start = part.boundary_face_start as usize;
+        let face_end = face_start.saturating_add(part.boundary_face_count as usize);
+        if face_start < face_end {
+            for face in mesh.boundary_faces.get(face_start..face_end)? {
+                source_node_indices.extend(face.iter().copied());
+            }
+        }
+    } else {
+        for face_index in &part.boundary_face_indices {
+            let face = mesh.boundary_faces.get(*face_index as usize)?;
+            source_node_indices.extend(face.iter().copied());
+        }
+    }
+
+    for face in &part.surface_faces {
+        source_node_indices.extend(face.iter().copied());
+    }
+
+    Some(source_node_indices.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subset_part_mesh_uses_explicit_node_indices_for_shared_airbox_nodes() {
+        let mesh = FemMeshPayload {
+            mesh_name: "shared".to_string(),
+            mesh_id: "shared:1".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ],
+            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+            element_markers: vec![1, 0],
+            boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+            boundary_markers: vec![10, 99],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: vec![FemMeshPartPayload {
+                id: "part:__air__".to_string(),
+                label: "Airbox".to_string(),
+                role: "air".to_string(),
+                object_id: None,
+                geometry_id: None,
+                material_id: None,
+                element_start: 1,
+                element_count: 1,
+                boundary_face_start: 1,
+                boundary_face_count: 1,
+                boundary_face_indices: Vec::new(),
+                node_start: 4,
+                node_count: 4,
+                node_indices: vec![0, 1, 2, 4],
+                surface_faces: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+            }],
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: HashMap::new(),
+        };
+
+        let part_mesh =
+            subset_part_mesh(&mesh, "part:__air__").expect("part topology should remap");
+
+        assert_eq!(part_mesh.nodes.len(), 4);
+        assert_eq!(part_mesh.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(part_mesh.element_markers, vec![0]);
+        assert_eq!(part_mesh.boundary_faces, vec![[0, 1, 3]]);
+        assert_eq!(part_mesh.mesh_parts[0].node_count, 4);
+    }
+
+    #[test]
+    fn subset_part_mesh_promotes_surface_faces_to_binary_boundary_faces() {
+        let mesh = FemMeshPayload {
+            mesh_name: "shared".to_string(),
+            mesh_id: "shared:1".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: vec![FemMeshPartPayload {
+                id: "part:interface:0:1".to_string(),
+                label: "Air ↔ body".to_string(),
+                role: "interface".to_string(),
+                object_id: None,
+                geometry_id: None,
+                material_id: None,
+                element_start: 0,
+                element_count: 0,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+                boundary_face_indices: Vec::new(),
+                node_start: 0,
+                node_count: 0,
+                node_indices: vec![0, 1, 2],
+                surface_faces: vec![[0, 1, 2]],
+                bounds_min: None,
+                bounds_max: None,
+            }],
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: HashMap::new(),
+        };
+
+        let part_mesh = subset_part_mesh(&mesh, "part:interface:0:1")
+            .expect("interface topology should remap surface faces");
+
+        assert_eq!(part_mesh.nodes.len(), 3);
+        assert_eq!(part_mesh.boundary_faces, vec![[0, 1, 2]]);
+        assert_eq!(part_mesh.mesh_parts[0].surface_faces, vec![[0, 1, 2]]);
+    }
+
+    #[test]
+    fn subset_object_mesh_fallback_remaps_segment_elements_with_shared_nodes() {
+        let mesh = FemMeshPayload {
+            mesh_name: "shared".to_string(),
+            mesh_id: "shared:1".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, -1.0],
+            ],
+            elements: vec![[0, 1, 2, 4]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 4]],
+            boundary_markers: vec![10],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: vec![FemMeshObjectSegment {
+                object_id: "body".to_string(),
+                geometry_id: Some("body_geom".to_string()),
+                node_start: 4,
+                node_count: 1,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 1,
+            }],
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain_mesh_with_air".to_string()),
+            domain_frame: None,
+            generation_id: None,
+            per_domain_quality: HashMap::new(),
+        };
+
+        let object_mesh = subset_object_mesh(&mesh, "body").expect("object topology should remap");
+
+        assert_eq!(object_mesh.nodes.len(), 4);
+        assert_eq!(object_mesh.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(object_mesh.boundary_faces, vec![[0, 1, 3]]);
+        assert_eq!(object_mesh.object_segments[0].node_count, 4);
+    }
 }

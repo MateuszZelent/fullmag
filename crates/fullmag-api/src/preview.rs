@@ -131,10 +131,21 @@ pub(crate) fn mesh_preview_active_mask(mesh: &FemMeshPayload, quantity: &str) ->
         let start = usize::try_from(segment.node_start).ok()?;
         let count = usize::try_from(segment.node_count).ok()?;
         let end = start.saturating_add(count).min(active_mask.len());
-        if start >= end {
-            continue;
+        if start < end {
+            active_mask[start..end].fill(true);
         }
-        active_mask[start..end].fill(true);
+        let element_start = usize::try_from(segment.element_start).ok()?;
+        let element_count = usize::try_from(segment.element_count).ok()?;
+        let element_end = element_start
+            .saturating_add(element_count)
+            .min(mesh.elements.len());
+        for element in &mesh.elements[element_start..element_end] {
+            for node_index in element {
+                if let Some(active) = active_mask.get_mut(*node_index as usize) {
+                    *active = true;
+                }
+            }
+        }
     }
     active_mask
         .iter()
@@ -229,6 +240,37 @@ mod tests {
             Some(vec![true, true, true, true, false, false])
         );
         assert_eq!(mesh_preview_active_mask(&mesh, "H_demag"), None);
+    }
+
+    #[test]
+    fn mesh_preview_active_mask_adds_segment_element_nodes() {
+        let mut mesh = test_mesh(
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+            ],
+            vec![FemMeshObjectSegment {
+                object_id: "flower".to_string(),
+                geometry_id: Some("flower_geom".to_string()),
+                node_start: 0,
+                node_count: 2,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            }],
+            Vec::new(),
+        );
+        mesh.elements = vec![[0, 2, 4, 5]];
+
+        assert_eq!(
+            mesh_preview_active_mask(&mesh, "m"),
+            Some(vec![true, true, true, false, true, true])
+        );
     }
 
     #[test]

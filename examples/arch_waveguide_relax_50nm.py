@@ -22,11 +22,15 @@ WIDTH = 1000e-9
 HEIGHT = 2e-9
 AIRBOX_Z = 500e-9
 AIRBOX_HMAX = 500e-9
-AIRBOX_HMIN = 150e-9
+AIRBOX_HMIN = 10e-9
 
 WAVEGUIDE_BULK_HMAX = 20e-9
 WAVEGUIDE_LOCAL_HMAX = 12e-9
 WAVEGUIDE_HMIN = HEIGHT
+AIRBOX_NEAR_INTERFACE_HMAX = 2e-9
+AIRBOX_NEAR_INTERFACE_THICKNESS = 2e-9
+AIRBOX_TRANSITION_DISTANCE = 220e-9
+WAVEGUIDE_EDGE_THICKNESS = AIRBOX_NEAR_INTERFACE_THICKNESS
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -109,23 +113,28 @@ waveguide.visualization(show=True, mode="surface")
 # airbox without making the full 2.5 um x 1.0 um sheet a 2 nm surface mesh.
 # A 5 nm / 2 nm production preset passes mesh validation but creates about
 # 2.35M tetrahedra here and is too slow as the default interactive example.
+# The interface/transition controls are COMSOL-style automatic sizing fields:
+# keep air moderately resolved near the magnetic surface, then grade smoothly
+# to the coarse far-field airbox target without hand-drawing airbox boxes.
 waveguide.mesh(
     maximum_element_size=WAVEGUIDE_BULK_HMAX,
     minimum_element_size=WAVEGUIDE_HMIN,
-    transition_distance=0.0,
+    interface_maximum_element_size=AIRBOX_NEAR_INTERFACE_HMAX,
+    interface_thickness=AIRBOX_NEAR_INTERFACE_THICKNESS,
+    transition_distance=AIRBOX_TRANSITION_DISTANCE,
+    edge_maximum_element_size=AIRBOX_NEAR_INTERFACE_HMAX,
+    edge_thickness=WAVEGUIDE_EDGE_THICKNESS,
     order=1,
 )
 waveguide.mesh.size_field(
-    "ComponentRestrictedBox",
+    "ComponentRestrictedCylinder",
     GeometryName="arch_waveguide_geom",
     VIn=WAVEGUIDE_LOCAL_HMAX,
     VOut=WAVEGUIDE_BULK_HMAX,
-    XMin=-500e-9,
-    XMax=500e-9,
-    YMin=-500e-9,
-    YMax=500e-9,
-    ZMin=-5e-9,
-    ZMax=5e-9,
+    Radius=500e-9,
+    XCenter=0.0,
+    YCenter=0.0,
+    ZCenter=0.0,
 )
 # Energy terms
 study.b_ext(B_EXT_T, 0.0, 0.0)

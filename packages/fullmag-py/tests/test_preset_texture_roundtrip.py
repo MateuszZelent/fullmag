@@ -17,6 +17,7 @@ from fullmag.init.textures import texture, PresetTexture, TextureMapping
 from fullmag.init.preset_eval import evaluate_preset_texture
 from fullmag.runtime.initial_state import (
     _apply_inverse_transform,
+    filter_fem_magnetic_points,
     prepare_initial_magnetization,
 )
 from fullmag.runtime.scene_document import (
@@ -231,6 +232,35 @@ class TestInverseTransform:
         }
         result = _apply_inverse_transform(pts, transform)
         np.testing.assert_allclose(result, [[3.0, 0.0, 0.0]], atol=1e-10)
+
+
+class TestFemMagneticPointFiltering:
+    def test_filter_uses_explicit_mesh_part_node_indices(self):
+        points = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+        ])
+        mesh_parts = [
+            {
+                "role": "magnetic_object",
+                "object_name": "strip",
+                "node_start": 0,
+                "node_count": 1,
+                "node_indices": [3, 1],
+            },
+            {
+                "role": "air",
+                "node_start": 2,
+                "node_count": 2,
+            },
+        ]
+
+        filtered, full_indices = filter_fem_magnetic_points(points, mesh_parts, "strip")
+
+        np.testing.assert_array_equal(full_indices, np.array([3, 1], dtype=np.intp))
+        np.testing.assert_allclose(filtered, points[[3, 1]])
 
 
 # ---------------------------------------------------------------------------

@@ -8,10 +8,18 @@ import {
   Gauge,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
+import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -29,7 +37,22 @@ import { TransportLogTable } from "./TransportLogTable";
 
 type FooterTabId = "engine" | "logs" | "telemetry";
 
-export default function FooterModule({ kernel }: ModuleProps) {
+const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
+
+interface FooterDiagnosticsSnapshot {
+  entries: RequestDiagnosticEntry[];
+  signature: string;
+}
+
+export default function FooterModule(props: ModuleProps) {
+  return (
+    <WorkspaceRenderProfiler id="FooterModule">
+      <FooterModuleContent {...props} />
+    </WorkspaceRenderProfiler>
+  );
+}
+
+function FooterModuleContent({ kernel }: ModuleProps) {
   const [activeTab, setActiveTab] = useState<FooterTabId>("logs");
 
   useEffect(() => {
@@ -93,19 +116,14 @@ export default function FooterModule({ kernel }: ModuleProps) {
 }
 
 function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
-  const entries = useTransportDiagnostics(kernel);
-  const commandEntries = useCommandDiagnostics(kernel);
   const [direction, setDirection] = useState<FooterDirectionFilter>("all");
-  const [channel, setChannel] = useState<FooterChannelFilter>("all");
+  const [channel, setChannel] = useState<FooterChannelFilter>("transport");
+  const filteredEntries = useTransportDiagnostics(kernel, {
+    channel,
+    direction,
+  });
+  const commandEntries = useCommandDiagnostics(kernel);
   const [copied, setCopied] = useState(false);
-  const filteredEntries = useMemo(
-    () =>
-      filterTransportEntries(entries, {
-        channel,
-        direction,
-      }),
-    [channel, direction, entries],
-  );
 
   function handleCopyLog() {
     const text = filteredEntries.map(serializeTransportEntry).join("\n\n");
@@ -138,8 +156,8 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
         </FilterButton>
         <span className="fm-footer__filter-sep" aria-hidden="true" />
         <FilterButton
-          active={channel === "all"}
-          onClick={() => setChannel("all")}
+          active={channel === "transport"}
+          onClick={() => setChannel("transport")}
         >
           HTTP + WS
         </FilterButton>
@@ -185,17 +203,40 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
   );
 }
 
-function useTransportDiagnostics(kernel: ModuleProps["kernel"]): RequestDiagnosticEntry[] {
-  const version = useSyncExternalStore(
-    kernel.diagnostics.subscribe.bind(kernel.diagnostics),
-    kernel.diagnostics.getVersion.bind(kernel.diagnostics),
-    () => 0,
+function useTransportDiagnostics(
+  kernel: ModuleProps["kernel"],
+  filters: {
+    channel: FooterChannelFilter;
+    direction: FooterDirectionFilter;
+  },
+): RequestDiagnosticEntry[] {
+  const { channel, direction } = filters;
+  const snapshotRef = useRef<FooterDiagnosticsSnapshot | null>(null);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      kernel.diagnostics.subscribe(onStoreChange),
+    [kernel.diagnostics],
   );
+  const getSnapshot = useCallback(() => {
+    const entries = filterTransportEntries(
+      kernel.diagnostics.listNewestFirst(),
+      { channel, direction },
+    );
+    const signature = transportEntriesSignature(entries);
+    const previous = snapshotRef.current;
+    if (previous?.signature === signature) {
+      return previous.entries;
+    }
 
-  return useMemo(() => {
-    void version;
-    return kernel.diagnostics.listNewestFirst();
-  }, [kernel.diagnostics, version]);
+    snapshotRef.current = { entries, signature };
+    return entries;
+  }, [channel, direction, kernel.diagnostics]);
+
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_DIAGNOSTIC_ENTRIES,
+  );
 }
 
 function useCommandDiagnostics(kernel: ModuleProps["kernel"]): CommandDiagnosticEntry[] {
@@ -209,6 +250,12 @@ function useCommandDiagnostics(kernel: ModuleProps["kernel"]): CommandDiagnostic
     void version;
     return kernel.commandDiagnostics.listNewestFirst();
   }, [kernel.commandDiagnostics, version]);
+}
+
+function transportEntriesSignature(
+  entries: readonly RequestDiagnosticEntry[],
+): string {
+  return entries.map((entry) => entry.id).join("|");
 }
 
 function FilterButton({

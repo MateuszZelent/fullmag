@@ -259,6 +259,7 @@ export default function Viewport3DModule({
       onCameraInteractionEnd={endCameraInteraction}
       onCameraInteractionStart={beginCameraInteraction}
       captureRevision={commandState.captureRevision}
+      requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
@@ -354,6 +355,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const canvasDpr = resolveViewport3DCanvasDpr({
     devicePixelRatio:
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
+    interactionActive: sceneProps.interactionActive,
     profile: visualProfile,
   });
   const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);

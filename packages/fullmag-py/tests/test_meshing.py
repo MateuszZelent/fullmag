@@ -1696,6 +1696,163 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsNotNone(fake_field_api.background)
         self.assertNotIn((1, "Source"), fake_field_api.strings)
 
+    def test_apply_mesh_options_scales_box_field_coordinates(self) -> None:
+        class _FakeOptionsApi:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}
+
+            def setNumber(self, key: str, value: float) -> None:
+                self.values[key] = float(value)
+
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next_id = 1
+                self.background: int | None = None
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+
+            def add(self, _kind: str) -> int:
+                field_id = self._next_id
+                self._next_id += 1
+                return field_id
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+            def setAsBackgroundMesh(self, field_id: int) -> None:
+                self.background = field_id
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "option": _FakeOptionsApi(),
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {"mesh": type("FakeMesh", (), {"field": fake_field_api})()},
+                )(),
+            },
+        )()
+
+        _apply_mesh_options(
+            fake_gmsh,
+            hmax=500e-9,
+            order=1,
+            hscale=1e6,
+            opts=MeshOptions(
+                size_fields=[
+                    {
+                        "kind": "Box",
+                        "params": {
+                            "VIn": 45e-9,
+                            "VOut": 500e-9,
+                            "XMin": -1.25e-6,
+                            "XMax": 1.25e-6,
+                            "YMin": -0.5e-6,
+                            "YMax": 0.5e-6,
+                            "ZMin": 1e-9,
+                            "ZMax": 91e-9,
+                        },
+                    }
+                ],
+            ),
+        )
+
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "VIn")], 0.045)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "XMin")], -1.25)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "XMax")], 1.25)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "ZMin")], 0.001)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "ZMax")], 0.091)
+
+    def test_apply_mesh_options_supports_component_restricted_cylinder(self) -> None:
+        class _FakeOptionsApi:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}
+
+            def setNumber(self, key: str, value: float) -> None:
+                self.values[key] = float(value)
+
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next_id = 1
+                self.background: int | None = None
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+
+            def add(self, kind: str) -> int:
+                field_id = self._next_id
+                self._next_id += 1
+                self.kinds[field_id] = kind
+                return field_id
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+            def setAsBackgroundMesh(self, field_id: int) -> None:
+                self.background = field_id
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "option": _FakeOptionsApi(),
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {"mesh": type("FakeMesh", (), {"field": fake_field_api})()},
+                )(),
+            },
+        )()
+
+        _apply_mesh_options(
+            fake_gmsh,
+            hmax=500e-9,
+            order=1,
+            hscale=1e6,
+            component_volume_tags={"arch_waveguide_geom": [42]},
+            opts=MeshOptions(
+                size_fields=[
+                    {
+                        "kind": "ComponentRestrictedCylinder",
+                        "params": {
+                            "GeometryName": "arch_waveguide_geom",
+                            "VIn": 12e-9,
+                            "VOut": 20e-9,
+                            "Radius": 500e-9,
+                            "XCenter": 125e-9,
+                            "YCenter": -50e-9,
+                            "ZCenter": 1e-9,
+                        },
+                    }
+                ],
+            ),
+        )
+
+        self.assertEqual(fake_field_api.kinds[1], "Cylinder")
+        self.assertEqual(fake_field_api.kinds[2], "Restrict")
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "VIn")], 0.012)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "VOut")], 0.02)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "Radius")], 0.5)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "XCenter")], 0.125)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "YCenter")], -0.05)
+        self.assertAlmostEqual(fake_field_api.numbers[(1, "ZCenter")], 0.001)
+        self.assertEqual(fake_field_api.numbers[(1, "XAxis")], 0.0)
+        self.assertEqual(fake_field_api.numbers[(1, "YAxis")], 0.0)
+        self.assertEqual(fake_field_api.numbers[(1, "ZAxis")], 1.0)
+        self.assertEqual(fake_field_api.numbers[(2, "InField")], 1.0)
+        self.assertEqual(fake_field_api.numbers[(2, "VolumesList")], [42.0])
+        self.assertEqual(fake_field_api.background, 2)
+
     def test_airbox_minimum_size_does_not_create_lower_bound_clamp(self) -> None:
         class _FakeFieldApi:
             def __init__(self) -> None:
@@ -1897,7 +2054,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 }
             )
 
-    def test_edge_distance_threshold_field_uses_curves_and_component_restrict(self) -> None:
+    def test_edge_distance_threshold_field_uses_curves_without_component_restrict(self) -> None:
         class _FakeOptionsApi:
             def __init__(self) -> None:
                 self.values: dict[str, float] = {}
@@ -1971,18 +2128,12 @@ class MeshScaffoldTests(unittest.TestCase):
             for field_id, kind in fake_field_api.kinds.items()
             if kind == "Distance"
         ]
-        restrict_ids = [
-            field_id
-            for field_id, kind in fake_field_api.kinds.items()
-            if kind == "Restrict"
-        ]
         self.assertEqual(len(distance_ids), 1)
         self.assertEqual(fake_field_api.numbers[(distance_ids[0], "CurvesList")], [11.0, 12.0])
-        self.assertEqual(len(restrict_ids), 1)
-        self.assertEqual(fake_field_api.numbers[(restrict_ids[0], "VolumesList")], [3.0])
+        self.assertNotIn("Restrict", fake_field_api.kinds.values())
         self.assertIsNotNone(fake_field_api.background)
         self.assertEqual(size_field_config["_gmsh_status"], "applied")
-        self.assertEqual(size_field_config["_gmsh_field_id"], restrict_ids[0])
+        self.assertEqual(size_field_config["_gmsh_field_id"], 2)
 
     def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
         try:
@@ -3178,7 +3329,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 [
                     [0, 1, 2, 3],
                     [4, 5, 6, 7],
-                    [8, 9, 10, 11],
+                    [0, 1, 2, 11],
                 ],
                 dtype=np.int32,
             ),
@@ -3238,13 +3389,25 @@ class MeshScaffoldTests(unittest.TestCase):
 
         output = stderr.getvalue()
         self.assertIn("Total mesh: 3 tetrahedra, 12 nodes, 3 boundary faces", output)
+        self.assertIn(
+            "Mesh partition check: 3/3 tetrahedra covered by mutually exclusive region markers",
+            output,
+        )
         self.assertIn("Mesh part airbox: 1 tetrahedra, 4 nodes", output)
         self.assertIn("requested maximum element size:", output)
         self.assertIn("characteristic size:", output)
         self.assertEqual(output.count("size bins:"), 3)
         self.assertIn("edge span:", output)
         self.assertIn("Mesh part left: 1 tetrahedra, 4 nodes", output)
+        self.assertIn(
+            "Mesh node sharing left: shared_with_airbox=3, object_only=1, airbox_only=1",
+            output,
+        )
         self.assertIn("Mesh part right", output)
+        self.assertIn(
+            "shared_with_airbox=0, object_only=4, airbox_only=4",
+            output,
+        )
         self.assertIn("1 tetrahedra, 4 nodes", output)
 
     def test_element_metric_summary_reports_five_characteristic_size_bins(self) -> None:
@@ -3423,7 +3586,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(len(fields), 1)
         self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 3e-9)
-        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 15e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMin"], 15e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 18e-9)
 
     def test_interface_field_component_aware_uses_shell_kind(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -3464,6 +3628,28 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(fields), 1)
         self.assertAlmostEqual(fields[0]["params"]["DistMax"], 50e-9)
         self.assertEqual(fields[0]["params"]["Source"], "explicit")
+
+    def test_transition_field_preserves_explicit_interface_shell_before_ramp(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        fields = _build_transition_fields(
+            [left],
+            default_hmax=500e-9,
+            override_by_name={
+                "left": {
+                    "bulk_hmax": "20e-9",
+                    "interface_hmax": "2e-9",
+                    "interface_thickness": "2e-9",
+                    "transition_distance": "220e-9",
+                },
+            },
+            component_aware=True,
+        )
+        self.assertEqual(len(fields), 1)
+        self.assertEqual(fields[0]["kind"], "TransitionShellThreshold")
+        self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 2e-9)
+        self.assertAlmostEqual(fields[0]["params"]["SizeMax"], 500e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMin"], 2e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 222e-9)
 
     def test_transition_field_component_aware_uses_shell_kind(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -3654,6 +3840,27 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(fields[0]["kind"], "EdgeDistanceThreshold")
         self.assertEqual(fields[0]["params"]["Selector"], {"mode": "all_boundary_curves"})
         self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 5e-9)
+
+    def test_edge_threshold_preserves_near_edge_shell_before_transition(self) -> None:
+        left = fm.Cylinder(2.0, 1.0, name="left")
+        fields = _build_perimeter_refinement_fields(
+            [left],
+            default_hmax=500e-9,
+            override_by_name={
+                "left": {
+                    "edge_hmax": "2e-9",
+                    "edge_thickness": "2e-9",
+                    "transition_distance": "220e-9",
+                },
+            },
+            component_aware=True,
+        )
+        self.assertEqual(len(fields), 1)
+        self.assertEqual(fields[0]["kind"], "EdgeDistanceThreshold")
+        self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 2e-9)
+        self.assertAlmostEqual(fields[0]["params"]["SizeMax"], 500e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMin"], 2e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 222e-9)
 
     def test_mesh_options_from_runtime_metadata_parses_boundary_layer_targets(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")

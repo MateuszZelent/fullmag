@@ -452,10 +452,24 @@ fn bump_mesh_build_revision(current: &mut SessionStateResponse) {
     current.mesh_build_revision = next_revision(current.mesh_build_revision);
 }
 
+fn mesh_statistics_signature(mesh_workspace: &Value) -> Value {
+    mesh_workspace
+        .get("mesh_statistics")
+        .cloned()
+        .or_else(|| {
+            mesh_workspace
+                .get("last_build_summary")
+                .and_then(|summary| summary.get("mesh_statistics"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
 fn mesh_resource_signature(mesh_workspace: &Value) -> Value {
     json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
         "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
+        "mesh_statistics": mesh_statistics_signature(mesh_workspace),
         "mesh_capabilities": mesh_workspace.get("mesh_capabilities").cloned().unwrap_or(Value::Null),
         "mesh_adaptivity_state": mesh_workspace.get("mesh_adaptivity_state").cloned().unwrap_or(Value::Null),
         "effective_airbox_target": mesh_workspace.get("effective_airbox_target").cloned().unwrap_or(Value::Null),
@@ -889,16 +903,13 @@ pub(crate) fn apply_current_live_runtime_frame(
         // static textures and vectors.
         if let Some(prev) = current.live_state.as_ref() {
             if live_state.latest_step.magnetization.is_none() {
-                live_state.latest_step.magnetization =
-                    prev.latest_step.magnetization.clone();
+                live_state.latest_step.magnetization = prev.latest_step.magnetization.clone();
             }
             if live_state.latest_step.fem_mesh.is_none() {
-                live_state.latest_step.fem_mesh =
-                    prev.latest_step.fem_mesh.clone();
+                live_state.latest_step.fem_mesh = prev.latest_step.fem_mesh.clone();
             }
             if live_state.latest_step.preview_field.is_none() {
-                live_state.latest_step.preview_field =
-                    prev.latest_step.preview_field.clone();
+                live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
             }
         }
         current.live_state = Some(live_state);
@@ -1084,6 +1095,44 @@ mod tests {
         assert_eq!(mesh.mesh_id, "domain-mesh-id");
         assert_eq!(mesh.generation_id.as_deref(), Some("domain-gen-1"));
         assert_eq!(current.mesh_revision, mesh_revision);
+    }
+
+    #[test]
+    fn mesh_statistics_update_bumps_mesh_revision() {
+        let mut current = test_current_snapshot();
+
+        apply_mesh_workspace_update(
+            &mut current,
+            json!({
+                "mesh_summary": { "nodes": 4, "elements": 2 },
+                "last_build_summary": {
+                    "kind": "mesh_build_summary",
+                    "mesh_statistics": {
+                        "scopes": [
+                            { "kind": "airbox", "marker": 0, "element_count": 10 }
+                        ]
+                    }
+                }
+            }),
+        );
+        let mesh_revision = current.mesh_revision;
+
+        apply_mesh_workspace_update(
+            &mut current,
+            json!({
+                "mesh_summary": { "nodes": 4, "elements": 2 },
+                "last_build_summary": {
+                    "kind": "mesh_build_summary",
+                    "mesh_statistics": {
+                        "scopes": [
+                            { "kind": "airbox", "marker": 0, "element_count": 59_244 }
+                        ]
+                    }
+                }
+            }),
+        );
+
+        assert!(current.mesh_revision > mesh_revision);
     }
 
     #[test]

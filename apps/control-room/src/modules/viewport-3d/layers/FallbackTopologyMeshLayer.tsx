@@ -44,6 +44,7 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
+  resolveCameraInteractionSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
   surfaceScalarColorModeFromSettings,
@@ -59,6 +60,7 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings,
   femDomain,
   fieldModel,
+  interactionActive,
   materialProfile,
   meshQualityColors,
   onSelectDomain,
@@ -72,6 +74,7 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
+  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   meshQualityColors: ScalarColorBuffer | null;
   onSelectDomain: () => void;
@@ -81,6 +84,10 @@ export function FallbackTopologyMeshLayer({
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const invalidate = useBatchedInvalidate();
+  const renderSettings = useMemo(
+    () => resolveCameraInteractionSettings(fallbackSettings, interactionActive),
+    [fallbackSettings, interactionActive],
+  );
   const geometry = useMemo(() => {
     if (!topologyModel) return null;
     const next = tracker.track("geometry", new BufferGeometry());
@@ -95,7 +102,7 @@ export function FallbackTopologyMeshLayer({
   const edgeGeometry = useMemo(() => {
     if (!topologyModel) return null;
     const next =
-      fallbackSettings.geometryScope === "full"
+      renderSettings.geometryScope === "full"
         ? buildLineIndexGeometry(
             topologyModel.positions,
             topologyModel.fallbackVolumeEdgeIndices,
@@ -105,7 +112,7 @@ export function FallbackTopologyMeshLayer({
             topologyModel.fallbackSurfaceIndices,
           );
     return next ? tracker.track("geometry", next) : null;
-  }, [fallbackSettings.geometryScope, topologyModel, tracker]);
+  }, [renderSettings.geometryScope, topologyModel, tracker]);
 
   useEffect(
     () => () => tracker.release("geometry", geometry),
@@ -118,25 +125,25 @@ export function FallbackTopologyMeshLayer({
   const pointGeometry = useMemo(() => {
     if (!topologyModel) return null;
     const selection =
-      fallbackSettings.geometryScope === "full"
+      renderSettings.geometryScope === "full"
         ? null
         : { nodeIndices: uniqueSortedSurfaceIndices(topologyModel.fallbackSurfaceIndices) };
     const next = buildViewport3DPointGeometry(topologyModel, selection);
     return next ? tracker.track("geometry", next) : null;
-  }, [fallbackSettings.geometryScope, topologyModel, tracker]);
+  }, [renderSettings.geometryScope, topologyModel, tracker]);
 
   useEffect(
     () => () => tracker.release("geometry", pointGeometry),
     [pointGeometry, tracker],
   );
 
-  const scalarColorMode = surfaceScalarColorModeFromSettings(fallbackSettings);
+  const scalarColorMode = surfaceScalarColorModeFromSettings(renderSettings);
   const scalarColors = scalarColorMode
     ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
     : null;
   const effectiveScalarColors = meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
-    Boolean(meshQualityColors) || shaderUsesVertexColors(fallbackSettings);
+    Boolean(meshQualityColors) || shaderUsesVertexColors(renderSettings);
   const canUseVertexScalarColors = canApplyVertexScalarColorBuffer(
     effectiveScalarColors,
     topologyModel?.nodeCount ?? 0,
@@ -186,7 +193,7 @@ export function FallbackTopologyMeshLayer({
 
   const hasScalarColors =
     vertexColorsEnabled && canUseVertexScalarColors;
-  const surfaceOpacity = opacityFromSettings(fallbackSettings);
+  const surfaceOpacity = opacityFromSettings(renderSettings);
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),
     [surfaceOpacity],
@@ -225,10 +232,10 @@ export function FallbackTopologyMeshLayer({
 
   if (!geometry) return null;
   if (
-    !fallbackSettings.visible ||
-    (!fallbackSettings.shaderVisible &&
-      !fallbackSettings.wireframeVisible &&
-      !fallbackSettings.pointsVisible)
+    !renderSettings.visible ||
+    (!renderSettings.shaderVisible &&
+      !renderSettings.wireframeVisible &&
+      !renderSettings.pointsVisible)
   ) {
     return null;
   }
@@ -249,7 +256,7 @@ export function FallbackTopologyMeshLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {fallbackSettings.shaderVisible ? (
+      {renderSettings.shaderVisible ? (
         <mesh
           geometry={geometry}
           renderOrder={surfacePolicy.transparent
@@ -261,7 +268,7 @@ export function FallbackTopologyMeshLayer({
           ) : (
             <meshStandardMaterial
               color={surfaceMaterialColorFromSettings(
-                fallbackSettings,
+                renderSettings,
                 colors.mesh,
                 hasScalarColors,
               )}
@@ -273,37 +280,37 @@ export function FallbackTopologyMeshLayer({
           )}
         </mesh>
       ) : null}
-      {fallbackSettings.wireframeVisible && edgeGeometry ? (
+      {renderSettings.wireframeVisible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
           <lineBasicMaterial
-            color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
+            color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(
-              fallbackSettings,
+              renderSettings,
               materialProfile.featureEdges,
             )}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>
       ) : null}
-      {fallbackSettings.wireframeVisible && fallbackSettings.shaderVisible && edgeGeometry ? (
+      {renderSettings.wireframeVisible && renderSettings.shaderVisible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder}
         >
           <lineBasicMaterial
-            color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
+            color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(
-              fallbackSettings,
+              renderSettings,
               materialProfile.featureEdges,
             ) * 0.25}
             {...materialPolicyProps("hiddenEdges")}
           />
         </lineSegments>
       ) : null}
-      {fallbackSettings.pointsVisible && pointGeometry ? (
+      {renderSettings.pointsVisible && pointGeometry ? (
         <points
           geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
@@ -317,17 +324,17 @@ export function FallbackTopologyMeshLayer({
           />
         </points>
       ) : null}
-      {fallbackSettings.vectorsVisible ? (
+      {renderSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(
-            fallbackSettings,
+            renderSettings,
             vectorColorMode,
           )}
           materialProfile={materialProfile.glyphs}
           opacity={surfaceOpacity}
           segments={fieldModel?.fullVectorSegments ?? null}
-          style={vectorStyleFromSettings(fallbackSettings, vectorStyle)}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}

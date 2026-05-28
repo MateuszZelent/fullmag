@@ -14,6 +14,7 @@ Component-aware path (when Gmsh has volume-tag identity):
   - ``InterfaceShellThreshold`` — refine near component surface (shell)
   - ``TransitionShellThreshold`` — smooth transition from shell to airbox
   - ``ComponentRestrictedBox`` — refine inside a named component sub-box
+  - ``ComponentRestrictedCylinder`` — refine inside a named component radial disk
 
 Bounds-based fallback (concatenated-STL or unknown topology):
   - ``Box`` — set size inside an axis-aligned bounding box
@@ -161,6 +162,16 @@ def _build_perimeter_refinement_fields(
         box = _unwrap_translated_box_geometry(geometry)
         if box is None:
             if "edge_hmax" in refinement and "edge_thickness" in refinement:
+                edge_thickness = float(refinement["edge_thickness"])
+                edge_transition_distance = _coerce_positive_float(
+                    entry.get("edge_transition_distance") or entry.get("transition_distance")
+                ) if entry is not None else None
+                edge_dist_min = edge_thickness if edge_transition_distance is not None else 0.0
+                edge_dist_max = (
+                    edge_thickness + edge_transition_distance
+                    if edge_transition_distance is not None
+                    else edge_thickness
+                )
                 fields.append(
                     {
                         "kind": "EdgeDistanceThreshold",
@@ -169,8 +180,8 @@ def _build_perimeter_refinement_fields(
                             "Selector": {"mode": "all_boundary_curves"},
                             "SizeMin": float(refinement["edge_hmax"]),
                             "SizeMax": float(default_hmax),
-                            "DistMin": 0.0,
-                            "DistMax": float(refinement["edge_thickness"]),
+                            "DistMin": float(edge_dist_min),
+                            "DistMax": float(edge_dist_max),
                             "Sampling": 40,
                             "Source": "per_geometry.edge_maximum_element_size",
                         },
@@ -440,6 +451,7 @@ def _build_interface_fields(
 
         if interface_hmax >= default_hmax:
             continue
+        interface_ramp = max(interface_hmax, interface_thickness * 0.05, 1.0e-18)
 
         if component_aware:
             fields.append(
@@ -449,8 +461,8 @@ def _build_interface_fields(
                         "GeometryName": geometry.geometry_name,
                         "SizeMin": float(interface_hmax),
                         "SizeMax": float(_NO_OP_FIELD_SIZE),
-                        "DistMin": 0.0,
-                        "DistMax": float(interface_thickness),
+                        "DistMin": float(interface_thickness),
+                        "DistMax": float(interface_thickness + interface_ramp),
                         "Sampling": 20,
                     },
                 }
@@ -475,8 +487,8 @@ def _build_interface_fields(
                     "BoundsMax": list(bounds_max),
                     "SizeMin": float(interface_hmax),
                     "SizeMax": float(_NO_OP_FIELD_SIZE),
-                    "DistMin": 0.0,
-                    "DistMax": float(interface_thickness),
+                    "DistMin": float(interface_thickness),
+                    "DistMax": float(interface_thickness + interface_ramp),
                     "Sampling": 20,
                     "MatchPadding": float(interface_hmax * 0.5),
                 },
@@ -513,6 +525,14 @@ def _build_transition_fields(
             raw_transition_distance
         )
         transition_distance = transition_distance_requested
+        interface_hmax = _coerce_positive_float(
+            entry.get("interface_hmax") if entry else None  # type: ignore[union-attr]
+        )
+        interface_thickness = _coerce_positive_float(
+            entry.get("interface_thickness") if entry else None  # type: ignore[union-attr]
+        ) or 0.0
+        transition_size_min = interface_hmax if interface_hmax is not None else bulk_hmax
+        transition_dist_min = interface_thickness if interface_hmax is not None else 0.0
 
         if transition_distance is None:
             if bulk_hmax < default_hmax:
@@ -520,15 +540,14 @@ def _build_transition_fields(
             else:
                 continue
 
-        if bulk_hmax >= default_hmax:
+        if transition_size_min >= default_hmax:
             continue
 
         # SizeMax = default_hmax (the airbox target) so the Threshold
-        # linearly ramps from bulk_hmax at the body surface to
-        # default_hmax at the transition boundary.  Previously SizeMax
-        # was 1e22, which jumped to infinity at d>0 and left grading
-        # entirely to SmoothRatio — wasting the transition field.
+        # linearly ramps from the near-interface target to default_hmax.
+        # DistMin preserves the requested fine shell before the ramp starts.
         transition_size_max = default_hmax
+        transition_dist_max = transition_dist_min + transition_distance
 
         if component_aware:
             fields.append(
@@ -536,10 +555,10 @@ def _build_transition_fields(
                     "kind": "TransitionShellThreshold",
                     "params": {
                         "GeometryName": geometry.geometry_name,
-                        "SizeMin": float(bulk_hmax),
+                        "SizeMin": float(transition_size_min),
                         "SizeMax": float(transition_size_max),
-                        "DistMin": 0.0,
-                        "DistMax": float(transition_distance),
+                        "DistMin": float(transition_dist_min),
+                        "DistMax": float(transition_dist_max),
                         "Sampling": 20,
                         "Source": "explicit" if transition_distance_requested is not None else "auto",
                     },
@@ -563,10 +582,10 @@ def _build_transition_fields(
                 "params": {
                     "BoundsMin": list(bounds_min),
                     "BoundsMax": list(bounds_max),
-                    "SizeMin": float(bulk_hmax),
+                    "SizeMin": float(transition_size_min),
                     "SizeMax": float(transition_size_max),
-                    "DistMin": 0.0,
-                    "DistMax": float(transition_distance),
+                    "DistMin": float(transition_dist_min),
+                    "DistMax": float(transition_dist_max),
                     "Sampling": 20,
                     "MatchPadding": float(bulk_hmax),
                     "Source": "explicit" if transition_distance_requested is not None else "auto",

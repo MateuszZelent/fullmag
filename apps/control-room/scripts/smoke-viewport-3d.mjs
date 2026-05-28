@@ -30,6 +30,8 @@ const REACT_RENDER_MEASURE_NAMES = [
   "fullmag.react.render.RibbonModule.update",
   "fullmag.react.render.Viewport3DModule.mount",
   "fullmag.react.render.Viewport3DModule.update",
+  "fullmag.react.render.FooterModule.mount",
+  "fullmag.react.render.FooterModule.update",
   "fullmag.react.render.WorkspaceDockLayout.mount",
   "fullmag.react.render.WorkspaceDockLayout.update",
 ];

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createViewport3DMissedClickHandler,
+  createViewport3DPointerMoveHandler,
   pickViewport3DEventHandlers,
 } from "./viewport3dEventManager";
 
@@ -64,5 +65,26 @@ describe("pickViewport3DEventHandlers", () => {
     handler({ offsetX: 11, offsetY: 21 } as MouseEvent);
 
     expect(onPointerMissed).not.toHaveBeenCalled();
+  });
+
+  it("skips pointer-move raycasts while camera drag buttons are pressed", () => {
+    const innerHandler = vi.fn();
+    const handler = createViewport3DPointerMoveHandler(innerHandler);
+
+    handler?.({ buttons: 1 } as PointerEvent);
+    handler?.({ buttons: 2 } as PointerEvent);
+    handler?.({ buttons: 4 } as PointerEvent);
+
+    expect(innerHandler).not.toHaveBeenCalled();
+  });
+
+  it("keeps passive pointer-move handling for hover interactions", () => {
+    const innerHandler = vi.fn();
+    const handler = createViewport3DPointerMoveHandler(innerHandler);
+    const event = { buttons: 0 } as PointerEvent;
+
+    handler?.(event);
+
+    expect(innerHandler).toHaveBeenCalledWith(event);
   });
 });

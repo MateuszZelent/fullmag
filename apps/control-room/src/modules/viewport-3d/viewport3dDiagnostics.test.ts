@@ -32,6 +32,20 @@ describe("viewport3dDiagnostics", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("counts dirty-frame reasons until they are consumed", () => {
+    const tracker = new Viewport3DResourceTracker();
+
+    tracker.recordDirtyFrame("camera-control");
+    tracker.recordDirtyFrame("camera-control");
+    tracker.recordDirtyFrame("resources-updated");
+
+    expect(tracker.consumeDirtyReasonCounts()).toEqual({
+      "camera-control": 2,
+      "resources-updated": 1,
+    });
+    expect(tracker.consumeDirtyReasonCounts()).toEqual({});
+  });
+
   it("records context loss and restoration diagnostics", () => {
     const tracker = new Viewport3DResourceTracker();
 

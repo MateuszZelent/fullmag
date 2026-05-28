@@ -1761,10 +1761,20 @@ export function resolveNodeSelectionCount(
     return selection.node_indices.length;
   }
 
-  return Math.min(
-    selection?.nodeCount ?? selection?.node_count ?? topology.nodeCount,
-    topology.nodeCount,
+  const start = Math.max(
+    0,
+    Math.floor(selection?.nodeStart ?? selection?.node_start ?? 0),
   );
+  if (start >= topology.nodeCount) {
+    return 0;
+  }
+
+  const rawCount = selection?.nodeCount ?? selection?.node_count;
+  const count =
+    rawCount === undefined || (rawCount <= 0 && start > 0)
+      ? topology.nodeCount - start
+      : Math.max(0, Math.floor(rawCount));
+  return Math.min(count, topology.nodeCount - start);
 }
 
 export function resolveNodeSelectionIndex(

@@ -59,6 +59,7 @@ import {
   type HeaderQuickAction,
 } from "./appMenuModel";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
+import { ThreadManagerDialog } from "./ThreadManagerDialog";
 
 interface HeaderSessionDisplay {
   connectionLabel: string;
@@ -456,6 +457,7 @@ export function AppMenuBar() {
   );
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const [registryOpen, setRegistryOpen] = useState(false);
+  const [threadManagerOpen, setThreadManagerOpen] = useState(false);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
@@ -499,6 +501,10 @@ export function AppMenuBar() {
   const runCommand = (commandId: string, input?: unknown) => {
     if (commandId === "tools.registry-inspector") {
       setRegistryOpen(true);
+      return;
+    }
+    if (commandId === "tools.thread-manager") {
+      setThreadManagerOpen(true);
       return;
     }
     if (kernel.commands.get(commandId)) {
@@ -623,6 +629,12 @@ export function AppMenuBar() {
         syncSnapshot={visualizationSyncSnapshot}
         visualizationState={visualizationState.data}
         onOpenChange={setRegistryOpen}
+      />
+
+      <ThreadManagerDialog
+        kernel={kernel}
+        onOpenChange={setThreadManagerOpen}
+        open={threadManagerOpen}
       />
 
       <div className="fm-header__separator" />

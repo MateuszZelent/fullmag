@@ -188,7 +188,7 @@ describe("AirboxLayer", () => {
 
   it("routes the airbox render branch through the parallel wireframe layers", () => {
     expect(boundsLayersSource).toContain(
-      'resolvedSettings.wireframeVisible && (',
+      'renderSettings.wireframeVisible && (',
     );
     expect(boundsLayersSource).toContain(
       'geometryScope === "full" || !edgeGeometry',
@@ -274,6 +274,7 @@ describe("AirboxLayer", () => {
     const element = AirboxLayerContent({
       colors,
       fieldModel: null,
+      interactionActive: false,
       materialProfile,
       onSelectPart,
       settings: visibleWireframeAirbox,

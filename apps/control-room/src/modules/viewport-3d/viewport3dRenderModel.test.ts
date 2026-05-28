@@ -1301,5 +1301,17 @@ describe("viewport3dRenderModel", () => {
         { nodeCount: 10 },
       ),
     ).toBe(10);
+    expect(
+      resolveNodeSelectionCount(
+        { node_count: 12, node_start: 4 },
+        { nodeCount: 10 },
+      ),
+    ).toBe(6);
+    expect(
+      resolveNodeSelectionCount(
+        { node_start: 4 },
+        { nodeCount: 10 },
+      ),
+    ).toBe(6);
   });
 });

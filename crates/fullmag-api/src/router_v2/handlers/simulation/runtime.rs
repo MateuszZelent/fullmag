@@ -898,19 +898,81 @@ fn latest_magnetization_average(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(segment) = live_state.latest_step.fem_mesh.as_ref().and_then(|mesh| {
-        mesh.object_segments
+    if let Some(mesh) = live_state.latest_step.fem_mesh.as_ref() {
+        if let Some(average) = mesh
+            .mesh_parts
+            .iter()
+            .find(|part| mesh_part_matches_object(part, object_id))
+            .and_then(|part| average_part_magnetization(values, part))
+        {
+            return Some(average);
+        }
+        if let Some(segment) = mesh
+            .object_segments
             .iter()
             .find(|segment| runtime_object_ids_match(&segment.object_id, object_id))
-    }) {
-        return average_flat_magnetization(
-            values,
-            segment.node_start as usize,
-            segment.node_count as usize,
-        )
-        .or(Some(fallback));
+        {
+            return average_flat_magnetization(
+                values,
+                segment.node_start as usize,
+                segment.node_count as usize,
+            )
+            .or(Some(fallback));
+        }
     }
     average_flat_magnetization(values, 0, values.len() / 3).or(Some(fallback))
+}
+
+fn mesh_part_matches_object(part: &fullmag_runner::FemMeshPartPayload, object_id: &str) -> bool {
+    part.role == "magnetic_object"
+        && (part
+            .object_id
+            .as_deref()
+            .is_some_and(|id| runtime_object_ids_match(id, object_id))
+            || part
+                .geometry_id
+                .as_deref()
+                .is_some_and(|id| runtime_object_ids_match(id, object_id))
+            || runtime_object_ids_match(&part.id, object_id))
+}
+
+fn average_part_magnetization(
+    values: &[f64],
+    part: &fullmag_runner::FemMeshPartPayload,
+) -> Option<[f64; 3]> {
+    if !part.node_indices.is_empty() {
+        return average_indexed_magnetization(values, part.node_indices.iter().copied());
+    }
+    average_flat_magnetization(values, part.node_start as usize, part.node_count as usize)
+}
+
+fn average_indexed_magnetization(
+    values: &[f64],
+    indices: impl IntoIterator<Item = u32>,
+) -> Option<[f64; 3]> {
+    let node_count = values.len() / 3;
+    let mut sum = [0.0; 3];
+    let mut used = 0usize;
+    for index in indices {
+        let index = index as usize;
+        if index >= node_count {
+            continue;
+        }
+        let offset = index * 3;
+        let vector = [values[offset], values[offset + 1], values[offset + 2]];
+        if !vector.iter().all(|value| value.is_finite()) {
+            continue;
+        }
+        sum[0] += vector[0];
+        sum[1] += vector[1];
+        sum[2] += vector[2];
+        used += 1;
+    }
+    if used == 0 {
+        return None;
+    }
+    let scale = 1.0 / used as f64;
+    Some([sum[0] * scale, sum[1] * scale, sum[2] * scale])
 }
 
 fn average_flat_magnetization(values: &[f64], start: usize, count: usize) -> Option<[f64; 3]> {

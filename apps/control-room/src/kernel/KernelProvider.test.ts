@@ -43,8 +43,9 @@ describe("KernelProvider performance contracts", () => {
   it("exports fullmag performance measures into diagnostics", () => {
     expect(kernelProviderSource).toContain("PerformanceDiagnosticsConnector");
     expect(kernelProviderSource).toContain("startPerformanceMeasureDiagnostics");
+    expect(kernelProviderSource).toContain("startBrowserActivityDiagnostics");
     expect(kernelProviderSource).toContain(
-      "startPerformanceMeasureDiagnostics({ diagnostics: kernel.diagnostics })",
+      "diagnostics: kernel.diagnostics",
     );
   });
 });

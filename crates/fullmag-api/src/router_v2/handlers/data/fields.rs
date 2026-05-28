@@ -1,6 +1,7 @@
 //! Field endpoints — catalog, meta, binary vector (P1 component), and 2D slice (P2).
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, Query, State};
@@ -479,12 +480,10 @@ fn resolve_object_scope(
         .iter()
         .find(|segment| object_ids_match(&segment.object_id, object_id))
         .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
-    let start = segment.node_start as usize;
-    let end = start.saturating_add(segment.node_count as usize);
     Ok(ResolvedFieldScope {
         kind: "object".to_string(),
         id: Some(object_id.to_string()),
-        node_indices: (start..end).collect(),
+        node_indices: node_indices_for_segment(mesh, segment),
     })
 }
 
@@ -499,6 +498,35 @@ fn node_indices_for_part(part: &fullmag_runner::FemMeshPartPayload) -> Vec<usize
             .map(|index| *index as usize)
             .collect()
     }
+}
+
+fn node_indices_for_segment(
+    mesh: &FemMeshPayload,
+    segment: &fullmag_runner::FemMeshObjectSegment,
+) -> Vec<usize> {
+    let mut node_indices = BTreeSet::new();
+
+    let start = segment.node_start as usize;
+    let end = start.saturating_add(segment.node_count as usize);
+    node_indices.extend(start..end);
+
+    let element_start = segment.element_start as usize;
+    let element_end = element_start.saturating_add(segment.element_count as usize);
+    if let Some(elements) = mesh.elements.get(element_start..element_end) {
+        for element in elements {
+            node_indices.extend(element.iter().map(|index| *index as usize));
+        }
+    }
+
+    let face_start = segment.boundary_face_start as usize;
+    let face_end = face_start.saturating_add(segment.boundary_face_count as usize);
+    if let Some(faces) = mesh.boundary_faces.get(face_start..face_end) {
+        for face in faces {
+            node_indices.extend(face.iter().map(|index| *index as usize));
+        }
+    }
+
+    node_indices.into_iter().collect()
 }
 
 fn resolve_part_scope(

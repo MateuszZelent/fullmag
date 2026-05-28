@@ -236,6 +236,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(10);
   });
 
   it("refreshes mesh build dependents after latest successful build changes", () => {
