@@ -349,22 +349,7 @@ async function beginCrossSectionDraftFromCommand(
 ): Promise<CommandResult> {
   const draft = beginCrossSectionDraft(visualizationStateFromContext(context));
   const nodeId = "model:visualizations-2d:draft";
-  context.selection?.set(
-    {
-      kind: "mesh.cross-section.draft",
-      label: draft.name,
-      nodeId,
-      objectId: null,
-      ref: {
-        draftId: draft.id,
-        kind: "mesh.cross-section.draft",
-        nodeId,
-        type: "cross-section-draft",
-        visualizationTargetId: "cross-section:draft",
-      },
-    },
-    context.source,
-  );
+  selectCrossSectionDraft(context, draft.name, nodeId);
   context.layout?.setPanelVisible("left", true);
   context.layout?.setPanelVisible("right", true);
   context.layout?.setFocusedSlot("viewport-main");
@@ -376,8 +361,32 @@ async function beginCrossSectionDraftFromCommand(
       { flush: true },
     );
   }
+  selectCrossSectionDraft(context, draft.name, nodeId);
 
   return { status: "completed" };
+}
+
+function selectCrossSectionDraft(
+  context: CommandContext,
+  label: string,
+  nodeId: string,
+): void {
+  context.selection?.set(
+    {
+      kind: "mesh.cross-section.draft",
+      label,
+      nodeId,
+      objectId: null,
+      ref: {
+        draftId: "draft",
+        kind: "mesh.cross-section.draft",
+        nodeId,
+        type: "cross-section-draft",
+        visualizationTargetId: "cross-section:draft",
+      },
+    },
+    context.source,
+  );
 }
 
 function selectPhysicsInteractionFromCommand(context: CommandContext): CommandResult {

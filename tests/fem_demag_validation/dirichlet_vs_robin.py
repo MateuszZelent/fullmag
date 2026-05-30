@@ -12,7 +12,11 @@ This is the key test for the Robin BC advantage claim.
 
 Usage
 -----
-    fullmag --headless tests/fem_demag_validation/dirichlet_vs_robin.py
+    python3 tests/fem_demag_validation/dirichlet_vs_robin.py
+
+Requires PyO3 `_fullmag_core` built with the MFEM/libCEED runtime stack. The
+managed `fullmag --headless` loader is only a capture-stage smoke path and does
+not execute this CSV sweep.
 
 Output
 ------
@@ -27,12 +31,16 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-from helpers import (
+from helpers import (  # noqa: E402
     MU0,
+    ValidationFailure,
     analytical_demag_energy_sphere,
     build_fem_sphere_study,
     extract_demag_from_result,
+    require_native_runtime_core,
     write_csv,
 )
 
@@ -57,6 +65,12 @@ RELAX_MAX_STEPS = 5
 RELAX_ALGORITHM = "projected_gradient_bb"
 
 # ── Analytical ──────────────────────────────────────────────────────────
+
+try:
+    require_native_runtime_core()
+except ValidationFailure as exc:
+    print(f"FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
 
 VOLUME = (4.0 / 3.0) * math.pi * RADIUS ** 3
 E_DEMAG_ANALYTICAL = analytical_demag_energy_sphere(MS, RADIUS)

@@ -97,7 +97,10 @@ from fullmag.meshing._gmsh_extraction import (
     _meshio_cell_markers,
     build_per_domain_quality_from_mesh_arrays,
 )
-from fullmag.meshing._gmsh_fields import validate_size_field_config
+from fullmag.meshing._gmsh_fields import (
+    _add_axis_aligned_box_distance_threshold_field,
+    validate_size_field_config,
+)
 from fullmag.meshing._gmsh_selectors import (
     collect_orphan_entity_diagnostics,
     resolve_entity_selectors,
@@ -569,7 +572,10 @@ class MeshScaffoldTests(unittest.TestCase):
             list(geometric_fields.kinds.values()),
             ["Distance", "MathEval", "MathEval", "Min"],
         )
-        self.assertIn("exp(", geometric_fields.strings[(2, "F")])
+        geometric_expr = geometric_fields.strings[(2, "F")]
+        self.assertIn("exp(", geometric_expr)
+        self.assertIn("log(0.5 / 0.002)", geometric_expr)
+        self.assertIn("F1 / 2", geometric_expr)
 
         linear_fields = _FakeFieldApi()
         linear_gmsh = type(
@@ -654,6 +660,8 @@ class MeshScaffoldTests(unittest.TestCase):
             ["Distance", "MathEval", "MathEval", "Min", "MathEval", "Min"],
         )
         envelope_expr = fields.strings[(5, "F")]
+        self.assertIn("exp(", envelope_expr)
+        self.assertIn("log(0.5 /", envelope_expr)
         self.assertIn("x", envelope_expr)
         self.assertIn("y", envelope_expr)
         self.assertIn("z", envelope_expr)
@@ -2452,6 +2460,93 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(size_field_config["_gmsh_status"], "applied")
         self.assertEqual(size_field_config["_gmsh_field_id"], 2)
 
+    def test_edge_distance_threshold_accepts_geometric_growth_rate(self) -> None:
+        class _FakeOptionsApi:
+            def __init__(self) -> None:
+                self.values: dict[str, float] = {}
+
+            def setNumber(self, key: str, value: float) -> None:
+                self.values[key] = float(value)
+
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next = 1
+                self.background: int | None = None
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                current = self._next
+                self._next += 1
+                self.kinds[current] = kind
+                return current
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+            def setAsBackgroundMesh(self, field_id: int) -> None:
+                self.background = field_id
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "option": _FakeOptionsApi(),
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {
+                        "mesh": type("FakeMesh", (), {"field": fake_field_api})(),
+                        "getEntities": staticmethod(lambda dim: []),
+                        "getBoundary": staticmethod(lambda _tags, oriented=False: [(1, 11), (1, -12)]),
+                    },
+                )(),
+            },
+        )()
+
+        _apply_mesh_options(
+            fake_gmsh,
+            hmax=5e-9,
+            order=1,
+            opts=MeshOptions(
+                size_fields=[
+                    {
+                        "kind": "EdgeDistanceThreshold",
+                        "params": {
+                            "GeometryName": "free_layer",
+                            "SizeMin": 0.8e-9,
+                            "SizeMax": 3.0e-9,
+                            "DistMin": 0.0,
+                            "DistMax": 5.0e-9,
+                            "Sampling": 40,
+                            "Grading": "geometric",
+                            "GrowthRate": 1.42,
+                        },
+                    }
+                ]
+            ),
+            component_surface_tags={"free_layer": [7]},
+            component_volume_tags={"free_layer": [3]},
+        )
+
+        self.assertIn("MathEval", fake_field_api.kinds.values())
+        self.assertNotIn("Threshold", fake_field_api.kinds.values())
+        math_ids = [
+            field_id
+            for field_id, kind in fake_field_api.kinds.items()
+            if kind == "MathEval"
+        ]
+        self.assertIn("1.42", fake_field_api.strings[(math_ids[0], "F")])
+
     def test_corner_distance_threshold_field_uses_curve_endpoints_without_component_restrict(self) -> None:
         class _FakeOptionsApi:
             def __init__(self) -> None:
@@ -2525,6 +2620,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 "DistMax": 5.0e-9,
                 "Sampling": 20,
                 "Grading": "geometric",
+                "GrowthRate": 1.42,
             },
         }
         _apply_mesh_options(
@@ -2553,11 +2649,59 @@ class MeshScaffoldTests(unittest.TestCase):
             for field_id, kind in fake_field_api.kinds.items()
             if kind == "MathEval"
         ]
-        self.assertIn("exp(", fake_field_api.strings[(math_ids[0], "F")])
+        math_expr = fake_field_api.strings[(math_ids[0], "F")]
+        self.assertIn("exp(", math_expr)
+        self.assertIn("log(1.42)", math_expr)
         self.assertNotIn("Restrict", fake_field_api.kinds.values())
         self.assertIsNotNone(fake_field_api.background)
         self.assertEqual(size_field_config["_gmsh_status"], "applied")
         self.assertEqual(size_field_config["_gmsh_field_id"], 2)
+
+    def test_axis_aligned_box_geometric_field_uses_growth_rate(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next = 1
+                self.kinds: dict[int, str] = {}
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                current = self._next
+                self._next += 1
+                self.kinds[current] = kind
+                return current
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {"mesh": type("FakeMesh", (), {"field": fake_field_api})()},
+                )(),
+            },
+        )()
+
+        field_id = _add_axis_aligned_box_distance_threshold_field(
+            fake_gmsh,
+            bounds_min=(-1.0, -1.0, -1.0),
+            bounds_max=(1.0, 1.0, 1.0),
+            size_min=2.0,
+            size_max=20.0,
+            dist_min=0.0,
+            dist_max=8.0,
+            grading="geometric",
+            growth_rate=1.45,
+        )
+
+        self.assertIsNotNone(field_id)
+        expr = fake_field_api.strings[(field_id, "F")]
+        self.assertIn("log(20 / 2)", expr)
+        self.assertIn("log(1.45)", expr)
 
     def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
         try:
@@ -4067,6 +4211,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                     "interface_hmax": "2e-9",
                     "interface_thickness": "2e-9",
                     "transition_distance": "220e-9",
+                    "transition_growth": "1.45",
                 },
             },
             component_aware=True,
@@ -4077,6 +4222,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(fields[0]["params"]["SizeMax"], 500e-9)
         self.assertAlmostEqual(fields[0]["params"]["DistMin"], 2e-9)
         self.assertAlmostEqual(fields[0]["params"]["DistMax"], 222e-9)
+        self.assertAlmostEqual(fields[0]["params"]["GrowthRate"], 1.45)
 
     def test_transition_field_component_aware_uses_shell_kind(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -4313,6 +4459,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                     "interface_hmax": 2.0,
                     "interface_thickness": 1.0,
                     "transition_distance": 5.0,
+                    "transition_growth": 1.45,
                 },
             ],
             component_aware=True,
@@ -4327,6 +4474,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(analytic_fields[0]["params"]["Source"], "interface_hmax")
         self.assertEqual(analytic_fields[1]["params"]["Source"], "transition_distance")
         self.assertEqual(analytic_fields[1]["params"]["Grading"], "geometric")
+        self.assertEqual(analytic_fields[1]["params"]["GrowthRate"], 1.45)
 
     def test_corner_threshold_does_not_inherit_surface_transition_distance(self) -> None:
         left = fm.Cylinder(2.0, 1.0, name="left")

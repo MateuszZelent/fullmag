@@ -17,7 +17,11 @@ Test geometries:
 
 Usage
 -----
-    fullmag --headless tests/fem_demag_validation/ellipsoid_validation.py
+    python3 tests/fem_demag_validation/ellipsoid_validation.py
+
+Requires PyO3 `_fullmag_core` built with the MFEM/libCEED runtime stack. The
+managed `fullmag --headless` loader is only a capture-stage smoke path and does
+not execute this CSV sweep.
 
 Output
 ------
@@ -32,12 +36,19 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-from helpers import (
+from helpers import (  # noqa: E402
     MU0,
+    ValidationFailure,
     build_fem_ellipsoid_study,
     ellipsoid_demag_factors,
     extract_demag_from_result,
+    require_finite_metrics,
+    require_grouped_sum_close,
+    require_native_runtime_core,
+    require_relative_error_below,
     write_csv,
 )
 
@@ -53,6 +64,8 @@ UNIVERSE_SCALE = 4.0
 RELAX_TOL = 1e-5
 RELAX_MAX_STEPS = 5
 RELAX_ALGORITHM = "projected_gradient_bb"
+MAX_AXIS_REL_ERROR = 0.10
+MAX_SHAPE_SUM_ERROR = 0.15
 
 # Test shapes: (name, rx, ry, rz) in metres
 SHAPES = [
@@ -68,6 +81,12 @@ AXES = [
     ("y", (0.0, 1.0, 0.0)),
     ("z", (0.0, 0.0, 1.0)),
 ]
+
+try:
+    require_native_runtime_core()
+except ValidationFailure as exc:
+    print(f"FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
 
 print("╔═══════════════════════════════════════════════════════════════╗")
 print("║  FEM Demag Validation: Ellipsoid Demagnetizing Factors      ║")
@@ -201,3 +220,29 @@ for shape_name, _, _, _ in SHAPES:
         print(f"  {check} {shape_name}: ΣN = {n_sum:.4f} (should be ~1.0)")
 
 print(f"\n  Results: {csv_path}")
+
+try:
+    require_finite_metrics(
+        rows,
+        ["n_ref", "n_effective", "n_rel_error", "e_demag_J", "max_h_demag_Apm"],
+        label_key="shape",
+    )
+    for row in rows:
+        require_relative_error_below(
+            row,
+            error_key="n_rel_error",
+            threshold=MAX_AXIS_REL_ERROR,
+            label=f"{row['shape']} {row['m_axis']}",
+        )
+    require_grouped_sum_close(
+        rows,
+        group_key="shape",
+        value_key="n_effective",
+        expected_sum=1.0,
+        tolerance=MAX_SHAPE_SUM_ERROR,
+        required_axis_key="m_axis",
+        required_axes=("x", "y", "z"),
+    )
+except ValidationFailure as exc:
+    print(f"\n  VALIDATION FAILURE: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc

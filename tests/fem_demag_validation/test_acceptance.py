@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,8 +17,11 @@ from helpers import (  # noqa: E402
     effective_demag_factor_from_energy,
     require_finite_metrics,
     require_grouped_error_improvement,
+    require_grouped_sum_close,
+    require_solver_telemetry,
     require_relative_error_below,
 )
+from telemetry_validation import read_csv_rows, validate_runtime_artifact  # noqa: E402
 
 
 class DemagValidationAcceptanceTests(unittest.TestCase):
@@ -66,6 +70,147 @@ class DemagValidationAcceptanceTests(unittest.TestCase):
                 order_key="scale",
                 error_key="n_rel_error",
             )
+
+    def test_grouped_sum_close_rejects_missing_group_axes(self) -> None:
+        rows = [
+            {"shape": "prolate", "m_axis": "x", "n_effective": 0.20},
+            {"shape": "prolate", "m_axis": "z", "n_effective": 0.60},
+        ]
+
+        with self.assertRaisesRegex(ValidationFailure, "prolate.*expected axes"):
+            require_grouped_sum_close(
+                rows,
+                group_key="shape",
+                value_key="n_effective",
+                expected_sum=1.0,
+                tolerance=0.15,
+                required_axis_key="m_axis",
+                required_axes=("x", "y", "z"),
+            )
+
+    def test_grouped_sum_close_rejects_bad_demag_factor_sum(self) -> None:
+        rows = [
+            {"shape": "oblate", "m_axis": "x", "n_effective": 0.20},
+            {"shape": "oblate", "m_axis": "y", "n_effective": 0.20},
+            {"shape": "oblate", "m_axis": "z", "n_effective": 0.30},
+        ]
+
+        with self.assertRaisesRegex(ValidationFailure, "oblate.*sum"):
+            require_grouped_sum_close(
+                rows,
+                group_key="shape",
+                value_key="n_effective",
+                expected_sum=1.0,
+                tolerance=0.15,
+                required_axis_key="m_axis",
+                required_axes=("x", "y", "z"),
+            )
+
+    def test_grouped_sum_close_accepts_complete_demag_factor_group(self) -> None:
+        rows = [
+            {"shape": "general", "m_axis": "x", "n_effective": 0.20},
+            {"shape": "general", "m_axis": "y", "n_effective": 0.30},
+            {"shape": "general", "m_axis": "z", "n_effective": 0.49},
+        ]
+
+        require_grouped_sum_close(
+            rows,
+            group_key="shape",
+            value_key="n_effective",
+            expected_sum=1.0,
+            tolerance=0.15,
+            required_axis_key="m_axis",
+            required_axes=("x", "y", "z"),
+        )
+
+    def test_solver_telemetry_rejects_missing_residual(self) -> None:
+        rows = [
+            {
+                "case": "poisson",
+                "demag_linear_iterations": 4,
+                "demag_linear_residual": math.nan,
+                "demag_wall_time_ns": 10,
+                "demag_assemble_wall_time_ns": 2,
+                "demag_solve_wall_time_ns": 4,
+                "demag_recover_wall_time_ns": 3,
+                "demag_energy_wall_time_ns": 1,
+            }
+        ]
+
+        with self.assertRaisesRegex(ValidationFailure, "poisson.*demag_linear_residual"):
+            require_solver_telemetry(rows, label_key="case")
+
+    def test_solver_telemetry_rejects_negative_iterations(self) -> None:
+        rows = [
+            {
+                "case": "poisson",
+                "demag_linear_iterations": -1,
+                "demag_linear_residual": 1.0e-8,
+                "demag_wall_time_ns": 10,
+                "demag_assemble_wall_time_ns": 2,
+                "demag_solve_wall_time_ns": 4,
+                "demag_recover_wall_time_ns": 3,
+                "demag_energy_wall_time_ns": 1,
+            }
+        ]
+
+        with self.assertRaisesRegex(ValidationFailure, "poisson.*iterations"):
+            require_solver_telemetry(rows, label_key="case")
+
+    def test_solver_telemetry_accepts_complete_phase_timings(self) -> None:
+        rows = [
+            {
+                "case": "poisson",
+                "demag_linear_iterations": 4,
+                "demag_linear_residual": 1.0e-8,
+                "demag_wall_time_ns": 10,
+                "demag_assemble_wall_time_ns": 2,
+                "demag_solve_wall_time_ns": 4,
+                "demag_recover_wall_time_ns": 3,
+                "demag_energy_wall_time_ns": 1,
+            }
+        ]
+
+        require_solver_telemetry(rows, label_key="case")
+
+    def test_telemetry_artifact_validator_rejects_missing_rows(self) -> None:
+        with self.assertRaisesRegex(ValidationFailure, "no demag telemetry rows"):
+            validate_runtime_artifact([])
+
+    def test_telemetry_artifact_validator_accepts_complete_rows(self) -> None:
+        rows = [
+            {
+                "case": "poisson-robin",
+                "demag_linear_iterations": 4,
+                "demag_linear_residual": 1.0e-8,
+                "demag_wall_time_ns": 10,
+                "demag_assemble_wall_time_ns": 2,
+                "demag_solve_wall_time_ns": 4,
+                "demag_recover_wall_time_ns": 3,
+                "demag_energy_wall_time_ns": 1,
+            }
+        ]
+
+        validate_runtime_artifact(rows)
+
+    def test_telemetry_csv_loader_parses_numeric_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "demag_telemetry.csv"
+            path.write_text(
+                "\n".join([
+                    "case,demag_linear_iterations,demag_linear_residual,"
+                    "demag_wall_time_ns,demag_assemble_wall_time_ns,"
+                    "demag_solve_wall_time_ns,demag_recover_wall_time_ns,"
+                    "demag_energy_wall_time_ns",
+                    "poisson-robin,4,1e-8,10,2,4,3,1",
+                ])
+                + "\n"
+            )
+
+            rows = read_csv_rows(path)
+
+        self.assertIsInstance(rows[0]["demag_linear_iterations"], float)
+        validate_runtime_artifact(rows)
 
 
 if __name__ == "__main__":

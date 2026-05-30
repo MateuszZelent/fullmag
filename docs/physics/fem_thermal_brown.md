@@ -1,7 +1,7 @@
 # FEM Brown Thermal Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-18
+- Last updated: 2026-05-30
 - Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
@@ -95,11 +95,17 @@ Current gate:
   nonmagnetic-node zeroing, same-time/dt refresh caching, source-module
   ownership, aggregate-header non-ownership documentation, top-level
   source-contract docstrings for the aggregate/sigma/sampler/field-add sources,
-  and additive `H_eff` semantics.
+  additive `H_eff` semantics, and deterministic sampler variance scaling
+  against the documented `1/dt` accepted-timestep law.
 
 Required before production qualification:
 
-- statistical moment tests over many samples;
+- active stochastic runtime evidence for the variance gate, accepted by
+  `tests/fem_thermal_validation/artifact_validation.py`;
+- Boltzmann macrospin CSV artifact acceptance is defined in
+  `tests/fem_thermal_validation/artifact_validation.py` and unit-tested by
+  `tests/fem_thermal_validation/test_acceptance.py`, but active stochastic LLG
+  trajectory evidence is still required;
 - public API seed/replay test;
 - comparison against a fixed reference trajectory for a small thermal run;
 - CPU/GPU parity before any shared production capability label.

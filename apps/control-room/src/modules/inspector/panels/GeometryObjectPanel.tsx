@@ -38,6 +38,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
+import { Vector3Field } from "../primitives/Vector3Field";
 import {
   buildGeometryDraftPatch,
   buildTransformDraftPatch,
@@ -618,7 +619,7 @@ function PrimitiveGeometryFields({
 
   return (
     <DraftVectorFormField
-      labels={["X", "Y", "Z"]}
+      label="Size"
       unit="m"
       values={draft.size}
       onChange={(index, value) => onVectorChange("size", index, value)}
@@ -636,19 +637,19 @@ function TransformSection({
   return (
     <InspectorSection value="transform" title="Transform">
       <DraftVectorFormField
-        labels={["TX", "TY", "TZ"]}
+        label="Translation"
         unit="m"
         values={draft.translation}
         onChange={(index, value) => onVectorChange("translation", index, value)}
       />
       <DraftVectorFormField
-        labels={["RX", "RY", "RZ"]}
+        label="Rotation"
         unit="rad"
         values={draft.rotation}
         onChange={(index, value) => onVectorChange("rotation", index, value)}
       />
       <DraftVectorFormField
-        labels={["SX", "SY", "SZ"]}
+        label="Scale"
         unit="x"
         values={draft.scale}
         onChange={(index, value) => onVectorChange("scale", index, value)}
@@ -843,28 +844,22 @@ function ValidationSection({
 }
 
 function DraftVectorFormField({
-  labels,
+  label,
   onChange,
   unit,
   values,
 }: {
-  labels: readonly [string, string, string];
+  label: string;
   onChange: (index: 0 | 1 | 2, value: string) => void;
   unit: string;
   values: readonly [string, string, string];
 }) {
   return (
-    <>
-      {labels.map((label, index) => (
-        <FormField
-          key={label}
-          label={label}
-          type="number"
-          unit={unit}
-          value={values[index]}
-          onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
-        />
-      ))}
-    </>
+    <Vector3Field
+      label={label}
+      unit={unit}
+      values={values}
+      onChange={onChange}
+    />
   );
 }

@@ -9,6 +9,39 @@ def _math_number(value: float) -> str:
     return f"{float(value):.17g}"
 
 
+def _growth_number(value: float) -> str:
+    return f"{float(value):.12g}"
+
+
+def _geometric_size_profile_expression(
+    *,
+    size_min: float,
+    size_max: float,
+    ramp: str,
+    growth_rate: float | None,
+) -> str:
+    """Return a MathEval expression mapping a unit ramp from size_min to size_max."""
+    min_value = float(size_min)
+    max_value = float(size_max)
+    if min_value <= 0.0 or max_value <= min_value:
+        return _math_number(min_value)
+
+    clamped_ramp = f"Min(Max(({ramp}), 0), 1)"
+    if growth_rate is not None and float(growth_rate) > 1.0:
+        growth = _growth_number(float(growth_rate))
+        shaped_ramp = (
+            f"(log(1 + ({growth} - 1) * ({clamped_ramp})) / log({growth}))"
+        )
+    else:
+        shaped_ramp = clamped_ramp
+
+    return (
+        f"{_math_number(min_value)} * "
+        f"exp(log({_math_number(max_value)} / {_math_number(min_value)}) * "
+        f"({shaped_ramp}))"
+    )
+
+
 def _distance_from_point_to_box(
     point: Sequence[float],
     bounds_min: Sequence[float],
@@ -145,9 +178,11 @@ def _add_rectangular_airbox_envelope_field(
     gmsh.model.mesh.field.setString(
         field_id,
         "F",
-        (
-            f"{_math_number(envelope_inner)} + "
-            f"({_math_number(h_outer)} - {_math_number(envelope_inner)}) * ({fraction})"
+        _geometric_size_profile_expression(
+            size_min=envelope_inner,
+            size_max=float(h_outer),
+            ramp=fraction,
+            growth_rate=float(grading_ratio),
         ),
     )
     return field_id
@@ -178,12 +213,17 @@ def _add_airbox_grading_field(
     gmsh.model.mesh.field.setNumber(f_dist, "Sampling", int(max(2, sampling)))
 
     if str(grading_mode).lower() == "geometric":
-        log_g = math.log(float(grading_ratio))
         f_growth = gmsh.model.mesh.field.add("MathEval")
+        dist_span = max(float(dist_max), float(h_inner))
         gmsh.model.mesh.field.setString(
             f_growth,
             "F",
-            f"{float(h_inner)} * exp({log_g} * F{f_dist} / {float(h_inner)})",
+            _geometric_size_profile_expression(
+                size_min=float(h_inner),
+                size_max=float(h_outer),
+                ramp=f"F{f_dist} / {_math_number(dist_span)}",
+                growth_rate=float(grading_ratio),
+            ),
         )
 
         f_cap = gmsh.model.mesh.field.add("MathEval")

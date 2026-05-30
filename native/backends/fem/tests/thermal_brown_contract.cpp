@@ -405,6 +405,92 @@ void changed_accepted_dt_resamples_thermal_field() {
         "changed accepted dt cache key");
 }
 
+std::vector<double> collect_thermal_samples(double dt, int sample_count) {
+    auto ctx = make_thermal_context();
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.node_volumes = {1.0e-27};
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.material_fields.alpha_field = {0.1};
+    ctx.material_fields.Ms_field = {800e3};
+    ctx.adaptive_dt.current_dt = dt;
+    ctx.thermal_brown.seed = 987654321ull;
+    fullmag::fem::initialize_thermal_brown_field(ctx);
+
+    std::vector<double> samples;
+    samples.reserve(static_cast<size_t>(sample_count) * 3u);
+    for (int sample = 0; sample < sample_count; ++sample) {
+        ctx.state.current_time = static_cast<double>(sample + 1) * dt;
+        fullmag::fem::refresh_thermal_brown_field(ctx);
+        samples.push_back(ctx.thermal_brown.h_xyz[0]);
+        samples.push_back(ctx.thermal_brown.h_xyz[1]);
+        samples.push_back(ctx.thermal_brown.h_xyz[2]);
+    }
+    return samples;
+}
+
+double sample_variance(const std::vector<double> &samples) {
+    check(samples.size() > 1u, "thermal variance requires at least two samples");
+    double mean = 0.0;
+    for (double sample : samples) {
+        mean += sample;
+    }
+    mean /= static_cast<double>(samples.size());
+
+    double sum_squared_deviation = 0.0;
+    for (double sample : samples) {
+        const double deviation = sample - mean;
+        sum_squared_deviation += deviation * deviation;
+    }
+    return sum_squared_deviation / static_cast<double>(samples.size() - 1u);
+}
+
+void check_relative(double actual, double expected, double tolerance, const char *msg) {
+    const double relative_error = std::fabs(actual - expected) / std::fabs(expected);
+    if (relative_error > tolerance) {
+        std::fprintf(
+            stderr,
+            "FAIL: %s: expected %.17g, got %.17g (relative error %.6g > %.6g)\n",
+            msg,
+            expected,
+            actual,
+            relative_error,
+            tolerance);
+        std::exit(1);
+    }
+}
+
+void sampled_variance_scales_with_accepted_dt() {
+    const double dt_short = 1.0e-12;
+    const double dt_long = 4.0e-12;
+    const int sample_count = 4096;
+
+    const double sigma_short = fullmag::fem::thermal_brown_sigma(
+        300.0,
+        0.1,
+        2.211e5,
+        800e3,
+        1.0e-27,
+        dt_short);
+    const double sigma_long = fullmag::fem::thermal_brown_sigma(
+        300.0,
+        0.1,
+        2.211e5,
+        800e3,
+        1.0e-27,
+        dt_long);
+
+    const double variance_short = sample_variance(collect_thermal_samples(dt_short, sample_count));
+    const double variance_long = sample_variance(collect_thermal_samples(dt_long, sample_count));
+
+    check_relative(variance_short, sigma_short * sigma_short, 0.08, "short-dt Brown variance");
+    check_relative(variance_long, sigma_long * sigma_long, 0.08, "long-dt Brown variance");
+    check_relative(
+        variance_short / variance_long,
+        dt_long / dt_short,
+        0.10,
+        "Brown variance inverse-dt scaling");
+}
+
 void disabled_or_invalid_state_clears_thermal_field() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 1;
@@ -464,6 +550,7 @@ int main() {
     refresh_uses_per_node_sigma_mask_and_cache();
     seeded_replay_is_deterministic_for_same_time_and_dt();
     changed_accepted_dt_resamples_thermal_field();
+    sampled_variance_scales_with_accepted_dt();
     disabled_or_invalid_state_clears_thermal_field();
     thermal_field_adds_to_effective_field();
     thermal_plan_import_sets_temperature_seed_and_initializes_buffer();

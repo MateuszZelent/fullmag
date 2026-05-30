@@ -106,12 +106,12 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
   geometryScope: "surface",
   opacityPercent: 100,
-  pointColor: "var(--fm-border-strong)",
+  pointColor: "#8caaee",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "surface+edges",
   shaderColorMode: "orientation",
-  shaderMonoColor: "var(--fm-surface-magnetic)",
+  shaderMonoColor: "#babbf1",
   shaderVisible: true,
   surfaceColorSource: "orientation",
   vectorAlphaPercent: 100,
@@ -119,13 +119,13 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
-  vectorMonoColor: "var(--fm-accent)",
+  vectorMonoColor: "#99d1db",
   vectorSurfaceOffsetEnabled: false,
   vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
-  wireframeColor: "var(--fm-border-strong)",
+  wireframeColor: "#8caaee",
   wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
@@ -135,12 +135,12 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
   geometryScope: "full",
   opacityPercent: 28,
-  pointColor: "var(--fm-info)",
+  pointColor: "#e78284",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "wireframe",
   shaderColorMode: "monochrome",
-  shaderMonoColor: "var(--fm-airbox-fill)",
+  shaderMonoColor: "#ea999c",
   shaderVisible: false,
   surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
@@ -148,13 +148,13 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
-  vectorMonoColor: "var(--fm-info)",
+  vectorMonoColor: "#e78284",
   vectorSurfaceOffsetEnabled: false,
   vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
-  wireframeColor: "var(--fm-airbox-wire)",
+  wireframeColor: "#e78284",
   wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
@@ -859,7 +859,8 @@ function visualizationSettingsFromResolvedTarget(
     pointColor:
       settings.point_color ?? DEFAULT_AIRBOX_VISUALIZATION.pointColor,
     renderMode: settings.render_mode,
-    shaderMonoColor: settings.surface_mono_color,
+    shaderMonoColor:
+      settings.surface_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.shaderMonoColor,
     shaderVisible: settings.surface_visible,
     surfaceColorSource: settings.surface_color_source,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
@@ -872,11 +873,13 @@ function visualizationSettingsFromResolvedTarget(
     vectorColorMode: settings.vector_color_mode,
     vectorLengthScale:
       settings.vector_length_scale ?? DEFAULT_AIRBOX_VISUALIZATION.vectorLengthScale,
-    vectorMonoColor: settings.vector_mono_color,
+    vectorMonoColor:
+      settings.vector_mono_color ?? DEFAULT_AIRBOX_VISUALIZATION.vectorMonoColor,
     vectorThickness: settings.vector_thickness,
     vectorsVisible: settings.vectors_visible,
     visible: settings.visible,
-    wireframeColor: settings.wireframe_color,
+    wireframeColor:
+      settings.wireframe_color ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeColor,
     wireframeOpacityPercent: layerOpacityToPercent(settings.wireframe_opacity),
     wireframeVisible: settings.wireframe_visible,
   });
@@ -1135,6 +1138,7 @@ function normalizePatch(
   }
   if (normalized.renderMode) {
     Object.assign(normalized, renderModePatch(normalized.renderMode));
+    delete normalized.renderMode;
   }
   if (normalized.activeQuantityId !== undefined) {
     const activeQuantityId =
@@ -1157,9 +1161,20 @@ function normalizeVisualizationSettings(
     normalizeSurfaceColorSource(settings.surfaceColorSource) ??
     surfaceColorSourceFromColorMode(settings.shaderColorMode) ??
     "orientation";
+  const pointsVisible = Boolean(settings.pointsVisible);
+  const shaderVisible = Boolean(settings.shaderVisible);
+  const wireframeVisible = Boolean(settings.wireframeVisible);
   return {
     ...settings,
     primitiveVisible: settings.primitiveVisible ?? false,
+    pointsVisible,
+    renderMode: resolveRenderMode({
+      pointsVisible,
+      shaderVisible,
+      wireframeVisible,
+    }),
+    shaderVisible,
+    wireframeVisible,
     geometryScope:
       settings.geometryScope === "surface" || settings.geometryScope === "full"
         ? settings.geometryScope

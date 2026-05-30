@@ -78,6 +78,16 @@ interface BinPayload {
   fraction: number;
 }
 
+export interface MeshSizeDistributionHoverBin {
+  binLabel: string;
+  count: number;
+  distributionId: MeshSizeDistribution["id"];
+  distributionLabel: string;
+  fraction: number;
+  hi: number | null;
+  lo: number | null;
+}
+
 function formatSizeMarkerValue(value: number | null): string {
   if (value === null) return "unknown";
   const abs = Math.abs(value);
@@ -256,9 +266,13 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
 
 interface SizeDistributionChartProps {
   distribution: MeshSizeDistribution;
+  onHoverBin?: (bin: MeshSizeDistributionHoverBin | null) => void;
 }
 
-export function SizeDistributionChart({ distribution }: SizeDistributionChartProps) {
+export function SizeDistributionChart({
+  distribution,
+  onHoverBin,
+}: SizeDistributionChartProps) {
   const colors = useChartColors();
   const data = useMemo(
     () =>
@@ -266,10 +280,25 @@ export function SizeDistributionChart({ distribution }: SizeDistributionChartPro
         binLabel: bin.label,
         count: bin.count,
         fraction: bin.fraction,
+        hi: bin.hi,
+        lo: bin.lo,
         name: shortLabel(bin.label),
       })),
     [distribution.histogram],
   );
+  const hoverBin = (index: number) => {
+    const bin = distribution.histogram[index];
+    if (!bin) return;
+    onHoverBin?.({
+      binLabel: bin.label,
+      count: bin.count,
+      distributionId: distribution.id,
+      distributionLabel: distribution.label,
+      fraction: bin.fraction,
+      hi: bin.hi,
+      lo: bin.lo,
+    });
+  };
 
   if (data.length === 0) return null;
 
@@ -280,6 +309,8 @@ export function SizeDistributionChart({ distribution }: SizeDistributionChartPro
         .join(", ")}
       className="fm-mesh-quality-chart"
       data-distribution={distribution.id}
+      data-hoverable={onHoverBin ? "true" : "false"}
+      onMouseLeave={() => onHoverBin?.(null)}
     >
       <ResponsiveContainer width="100%" height={100}>
         <BarChart
@@ -340,6 +371,8 @@ export function SizeDistributionChart({ distribution }: SizeDistributionChartPro
             fill="url(#accentGradient)"
             radius={[4, 4, 0, 0]}
             maxBarSize={32}
+            onMouseEnter={(_entry: unknown, index: number) => hoverBin(index)}
+            onMouseLeave={() => onHoverBin?.(null)}
           />
         </BarChart>
       </ResponsiveContainer>

@@ -26,6 +26,7 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import type { Viewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DTopologyFreshness } from "../viewport3dTopologyStaleness";
 import type {
@@ -59,6 +60,7 @@ import {
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
+import { MeshSizeHighlightLayer } from "./MeshSizeHighlightLayer";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
@@ -104,6 +106,7 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
   onCameraInteractionStart?: () => void;
@@ -381,6 +384,7 @@ export function Viewport3DScene({
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
+  meshSizeHighlightModel,
   onCameraChange,
   onCameraInteractionEnd,
   onCameraInteractionStart,
@@ -582,6 +586,11 @@ export function Viewport3DScene({
         topologyModel={topologyModel}
         vectorColorMode={vectorColorMode}
         vectorStyle={vectorStyle}
+      />
+      <MeshSizeHighlightLayer
+        colors={colors}
+        model={meshSizeHighlightModel}
+        tracker={tracker}
       />
       <SelectionHighlightLayer
         bounds={selectionBounds}

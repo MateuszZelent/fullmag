@@ -1,7 +1,7 @@
 # FEM Thermal Interaction
 
 - Status: native FEM CPU interaction documentation umbrella
-- Last updated: 2026-05-17
+- Last updated: 2026-05-30
 - Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
@@ -90,9 +90,16 @@ Current local gate:
 - `fem_thermal_brown_contract` checks sigma, invalid-input zero behavior,
   initialization, per-node diagnostics, nonmagnetic-node zeroing, same-time/dt
   cache reuse, source-module ownership, and additive `H_eff` semantics.
+- It also runs a deterministic sampler moment check showing Brown-field sample
+  variance follows the documented `1/dt` scaling for accepted timesteps.
 
 Required before production qualification:
 
-- statistical moment tests over many samples;
+- active stochastic runtime evidence for the variance gate, accepted by
+  `tests/fem_thermal_validation/artifact_validation.py`;
+- Boltzmann macrospin CSV artifact acceptance is defined in
+  `tests/fem_thermal_validation/artifact_validation.py` and unit-tested by
+  `tests/fem_thermal_validation/test_acceptance.py`, but active stochastic LLG
+  trajectory evidence is still required;
 - deterministic seed/replay test through the public API;
 - CPU/GPU parity before any shared production capability label.

@@ -366,7 +366,7 @@ describe("ribbon structure", () => {
     });
     expect(solidColorNode).toMatchObject({
       disabled: false,
-      value: "var(--fm-surface-magnetic)",
+      value: "#babbf1",
     });
     expect(vectorAlphaNode).toMatchObject({ value: 100 });
     expect(visibilityNode).toMatchObject({
@@ -882,11 +882,11 @@ describe("ribbon structure", () => {
     expect(vectorThicknessNode).toMatchObject({ disabled: false, value: 1 });
     expect(wireframeColorNode).toMatchObject({
       disabled: false,
-      value: "var(--fm-airbox-wire)",
+      value: "#e78284",
     });
     expect(pointColorNode).toMatchObject({
       disabled: false,
-      value: "var(--fm-info)",
+      value: "#e78284",
     });
 
     if (

@@ -1,8 +1,9 @@
 # FEM Dzyaloshinskii-Moriya Interaction
 
-- Status: native FEM CPU runtime validated; native FEM GPU source/enablement
-  contract wired and live CUDA runtime smoke verified on 2026-05-29
-- Last updated: 2026-05-29
+- Status: native FEM CPU/GPU DMI is executable and covered by local
+  weak-residual/source contracts plus prior CUDA smoke evidence; public
+  validated status still requires the documented runtime validation workloads
+- Last updated: 2026-05-30
 - Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_bulk.hpp/.cpp`,
@@ -86,7 +87,7 @@ scratch lifetime and per-element MFEM buffers are isolated in
 `dmi_workspace.*`; interfacial residual and energy assembly live in
 `dmi_interfacial.*`.
 
-## Capability and runtime status
+## Ograniczenia capability i status runtime
 
 - Active DMI requires `FULLMAG_HAS_MFEM_STACK`.
 - Local non-MFEM builds verify disabled behavior and explicit environment
@@ -124,6 +125,11 @@ Current gates:
   fixture that proves non-default normal vectors are used in the residual. It
   also covers interfacial domain-wall handedness, interfacial boundary tilt,
   and bulk spiral-pitch handedness/sign.
+- `tests/fem_dmi_validation/artifact_validation.py` validates runtime CSV
+  artifacts for DMI chirality, signed spiral pitch, and boundary tilt.
+  `tests/fem_dmi_validation/test_acceptance.py` unit-tests that artifact
+  acceptance. These checks do not replace the active MFEM/CUDA execution needed
+  before public validated-status promotion.
 - `cargo test -p fullmag-runner --features fem-gpu dmi -- --test-threads=1`
   covers runner DMI quantity activation, field snapshot readback, CPU native DMI
   runtime, GPU DMI runtime smoke wiring, and FEM eigen bulk-DMI non-reciprocity.

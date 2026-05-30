@@ -25,6 +25,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
+import { Vector3Field } from "../primitives/Vector3Field";
 import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
 import {
   buildMaterialAssignmentPatch,
@@ -392,26 +393,14 @@ function ObjectMaterialPanelView({
           value={anisotropyDraft.ku1}
           onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
         />
-        <FormField
-          label="Axis X"
-          type="number"
+        <Vector3Field
+          label="Axis"
           disabled={!anisotropyDraft.present}
-          value={anisotropyDraft.axisX}
-          onChange={(event) => updateAnisotropyDraft({ axisX: event.target.value })}
-        />
-        <FormField
-          label="Axis Y"
-          type="number"
-          disabled={!anisotropyDraft.present}
-          value={anisotropyDraft.axisY}
-          onChange={(event) => updateAnisotropyDraft({ axisY: event.target.value })}
-        />
-        <FormField
-          label="Axis Z"
-          type="number"
-          disabled={!anisotropyDraft.present}
-          value={anisotropyDraft.axisZ}
-          onChange={(event) => updateAnisotropyDraft({ axisZ: event.target.value })}
+          values={[anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ]}
+          onChange={(index, value) => {
+            const fields = ["axisX", "axisY", "axisZ"] as const;
+            updateAnisotropyDraft({ [fields[index]]: value });
+          }}
         />
       </InspectorSection>
 

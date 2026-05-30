@@ -1,4 +1,8 @@
-import { MetricHistogramChart, SizeDistributionChart } from "./MeshQualityChart";
+import {
+  MetricHistogramChart,
+  SizeDistributionChart,
+  type MeshSizeDistributionHoverBin,
+} from "./MeshQualityChart";
 
 import type {
   MeshQualityHistogramBin,
@@ -100,8 +104,10 @@ function formatDistributionValue(
 
 function SizeDistributionCard({
   distribution,
+  onHoverBin,
 }: {
   distribution: MeshSizeDistribution;
+  onHoverBin?: (bin: MeshSizeDistributionHoverBin | null) => void;
 }) {
   const hasHistogram = distribution.histogram.length > 0;
   return (
@@ -128,7 +134,10 @@ function SizeDistributionCard({
       </dl>
       {hasHistogram ? (
         <>
-          <SizeDistributionChart distribution={distribution} />
+          <SizeDistributionChart
+            distribution={distribution}
+            onHoverBin={onHoverBin}
+          />
           <ul
             aria-label={`${distribution.label} histogram bins`}
             className="fm-mesh-size-distribution__bins"
@@ -151,12 +160,16 @@ function SizeDistributionCard({
 }
 
 export function MeshQualityStatisticsView({
+  onHoverSizeDistributionBin,
   onRefineWorstElement,
   onSelectMetric,
   onSelectWorstElement,
   refinementState,
   statistics,
 }: {
+  onHoverSizeDistributionBin?: (
+    bin: MeshSizeDistributionHoverBin | null,
+  ) => void;
   onRefineWorstElement?: () => void;
   onSelectMetric?: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement?: (element: MeshWorstElement) => void;
@@ -254,6 +267,7 @@ export function MeshQualityStatisticsView({
             <SizeDistributionCard
               distribution={distribution}
               key={distribution.id}
+              onHoverBin={onHoverSizeDistributionBin}
             />
           ))}
         </section>

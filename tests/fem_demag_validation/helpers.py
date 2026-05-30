@@ -19,6 +19,23 @@ class ValidationFailure(RuntimeError):
     """Raised when a demag validation run does not meet acceptance criteria."""
 
 
+def require_native_runtime_core() -> None:
+    """Fail fast when the direct Python runtime bridge is unavailable."""
+    try:
+        from fullmag import _core
+    except ImportError as exc:  # pragma: no cover - import wiring failure
+        raise ValidationFailure(
+            "runtime validation requires the fullmag Python package and PyO3 "
+            "_fullmag_core bridge"
+        ) from exc
+    if getattr(_core, "_native_core", None) is None:
+        raise ValidationFailure(
+            "runtime validation requires PyO3 _fullmag_core built with the "
+            "MFEM/libCEED runtime stack; use the managed CLI only for "
+            "capture-stage smoke checks"
+        )
+
+
 def _row_label(row: dict, label_key: str | None, index: int) -> str:
     if label_key and label_key in row:
         return str(row[label_key])
@@ -101,6 +118,93 @@ def require_grouped_error_improvement(
                 f"{group}: not convergent ({first_error * 100:.2f}% -> "
                 f"{last_error * 100:.2f}%)"
             )
+
+
+def require_grouped_sum_close(
+    rows: Sequence[dict],
+    *,
+    group_key: str,
+    value_key: str,
+    expected_sum: float,
+    tolerance: float,
+    required_axis_key: str | None = None,
+    required_axes: Sequence[str] = (),
+) -> None:
+    """Fail validation when grouped scalar sums are incomplete or too far off."""
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        group = str(row.get(group_key, "unknown"))
+        grouped.setdefault(group, []).append(row)
+
+    if not grouped:
+        raise ValidationFailure("validation produced no sum groups")
+
+    for group, group_rows in grouped.items():
+        if required_axis_key is not None and required_axes:
+            axes = {
+                str(row.get(required_axis_key))
+                for row in group_rows
+                if row.get(required_axis_key) is not None
+            }
+            missing = [axis for axis in required_axes if axis not in axes]
+            if missing:
+                raise ValidationFailure(
+                    f"{group}: expected axes {tuple(required_axes)}, missing {tuple(missing)}"
+                )
+
+        values = []
+        for row in group_rows:
+            value = row.get(value_key)
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                values.append(float(value))
+        if not values:
+            raise ValidationFailure(f"{group}: no finite {value_key} values")
+
+        total = sum(values)
+        if abs(total - expected_sum) > tolerance:
+            raise ValidationFailure(
+                f"{group}: {value_key} sum {total:.4f} differs from "
+                f"{expected_sum:.4f} by more than {tolerance:.4f}"
+            )
+
+
+def require_solver_telemetry(
+    rows: Sequence[dict],
+    *,
+    label_key: str | None = None,
+    iteration_key: str = "demag_linear_iterations",
+    residual_key: str = "demag_linear_residual",
+    phase_keys: Sequence[str] = (
+        "demag_wall_time_ns",
+        "demag_assemble_wall_time_ns",
+        "demag_solve_wall_time_ns",
+        "demag_recover_wall_time_ns",
+        "demag_energy_wall_time_ns",
+    ),
+) -> None:
+    """Fail validation when demag solve telemetry is missing or non-finite."""
+    if not rows:
+        raise ValidationFailure("validation produced no demag telemetry rows")
+    for index, row in enumerate(rows):
+        label = _row_label(row, label_key, index)
+        iterations = row.get(iteration_key)
+        if not isinstance(iterations, (int, float)) or not math.isfinite(float(iterations)):
+            raise ValidationFailure(f"{label}: {iteration_key} is not finite")
+        if float(iterations) < 0.0:
+            raise ValidationFailure(f"{label}: {iteration_key} must be nonnegative")
+
+        residual = row.get(residual_key)
+        if not isinstance(residual, (int, float)) or not math.isfinite(float(residual)):
+            raise ValidationFailure(f"{label}: {residual_key} is not finite")
+        if float(residual) < 0.0:
+            raise ValidationFailure(f"{label}: {residual_key} must be nonnegative")
+
+        for key in phase_keys:
+            value = row.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValidationFailure(f"{label}: {key} is not finite")
+            if float(value) < 0.0:
+                raise ValidationFailure(f"{label}: {key} must be nonnegative")
 
 
 # ── Analytical references ───────────────────────────────────────────────

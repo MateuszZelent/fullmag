@@ -341,7 +341,7 @@ async function ensureObjectScene(page, viewport) {
 async function setVisualProfile(page, viewport, profile) {
   if ((await viewport.getAttribute("data-visual-profile-id")) === profile) return;
 
-  await page.getByRole("tab", { name: "View" }).click({ force: true });
+  await page.getByRole("tab", { exact: true, name: "View" }).click({ force: true });
   await page.locator('[data-action-id="view-render-quality"]').click({ force: true });
   await page
     .getByRole("menuitemradio", { exact: true, name: profileLabel(profile) })
@@ -360,7 +360,7 @@ async function setVisualProfile(page, viewport, profile) {
 async function enableDimensionFrameCage(page, canvas) {
   const commandId = "viewport-3d.dimension-frame-cage";
   const baseline = await sampleCanvasComposite(page, canvas);
-  await page.getByRole("tab", { name: "View" }).click({ force: true });
+  await page.getByRole("tab", { exact: true, name: "View" }).click({ force: true });
   await page
     .locator('[data-action-id="view-dimension-frame"]')
     .click({ force: true });

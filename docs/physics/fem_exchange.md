@@ -1,7 +1,7 @@
 # FEM Exchange Interaction
 
 - Status: native FEM CPU module contract, full field assembly requires MFEM runtime validation
-- Last updated: 2026-05-18
+- Last updated: 2026-05-30
 - Implementation:
   `native/backends/fem/cpu/mfem/interactions/exchange.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/exchange_operator.hpp/.cpp`,
@@ -124,5 +124,10 @@ aggregate, operator, field-compute, runtime-refresh, fallback, mass-projection,
 and legacy GPU upload sources, plus exchange enablement storage in
 `ExchangeRuntimeState` instead of flat `Context`.
 
-The full MFEM exchange branch still requires an environment with complete MFEM
-headers and libraries.
+Runtime validation is gated by
+`tests/fem_exchange_validation/sinusoidal_mode.py`. The scripted acceptance
+requires finite `H_ex` and energy metrics, finest-mesh `H_ex` relative error
+below 25% against `2 A_ex/(mu0 Ms) Delta m`, and finest-mesh energy relative
+error below 8% against `A_ex k^2 V`. Executing the full CSV sweep still requires
+an environment with complete MFEM/libCEED headers, libraries, and the matching
+PyO3 `_fullmag_core`.

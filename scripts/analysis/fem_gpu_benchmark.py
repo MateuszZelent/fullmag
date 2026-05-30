@@ -502,6 +502,11 @@ def parse_args() -> argparse.Namespace:
         help="Fail unless matching FEM CPU/GPU rows agree on final energy, max torque, and relaxation step count",
     )
     parser.add_argument(
+        "--require-gpu-strict-residency",
+        action="store_true",
+        help="Fail unless completed FEM GPU rows report device source-of-truth and zero hot-loop compute host transfers/syncs",
+    )
+    parser.add_argument(
         "--cpu-gpu-summary-output",
         type=str,
         default=None,
@@ -738,6 +743,7 @@ def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace)
     args.require_stable_solver_mesh = True
     args.require_demag_converged = True
     args.require_cpu_gpu_consistency = True
+    args.require_gpu_strict_residency = True
 
 
 def canonical_consistency_scenario(scenario: str) -> str:
@@ -2180,6 +2186,34 @@ def resolved_execution_failure(row: Mapping[str, object]) -> str | None:
     return None
 
 
+def gpu_strict_residency_failures(results: list[dict[str, object]]) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("backend") != "fem_gpu" or row.get("status") != "ok":
+            continue
+        case = repeated_case_key(row)
+        if row.get("fem_data_residency") != "device_source_of_truth":
+            failures.append(
+                f"case={case} fem_gpu strict residency requires "
+                "fem_data_residency='device_source_of_truth' "
+                f"got {row.get('fem_data_residency')!r}"
+            )
+        for key in (
+            "hot_loop_compute_h2d_bytes",
+            "hot_loop_compute_d2h_bytes",
+            "hot_loop_compute_host_sync_count",
+        ):
+            value = as_int(row.get(key))
+            if value is None:
+                failures.append(f"case={case} fem_gpu strict residency missing {key}")
+                continue
+            if value != 0:
+                failures.append(
+                    f"case={case} fem_gpu strict residency requires {key}=0 got {value}"
+                )
+    return failures
+
+
 def numeric_abs_diff(left: object, right: object) -> float | None:
     left_value = as_float(left)
     right_value = as_float(right)
@@ -2476,6 +2510,7 @@ def cpu_gpu_consistency_summary(
     results: list[dict[str, object]],
     *,
     case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
     energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
     energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
     torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
@@ -2487,6 +2522,7 @@ def cpu_gpu_consistency_summary(
     failures = cpu_gpu_consistency_failures(
         results,
         case_manifests=case_manifests,
+        require_gpu_strict_residency=require_gpu_strict_residency,
         energy_rtol=energy_rtol,
         energy_atol=energy_atol,
         torque_rtol=torque_rtol,
@@ -2506,6 +2542,7 @@ def cpu_gpu_consistency_summary(
         "failed_count": sum(1 for row in results if row.get("status") != "ok"),
         "failure_count": len(failures),
         "failures": failures,
+        "require_gpu_strict_residency": require_gpu_strict_residency,
         "ok_count": sum(1 for row in results if row.get("status") == "ok"),
         "pair_count": len(pairs),
         "pairs": pairs,
@@ -2524,6 +2561,7 @@ def emit_cpu_gpu_consistency_summary(
     results: list[dict[str, object]],
     *,
     case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
     energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
     energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
     torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
@@ -2537,6 +2575,7 @@ def emit_cpu_gpu_consistency_summary(
             cpu_gpu_consistency_summary(
                 results,
                 case_manifests=case_manifests,
+                require_gpu_strict_residency=require_gpu_strict_residency,
                 energy_rtol=energy_rtol,
                 energy_atol=energy_atol,
                 torque_rtol=torque_rtol,
@@ -2554,6 +2593,7 @@ def write_cpu_gpu_consistency_summary(
     output_path: str | Path,
     *,
     case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
     energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
     energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
     torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
@@ -2564,6 +2604,7 @@ def write_cpu_gpu_consistency_summary(
     summary = cpu_gpu_consistency_summary(
         results,
         case_manifests=case_manifests,
+        require_gpu_strict_residency=require_gpu_strict_residency,
         energy_rtol=energy_rtol,
         energy_atol=energy_atol,
         torque_rtol=torque_rtol,
@@ -3026,6 +3067,7 @@ def cpu_gpu_consistency_failures(
     results: list[dict[str, object]],
     *,
     case_manifests: list[dict[str, object]] | None = None,
+    require_gpu_strict_residency: bool = False,
     energy_rtol: float = DEFAULT_CPU_GPU_ENERGY_RTOL,
     energy_atol: float = DEFAULT_CPU_GPU_ENERGY_ATOL_J,
     torque_rtol: float = DEFAULT_CPU_GPU_TORQUE_RTOL,
@@ -3037,6 +3079,8 @@ def cpu_gpu_consistency_failures(
         results,
         case_manifests=case_manifests,
     )
+    if require_gpu_strict_residency:
+        failures.extend(gpu_strict_residency_failures(results))
     grouped: dict[tuple[object, ...], dict[str, list[dict[str, object]]]] = {}
     for row in results:
         backend = row.get("backend")
@@ -3820,6 +3864,7 @@ def main() -> None:
             results,
             args.cpu_gpu_summary_output,
             case_manifests=cpu_gpu_manifests,
+            require_gpu_strict_residency=args.require_gpu_strict_residency,
             energy_rtol=args.cpu_gpu_energy_rtol,
             energy_atol=args.cpu_gpu_energy_atol,
             torque_rtol=args.cpu_gpu_torque_rtol,
@@ -3863,6 +3908,7 @@ def main() -> None:
             cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
                 results,
                 case_manifests=cpu_gpu_manifests,
+                require_gpu_strict_residency=args.require_gpu_strict_residency,
                 energy_rtol=args.cpu_gpu_energy_rtol,
                 energy_atol=args.cpu_gpu_energy_atol,
                 torque_rtol=args.cpu_gpu_torque_rtol,
@@ -3949,6 +3995,7 @@ def main() -> None:
             cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
                 results,
                 case_manifests=cpu_gpu_manifests,
+                require_gpu_strict_residency=args.require_gpu_strict_residency,
                 energy_rtol=args.cpu_gpu_energy_rtol,
                 energy_atol=args.cpu_gpu_energy_atol,
                 torque_rtol=args.cpu_gpu_torque_rtol,

@@ -13,6 +13,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { isMagneticOnlyQuantityId } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -79,6 +80,7 @@ import {
   buildMeshQualityVertexColors,
   type MeshQualityColorMetric,
 } from "../viewport3dQualityMapping";
+import { buildViewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
 import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
@@ -266,11 +268,13 @@ export function resolveViewport3DSceneCameraView({
 export function useViewport3DSceneModel({
   commandState,
   colors,
+  meshSizeHighlight,
   resourceCounts,
   selection,
 }: {
   commandState: ReturnType<typeof useViewport3DCommandState>;
   colors: Viewport3DSceneProps["colors"] | null;
+  meshSizeHighlight: MeshSizeHistogramHighlight | null;
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
 }) {
@@ -414,6 +418,28 @@ export function useViewport3DSceneModel({
       meshQualityData.data,
       meshQualityMetric,
       meshQualityOverlayVisible,
+      topology.data,
+      topologyCurrent,
+    ],
+  );
+  const meshSizeHighlightModel = useMemo(
+    () =>
+      topologyCurrent
+        ? measureViewport3DModelBuild(
+            "fullmag.viewport3d.buildMeshSizeHistogramHighlight",
+            () =>
+              buildViewport3DMeshSizeHighlightModel(
+                topology.data,
+                currentTopologyRenderModel,
+                femDomain,
+                meshSizeHighlight,
+              ),
+          )
+        : null,
+    [
+      currentTopologyRenderModel,
+      femDomain,
+      meshSizeHighlight,
       topology.data,
       topologyCurrent,
     ],
@@ -999,6 +1025,7 @@ export function useViewport3DSceneModel({
     meshQualityColors,
     meshQualityMetric,
     meshQualityOverlayVisible,
+    meshSizeHighlightModel,
     meshQualityRange: meshQualityColors?.range ?? null,
     primitiveModel,
     quantityId,

@@ -286,7 +286,7 @@ function sanitizeDraft(draft: CrossSectionDraft): CrossSectionDraft {
   return {
     ...draft,
     filterExpression: draft.filterExpression.trim(),
-    name: draft.name.trim() || DEFAULT_DRAFT.name,
+    name: draft.name,
     positionPercent: clamp(draft.positionPercent, 0, 100),
     rotationDegrees: clamp(draft.rotationDegrees, -180, 180),
     shrinkFactor: clamp(draft.shrinkFactor, 0.5, 1),

@@ -602,6 +602,9 @@ def _build_transition_fields(
             raw_transition_distance
         )
         transition_distance = transition_distance_requested
+        transition_growth = _coerce_positive_float(
+            entry.get("transition_growth") if entry else None  # type: ignore[union-attr]
+        )
         interface_hmax = _coerce_positive_float(
             entry.get("interface_hmax") if entry else None  # type: ignore[union-attr]
         )
@@ -620,8 +623,8 @@ def _build_transition_fields(
         if transition_size_min >= default_hmax:
             continue
 
-        # SizeMax = default_hmax (the airbox target) so the Threshold
-        # linearly ramps from the near-interface target to default_hmax.
+        # SizeMax = default_hmax (the airbox target) so the transition
+        # field grades from the near-interface target to default_hmax.
         # DistMin preserves the requested fine shell before the ramp starts.
         transition_size_max = default_hmax
         transition_dist_max = transition_dist_min + transition_distance
@@ -637,19 +640,22 @@ def _build_transition_fields(
                     bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
                 if bounds_min is None or bounds_max is None:
                     continue
+                params = {
+                    "BoundsMin": [float(value) for value in bounds_min],
+                    "BoundsMax": [float(value) for value in bounds_max],
+                    "SizeMin": float(transition_size_min),
+                    "SizeMax": float(transition_size_max),
+                    "DistMin": float(transition_dist_min),
+                    "DistMax": float(transition_dist_max),
+                    "Grading": "geometric",
+                    "Source": "transition_distance",
+                }
+                if transition_growth is not None and transition_growth > 1.0:
+                    params["GrowthRate"] = float(transition_growth)
                 fields.append(
                     {
                         "kind": "AxisAlignedBoxDistanceThreshold",
-                        "params": {
-                            "BoundsMin": [float(value) for value in bounds_min],
-                            "BoundsMax": [float(value) for value in bounds_max],
-                            "SizeMin": float(transition_size_min),
-                            "SizeMax": float(transition_size_max),
-                            "DistMin": float(transition_dist_min),
-                            "DistMax": float(transition_dist_max),
-                            "Grading": "geometric",
-                            "Source": "transition_distance",
-                        },
+                        "params": params,
                     }
                 )
                 continue
@@ -663,6 +669,8 @@ def _build_transition_fields(
                 "Grading": "geometric",
                 "Source": "explicit" if transition_distance_requested is not None else "auto",
             }
+            if transition_growth is not None and transition_growth > 1.0:
+                params["GrowthRate"] = float(transition_growth)
             fields.append(
                 {
                     "kind": "TransitionShellThreshold",
@@ -692,6 +700,8 @@ def _build_transition_fields(
             "MatchPadding": float(bulk_hmax),
             "Source": "explicit" if transition_distance_requested is not None else "auto",
         }
+        if transition_growth is not None and transition_growth > 1.0:
+            params["GrowthRate"] = float(transition_growth)
         fields.append(
             {
                 "kind": "BoundsSurfaceThreshold",

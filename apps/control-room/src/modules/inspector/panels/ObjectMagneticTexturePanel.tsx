@@ -28,6 +28,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
+import { Vector3Field } from "../primitives/Vector3Field";
 import {
   buildObjectMagneticTextureAssetDraft,
   objectMagneticTextureDraftFromModel,
@@ -168,12 +169,6 @@ const WALL_KIND_OPTIONS = [
   ["bloch", "Bloch"],
 ] as const;
 
-const UNIFORM_FIELDS = [
-  { field: "directionX", label: "Direction X" },
-  { field: "directionY", label: "Direction Y" },
-  { field: "directionZ", label: "Direction Z" },
-] as const satisfies readonly DraftNumberFieldSpec[];
-
 const VORTEX_FIELDS = [
   { field: "circulation", label: "Circulation" },
   { field: "core_polarity", label: "Core Polarity" },
@@ -185,53 +180,6 @@ const SKYRMION_FIELDS = [
   { field: "wall_width", label: "Wall Width", unit: "m" },
   { field: "core_polarity", label: "Core Polarity" },
   { field: "chirality", label: "Chirality" },
-] as const satisfies readonly DraftNumberFieldSpec[];
-
-const DOMAIN_WALL_FIELDS = [
-  { field: "center_offset", label: "Center Offset", unit: "m" },
-  { field: "wall_width", label: "Wall Width", unit: "m" },
-  { field: "leftX", label: "Left X" },
-  { field: "leftY", label: "Left Y" },
-  { field: "leftZ", label: "Left Z" },
-  { field: "rightX", label: "Right X" },
-  { field: "rightY", label: "Right Y" },
-  { field: "rightZ", label: "Right Z" },
-] as const satisfies readonly DraftNumberFieldSpec[];
-
-const TWO_DOMAIN_FIELDS = [
-  { field: "leftX", label: "Left X" },
-  { field: "leftY", label: "Left Y" },
-  { field: "leftZ", label: "Left Z" },
-  { field: "rightX", label: "Right X" },
-  { field: "rightY", label: "Right Y" },
-  { field: "rightZ", label: "Right Z" },
-  { field: "wallX", label: "Wall X" },
-  { field: "wallY", label: "Wall Y" },
-  { field: "wallZ", label: "Wall Z" },
-] as const satisfies readonly DraftNumberFieldSpec[];
-
-const HELICAL_FIELDS = [
-  { field: "wavevectorX", label: "Wavevector X" },
-  { field: "wavevectorY", label: "Wavevector Y" },
-  { field: "wavevectorZ", label: "Wavevector Z" },
-  { field: "e1X", label: "E1 X" },
-  { field: "e1Y", label: "E1 Y" },
-  { field: "e1Z", label: "E1 Z" },
-  { field: "e2X", label: "E2 X" },
-  { field: "e2Y", label: "E2 Y" },
-  { field: "e2Z", label: "E2 Z" },
-  { field: "phase_rad", label: "Phase", unit: "rad" },
-] as const satisfies readonly DraftNumberFieldSpec[];
-
-const CONICAL_FIELDS = [
-  { field: "wavevectorX", label: "Wavevector X" },
-  { field: "wavevectorY", label: "Wavevector Y" },
-  { field: "wavevectorZ", label: "Wavevector Z" },
-  { field: "cone_axisX", label: "Cone Axis X" },
-  { field: "cone_axisY", label: "Cone Axis Y" },
-  { field: "cone_axisZ", label: "Cone Axis Z" },
-  { field: "phase_rad", label: "Phase", unit: "rad" },
-  { field: "cone_angle_rad", label: "Cone Angle", unit: "rad" },
 ] as const satisfies readonly DraftNumberFieldSpec[];
 
 function patchDraftField(
@@ -361,7 +309,14 @@ function MagneticTexturePresetParametersSection({
   return (
     <InspectorSection value="preset" title="Preset Parameters">
       {draft.presetKind === "uniform" ? (
-        <DraftNumberFields draft={draft} fields={UNIFORM_FIELDS} updateDraft={updateDraft} />
+        <Vector3Field
+          label="Direction"
+          values={[draft.directionX, draft.directionY, draft.directionZ]}
+          onChange={(index, value) => {
+            const fields = ["directionX", "directionY", "directionZ"] as const;
+            updateDraft({ [fields[index]]: value });
+          }}
+        />
       ) : null}
       {draft.presetKind === "random_seeded" ? (
         <DraftNumberField draft={draft} field="seed" label="Seed" updateDraft={updateDraft} />
@@ -389,20 +344,105 @@ function MagneticTexturePresetParametersSection({
             options={WALL_KIND_OPTIONS}
             updateDraft={updateDraft}
           />
-          <DraftNumberFields draft={draft} fields={DOMAIN_WALL_FIELDS} updateDraft={updateDraft} />
+          <DraftNumberField draft={draft} field="center_offset" label="Center Offset" unit="m" updateDraft={updateDraft} />
+          <DraftNumberField draft={draft} field="wall_width" label="Wall Width" unit="m" updateDraft={updateDraft} />
+          <Vector3Field
+            label="Left"
+            values={[draft.leftX, draft.leftY, draft.leftZ]}
+            onChange={(index, value) => {
+              const fields = ["leftX", "leftY", "leftZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="Right"
+            values={[draft.rightX, draft.rightY, draft.rightZ]}
+            onChange={(index, value) => {
+              const fields = ["rightX", "rightY", "rightZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
         </>
       ) : null}
       {draft.presetKind === "two_domain" ? (
         <>
           <NormalAxisSelect draft={draft} updateDraft={updateDraft} />
-          <DraftNumberFields draft={draft} fields={TWO_DOMAIN_FIELDS} updateDraft={updateDraft} />
+          <Vector3Field
+            label="Left"
+            values={[draft.leftX, draft.leftY, draft.leftZ]}
+            onChange={(index, value) => {
+              const fields = ["leftX", "leftY", "leftZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="Right"
+            values={[draft.rightX, draft.rightY, draft.rightZ]}
+            onChange={(index, value) => {
+              const fields = ["rightX", "rightY", "rightZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="Wall"
+            values={[draft.wallX, draft.wallY, draft.wallZ]}
+            onChange={(index, value) => {
+              const fields = ["wallX", "wallY", "wallZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
         </>
       ) : null}
       {draft.presetKind === "helical" ? (
-        <DraftNumberFields draft={draft} fields={HELICAL_FIELDS} updateDraft={updateDraft} />
+        <>
+          <Vector3Field
+            label="Wavevector"
+            values={[draft.wavevectorX, draft.wavevectorY, draft.wavevectorZ]}
+            onChange={(index, value) => {
+              const fields = ["wavevectorX", "wavevectorY", "wavevectorZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="E1"
+            values={[draft.e1X, draft.e1Y, draft.e1Z]}
+            onChange={(index, value) => {
+              const fields = ["e1X", "e1Y", "e1Z"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="E2"
+            values={[draft.e2X, draft.e2Y, draft.e2Z]}
+            onChange={(index, value) => {
+              const fields = ["e2X", "e2Y", "e2Z"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <DraftNumberField draft={draft} field="phase_rad" label="Phase" unit="rad" updateDraft={updateDraft} />
+        </>
       ) : null}
       {draft.presetKind === "conical" ? (
-        <DraftNumberFields draft={draft} fields={CONICAL_FIELDS} updateDraft={updateDraft} />
+        <>
+          <Vector3Field
+            label="Wavevector"
+            values={[draft.wavevectorX, draft.wavevectorY, draft.wavevectorZ]}
+            onChange={(index, value) => {
+              const fields = ["wavevectorX", "wavevectorY", "wavevectorZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <Vector3Field
+            label="Cone Axis"
+            values={[draft.cone_axisX, draft.cone_axisY, draft.cone_axisZ]}
+            onChange={(index, value) => {
+              const fields = ["cone_axisX", "cone_axisY", "cone_axisZ"] as const;
+              updateDraft({ [fields[index]]: value });
+            }}
+          />
+          <DraftNumberField draft={draft} field="phase_rad" label="Phase" unit="rad" updateDraft={updateDraft} />
+          <DraftNumberField draft={draft} field="cone_angle_rad" label="Cone Angle" unit="rad" updateDraft={updateDraft} />
+        </>
       ) : null}
     </InspectorSection>
   );
@@ -458,15 +498,32 @@ function MagneticTextureTransformSection({
           </Button>
         </div>
       )}
-      <FormField label="Translate X" type="number" unit="m" value={draft.translationX} onChange={(event) => updateDraft({ translationX: event.target.value })} />
-      <FormField label="Translate Y" type="number" unit="m" value={draft.translationY} onChange={(event) => updateDraft({ translationY: event.target.value })} />
-      <FormField label="Translate Z" type="number" unit="m" value={draft.translationZ} onChange={(event) => updateDraft({ translationZ: event.target.value })} />
-      <FormField label="Rotate X" type="number" unit="deg" value={draft.rotationXDeg} onChange={(event) => updateDraft({ rotationXDeg: event.target.value })} />
-      <FormField label="Rotate Y" type="number" unit="deg" value={draft.rotationYDeg} onChange={(event) => updateDraft({ rotationYDeg: event.target.value })} />
-      <FormField label="Rotate Z" type="number" unit="deg" value={draft.rotationZDeg} onChange={(event) => updateDraft({ rotationZDeg: event.target.value })} />
-      <FormField label="Scale X" type="number" value={draft.scaleX} onChange={(event) => updateDraft({ scaleX: event.target.value })} />
-      <FormField label="Scale Y" type="number" value={draft.scaleY} onChange={(event) => updateDraft({ scaleY: event.target.value })} />
-      <FormField label="Scale Z" type="number" value={draft.scaleZ} onChange={(event) => updateDraft({ scaleZ: event.target.value })} />
+      <Vector3Field
+        label="Translation"
+        unit="m"
+        values={[draft.translationX, draft.translationY, draft.translationZ]}
+        onChange={(index, value) => {
+          const fields = ["translationX", "translationY", "translationZ"] as const;
+          updateDraft({ [fields[index]]: value });
+        }}
+      />
+      <Vector3Field
+        label="Rotation"
+        unit="deg"
+        values={[draft.rotationXDeg, draft.rotationYDeg, draft.rotationZDeg]}
+        onChange={(index, value) => {
+          const fields = ["rotationXDeg", "rotationYDeg", "rotationZDeg"] as const;
+          updateDraft({ [fields[index]]: value });
+        }}
+      />
+      <Vector3Field
+        label="Scale"
+        values={[draft.scaleX, draft.scaleY, draft.scaleZ]}
+        onChange={(index, value) => {
+          const fields = ["scaleX", "scaleY", "scaleZ"] as const;
+          updateDraft({ [fields[index]]: value });
+        }}
+      />
     </InspectorSection>
   );
 }
@@ -495,9 +552,15 @@ function MagneticTextureMappingSection({
         <option value="repeat">Repeat</option>
         <option value="clamp">Clamp</option>
       </FormField>
-      <FormField label="Pivot X" type="number" unit="m" value={draft.pivotX} onChange={(event) => updateDraft({ pivotX: event.target.value })} />
-      <FormField label="Pivot Y" type="number" unit="m" value={draft.pivotY} onChange={(event) => updateDraft({ pivotY: event.target.value })} />
-      <FormField label="Pivot Z" type="number" unit="m" value={draft.pivotZ} onChange={(event) => updateDraft({ pivotZ: event.target.value })} />
+      <Vector3Field
+        label="Pivot"
+        unit="m"
+        values={[draft.pivotX, draft.pivotY, draft.pivotZ]}
+        onChange={(index, value) => {
+          const fields = ["pivotX", "pivotY", "pivotZ"] as const;
+          updateDraft({ [fields[index]]: value });
+        }}
+      />
     </InspectorSection>
   );
 }

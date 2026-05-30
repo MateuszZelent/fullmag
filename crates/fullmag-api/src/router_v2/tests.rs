@@ -3855,6 +3855,50 @@ async fn mesh_universe_quality_fallback_reports_volume_ratio() {
 }
 
 #[tokio::test]
+async fn mesh_universe_quality_reports_airbox_size_distribution_without_quality_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.element_markers = vec![0];
+        mesh.per_domain_quality.clear();
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "effective_airbox_target": { "maximum_element_size": 5e-7 }
+        }));
+        snapshot.mesh_revision = 25;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/universe/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 25);
+    assert_eq!(json["quality"]["global"]["kind"], "airbox");
+    assert_eq!(json["quality"]["global"]["element_count"], 1);
+    assert_eq!(
+        json["quality"]["global"]["characteristic_size"]["histogram"][0]["count"],
+        1
+    );
+    assert_eq!(
+        json["quality"]["global"]["edge_length"]["histogram"][0]["count"],
+        3
+    );
+    assert_eq!(
+        json["quality"]["global"]["volume"]["histogram"][0]["count"],
+        1
+    );
+}
+
+#[tokio::test]
 async fn mesh_summary_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

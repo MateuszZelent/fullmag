@@ -13,6 +13,7 @@ import {
   buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  geometryScopeDisplayPatch,
   resolveVisualizationVectorBudgetRange,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceDisplayPassPatch,
@@ -71,7 +72,8 @@ describe("ObjectVisualizationPanelModel", () => {
   it("keeps color picker input compatible with CSS token defaults", () => {
     expect(colorPickerInputValue("#00ffaa")).toBe("#00ffaa");
     expect(colorPickerInputValue("#00FFAA")).toBe("#00FFAA");
-    expect(colorPickerInputValue("var(--fm-surface-magnetic)")).toBe("#ffffff");
+    expect(colorPickerInputValue("#babbf1")).toBe("#babbf1");
+    expect(colorPickerInputValue("var(--fm-any-token)")).toBe("#ffffff");
   });
 
   it("turns a surface color picker value into a visible solid-color patch", () => {
@@ -100,6 +102,40 @@ describe("ObjectVisualizationPanelModel", () => {
         wireframeVisible: false,
       }),
     ).toEqual({ shaderVisible: false });
+  });
+
+  it("turns Full geometry scope into a visible volume-mesh pass when only the surface is active", () => {
+    expect(
+      geometryScopeDisplayPatch(
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          pointsVisible: false,
+          renderMode: "surface",
+          shaderVisible: true,
+          wireframeVisible: false,
+        },
+        "full",
+      ),
+    ).toMatchObject({
+      geometryScope: "full",
+      renderMode: "surface+edges",
+      shaderVisible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("keeps Full geometry scope scoped-only when a volume-capable pass is already active", () => {
+    expect(
+      geometryScopeDisplayPatch(
+        {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          renderMode: "wireframe",
+          shaderVisible: false,
+          wireframeVisible: true,
+        },
+        "full",
+      ),
+    ).toEqual({ geometryScope: "full" });
   });
 
   it("builds pass-specific sections for a visible object target", () => {

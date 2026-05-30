@@ -420,5 +420,9 @@ export const viewport3dManifest: ModuleManifest = {
     ],
   },
   emits: ["workspace:selection-changed"],
-  listens: ["resource:invalidated", "workspace:selection-changed"],
+  listens: [
+    "resource:invalidated",
+    "viewport:mesh-size-bin-hovered",
+    "workspace:selection-changed",
+  ],
 };

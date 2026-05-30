@@ -24,18 +24,18 @@ describe("ObjectVisualizationController", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
       opacityPercent: 100,
-      pointColor: "var(--fm-border-strong)",
+      pointColor: "#8caaee",
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
-      shaderMonoColor: "var(--fm-surface-magnetic)",
+      shaderMonoColor: "#babbf1",
       shaderVisible: true,
       surfaceColorSource: "orientation",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
-      vectorMonoColor: "var(--fm-accent)",
+      vectorMonoColor: "#99d1db",
       vectorThickness: 1,
       vectorsVisible: false,
-      wireframeColor: "var(--fm-border-strong)",
+      wireframeColor: "#8caaee",
       wireframeOpacityPercent: 100,
       wireframeVisible: true,
     });
@@ -43,18 +43,18 @@ describe("ObjectVisualizationController", () => {
       activeQuantityId: "H_demag",
       geometryScope: "full",
       opacityPercent: 28,
-      pointColor: "var(--fm-info)",
+      pointColor: "#e78284",
       renderMode: "wireframe",
       shaderColorMode: "monochrome",
-      shaderMonoColor: "var(--fm-airbox-fill)",
+      shaderMonoColor: "#ea999c",
       shaderVisible: false,
       surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
-      vectorMonoColor: "var(--fm-info)",
+      vectorMonoColor: "#e78284",
       vectorThickness: 1,
       vectorsVisible: false,
-      wireframeColor: "var(--fm-airbox-wire)",
+      wireframeColor: "#e78284",
       wireframeOpacityPercent: 100,
       wireframeVisible: true,
     });
@@ -204,8 +204,12 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSnapshot().overrides[visualizationTargetKey(target)])
       .toMatchObject({
         opacityPercent: 41,
-        renderMode: "wireframe",
+        pointsVisible: false,
+        shaderVisible: false,
+        wireframeVisible: true,
       });
+    expect(controller.getSnapshot().overrides[visualizationTargetKey(target)])
+      .not.toHaveProperty("renderMode");
 
     controller.clearTarget(target);
 
@@ -256,6 +260,35 @@ describe("ObjectVisualizationController", () => {
       shaderVisible: false,
       wireframeVisible: false,
     });
+  });
+
+  it("keeps display-pass toggles editable after a render-mode override", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "arch-waveguide", kind: "object" as const };
+
+    controller.patchTarget(target, {
+      geometryScope: "full",
+      ...renderModePatch("surface+edges"),
+    });
+    controller.patchTarget(target, { shaderVisible: false });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      geometryScope: "full",
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+
+    controller.patchTarget(target, { pointsVisible: true });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+    expect(controller.getSnapshot().overrides[visualizationTargetKey(target)])
+      .not.toHaveProperty("renderMode");
   });
 
   it("merges per-target overrides over a caller-provided global base", () => {

@@ -59,7 +59,7 @@ For efficient meshes, element size should grow proportionally to the characteris
 scale of the solution. For dipolar decay (~1/r³ gradients), allowing h ~ r gives acceptable
 accuracy while minimizing element count.
 
-The geometric growth model:
+The ideal local geometric growth model:
 
 $$
 h(r) = h_0 \cdot g^{r/h_0}
@@ -70,24 +70,44 @@ where:
 - g = growth rate (typically 1.2–1.5)
 - r = distance from interface
 
-This gives logarithmic element count scaling with domain size, rather than linear.
+For a bounded rectangular airbox this local model is not enough by itself: if
+`h0` is very small or the airbox is shallow in one direction, the field may not
+reach the far-field target at the outer boundary. Fullmag therefore uses a
+boundary-normalized geometric profile for airbox and transition fields:
+
+$$
+s = \mathrm{clamp}\left(\frac{r-r_\min}{r_\max-r_\min}, 0, 1\right)
+$$
+
+$$
+\psi(s,g) =
+\begin{cases}
+s, & g \le 1 \\
+\frac{\exp(\log(g)s)-1}{g-1}, & g > 1
+\end{cases}
+$$
+
+$$
+h(r) = h_\min \exp\left(\log\left(\frac{h_\max}{h_\min}\right)\psi(s,g)\right)
+$$
+
+This keeps the near-object region smooth, preserves a geometric size law, and
+guarantees `h(r_max) = hmax` for the controlled outer boundary/corner distance.
 
 ## 3. Current implementation status
 
-Geometric grading is partially implemented. The older GEO/OCC-fragment helpers
-in `_gmsh_airbox.py` can build a `MathEval` exponential growth field, but the
-production conformal OCC shared-domain path historically used only a linear
-`Distance -> Threshold` field despite `AirboxOptions.grading_mode` defaulting to
-`"geometric"`.
+Geometric grading is implemented through shared helpers used by the GEO/OCC
+airbox paths and by semantic transition fields. The implementation must keep
+all airbox paths on the same grading contract:
 
-The corrected implementation must keep all airbox paths on the same grading
-contract:
-
-- `geometric`: exponential growth capped at `airbox_hmax`
+- `geometric`: boundary-normalized exponential growth reaching `airbox_hmax`
+  at the relevant outer airbox boundary/corner span
 - `linear`: legacy `Threshold` interpolation
 - `airbox_hmin`: near-object size target, not gradient distance
 - `DistMax`: distance to the relevant outer airbox boundary/corner or explicit
   transition span
+- `airbox_growth_rate` / `transition_growth`: curvature of the normalized
+  geometric ramp, not a replacement for the outer `hmax` target
 - `edge_transition_distance`: optional boundary-curve grading span, distinct from
   the surface `transition_distance`
 - `corner_transition_distance`: optional endpoint/corner grading span, distinct
@@ -120,7 +140,8 @@ Problems:
 
 ### 4.1 Gmsh MathEval field
 
-Replace the Threshold field with a MathEval field that implements geometric growth:
+Replace the Threshold field with a MathEval field that implements normalized
+geometric growth:
 
 ```python
 # Distance field (unchanged)
@@ -130,14 +151,15 @@ gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", interface_surfaces)
 # Geometric growth via MathEval
 f_growth = gmsh.model.mesh.field.add("MathEval")
 growth_rate = 1.3  # standard COMSOL default
-log_g = math.log(growth_rate)
-# h(r) = h_inner * exp(ln(g) * dist / h_inner)
+# s = clamp(distance / dist_max, 0, 1)
+# psi(s, g) = (exp(log(g) * s) - 1) / (g - 1)
+# h(r) = h_inner * exp(log(h_outer / h_inner) * psi)
 gmsh.model.mesh.field.setString(
     f_growth, "F",
-    f"{h_inner} * exp({log_g} * F{f_dist} / {h_inner})"
+    f"{h_inner} * exp(log({h_outer} / {h_inner}) * psi)"
 )
 
-# Cap at airbox_hmax
+# Optional cap at airbox_hmax
 f_cap = gmsh.model.mesh.field.add("Min")
 gmsh.model.mesh.field.setNumbers(f_cap, "FieldsList", [f_growth, f_const_hmax])
 ```
@@ -149,6 +171,10 @@ gmsh.model.mesh.field.setNumbers(f_cap, "FieldsList", [f_growth, f_const_hmax])
 | growth_rate  | h_{n+1} / h_n ratio                 | 1.3     | 1.1–2.0   |
 | h_inner      | Element size at magnetic interface   | hmax    | > 0       |
 | airbox_hmax  | Maximum element size in far field    | 10×hmax | > h_inner |
+
+`transition_growth` uses the same ramp curvature for per-object transition
+fields. If omitted, the transition still uses geometric interpolation from
+`SizeMin` to `SizeMax`; it simply uses the default neutral ramp shape.
 
 ### 4.3 Conformal shared-domain constraint
 

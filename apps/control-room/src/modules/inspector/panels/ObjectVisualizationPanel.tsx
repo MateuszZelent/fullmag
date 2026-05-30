@@ -65,6 +65,7 @@ import {
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationRenderResolution,
   SURFACE_COLOR_SOURCE_ITEMS,
+  geometryScopeDisplayPatch,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
@@ -641,7 +642,7 @@ function VisualizationGeometryScopeSection({
             type="button"
             disabled={passControlsDisabled}
             variant={settings.visible && settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() => void patch({ geometryScope: scope.value })}
+            onClick={() => void patch(geometryScopeDisplayPatch(settings, scope.value))}
           >
             {scope.label}
           </Button>

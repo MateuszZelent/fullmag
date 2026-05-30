@@ -57,7 +57,9 @@ import {
   recordField,
 } from "./MeshResourceView";
 import { MeshBuildHistoryView } from "./MeshBuildHistoryView";
+import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
+import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 
 type MeshDetailsRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -466,12 +468,14 @@ function MeshQualityGatesSection({
 }
 
 function MeshQualityStatisticsSection({
+  onHoverSizeDistributionBin,
   onRefineWorstElement,
   onSelectMetric,
   onSelectWorstElement,
   refinementState,
   statistics,
 }: {
+  onHoverSizeDistributionBin: (bin: MeshSizeDistributionHoverBin | null) => void;
   onRefineWorstElement: () => void;
   onSelectMetric: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement: (element: MeshWorstElement) => void;
@@ -489,6 +493,7 @@ function MeshQualityStatisticsSection({
       <MeshQualityStatisticsView
         statistics={statistics}
         refinementState={refinementState}
+        onHoverSizeDistributionBin={onHoverSizeDistributionBin}
         onRefineWorstElement={onRefineWorstElement}
         onSelectMetric={onSelectMetric}
         onSelectWorstElement={onSelectWorstElement}
@@ -824,6 +829,16 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       },
     );
   }, [buildContext, kernel.commands, qualityRefinementState.plan]);
+  const hoverSizeDistributionBin = useCallback(
+    (bin: MeshSizeDistributionHoverBin | null) => {
+      emitMeshSizeHistogramHover({
+        bin,
+        kernel,
+        scope: { kind: "all" },
+      });
+    },
+    [kernel],
+  );
 
   return (
     <Accordion
@@ -897,6 +912,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       <MeshQualityStatisticsSection
         statistics={qualityStatistics}
         refinementState={qualityRefinementState}
+        onHoverSizeDistributionBin={hoverSizeDistributionBin}
         onRefineWorstElement={refineWorstQualityElement}
         onSelectMetric={selectQualityMetric}
         onSelectWorstElement={selectWorstElement}

@@ -154,13 +154,22 @@ Current gate:
   `tests/fem_demag_validation/results/airbox_convergence.csv` and exits
   nonzero if any required metric is non-finite or any boundary-condition group
   fails to improve from the smallest to largest airbox scale.
+- `tests/fem_demag_validation/ellipsoid_validation.py` is the scripted
+  MFEM-stack gate for Osborn ellipsoid factors. It exits nonzero when any axis
+  differs by more than 10% or a shape's three effective demag factors fail to
+  sum to 1 within 0.15.
+- `tests/fem_demag_validation/telemetry_validation.py` validates residual /
+  iteration telemetry CSV artifacts: finite residual, nonnegative iterations,
+  and nonnegative demag phase timings for assemble/RHS, solve, recover, and
+  energy. `tests/fem_demag_validation/test_acceptance.py` unit-tests that
+  artifact shape. Active solve evidence is still required before production
+  qualification.
 
 Required before production qualification:
 
-- ellipsoid or rectangular-prism reference;
 - Robin vs Dirichlet comparison;
 - RHS assembly fixture for magnetic/nonmagnetic element masks;
 - boundary marker fixture for Dirichlet/Robin/seam exclusion;
 - periodic reduced-system fixture for matrix/RHS reduction and lifted solution;
-- residual/iteration telemetry regression;
+- active residual/iteration telemetry regression on an MFEM-stack solve;
 - performance regression for RHS, solve, recover, and energy phases.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
@@ -33,7 +33,9 @@ import {
   MeshResourceFields,
   recordField,
 } from "./MeshResourceView";
+import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
+import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import {
   buildObjectMeshPolicyReplaceRequest,
   defaultObjectMeshPolicyResource,
@@ -415,8 +417,10 @@ function ObjectMeshTopologyQualitySection({
 }
 
 function ObjectMeshQualityStatisticsSection({
+  onHoverSizeDistributionBin,
   statistics,
 }: {
+  onHoverSizeDistributionBin: (bin: MeshSizeDistributionHoverBin | null) => void;
   statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
 }) {
   return (
@@ -427,7 +431,10 @@ function ObjectMeshQualityStatisticsSection({
       collapsible
       defaultCollapsed={false}
     >
-      <MeshQualityStatisticsView statistics={statistics} />
+      <MeshQualityStatisticsView
+        statistics={statistics}
+        onHoverSizeDistributionBin={onHoverSizeDistributionBin}
+      />
     </InspectorSection>
   );
 }
@@ -523,6 +530,16 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
       }),
     [kernel],
   );
+  const hoverSizeDistributionBin = useCallback(
+    (bin: MeshSizeDistributionHoverBin | null) => {
+      emitMeshSizeHistogramHover({
+        bin,
+        kernel,
+        scope: objectId ? { kind: "object", objectId } : { kind: "all" },
+      });
+    },
+    [kernel, objectId],
+  );
 
   function updateDraft(patch: Partial<ObjectMeshPolicyDraft>): void {
     setDraftState((current) => ({
@@ -605,7 +622,10 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         qualityStatus={quality.status}
         topology={topology}
       />
-      <ObjectMeshQualityStatisticsSection statistics={qualityStatistics} />
+      <ObjectMeshQualityStatisticsSection
+        statistics={qualityStatistics}
+        onHoverSizeDistributionBin={hoverSizeDistributionBin}
+      />
       <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
       <ObjectMeshTransactionsSection
         feedback={feedback}

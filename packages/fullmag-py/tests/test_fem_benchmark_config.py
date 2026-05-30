@@ -4080,6 +4080,64 @@ def test_cpu_gpu_consistency_rejects_gpu_request_that_resolves_to_cpu():
     assert any("fem_gpu resolved execution" in failure for failure in failures)
 
 
+def test_cpu_gpu_consistency_rejects_gpu_strict_residency_counter_drift():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_cpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "exchange_only_box500_airbox1um",
+            "integrator": "heun",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "reported_precision": "double",
+            "executed_steps": 1,
+            "final_e_total_j": 0.0,
+            "final_e_ex_j": 0.0,
+            "final_torque_apm": 0.0,
+            "final_torque_t": 0.0,
+            "execution_engine": "fem_cpu_native",
+            "fem_execution_mode": "cpu_native",
+            "mfem_device": "cpu",
+            "uses_cuda_kernels": False,
+        },
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "exchange_only_box500_airbox1um",
+            "integrator": "heun",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "reported_precision": "double",
+            "executed_steps": 1,
+            "final_e_total_j": 0.0,
+            "final_e_ex_j": 0.0,
+            "final_torque_apm": 0.0,
+            "final_torque_t": 0.0,
+            "execution_engine": "fem_native_gpu",
+            "fem_execution_mode": "all_in_gpu_legacy_sparse",
+            "mfem_device": "cuda",
+            "uses_cuda_kernels": True,
+            "fem_data_residency": "device_source_of_truth",
+            "hot_loop_compute_h2d_bytes": 16,
+            "hot_loop_compute_d2h_bytes": 0,
+            "hot_loop_compute_host_sync_count": 0,
+        },
+    ]
+
+    summary = bench.cpu_gpu_consistency_summary(
+        rows,
+        require_gpu_strict_residency=True,
+    )
+
+    assert summary["status"] == "fail"
+    assert any("hot_loop_compute_h2d_bytes" in failure for failure in summary["failures"])
+
+
 def test_cpu_gpu_consistency_rejects_scenario_specific_energy_drift():
     bench = load_analysis_benchmark_module()
     rows = [
@@ -10417,6 +10475,7 @@ def test_benchmark_cli_applies_box500_airbox_interaction_consistency_preset(monk
     assert args.require_stable_solver_mesh is True
     assert args.require_cpu_gpu_consistency is True
     assert args.require_demag_converged is True
+    assert args.require_gpu_strict_residency is True
 
 
 def test_box500_airbox_interaction_preset_preserves_requested_integrators(monkeypatch):

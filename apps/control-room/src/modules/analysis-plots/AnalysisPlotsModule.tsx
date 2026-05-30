@@ -13,7 +13,10 @@ import {
 
 export default function AnalysisPlotsModule() {
   const energyHistory = useSolverEnergyHistoryResource(240);
-  const scalarWindow = useScalarWindowResource({ limit: 240 });
+  const scalarWindow = useScalarWindowResource({
+    columns: ["step", "e_total", "mx", "my", "mz"],
+    limit: 240,
+  });
   const energyPoints =
     energyHistory.data?.rows.map((row) => ({
       x: row.step,
@@ -34,7 +37,7 @@ export default function AnalysisPlotsModule() {
         emptyLabel="No scalar samples"
         points={scalarPoints.points}
         title={scalarPoints.title}
-        xLabel="sample"
+        xLabel="step"
         yLabel={scalarPoints.yLabel}
       />
     </div>
@@ -99,7 +102,7 @@ function scalarPointsFromWindow(data: {
   yLabel: string;
 } {
   const columns = data?.columns ?? [];
-  const valueColumn = columns.findIndex((column) => column !== "step");
+  const valueColumn = resolveScalarValueColumn(columns);
   if (!data || valueColumn < 0) {
     return { points: [], title: "Scalars", yLabel: "value" };
   }
@@ -120,3 +123,20 @@ function formatNumber(value: number): string {
   }
   return value.toPrecision(4);
 }
+
+function resolveScalarValueColumn(columns: readonly string[]): number {
+  const preferredColumns = ["e_total", "mx", "my", "mz"];
+  for (const preferred of preferredColumns) {
+    const index = columns.indexOf(preferred);
+    if (index >= 0) return index;
+  }
+
+  return columns.findIndex(
+    (column) => !["step", "time", "solver_dt"].includes(column),
+  );
+}
+
+export const __analysisPlotsTestUtils = {
+  resolveScalarValueColumn,
+  scalarPointsFromWindow,
+};

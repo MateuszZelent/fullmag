@@ -21,5 +21,6 @@ export const inspectorManifest: ModuleManifest = {
       },
     ],
   },
+  emits: ["viewport:mesh-size-bin-hovered"],
   listens: ["workspace:selection-changed"],
 };

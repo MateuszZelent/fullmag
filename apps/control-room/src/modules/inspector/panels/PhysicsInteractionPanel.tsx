@@ -28,6 +28,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
+import { Vector3Field } from "../primitives/Vector3Field";
 import {
   buildInteractionApplyPatch,
   defaultObjectInteractionResource,
@@ -583,22 +584,34 @@ function InteractionField({
     );
   }
 
-  if (field.kind === "vector3" || field.kind === "vector6") {
-    const vectorKind = field.kind as Extract<
-      InteractionFieldSpec["kind"],
-      "vector3" | "vector6"
-    >;
-    const length = vectorKind === "vector3" ? 3 : 6;
-    const values = vectorDraftValue(value, field.defaultValue, length);
+  if (field.kind === "vector3") {
+    const values = vectorDraftValue(value, field.defaultValue, 3) as [string, string, string];
+    return (
+      <Vector3Field
+        disabled={disabled}
+        label={field.label}
+        unit={field.unit ?? undefined}
+        values={values}
+        onChange={(index, val) => {
+          const next = [...values];
+          next[index] = val;
+          onChange(next);
+        }}
+      />
+    );
+  }
+
+  if (field.kind === "vector6") {
+    const values = vectorDraftValue(value, field.defaultValue, 6);
     return (
       <>
         {values.map((entry, index) => {
-          const componentId = vectorComponentId(vectorKind, index);
+          const componentId = vectorComponentId("vector6", index);
           return (
             <FormField
               key={`${field.id}:${componentId}`}
               disabled={disabled}
-              hint={index === length - 1 ? field.description : undefined}
+              hint={index === 5 ? field.description : undefined}
               label={`${field.label} ${index + 1}`}
               type="text"
               unit={field.unit ?? undefined}

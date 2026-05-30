@@ -18,6 +18,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   selectionSnapshotEquals,
   useSelectionActions,
@@ -110,6 +111,21 @@ export function resolveViewport3DMeshQualityLegend(
   return `Mesh quality ${metricLabel} ${formatLegendValue(range.min)} to ${formatLegendValue(range.max)}`;
 }
 
+function useMeshSizeHistogramHighlight(
+  bus: ModuleProps["kernel"]["bus"],
+): MeshSizeHistogramHighlight | null {
+  const [highlight, setHighlight] =
+    useState<MeshSizeHistogramHighlight | null>(null);
+  useEffect(
+    () =>
+      bus.on("viewport:mesh-size-bin-hovered", (event) => {
+        setHighlight(event.highlight);
+      }),
+    [bus],
+  );
+  return highlight;
+}
+
 interface Viewport3DFrameProps
   extends Omit<
     Viewport3DSceneProps,
@@ -158,9 +174,11 @@ export default function Viewport3DModule({
   const tracker = useViewport3DResourceTracker();
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
+  const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
   const { domainId, ...sceneModel } = useViewport3DSceneModel({
     commandState,
     colors,
+    meshSizeHighlight,
     resourceCounts,
     selection,
   });
@@ -468,6 +486,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <span>{selectedLabel}</span>
         <span>{domainSummary}</span>
         {meshQualityLegend ? <span>{meshQualityLegend}</span> : null}
+        {sceneProps.meshSizeHighlightModel ? (
+          <span>
+            {sceneProps.meshSizeHighlightModel.label} ·{" "}
+            {sceneProps.meshSizeHighlightModel.sampledElementCount.toLocaleString(
+              "en-US",
+            )}
+            /
+            {sceneProps.meshSizeHighlightModel.matchedElementCount.toLocaleString(
+              "en-US",
+            )} highlighted
+          </span>
+        ) : null}
         <span>{status}</span>
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         <span>{diagnostics}</span>

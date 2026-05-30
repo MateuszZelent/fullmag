@@ -1,7 +1,7 @@
 # FEM CPU Validation Matrix
 
 - Status: release-gate validation matrix for native FEM CPU modularization
-- Last updated: 2026-05-18
+- Last updated: 2026-05-30
 - Implementation: `native/backends/fem/`
 - Test: `native/backends/fem/tests/interaction_docs_contract.cpp`
 
@@ -52,13 +52,29 @@ can be treated as production-quality. It complements the module contracts under
 | Magnetoelastic | `fem_magnetoelastic_contract` | prescribed-strain field/energy, runtime H_mel/energy state ownership, enablement plus B1/B2/strain-mode/strain-buffer runtime ownership, runtime strain-upload ownership outside the C ABI facade, Context no longer owning flat magnetoelastic plan fields, field-add module ownership, plan-field initialization ownership, aggregate/leaf-header non-ownership docstrings, source-level docstrings, masking, and additive H_eff |
 | Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman plan-field initialization plus broadcast/field/energy module ownership and leaf/source-level docstrings, Zeeman runtime H_ext plus uniform external-field plan storage ownership, Context no longer owning flat Zeeman enable/field-vector fields, uniaxial/cubic module ownership and leaf/source-level docstrings, anisotropy runtime H_ani/H_cubic/energy plus uniaxial/cubic plan storage ownership, Context no longer owning flat anisotropy/cubic plan fields, aggregate/leaf-header non-ownership docstrings, and anisotropy plan-field initialization plus axis normalization/validation ownership |
 
+## Local Interaction Contract Pass
+
+This section is a local-contract readiness table, not a validated-status promotion. It records the no-MFEM source, unit, sign, and ownership gates that can run in this checkout. Runtime validation remains separate where MFEM/CUDA-visible execution is required.
+
+| Interaction | Local source gate | Units gate | Energy/field sign gate | CPU/GPU ownership gate | Status boundary |
+|---|---|---|---|---|---|
+| Exchange | `fem_exchange_contract` | `fem_exchange.md` pins `A_ex` in `J/m`, `Ms`/`H_ex` in `A/m`, and `E_ex` in `J` | source/docs gate pins positive `E_ex = integral A_ex |grad m|^2 dV` and the `H_ex,c = -2 h_raw_c/(mu0 Ms)` weak-form sign; sinusoidal Laplacian and energy convergence remain runtime fixtures | CPU owners: `exchange_*`; GPU owners: `gpu/cuda/exchange/*`, `rk_exchange_dispatch.*`, `rk_exchange_energy_reductions.*` | local-ready; runtime-open for MFEM sinusoidal Laplacian and convergence sweep |
+| Demag | `fem_demag_contract`, `fem_demag_poisson_contract`, `fem_demag_fem_bem_contract` | `fem_demag_poisson.md` and `fem_demag_fem_bem.md` pin `u` in `A`, `H_demag` in `A/m`, and `E_d` in `J` | local gates pin `H_demag = -grad(u)` and `E_d = -0.5 mu0 integral Ms m.H_demag dV`; sphere/ellipsoid/airbox/residual checks remain runtime fixtures | CPU owners: `demag*`, `demag_poisson_*`, `demag_fem_bem_*`; GPU owners: `gpu/cuda/demag_poisson/*`, `rk_demag_dispatch.*`, `rk_demag_energy_reductions.*` | local-ready; runtime-open for sphere, ellipsoid, airbox convergence, residual, and strict GPU residency gates |
+| Zeeman | `fem_zeeman_contract` | `fem_zeeman.md` pins `H_ext`/`Ms` in `A/m` and `E_Z` in `J` | local gate pins additive `H_Z = H_ext` and negative work sign `E_Z = -mu0 integral Ms m.H_ext dV` | CPU owners: `zeeman_*`; GPU owners: `gpu/cuda/interactions/zeeman/zeeman_kernels.*`, `rk_external_energy_reductions.*`, `rk_effective_field.*` | local-ready; CPU/GPU parity still runtime-open |
+| Anisotropy | `fem_anisotropy_contract` | `fem_anisotropy_uniaxial.md` and `fem_anisotropy_cubic.md` pin `Ku*`/`Kc*` in `J/m^3`, axes dimensionless, `H_ani`/`H_cub` in `A/m`, and energies in `J` | local gate pins easy-axis/easy-cubic signs, cubic `H_cub = -(1/(mu0 Ms)) d e_cub/dm`, per-node scaling, and axis validation; directional derivative remains a production qualification fixture | CPU owners: `anisotropy_*`; GPU owners: `gpu/cuda/interactions/anisotropy/anisotropy_kernels.*`, `rk_anisotropy_field.*`, `rk_anisotropy_energy_reductions.*` | local-ready; broader derivative and CPU/GPU parity gates remain runtime/open qualification |
+| DMI | `fem_dmi_contract`, `fem_dmi_weak_residual` | `fem_dmi.md` pins `Dind` / `InterfacialDMI(D=...)` as unchanged `J/m^2` surface input and `H_DMI` in `A/m` | weak-residual gate pins interfacial/bulk directional derivatives, chirality, spiral-pitch handedness/sign, boundary tilt, and non-default interface-normal use | CPU owners: `dmi_*`; GPU owners: `gpu/cuda/interactions/dmi/dmi_kernels.*`, `rk_dmi_fields.*`, `rk_dmi_energy_reductions.*` | local-ready plus prior CUDA smoke evidence; public status must stay below `validated` until documented validation workloads are current |
+| Oersted | `fem_oersted_contract` | `fem_oersted.md` pins `I` in `A`, radius/center in `m`, and `H_oe` in `A/m` | local gate pins Ampere-law inside/outside field direction `a x r_hat`, envelope scaling, and unscaled explicit-field addition; no standalone energy is reported | CPU owners: `oersted_*`; GPU owners: `gpu/cuda/interactions/oersted/oersted_kernels.*`, `rk_oersted_field.*`, `rk_effective_field.*` | local-ready; generalized current-solution and CPU/GPU parity remain runtime-open |
+| Thermal | `fem_thermal_brown_contract` | `fem_thermal.md` and `fem_thermal_brown.md` pin `T` in `K`, `dt` in `s`, `V_i` in `m^3`, `gamma_mu0` in `m/(A s)`, and `H_therm` in `A/m` | local gate pins Brown sigma scaling, accepted `(time, dt)` replay/cache, nonmagnetic zeroing, and no deterministic standalone energy; variance-vs-`dt` and Boltzmann macrospin remain runtime/statistical fixtures | CPU owners: `thermal_brown_*`; GPU owners: `gpu/cuda/interactions/thermal/thermal_kernels.*`, `rk_thermal_field.*` | local-ready; runtime-open for statistical variance, Boltzmann macrospin, and CPU/GPU parity gates |
+| Magnetoelastic | `fem_magnetoelastic_contract` | `fem_magnetoelastic.md` pins `B1/B2` in `Pa`, strain dimensionless, `H_mel` in `A/m`, and `E_mel` in `J` | local gate pins engineering-shear Voigt convention, negative field derivative sign, energy integration, nonmagnetic masking, and additive `H_eff`; coupled mechanics remains deferred | CPU owners: `magnetoelastic_*`; GPU owners: `gpu/cuda/interactions/magnetoelastic/*`, `rk_magnetoelastic_field.*`, `rk_magnetoelastic_energy_reductions.*` | local-ready for prescribed strain; coupled mechanics and CPU/GPU parity remain runtime-open |
+
 ## Required Physics Fixtures
 
 | Area | Fixture | Required criterion | Status |
 |---|---|---|---|
 | Exchange | uniform state | zero exchange field and energy | local contract only |
-| Exchange | sinusoidal mode | convergence of helical `E_ex = A k^2 V` with finite `H_ex` diagnostic | scripted in `tests/fem_exchange_validation/sinusoidal_mode.py`; representative `fullmag --headless` finest-mesh stage passes on managed runtime; full CSV sweep requires a PyO3 `_fullmag_core` built with MFEM/libCEED |
+| Exchange | sinusoidal mode | finest-mesh `H_ex` agrees with `2 A_ex/(mu0 Ms) Delta m` within 25% and `E_ex = A k^2 V` converges under refinement | scripted in `tests/fem_exchange_validation/sinusoidal_mode.py`; representative `fullmag --headless` finest-mesh stage passes on managed runtime; full CSV sweep requires a PyO3 `_fullmag_core` built with MFEM/libCEED |
 | Demag Poisson | uniformly magnetized sphere | `H_demag ~= -M/3` inside | covered by `tests/fem_demag_validation/sphere_validation.py` (requires MFEM stack) |
+| Demag Poisson | ellipsoid factors | Osborn demag factors agree within 10% per axis and sum to 1 within 0.15 per shape | covered by `tests/fem_demag_validation/ellipsoid_validation.py` (requires MFEM stack) |
 | Demag Poisson | airbox sweep | convergence with airbox size and boundary mode | covered by `tests/fem_demag_validation/airbox_convergence.py` (requires MFEM stack) |
 | Demag FEM/BEM | body-only sphere | demag factor agreement | scripted in `tests/fem_demag_validation/fem_bem_body_validation.py`; body-only mesh materializes and source CLI diagnostic passes through Fredkin-Koehler, but active run remains runtime-open until the launcher/PyO3 core reports MFEM/libCEED CPU availability |
 | DMI | directional derivative | finite-difference energy derivative matches weak residual | covered by `fem_dmi_weak_residual` |
@@ -66,6 +82,44 @@ can be treated as production-quality. It complements the module contracts under
 | Thermal | seeded replay | deterministic replay for fixed seed and accepted `(t, dt)` | covered by `fem_thermal_brown_contract` |
 | LLG | damping-only macrospin | energy decreases under relaxation | covered by `fem_llg_rhs_contract` |
 | Periodic FEM | exchange periodic pair fixture | class-consistent field across periodic nodes | local class/reduction coverage by `fem_mesh_contract` and `fem_aos_field_contract`; active exchange numerical periodic fixture requires MFEM stack |
+
+## Runtime Validation Matrix (MFEM/CUDA Stage)
+
+No row in this section changes a capability row to `validated`. These are the runtime gates that must be executed in an MFEM/CUDA-capable environment before any public validation-status promotion.
+
+| Area | Gate | Criterion | Required environment | Current status |
+|---|---|---|---|---|
+| Exchange | sinusoidal Laplacian | recovered `H_ex` matches `2 A_ex/(mu0 Ms) Delta m` for sinusoidal magnetization within 25% on the finest mesh | MFEM/libCEED CPU runtime or equivalent native FEM runtime | runtime-open; scripted acceptance covered by `tests/fem_exchange_validation/sinusoidal_mode.py`, full CSV run still requires MFEM/libCEED PyO3 core |
+| Exchange | energy convergence | `E_ex` converges to `A k^2 V` under mesh refinement | MFEM/libCEED CPU runtime with PyO3 `_fullmag_core` built against the same stack | runtime-open; scripted acceptance covered by `tests/fem_exchange_validation/sinusoidal_mode.py`, full CSV run still requires MFEM/libCEED PyO3 core |
+| Demag | sphere | uniformly magnetized sphere gives `H_demag ~= -M/3` and finite `E_d` | MFEM/libCEED/Hypre runtime | runtime-open; scripted gate exists at `tests/fem_demag_validation/sphere_validation.py` |
+| Demag | ellipsoid factors | effective demag factors agree with Osborn ellipsoid references within 10% per axis and sum to 1 within 0.15 per shape | MFEM/libCEED/Hypre runtime | runtime-open; scripted gate exists at `tests/fem_demag_validation/ellipsoid_validation.py` |
+| Demag | airbox convergence | Dirichlet/Robin airbox sweep improves with increasing airbox extent | MFEM/libCEED/Hypre runtime | runtime-open; scripted gate exists at `tests/fem_demag_validation/airbox_convergence.py` |
+| Demag | residual and iteration telemetry | solve publishes finite residuals, nonnegative iteration counts, and demag phase timings for assemble/RHS, solve, recover, and energy | MFEM/libCEED/Hypre runtime | runtime-open; telemetry CSV acceptance covered by `tests/fem_demag_validation/telemetry_validation.py` and `tests/fem_demag_validation/test_acceptance.py`, active solve evidence still required |
+| DMI | chirality | interfacial and bulk DMI choose the expected handedness for domain-wall / spiral fixtures | MFEM runtime for active solve; local weak-residual executable for source-level proof | local fixture covered by `fem_dmi_weak_residual`; runtime CSV acceptance covered by `tests/fem_dmi_validation/artifact_validation.py` and `tests/fem_dmi_validation/test_acceptance.py`; active runtime freshness still required before public validated status |
+| DMI | spiral pitch | bulk/interfacial spiral pitch sign and scale match the documented coefficient convention | MFEM runtime for active solve; local weak-residual executable for source-level proof | local fixture covered by `fem_dmi_weak_residual`; runtime CSV acceptance covered by `tests/fem_dmi_validation/artifact_validation.py` and `tests/fem_dmi_validation/test_acceptance.py`; active runtime freshness still required before public validated status |
+| DMI | boundary tilt | natural-boundary derivative is nonzero for tangential tilt and zero for the baseline uniform state | MFEM runtime for active solve; local weak-residual executable for source-level proof | local fixture covered by `fem_dmi_weak_residual`; runtime CSV acceptance covered by `tests/fem_dmi_validation/artifact_validation.py` and `tests/fem_dmi_validation/test_acceptance.py`; active runtime freshness still required before public validated status |
+| Thermal | variance vs `dt` | Brown-field sample variance scales as `1/dt` with node volume, damping, `Ms`, and temperature | local sampler statistics plus stochastic runtime harness with deterministic seed | local sampler gate covered by `fem_thermal_brown_contract`; runtime CSV acceptance covered by `tests/fem_thermal_validation/artifact_validation.py` and `tests/fem_thermal_validation/test_acceptance.py`; active stochastic runtime evidence still required |
+| Thermal | Boltzmann macrospin | long-run macrospin statistics match Boltzmann equilibrium within documented tolerance | statistical runtime harness with deterministic seed | runtime CSV acceptance covered by `tests/fem_thermal_validation/artifact_validation.py` and `tests/fem_thermal_validation/test_acceptance.py`; active stochastic LLG runtime trajectory gate still missing |
+| GPU | strict residency counters | strict GPU path reports device source-of-truth, `hot_loop_compute_h2d_bytes = 0`, `hot_loop_compute_d2h_bytes = 0`, and `hot_loop_compute_host_sync_count = 0` | CUDA-visible MFEM/libCEED/Hypre GPU runtime | runtime-open; `scripts/analysis/fem_gpu_benchmark.py --require-gpu-strict-residency` enforces device source-of-truth plus zero hot-loop compute transfer/sync counters, and the box500 interaction preset enables it; current qualification still requires rerun |
+| GPU | CPU/GPU parity | CPU and GPU fields, energies, and accepted-step statistics agree within per-interaction tolerances | CUDA-visible MFEM/libCEED/Hypre GPU runtime plus CPU reference run | runtime-open; scripted gate exists at `scripts/analysis/fem_gpu_benchmark.py --box500-airbox-interaction-consistency-preset` and `just bench-fem-box500-consistency` |
+
+## Runtime Artifact Acceptance Commands
+
+These commands are the handoff contract for the MFEM/CUDA validation stage. The
+CSV-acceptance commands validate artifacts produced by runtime sweeps; they do
+not run the solver themselves. Runtime-producing Python commands require a
+PyO3 `_fullmag_core` built with the same MFEM/libCEED stack.
+
+| Gate | Command |
+|---|---|
+| Exchange sinusoidal Laplacian and energy convergence | `python3 tests/fem_exchange_validation/sinusoidal_mode.py` |
+| Demag sphere | `python3 tests/fem_demag_validation/sphere_validation.py` |
+| Demag ellipsoid factors | `python3 tests/fem_demag_validation/ellipsoid_validation.py` |
+| Demag airbox convergence | `python3 tests/fem_demag_validation/airbox_convergence.py` |
+| Demag residual and iteration telemetry artifact | `python3 tests/fem_demag_validation/telemetry_validation.py <demag_telemetry.csv>` |
+| DMI chirality, spiral pitch, and boundary tilt artifact | `python3 tests/fem_dmi_validation/artifact_validation.py <dmi_runtime.csv>` |
+| Thermal variance and Boltzmann macrospin artifact | `python3 tests/fem_thermal_validation/artifact_validation.py <thermal_runtime.csv>` |
+| GPU strict residency and CPU/GPU parity | `just bench-fem-box500-consistency` |
 
 ## Environment Boundary
 
@@ -96,11 +150,10 @@ env LD_LIBRARY_PATH=/home/kkingstoun/git/fullmag/fullmag/.fullmag/runtimes/fem-g
   --output-on-failure
 ```
 
-Result: `4/4` selected MFEM-stack contracts passed. Rows marked
-`runtime-open (requires MFEM stack)` still lack a concrete numerical fixture
-gate. Rows covered by `tests/fem_demag_validation/*.py` have scripted runtime
-gates with fail-fast acceptance criteria, but still require those scripts to be
-run before production qualification can be closed.
+Result: `4/4` selected MFEM-stack contracts passed. Rows marked runtime-open
+have scripted gates or artifact validators, but still require those commands to
+be run in the MFEM/CUDA environment before production qualification can be
+closed.
 
 Exchange sinusoidal validation now has a scripted runtime gate at
 `tests/fem_exchange_validation/sinusoidal_mode.py`. The managed

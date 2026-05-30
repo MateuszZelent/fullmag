@@ -120,6 +120,30 @@ describe("MeshQualityStatisticsView", () => {
     expect(html).toContain("Show heatmap");
   });
 
+  it("marks element-size charts as hoverable when a hover handler is provided", () => {
+    const statistics = normalizeMeshQualityStatistics({
+      global: {
+        characteristic_size: {
+          histogram: [
+            { count: 9, hi: 3e-9, lo: 1e-9 },
+            { count: 15, hi: 9e-9, lo: 3e-9 },
+          ],
+        },
+        element_count: 24,
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      <MeshQualityStatisticsView
+        statistics={statistics}
+        onHoverSizeDistributionBin={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('data-distribution="tetra_size"');
+    expect(html).toContain('data-hoverable="true"');
+  });
+
   it("renders quality refinement action when a local refinement plan is ready", () => {
     const statistics = normalizeMeshQualityStatistics({
       global: {

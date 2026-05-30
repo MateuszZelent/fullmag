@@ -14,6 +14,23 @@ class ValidationFailure(RuntimeError):
     """Raised when an exchange validation run does not meet acceptance criteria."""
 
 
+def require_native_runtime_core() -> None:
+    """Fail fast when the direct Python runtime bridge is unavailable."""
+    try:
+        from fullmag import _core
+    except ImportError as exc:  # pragma: no cover - import wiring failure
+        raise ValidationFailure(
+            "runtime validation requires the fullmag Python package and PyO3 "
+            "_fullmag_core bridge"
+        ) from exc
+    if getattr(_core, "_native_core", None) is None:
+        raise ValidationFailure(
+            "runtime validation requires PyO3 _fullmag_core built with the "
+            "MFEM/libCEED runtime stack; use the managed CLI only for "
+            "capture-stage smoke checks"
+        )
+
+
 def exchange_field_scale(*, aex: float, ms: float) -> float:
     """Return the exchange field prefactor 2A/(mu0 Ms) in A/m per Laplacian."""
     if aex <= 0.0:

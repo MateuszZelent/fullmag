@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-import math
 from typing import Any
 
 import numpy as np
 
 from fullmag._progress import emit_progress
 
+from ._airbox_grading import _geometric_size_profile_expression
 from ._gmsh_types import (
     ALGO_3D_HXT,
     ALGO_3D_MMG3D,
@@ -17,6 +17,15 @@ from ._gmsh_types import (
 )
 from ._gmsh_selectors import resolve_entity_selectors
 from ._mesh_targets import _geometry_name_aliases
+
+
+def _coerce_growth_rate(value: object) -> float | None:
+    try:
+        growth_rate = float(value)
+    except (TypeError, ValueError):
+        return None
+    return growth_rate if growth_rate > 1.0 else None
+
 
 @dataclass(frozen=True, slots=True)
 class BoundaryLayerResult:
@@ -529,6 +538,7 @@ def _add_surface_threshold_field(
     sampling: int = 20,
     hscale: float = 1.0,
     grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     normalized_surface_tags = [int(tag) for tag in surface_tags]
     if not normalized_surface_tags:
@@ -545,6 +555,7 @@ def _add_surface_threshold_field(
         sampling=sampling,
         hscale=hscale,
         grading=grading,
+        growth_rate=growth_rate,
     )
 
 
@@ -560,6 +571,7 @@ def _add_entity_distance_threshold_field(
     sampling: int = 20,
     hscale: float = 1.0,
     grading: str | None = None,
+    growth_rate: object = None,
 ) -> int:
     f_dist = gmsh.model.mesh.field.add("Distance")
     gmsh.model.mesh.field.setNumbers(f_dist, distance_list_key, [int(tag) for tag in entity_tags])
@@ -576,11 +588,12 @@ def _add_entity_distance_threshold_field(
         and float(dist_max) * hscale > dist_min_scaled
     ):
         span = float(dist_max) * hscale - dist_min_scaled
-        log_growth = math.log(size_max_scaled / size_min_scaled)
         f_math = gmsh.model.mesh.field.add("MathEval")
-        expr = (
-            f"{size_min_scaled} * exp({log_growth} * "
-            f"Min(Max((F{f_dist} - {dist_min_scaled}) / {span}, 0), 1))"
+        expr = _geometric_size_profile_expression(
+            size_min=size_min_scaled,
+            size_max=size_max_scaled,
+            ramp=f"(F{f_dist} - {dist_min_scaled}) / {span}",
+            growth_rate=_coerce_growth_rate(growth_rate),
         )
         gmsh.model.mesh.field.setString(f_math, "F", expr)
         return f_math
@@ -606,6 +619,7 @@ def _add_component_surface_threshold_field(
     sampling: int = 20,
     hscale: float = 1.0,
     grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     surf_tags = _component_surface_tags_for_geometry(geometry_name, component_surface_tags)
     if not surf_tags:
@@ -623,6 +637,7 @@ def _add_component_surface_threshold_field(
         sampling=sampling,
         hscale=hscale,
         grading=grading,
+        growth_rate=growth_rate,
     )
 
 
@@ -671,6 +686,8 @@ def _add_edge_distance_threshold_field(
     component_surface_tags: dict[str, list[int]] | None,
     sampling: int = 40,
     hscale: float = 1.0,
+    grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     curve_params = dict(params)
     curve_params["Selector"] = {"mode": "all_boundary_curves"}
@@ -699,7 +716,8 @@ def _add_edge_distance_threshold_field(
         dist_max=dist_max,
         sampling=sampling,
         hscale=hscale,
-        grading=params.get("Grading"),
+        grading=grading if grading is not None else params.get("Grading"),
+        growth_rate=growth_rate if growth_rate is not None else params.get("GrowthRate"),
     )
 
 
@@ -756,6 +774,8 @@ def _add_corner_distance_threshold_field(
     component_surface_tags: dict[str, list[int]] | None,
     sampling: int = 20,
     hscale: float = 1.0,
+    grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     point_tags = _point_tags_for_geometry(
         gmsh,
@@ -779,7 +799,8 @@ def _add_corner_distance_threshold_field(
         dist_max=dist_max,
         sampling=sampling,
         hscale=hscale,
-        grading=params.get("Grading"),
+        grading=grading if grading is not None else params.get("Grading"),
+        growth_rate=growth_rate if growth_rate is not None else params.get("GrowthRate"),
     )
 
 
@@ -896,6 +917,7 @@ def _add_bounds_surface_threshold_field(
     match_padding: float = 0.0,
     hscale: float = 1.0,
     grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     scaled_bounds_min = [float(v) * hscale for v in bounds_min]
     scaled_bounds_max = [float(v) * hscale for v in bounds_max]
@@ -922,6 +944,7 @@ def _add_bounds_surface_threshold_field(
         sampling=sampling,
         hscale=hscale,
         grading=grading,
+        growth_rate=growth_rate,
     )
 
 
@@ -949,6 +972,7 @@ def _add_axis_aligned_box_distance_threshold_field(
     dist_max: float,
     hscale: float = 1.0,
     grading: str | None = None,
+    growth_rate: object = None,
 ) -> int | None:
     scaled_bounds_min = [float(value) * hscale for value in bounds_min]
     scaled_bounds_max = [float(value) * hscale for value in bounds_max]
@@ -974,8 +998,12 @@ def _add_axis_aligned_box_distance_threshold_field(
         and size_min_scaled > 0.0
         and size_max_scaled > size_min_scaled
     ):
-        log_growth = math.log(size_max_scaled / size_min_scaled)
-        expr = f"{_math_number(size_min_scaled)} * exp({_math_number(log_growth)} * {ramp})"
+        expr = _geometric_size_profile_expression(
+            size_min=size_min_scaled,
+            size_max=size_max_scaled,
+            ramp=ramp,
+            growth_rate=_coerce_growth_rate(growth_rate),
+        )
     else:
         expr = (
             f"{_math_number(size_min_scaled)} + "
@@ -1118,6 +1146,7 @@ def _configure_mesh_size_fields(
                 dist_max=float(params.get("DistMax")),
                 hscale=hscale,
                 grading=params.get("Grading"),
+                growth_rate=params.get("GrowthRate"),
             )
             if fid is not None:
                 field_ids.append(fid)
@@ -1142,6 +1171,7 @@ def _configure_mesh_size_fields(
                 sampling=int(params.get("Sampling", 20)),
                 hscale=hscale,
                 grading=params.get("Grading"),
+                growth_rate=params.get("GrowthRate"),
             )
             if fid is not None:
                 field_ids.append(fid)
@@ -1166,6 +1196,8 @@ def _configure_mesh_size_fields(
                 component_surface_tags=component_surface_tags,
                 sampling=int(params.get("Sampling", 40)),
                 hscale=hscale,
+                grading=params.get("Grading"),
+                growth_rate=params.get("GrowthRate"),
             )
             if fid is not None:
                 field_ids.append(fid)
@@ -1190,6 +1222,8 @@ def _configure_mesh_size_fields(
                 component_surface_tags=component_surface_tags,
                 sampling=int(params.get("Sampling", 20)),
                 hscale=hscale,
+                grading=params.get("Grading"),
+                growth_rate=params.get("GrowthRate"),
             )
             if fid is not None:
                 field_ids.append(fid)
@@ -1215,6 +1249,7 @@ def _configure_mesh_size_fields(
                 match_padding=float(params.get("MatchPadding", 0.0)),
                 hscale=hscale,
                 grading=params.get("Grading"),
+                growth_rate=params.get("GrowthRate"),
             )
             if fid is not None:
                 field_ids.append(fid)

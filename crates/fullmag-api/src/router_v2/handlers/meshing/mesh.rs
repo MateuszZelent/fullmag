@@ -2017,35 +2017,45 @@ fn merge_mesh_scope_size_statistics(
     else {
         return;
     };
-    let Some(global) = quality.get_mut("global").and_then(Value::as_object_mut) else {
+    if !quality.is_object() {
+        *quality = json!({});
+    }
+    let Some(root) = quality.as_object_mut() else {
         return;
     };
-    let Some(size_statistics) = size_statistics.as_object() else {
-        return;
-    };
-
-    for key in ["characteristic_size", "edge_length", "volume"] {
-        let Some(fallback) = size_statistics.get(key).and_then(Value::as_object) else {
-            continue;
-        };
-        match global.get_mut(key) {
-            Some(Value::Object(existing)) => {
-                for (field, value) in fallback {
-                    let should_fill = match existing.get(field) {
-                        Some(Value::Array(items)) => items.is_empty(),
-                        Some(Value::Null) | None => true,
-                        _ => false,
-                    };
-                    if should_fill {
-                        existing.insert(field.clone(), value.clone());
+    match root.get_mut("global") {
+        Some(Value::Object(global)) => {
+            let Some(size_statistics) = size_statistics.as_object() else {
+                return;
+            };
+            for (key, fallback) in size_statistics {
+                match global.get_mut(key) {
+                    Some(Value::Object(existing)) => {
+                        let Some(fallback) = fallback.as_object() else {
+                            continue;
+                        };
+                        for (field, value) in fallback {
+                            let should_fill = match existing.get(field) {
+                                Some(Value::Array(items)) => items.is_empty(),
+                                Some(Value::Null) | None => true,
+                                _ => false,
+                            };
+                            if should_fill {
+                                existing.insert(field.clone(), value.clone());
+                            }
+                        }
                     }
+                    Some(Value::Null) | None => {
+                        global.insert(key.clone(), fallback.clone());
+                    }
+                    _ => {}
                 }
             }
-            Some(Value::Null) | None => {
-                global.insert(key.to_string(), Value::Object(fallback.clone()));
-            }
-            _ => {}
         }
+        Some(Value::Null) | None => {
+            root.insert("global".to_string(), size_statistics);
+        }
+        _ => {}
     }
 }
 
@@ -2077,7 +2087,15 @@ fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Valu
         return None;
     }
 
+    let element_count = volumes.len();
+
     Some(json!({
+        "scope_id": format!("marker:{marker}"),
+        "kind": if marker == 0 { "airbox" } else { "domain" },
+        "label": if marker == 0 { "Airbox".to_string() } else { format!("Domain {marker}") },
+        "role": if marker == 0 { "air" } else { "domain" },
+        "marker": marker,
+        "element_count": element_count,
         "characteristic_size": distribution_statistics(&characteristic_sizes),
         "edge_length": distribution_statistics(&edge_lengths),
         "volume": distribution_statistics(&volumes),

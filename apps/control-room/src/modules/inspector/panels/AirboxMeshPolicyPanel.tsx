@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
@@ -36,7 +36,9 @@ import {
   MeshResourceFields,
   recordField,
 } from "./MeshResourceView";
+import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
+import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 import {
   AIRBOX_GRADING_MODES,
   buildAirboxMeshPolicyReplaceRequest,
@@ -119,7 +121,8 @@ function isAirboxPart(part: {
 
 export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   void selection;
-  const { api, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, resources } = kernel;
   const runtimeStatus = useSessionStatusSelector(
     selectAirboxMeshPolicyRuntimeStatus,
     { isEqual: airboxMeshPolicyRuntimeStatusEquals },
@@ -197,6 +200,16 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
       setPending(false);
     }
   }
+  const hoverSizeDistributionBin = useCallback(
+    (bin: MeshSizeDistributionHoverBin | null) => {
+      emitMeshSizeHistogramHover({
+        bin,
+        kernel,
+        scope: { kind: "airbox" },
+      });
+    },
+    [kernel],
+  );
 
   return (
     <Accordion
@@ -430,7 +443,10 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         collapsible
         defaultCollapsed={false}
       >
-        <MeshQualityStatisticsView statistics={qualityStatistics} />
+        <MeshQualityStatisticsView
+          statistics={qualityStatistics}
+          onHoverSizeDistributionBin={hoverSizeDistributionBin}
+        />
       </InspectorSection>
 
       <InspectorSection value="advanced" title="Advanced JSON" collapsible defaultCollapsed={true}>

@@ -14,11 +14,10 @@ the continuum exchange field is
 so the field amplitude is `(2A / (mu0 Ms)) * k^2`.
 
 This script sweeps FEM mesh resolution on a thin box, records exchange energy
-and the measured `max_h_eff` from an exchange-only run, and compares the energy
-with the analytical continuum value `E_ex = A k^2 V`.  With only exchange
-enabled, `H_eff == H_ex`; `max_h_eff` is retained as a finite diagnostic rather
-than a strict threshold because open-boundary nodal maxima are sensitive to
-boundary projection spikes.
+and the measured `max_h_eff` from an exchange-only run, and compares both
+against the analytical continuum references. With only exchange enabled,
+`H_eff == H_ex`; the finest-mesh `max_h_eff` must stay within the documented
+sinusoidal Laplacian tolerance while `E_ex` must converge to `A k^2 V`.
 
 Usage
 -----
@@ -57,6 +56,7 @@ from helpers import (  # noqa: E402
     relative_error,
     require_error_decreases_with_refinement,
     require_finite_metrics,
+    require_native_runtime_core,
     require_relative_error_below,
     write_csv,
 )
@@ -72,6 +72,7 @@ ALPHA = 0.1
 DT = 1e-13
 HMAX_VALUES = [16e-9, 12e-9, 8e-9]
 ENERGY_RELATIVE_ERROR_THRESHOLD = 0.08
+H_EX_RELATIVE_ERROR_THRESHOLD = 0.25
 
 K = 2.0 * math.pi / WAVELENGTH
 VOLUME = LENGTH * WIDTH * THICKNESS
@@ -201,6 +202,12 @@ def run_sweep() -> list[dict]:
 
 
 def main() -> int:
+    try:
+        require_native_runtime_core()
+    except ValidationFailure as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
+
     print("FEM exchange validation: sinusoidal Laplacian mode")
     print(f"  length={LENGTH * 1e9:.1f} nm wavelength={WAVELENGTH * 1e9:.1f} nm")
     print(f"  reference |H_ex|={REFERENCE_H_EX:.6e} A/m")
@@ -216,6 +223,7 @@ def main() -> int:
             [
                 "h_ex_max_Apm",
                 "h_ex_reference_Apm",
+                "h_ex_rel_error",
                 "exchange_energy_J",
                 "exchange_energy_reference_J",
                 "exchange_energy_rel_error",
@@ -228,6 +236,12 @@ def main() -> int:
             error_key="exchange_energy_rel_error",
         )
         finest = min(rows, key=lambda row: float(row["hmax_m"]))
+        require_relative_error_below(
+            finest,
+            error_key="h_ex_rel_error",
+            threshold=H_EX_RELATIVE_ERROR_THRESHOLD,
+            label=str(finest["case"]),
+        )
         require_relative_error_below(
             finest,
             error_key="exchange_energy_rel_error",

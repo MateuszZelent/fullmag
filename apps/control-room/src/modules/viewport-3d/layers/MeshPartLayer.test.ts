@@ -16,6 +16,20 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<primitive attach=\"material\" object={scalarShaderMaterial} />");
   });
 
+  it("does not suppress hidden full-volume wireframe behind a shaded magnetic surface", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "renderSettings.wireframeVisible && renderSettings.shaderVisible && edgeGeometry",
+    );
+    expect(source).not.toContain(
+      'renderSettings.geometryScope !== "full" && edgeGeometry',
+    );
+  });
+
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3, 0, 3]);

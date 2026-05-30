@@ -69,6 +69,16 @@ class ExchangeValidationAcceptanceTests(unittest.TestCase):
                 label="sinusoidal",
             )
 
+    def test_sinusoidal_laplacian_threshold_accepts_runtime_artifact(self) -> None:
+        row = {"case": "sinusoidal", "h_ex_rel_error": 0.24}
+
+        require_relative_error_below(
+            row,
+            error_key="h_ex_rel_error",
+            threshold=0.25,
+            label="sinusoidal",
+        )
+
     def test_refinement_requires_error_decrease(self) -> None:
         rows = [
             {"hmax_m": 16e-9, "h_ex_rel_error": 0.10},

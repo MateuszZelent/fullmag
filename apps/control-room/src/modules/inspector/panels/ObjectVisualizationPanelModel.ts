@@ -133,6 +133,24 @@ export function surfaceDisplayPassPatch(
   return renderModePatch("surface");
 }
 
+export function geometryScopeDisplayPatch(
+  settings: VisualizationTargetSettings,
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+): VisualizationTargetPatch {
+  if (geometryScope !== "full") {
+    return { geometryScope };
+  }
+
+  if (settings.wireframeVisible || settings.pointsVisible) {
+    return { geometryScope };
+  }
+
+  return {
+    ...renderModePatch("surface+edges"),
+    geometryScope,
+  };
+}
+
 function rgbToHex(red: number, green: number, blue: number): string {
   return `#${[red, green, blue]
     .map((channel) => channel.toString(16).padStart(2, "0"))
