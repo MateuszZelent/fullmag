@@ -80,6 +80,13 @@ export function vectorStyleFromSettings(
   };
 }
 
+export function pointColorFromSettings(
+  settings: VisualizationTargetSettings,
+  fallback: ColorRepresentation,
+): ColorRepresentation {
+  return renderableColor(settings.pointColor, fallback);
+}
+
 export function wireframeColorFromSettings(
   settings: VisualizationTargetSettings,
   fallback: ColorRepresentation,

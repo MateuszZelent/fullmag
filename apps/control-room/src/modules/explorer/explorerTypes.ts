@@ -26,6 +26,7 @@ type ExplorerNodeKind =
   | "object.mesh"
   | "object.visualization"
   | "airbox.mesh"
+  | "airbox.mesh-quality"
   | "airbox.visualization"
   | "mesh.root"
   | "mesh.shared-domain"

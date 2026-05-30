@@ -77,6 +77,9 @@ void effective_field_composition_is_owned_by_interaction_module() {
         effective.find("plan.eager_initial_effective_field") != std::string::npos,
         "effective_field.cpp must own the eager initial effective-field plan flag");
     check(
+        effective.find("!ctx.exchange.enabled && !ctx.demag.enabled") == std::string::npos,
+        "eager initial effective-field refresh must not skip local-only field terms");
+    check(
         effective_header.find("Refresh initial native FEM effective-field buffers") !=
             std::string::npos,
         "effective_field header must document eager initial refresh ownership");

@@ -771,15 +771,25 @@ button.fm-mesh-detail-list__item:focus-visible {
   gap: var(--fm-space-2);
 }
 
-.fm-mesh-quality-metric {
+.fm-mesh-quality-metric,
+.fm-mesh-size-distribution {
   display: grid;
   gap: var(--fm-space-2);
   min-width: 0;
-  padding: var(--fm-space-2);
+  padding: var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel);
+  box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.2), 0 2px 6px -1px rgba(0, 0, 0, 0.1);
+  transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
+
+.fm-mesh-quality-metric:hover,
+.fm-mesh-size-distribution:hover {
+  border-color: var(--fm-border-default);
+  box-shadow: 0 6px 16px -2px rgba(0, 0, 0, 0.25), 0 4px 8px -1px rgba(0, 0, 0, 0.15);
+}
+
 
 .fm-mesh-quality-metric__header {
   display: grid;
@@ -866,35 +876,44 @@ button.fm-mesh-detail-list__item:focus-visible {
 
 .fm-mesh-chart-tooltip {
   display: grid;
-  gap: 2px;
-  padding: var(--fm-space-2);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-panel-raised);
-  box-shadow: var(--fm-shadow-panel);
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 85%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
 }
 
 .fm-mesh-chart-tooltip__label {
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
+  font-weight: 600;
 }
 
 .fm-mesh-chart-tooltip__value {
-  color: var(--fm-text-muted);
+  color: var(--fm-accent);
+  font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
+  font-weight: 550;
 }
 
 .fm-mesh-size-distributions {
   display: grid;
-  gap: var(--fm-space-2);
-  padding: var(--fm-space-2);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-panel);
+  gap: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
 }
 
-.fm-mesh-size-distributions__header,
+.fm-mesh-size-distributions__header {
+  display: grid;
+  gap: var(--fm-space-1);
+  padding-bottom: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  margin-bottom: var(--fm-space-1);
+}
+
 .fm-mesh-size-distribution__header {
   display: grid;
   gap: var(--fm-space-1);
@@ -917,19 +936,10 @@ button.fm-mesh-detail-list__item:focus-visible {
   line-height: 1.35;
 }
 
-.fm-mesh-size-distribution {
-  display: grid;
-  gap: var(--fm-space-2);
-  min-width: 0;
-  padding: var(--fm-space-2);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-canvas);
-}
-
 .fm-mesh-size-distribution__header span {
   font-family: var(--fm-font-mono);
 }
+
 
 .fm-mesh-size-distribution__stats {
   display: grid;
@@ -957,6 +967,40 @@ button.fm-mesh-detail-list__item:focus-visible {
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
+}
+
+.fm-mesh-size-distribution__bins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--fm-space-1);
+  padding: 0;
+  margin: var(--fm-space-2) 0 0;
+  list-style: none;
+}
+
+.fm-mesh-size-distribution__bins li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 40%, transparent);
+}
+
+.fm-mesh-size-distribution__bins li span {
+  color: var(--fm-text-muted);
+  font-size: 9px;
+  font-family: var(--fm-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-mesh-size-distribution__bins li strong {
+  color: var(--fm-text-primary);
+  font-size: 10px;
+  font-family: var(--fm-font-mono);
 }
 
 .fm-mesh-quality-warnings {

@@ -138,7 +138,8 @@ src/modules/
   explorer/
   inspector/
   viewport-3d/
-  viewport-2d/
+  cross-section-image/
+  analysis-plots/
   charts/
   engine-console/
   status-bar/

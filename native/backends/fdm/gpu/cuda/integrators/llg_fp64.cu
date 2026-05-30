@@ -83,7 +83,7 @@ __global__ void llg_rhs_fp64_kernel(
     double rhs_z = -gamma_bar * (precession_scale * pz + alpha * dz);
 
     // --- Zhang-Li STT (CIP) ---
-    // tau_ZL = -b * m x (m x (j.grad)m) - beta * b * m x (j.grad)m
+    // Explicit Gilbert form of Zhang-Li: scaled v_perp and m x v terms.
     // b = P * mu_B / (e * M_s * (1 + beta^2)) [precomputed as stt_u_pf]
     // Vector u = stt_u_pf * j
     double jx = stt.current_density_x;
@@ -153,9 +153,12 @@ __global__ void llg_rhs_fp64_kernel(
         double double_cross_z = m0 * cross_y - m1 * cross_x;
 
         double beta = stt.stt_beta;
-        rhs_x += -double_cross_x - beta * cross_x;
-        rhs_y += -double_cross_y - beta * cross_y;
-        rhs_z += -double_cross_z - beta * cross_z;
+        double inv_gilbert_stt = 1.0 / (1.0 + alpha * alpha);
+        double adiabatic_scale = (1.0 + alpha * beta) * inv_gilbert_stt;
+        double cross_scale = (alpha - beta) * inv_gilbert_stt;
+        rhs_x += adiabatic_scale * (-double_cross_x) + cross_scale * cross_x;
+        rhs_y += adiabatic_scale * (-double_cross_y) + cross_scale * cross_y;
+        rhs_z += adiabatic_scale * (-double_cross_z) + cross_scale * cross_z;
     }
     
     // --- Slonczewski STT (CPP/SOT) ---
@@ -170,6 +173,11 @@ __global__ void llg_rhs_fp64_kernel(
         
         double g = (P_val * L2) / ((L2 + 1.0) + (L2 - 1.0) * m_dot_p);
         double beta_STT = stt.stt_cpp_pf * g;
+        double inv_gilbert_stt = 1.0 / (1.0 + alpha * alpha);
+        double damping_like_scale =
+            beta_STT * (1.0 + alpha * stt.stt_epsilon_prime) * inv_gilbert_stt;
+        double field_like_scale =
+            beta_STT * (stt.stt_epsilon_prime - alpha) * inv_gilbert_stt;
         
         // m x p
         double m_cross_px = m1 * pz - m2 * py;
@@ -181,9 +189,9 @@ __global__ void llg_rhs_fp64_kernel(
         double double_m_cross_py = m2 * m_cross_px - m0 * m_cross_pz;
         double double_m_cross_pz = m0 * m_cross_py - m1 * m_cross_px;
         
-        rhs_x += beta_STT * (double_m_cross_px + stt.stt_epsilon_prime * m_cross_px);
-        rhs_y += beta_STT * (double_m_cross_py + stt.stt_epsilon_prime * m_cross_py);
-        rhs_z += beta_STT * (double_m_cross_pz + stt.stt_epsilon_prime * m_cross_pz);
+        rhs_x += damping_like_scale * double_m_cross_px + field_like_scale * m_cross_px;
+        rhs_y += damping_like_scale * double_m_cross_py + field_like_scale * m_cross_py;
+        rhs_z += damping_like_scale * double_m_cross_pz + field_like_scale * m_cross_pz;
     }
 
     // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model

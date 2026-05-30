@@ -52,8 +52,9 @@ bool has_any_field_or_direct_torque_term(const Context &ctx);
  * eager startup observables.
  *
  * This plan-time policy belongs with top-level effective-field composition. It
- * skips work when no exchange or demag field can be refreshed and otherwise
- * delegates to the extracted exchange/effective-field runtime refresh wrapper.
+ * skips device-resident strict GPU demag startup refresh and otherwise
+ * delegates to the extracted effective-field runtime refresh wrapper so
+ * local-only fields are also materialized.
  */
 bool refresh_initial_effective_field_from_plan(
     Context &ctx,

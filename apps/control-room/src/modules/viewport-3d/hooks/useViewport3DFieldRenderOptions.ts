@@ -27,6 +27,7 @@ const fieldRenderOptionsCache = new WeakMap<
 
 export function useViewport3DFieldRenderOptions({
   airboxSettings,
+  airboxQuantityCompatible,
   fallbackSettings,
   getPartSettings,
   scalarColorPalette,
@@ -35,6 +36,7 @@ export function useViewport3DFieldRenderOptions({
   vectorDomain,
 }: {
   airboxSettings: VisualizationTargetSettings;
+  airboxQuantityCompatible: boolean;
   fallbackSettings: VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   scalarColorPalette: string;
@@ -61,6 +63,7 @@ export function useViewport3DFieldRenderOptions({
     const airboxVectorsVisible = viewport3DAirboxVectorsVisible(
       airboxSettings.visible,
       airboxSettings.vectorsVisible,
+      airboxQuantityCompatible,
       vectorDomain,
     );
 
@@ -124,7 +127,11 @@ export function useViewport3DFieldRenderOptions({
 
     for (const partModel of topologyRenderModel.airboxParts) {
       const partId = partModel.part.id;
-      if (airboxSettings.visible && airboxSettings.shaderVisible) {
+      if (
+        airboxQuantityCompatible &&
+        airboxSettings.visible &&
+        airboxSettings.shaderVisible
+      ) {
         const scalarColorMode = surfaceColorSourceToColorMode(
           airboxSettings.surfaceColorSource,
         );
@@ -177,6 +184,7 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.surfaceColorSource,
     airboxSettings.shaderVisible,
     airboxSettings.visible,
+    airboxQuantityCompatible,
     fallbackSettings.surfaceColorSource,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorBudget,
@@ -196,11 +204,13 @@ export function useViewport3DFieldRenderOptions({
 export function viewport3DAirboxVectorsVisible(
   visible: boolean,
   vectorsVisible: boolean,
+  quantityCompatible: boolean,
   vectorDomain: string,
 ): boolean {
   return (
     visible &&
     vectorsVisible &&
+    quantityCompatible &&
     vectorDomain !== "magnetic_only" &&
     vectorDomain !== "object" &&
     vectorDomain !== "part"

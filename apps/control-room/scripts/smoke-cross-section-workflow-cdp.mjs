@@ -10,6 +10,8 @@ const WORKFLOW_TIMEOUT_MS = 20_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
 const CROSS_SECTION_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section";
+const CROSS_SECTION_IMAGE_PATH =
+  "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image";
 const CROSS_SECTION_QUALITY_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality";
 
@@ -84,7 +86,7 @@ try {
   await fillInputByAriaLabel("Name", "Smoke 2D Cross");
   await fillInputByAriaLabel("Position", "62.5");
   await fillInputByAriaLabel("Rotation", "17");
-  await clickButtonByText("Create 2D Plot");
+  await clickButtonByText("Generate Image");
 
   await waitForVisible('[data-node-id="model:visualizations-2d:plot-1"]');
   for (const suffix of ["frame", "plane", "quality", "render"]) {
@@ -99,22 +101,23 @@ try {
     "XY 62.5%",
   );
 
-  await waitForWebGLCanvasReady(".fm-viewport-2d canvas", "2D cross-section viewport");
-  await waitForText(".fm-viewport-2d", "Smoke 2D Cross");
-  await waitForText(".fm-viewport-2d__hud", "polygons");
-  const sample2d = await sampleCanvasComposite(".fm-viewport-2d canvas", ".fm-viewport-2d");
-  if (!sample2d.nonBlank) {
-    throw new Error(
-      `2D cross-section canvas composite is blank: ${sample2d.variedPixels}/${sample2d.sampledPixels} sampled pixels differ from background.`,
-    );
+  await waitForVisible(".fm-cross-section-image__img");
+  await waitForText(".fm-cross-section-image", "Smoke 2D Cross");
+  const imageState = await evaluate(`(() => {
+    const image = document.querySelector(".fm-cross-section-image__img");
+    return image ? {
+      complete: image.complete,
+      naturalHeight: image.naturalHeight,
+      naturalWidth: image.naturalWidth
+    } : null;
+  })()`);
+  if (!imageState?.complete || imageState.naturalWidth <= 0 || imageState.naturalHeight <= 0) {
+    throw new Error(`Cross-section PNG did not load: ${JSON.stringify(imageState)}`);
   }
 
   const requestedPaths = new Set(fixtureRequests.map((request) => request.path));
-  if (!requestedPaths.has(CROSS_SECTION_PATH)) {
-    throw new Error("2D viewport did not request cross-section geometry.");
-  }
-  if (!requestedPaths.has(CROSS_SECTION_QUALITY_PATH)) {
-    throw new Error("2D viewport did not request cross-section quality.");
+  if (!requestedPaths.has(CROSS_SECTION_IMAGE_PATH)) {
+    throw new Error("Cross-section image module did not request the PNG resource.");
   }
   if (errors.length > 0) {
     throw new Error(`Browser console/runtime errors:\n${errors.join("\n")}`);
@@ -128,7 +131,7 @@ try {
       "3d=cut-frame",
       "explorer=draft+plot-1+parameters",
       "inspector=commit",
-      "viewport-2d=webgl",
+      "cross-section-image=png",
       `requests=${fixtureRequests.length}`,
     ].join(" "),
   );
@@ -189,6 +192,16 @@ async function startFixtureServer() {
       writeJson(response, sharedDomainManifestFixture());
       return;
     }
+    if (path === CROSS_SECTION_IMAGE_PATH) {
+      writeBinary(
+        response,
+        makeCrossSectionPngBuffer(),
+        '"cross-section-image-fixture"',
+        200,
+        "image/png",
+      );
+      return;
+    }
     if (path === CROSS_SECTION_PATH) {
       writeBinary(response, makeCrossSectionBuffer(), '"cross-section-fixture"');
       return;
@@ -230,12 +243,18 @@ function writeJson(response, body, status = 200) {
   response.end(payload);
 }
 
-function writeBinary(response, arrayBuffer, etag, status = 200) {
+function writeBinary(
+  response,
+  arrayBuffer,
+  etag,
+  status = 200,
+  contentType = "application/octet-stream",
+) {
   const payload = Buffer.from(arrayBuffer);
   response.writeHead(status, {
     ...fixtureHeaders({
       "content-length": String(payload.byteLength),
-      "content-type": "application/octet-stream",
+      "content-type": contentType,
       etag,
     }),
   });
@@ -543,7 +562,7 @@ async function waitForWebGLCanvasReady(selector, label) {
             width: node.width
           };
         }),
-        hasViewport2d: Boolean(document.querySelector(".fm-viewport-2d")),
+        hasCrossSectionImage: Boolean(document.querySelector(".fm-cross-section-image")),
         hasViewport3d: Boolean(document.querySelector(".fm-viewport-3d")),
         location: window.location.href,
         title: document.title
@@ -1032,6 +1051,14 @@ function makeCrossSectionQualityBuffer() {
   view.setFloat32(16, 0.18, true);
   new Float32Array(buffer, 20, 1).set([0.18]);
   return buffer;
+}
+
+function makeCrossSectionPngBuffer() {
+  const buffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR42mP8z8BQz0AEYBxVSFUBAA2TAYPdiun8AAAAAElFTkSuQmCC",
+    "base64",
+  );
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
 function parsePng(buffer) {

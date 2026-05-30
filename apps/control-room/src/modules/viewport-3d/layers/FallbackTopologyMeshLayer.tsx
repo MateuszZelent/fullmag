@@ -44,6 +44,7 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
+  pointColorFromSettings,
   resolveCameraInteractionSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
@@ -316,7 +317,7 @@ export function FallbackTopologyMeshLayer({
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
-            color={colors.wire}
+            color={pointColorFromSettings(renderSettings, colors.wire)}
             opacity={surfaceOpacity}
             sizeAttenuation={false}
             size={3}

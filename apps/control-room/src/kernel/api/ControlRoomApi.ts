@@ -15,6 +15,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
   MESHING_SEMANTICS_PATH,
@@ -90,6 +91,7 @@ import type {
   CommandQueueStatusResource,
   CommandResponse,
   CpuTelemetryResource,
+  CrossSectionImageQuery,
   CrossSectionQuery,
   CrossSectionQualityQuery,
   CurrentRunResource,
@@ -435,6 +437,15 @@ export class ControlRoomApi {
       ) =>
         this.requestCrossSection(
           MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
+          query,
+          options,
+        ),
+      crossSectionImage: (
+        query: CrossSectionImageQuery,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestCrossSectionImage(
+          MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
           query,
           options,
         ),
@@ -1136,6 +1147,24 @@ export class ControlRoomApi {
         position_percent: query.positionPercent,
       },
     );
+  }
+
+  private requestCrossSectionImage(
+    path: OpenApiV2Path,
+    query: CrossSectionImageQuery,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<ArrayBuffer>> {
+    return this.requestBinaryBytes(path, options, undefined, {
+      color_scale: query.colorScale,
+      filter_expression: query.filterExpression,
+      legend: query.legend,
+      metric: query.metric,
+      plane: query.plane,
+      position_percent: query.positionPercent,
+      resolution: query.resolution,
+      shrink_factor: query.shrinkFactor,
+      wireframe: query.wireframe,
+    });
   }
 
   private requestCrossSectionQuality(

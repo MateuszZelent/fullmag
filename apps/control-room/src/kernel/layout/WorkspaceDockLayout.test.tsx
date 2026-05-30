@@ -66,7 +66,7 @@ describe("WorkspaceDockLayout", () => {
   it("renders the auxiliary viewport fallback when a module is registered for viewport-aux", () => {
     const kernel = makeKernel();
     kernel.modules.register({
-      id: "viewport-2d-test",
+      id: "viewport-aux-test",
       title: "2D Test",
       version: "0.1.0",
       slots: ["viewport-aux"],

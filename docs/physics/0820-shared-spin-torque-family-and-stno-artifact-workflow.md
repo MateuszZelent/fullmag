@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-04-18
+- Last updated: 2026-05-30
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
@@ -19,8 +19,8 @@ The current executable slice remains intentionally narrow:
 
 - executable now: single-module `SlonczewskiSTT`, `ZhangLiSTT`, or `SpinOrbitTorque` on the FDM public path,
 - executable now: `CurrentTransport(model="prescribed_density")` as a source-bound current artifact and planner bridge on the FDM public path,
+- executable now: single-module `SlonczewskiSTT` or `ZhangLiSTT` on native FEM CPU/GPU for prescribed current density,
 - semantic-only now: `InterfaceCppSTT`, `DriftDiffusionSpinTorque`,
-- semantic-only now on FEM: all spin-torque modules,
 - executable now for Oersted on the CPU FDM reference path: constant / sinusoidal / pulse envelopes,
 - rejected now on the FDM public path: `PiecewiseLinear` Oersted time dependence.
 
@@ -44,16 +44,28 @@ For the currently executable public slice:
 
 $$
 \boldsymbol{\tau}_\mathrm{Slonc}
-= \sigma(J, P, \Lambda)\,\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
-+ \sigma'(J, \varepsilon')\,\mathbf{m} \times \hat{\mathbf{p}}.
+= \frac{\sigma(J, P, \Lambda)}{1+\alpha^2}
+\left[
+(1+\alpha\varepsilon')\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
++(\varepsilon'-\alpha)\mathbf{m} \times \hat{\mathbf{p}}
+\right],
 $$
+
+where $\sigma(J,P,\Lambda,\mathbf{m}\cdot\hat{\mathbf{p}})$ is a direct-RHS
+coefficient in `1/s`. It includes the reduced gyromagnetic factor
+`gamma_mu0`; this is the explicit Gilbert-equivalent form of adding the same
+Slonczewski contribution through `H_eff`.
 
 - Zhang-Li CIP torque
 
 $$
 \boldsymbol{\tau}_\mathrm{ZL}
-= -(\mathbf{u}\cdot\nabla)\mathbf{m}
-+ \beta\,\mathbf{m}\times(\mathbf{u}\cdot\nabla)\mathbf{m}.
+= \frac{(1+\alpha\beta)\mathbf{v}_\perp
+-(\beta-\alpha)\mathbf{m}\times\mathbf{v}}{1+\alpha^2},
+\quad
+\mathbf{v}=(\mathbf{u}\cdot\nabla)\mathbf{m},
+\quad
+\mathbf{v}_\perp=-\mathbf{m}\times(\mathbf{m}\times\mathbf{v}).
 $$
 
 - Oersted field from a cylindrical conductor
@@ -81,12 +93,13 @@ $$
 | $\varepsilon'$ | field-like CPP coefficient | dimensionless |
 | $\beta$ | Zhang-Li non-adiabaticity | dimensionless |
 | $\hat{\mathbf{p}}$ | fixed spin-polarization direction | dimensionless |
+| $\gamma_{\mu0}$ | reduced gyromagnetic ratio used by LLG | m/(A s) |
 | $R$ | conductor radius | m |
 | $T$ | temperature | K |
 
 ### 2.3 Assumptions and approximations
 
-1. Public executable FDM assumes one torque module at a time.
+1. Public executable FDM and native FEM assume one executable torque module at a time.
 2. The public Slonczewski model is a bulk / uniform CPP drive over the solved magnetic body.
 3. `InterfaceCppSTT` is reserved for interface-local multilayer torque semantics and is not executable yet.
 4. `DriftDiffusionSpinTorque` is reserved for self-consistent spin accumulation and diffusion and is not executable yet.
@@ -106,12 +119,15 @@ $$
 
 ### 3.2 FEM
 
-- Torque-family authoring is kept legal in `ProblemIR`, but the current public FEM planner treats all `spin_torque_modules` entries as semantic-only.
-- This preserves one canonical semantics layer while keeping runtime claims honest.
-- Future FEM realizations may lower:
-  - uniform CPP bulk torque,
-  - interface-local CPP torque,
-  - self-consistent drift-diffusion or ohmic transport to torque couplings.
+- Native FEM CPU/GPU executes the current single-module public subset:
+  - uniform Slonczewski CPP bulk torque,
+  - Zhang-Li CIP torque with P1 tetrahedral gradients.
+- The Slonczewski direct RHS is the Gilbert-explicit equivalent of the
+  corresponding effective-field torque and therefore includes `gamma_mu0`.
+- The Zhang-Li direct RHS includes the explicit
+  `(1 + alpha beta)/(1 + alpha^2)` and `(beta - alpha)/(1 + alpha^2)` factors.
+- Interface-local CPP and self-consistent drift-diffusion torque remain
+  semantic-only.
 
 ### 3.3 Hybrid
 
@@ -182,9 +198,11 @@ Planner behavior after this change:
   - single `slonczewski` -> executable bridge,
   - single `zhang_li` -> executable bridge,
   - multiple modules -> rejected with explicit support note,
-  - `interface_cpp`, `drift_diffusion`, `spin_orbit_torque` -> rejected as `semantic_only`.
+  - `interface_cpp`, `drift_diffusion` -> rejected as `semantic_only`.
 - FEM lane:
-  - any torque module -> rejected as `semantic_only`.
+  - single `slonczewski` or `zhang_li` on native FEM CPU/GPU -> executable,
+  - multiple modules -> rejected with explicit support note,
+  - `interface_cpp`, `drift_diffusion`, `spin_orbit_torque` -> rejected as `semantic_only`.
 
 Capability status vocabulary used for this workflow:
 
@@ -197,8 +215,8 @@ Current truthful status:
 
 | Feature | FDM CPU | FDM GPU | FEM CPU/GPU |
 |---|---|---|---|
-| `SlonczewskiSTT` | `reference_executable` | `production_executable` | `semantic_only` |
-| `ZhangLiSTT` | `reference_executable` | `production_executable` | `semantic_only` |
+| `SlonczewskiSTT` | `reference_executable` | `production_executable` | `production_executable`, validation pending |
+| `ZhangLiSTT` | `reference_executable` | `production_executable` | `production_executable`, validation pending |
 | `InterfaceCppSTT` | `semantic_only` | `semantic_only` | `semantic_only` |
 | `DriftDiffusionSpinTorque` | `semantic_only` | `semantic_only` | `semantic_only` |
 | `SpinOrbitTorque` | `reference_executable` | `production_executable` | `semantic_only` |
@@ -209,8 +227,9 @@ Current truthful status:
 
 ### 5.1 Runtime / session impact
 
-- runtime behavior is unchanged for the already executable FDM slice,
-- semantic-only modules fail in planning instead of leaking to the runner,
+- the already executable FDM slice uses the same corrected STT contract as native FEM,
+- unsupported or semantic-only modules fail in planning instead of leaking to the runner,
+- supported single-module Slonczewski/Zhang-Li requests may execute on native FEM CPU/GPU,
 - requested intent and resolved executable lane remain distinct.
 
 ### 5.2 Artifact contract
@@ -259,15 +278,17 @@ Derived report metrics:
 ### 6.1 Analytical checks
 
 1. Slonczewski and Zhang-Li parameter domain validation.
-2. Oersted cylindrical field profile sign and scaling checks.
-3. PSD peak extraction on synthetic traces with known frequency.
-4. Linewidth extraction on synthetic Lorentzian PSDs.
+2. Slonczewski direct-RHS equivalence to the effective-field form after Gilbert conversion.
+3. Zhang-Li explicit Gilbert alpha/beta projection.
+4. Oersted cylindrical field profile sign and scaling checks.
+5. PSD peak extraction on synthetic traces with known frequency.
+6. Linewidth extraction on synthetic Lorentzian PSDs.
 
 ### 6.2 Cross-backend checks
 
 1. FDM CPU reference remains the trusted executable oracle for the current public STT slice.
 2. CUDA FDM parity remains required before promoting any broader validated status.
-3. FEM torque-family realizations must remain semantic-only until cross-checked and benchmarked.
+3. FEM Slonczewski/Zhang-Li execution must remain below `validated` until cross-checked and benchmarked.
 
 ### 6.3 Regression tests
 
@@ -275,7 +296,8 @@ Required regression coverage:
 
 - Python round-trip for legacy and canonical torque authoring,
 - planner rejection for unsupported multi-module executable requests,
-- planner rejection for torque modules on FEM,
+- planner acceptance for native FEM single-module Slonczewski/Zhang-Li requests,
+- planner rejection for unsupported FEM torque modules,
 - artifact-backed STNO analysis:
   - peak frequency,
   - orbit radius,
@@ -288,7 +310,7 @@ Required regression coverage:
 - [x] Planner
 - [x] Capability matrix
 - [x] FDM backend
-- [ ] FEM backend
+- [x] FEM backend
 - [ ] Hybrid backend
 - [x] Outputs / observables
 - [x] Tests / benchmarks
@@ -298,7 +320,8 @@ Checklist notes:
 
 - `Capability matrix` means the product status is now explicitly described with the four-state vocabulary and machine-readable sync artifacts.
 - `Outputs / observables` means the artifact-backed STNO analysis path is defined and implemented for the current benchmark slice.
-- `FEM backend` remains unchecked because torque-family execution is still semantic-only there.
+- `FEM backend` means the current native FEM single-module Slonczewski/Zhang-Li
+  executable subset exists. It does not mean the FEM STT slice is `validated`.
 
 ## 8. Known limits and deferred work
 

@@ -52,6 +52,16 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 
 const qualityPayload = {
   global: {
+    characteristic_size: {
+      histogram: [
+        { count: 3, hi: 3e-9, lo: 1e-9 },
+        { count: 7, hi: 9e-9, lo: 3e-9 },
+      ],
+      max: 9e-9,
+      mean: 5e-9,
+      min: 1e-9,
+      std: 1e-9,
+    },
     edge_length: {
       histogram: [
         { count: 2, hi: 2e-9, lo: 1e-9 },
@@ -330,6 +340,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Gamma");
     expect(html).toContain("Below target");
     expect(html).toContain("Element size distributions");
+    expect(html).toContain("Tetra size");
     expect(html).toContain("object:waveguide");
     expect(html).toContain("Size from curvature");
     expect(html).toContain("Narrow regions");
@@ -350,6 +361,7 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Gamma");
     expect(html).toContain("Below target");
     expect(html).toContain("Element size distributions");
+    expect(html).toContain("Tetra size");
     expect(html).toContain("Airbox Mesh Part");
     expect(html).toContain("Points / nodes");
     expect(html).toContain("12,345");

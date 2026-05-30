@@ -1,6 +1,6 @@
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
-import type { SlotId } from "../types";
+import type { ModuleId, SlotId } from "../types";
 
 import {
   DEFAULT_LAYOUT,
@@ -29,11 +29,13 @@ export class LayoutController {
   replace(nextState: LayoutState): void {
     const next: LayoutState = {
       activeModuleTab: nextState.activeModuleTab,
+      activeViewportMainModuleId: nextState.activeViewportMainModuleId,
       focusedSlot: nextState.focusedSlot,
       panelVisible: { ...nextState.panelVisible },
     };
     const layoutChanged =
       this.state.activeModuleTab !== next.activeModuleTab ||
+      this.state.activeViewportMainModuleId !== next.activeViewportMainModuleId ||
       this.state.panelVisible.left !== next.panelVisible.left ||
       this.state.panelVisible.right !== next.panelVisible.right ||
       this.state.panelVisible.bottom !== next.panelVisible.bottom;
@@ -48,6 +50,12 @@ export class LayoutController {
   setActiveTab(tabId: RibbonTabId): void {
     if (this.state.activeModuleTab === tabId) return;
     this.state = { ...this.state, activeModuleTab: tabId };
+    this.notify("workspace:layout-changed");
+  }
+
+  setActiveViewportMainModule(moduleId: ModuleId): void {
+    if (this.state.activeViewportMainModuleId === moduleId) return;
+    this.state = { ...this.state, activeViewportMainModuleId: moduleId };
     this.notify("workspace:layout-changed");
   }
 

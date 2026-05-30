@@ -1,6 +1,6 @@
 # Mesh System Holistic Audit And Repair Implementation Plan
 
-> **For agentic workers:** Implement this plan task by task. Use isolated exploration or subagents only when the current tool policy allows it. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Implement this plan task by task. Use isolated exploration or subagents only when the current tool policy allows it. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make Fullmag FEM shared-domain meshing logically consistent from Python DSL intent through ProblemIR/runtime metadata, Gmsh realization, mesh build provenance, API v2 resources, and control-room diagnostics.
 
@@ -108,10 +108,10 @@ The remaining risk is not a single isolated bug. The risk is cross-layer drift:
 
 **Steps:**
 
-- [ ] Add a failing test with at least two geometries where the first geometry is not an `ArchWaveguide` and a later geometry is a lofted `ArchWaveguide`; assert sanitized `algorithm_3d` resolves to HXT.
-- [ ] Replace first-geometry sanitization with all-geometry sanitization.
-- [ ] Keep the existing single-geometry behavior unchanged.
-- [ ] Run the focused sanitizer/fallback tests.
+- [x] Add a failing test with at least two geometries where the first geometry is not an `ArchWaveguide` and a later geometry is a lofted `ArchWaveguide`; assert sanitized `algorithm_3d` resolves to HXT.
+- [x] Replace first-geometry sanitization with all-geometry sanitization.
+- [x] Keep the existing single-geometry behavior unchanged.
+- [x] Run the focused sanitizer/fallback tests.
 
 **Verification:**
 
@@ -133,10 +133,10 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Update the edge test so `transition_distance` alone does not expand `EdgeDistanceThreshold`.
-- [ ] Keep `edge_transition_distance` as the only control that expands the edge plume beyond `edge_thickness`.
-- [ ] Preserve the explicit `edge_transition_distance` test.
-- [ ] Re-run perimeter refinement tests.
+- [x] Update the edge test so `transition_distance` alone does not expand `EdgeDistanceThreshold`.
+- [x] Keep `edge_transition_distance` as the only control that expands the edge plume beyond `edge_thickness`.
+- [x] Preserve the explicit `edge_transition_distance` test.
+- [x] Re-run perimeter refinement tests.
 
 **Verification:**
 
@@ -159,10 +159,10 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Add/adjust a test proving component-aware non-box transition fields carry `Grading="geometric"`.
-- [ ] Ensure `_configure_mesh_size_fields()` passes `Grading` into `_add_component_surface_threshold_field()`.
-- [ ] Keep explicit `transition_distance=0` disabling behavior.
-- [ ] Mark the physics-note checklist item complete only after tests pass.
+- [x] Add/adjust a test proving component-aware non-box transition fields carry `Grading="geometric"`.
+- [x] Ensure `_configure_mesh_size_fields()` passes `Grading` into `_add_component_surface_threshold_field()`.
+- [x] Keep explicit `transition_distance=0` disabling behavior.
+- [x] Mark the physics-note checklist item complete only after tests pass.
 
 **Verification:**
 
@@ -187,10 +187,10 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Extend `MeshOptionsApplicationReport` with boundary-layer status, reason, and field id.
-- [ ] Feed the application report into shared-domain build report construction.
-- [ ] Update operation status to distinguish `applied`, `degraded`, and `ignored`.
-- [ ] Add a fake-Gmsh test where `setAsBoundaryLayer` raises and provenance reports `degraded`.
+- [x] Extend `MeshOptionsApplicationReport` with boundary-layer status, reason, and field id.
+- [x] Feed the application report into shared-domain build report construction.
+- [x] Update operation status to distinguish `applied`, `degraded`, and `ignored`.
+- [x] Add a fake-Gmsh test where `setAsBoundaryLayer` raises and provenance reports `degraded`.
 
 **Verification:**
 
@@ -213,12 +213,12 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Build a small box/cylinder shared-domain mesh with geometric airbox grading.
-- [ ] Classify airbox tetrahedra by distance band from object bounds/interface.
-- [ ] Assert every near/mid/far band has nonzero airbox elements.
-- [ ] Assert characteristic edge size grows monotonically within tolerance from near object to far airbox.
-- [ ] Assert corner/diagonal bins are populated and not entirely flat at `h_outer`.
-- [ ] Keep the test small enough for local CI.
+- [x] Build a small box/cylinder shared-domain mesh with geometric airbox grading.
+- [x] Classify airbox tetrahedra by distance band from object bounds/interface.
+- [x] Assert every near/mid/far band has nonzero airbox elements.
+- [x] Assert characteristic edge size grows monotonically within tolerance from near object to far airbox.
+- [x] Assert corner/diagonal bins are populated and not entirely flat at `h_outer`.
+- [x] Keep the test small enough for local CI.
 
 **Verification:**
 
@@ -239,10 +239,10 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Add a compact flat `ArchWaveguide` test using `mesh.thin_film(...)`.
-- [ ] Assert the build report records `thin_film` requested and `feature_aware_tetrahedral` realized.
-- [ ] Assert object and airbox mesh part summaries are both present.
-- [ ] Assert edge/corner fields exist only when requested or produced by the preset.
+- [x] Add a compact flat `ArchWaveguide` test using `mesh.thin_film(...)`.
+- [x] Assert the build report records `thin_film` requested and `feature_aware_tetrahedral` realized.
+- [x] Assert object and airbox mesh part summaries are both present.
+- [x] Assert edge/corner fields exist only when requested or produced by the preset.
 
 **Verification:**
 
@@ -268,10 +268,10 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Test that `body.mesh.thin_film(...)` exports all resolved mesh controls.
-- [ ] Test that explicit `edge_transition_distance` and `corner_transition_distance` round-trip.
-- [ ] Test that boundary-layer selectors round-trip separately from resolved Gmsh tags.
-- [ ] Test that public DSL export does not flatten airbox controls into per-object controls.
+- [x] Test that `body.mesh.thin_film(...)` exports all resolved mesh controls.
+- [x] Test that explicit `edge_transition_distance` and `corner_transition_distance` round-trip.
+- [x] Test that boundary-layer selectors round-trip separately from resolved Gmsh tags.
+- [x] Test that public DSL export does not flatten airbox controls into per-object controls.
 
 **Verification:**
 
@@ -299,11 +299,11 @@ env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
 
 **Steps:**
 
-- [ ] Confirm API distinguishes total mesh nodes from scoped part nodes and element counts.
-- [ ] If missing, add a mesh-part summary field for `node_count`, `unique_point_count` naming, `tetra_count`, `boundary_face_count`, and characteristic-size bins.
-- [ ] Regenerate OpenAPI and generated frontend types if backend schemas change.
-- [ ] Display scoped airbox/object mesh counts in the inspector without direct component fetches.
-- [ ] Add tests for facade/resource hook/model builder.
+- [x] Confirm API distinguishes total mesh nodes from scoped part nodes and element counts.
+- [x] If missing, add a mesh-part summary field for `node_count`, `unique_point_count` naming, `tetra_count`, `boundary_face_count`, and characteristic-size bins.
+- [x] Regenerate OpenAPI and generated frontend types if backend schemas change.
+- [x] Display scoped airbox/object mesh counts in the inspector without direct component fetches.
+- [x] Add tests for facade/resource hook/model builder.
 
 **Verification:**
 
@@ -328,11 +328,11 @@ rg '"/v2/' apps/control-room/src --glob '!src/kernel/api/**' --glob '!src/kernel
 
 **Steps:**
 
-- [ ] Search for direct `fetch()` in control-room modules.
-- [ ] Search for `/v1`, `bootstrap`, `poll`, and legacy preview paths.
-- [ ] Ensure websocket events invalidate resources rather than carrying full mesh payloads.
-- [ ] Ensure viewport modules do not rebuild topology when only field buffers or display state changes.
-- [ ] Add or update focused tests for mesh-resource invalidation and viewport model building.
+- [x] Search for direct `fetch()` in control-room modules.
+- [x] Search for `/v1`, `bootstrap`, `poll`, and legacy preview paths.
+- [x] Ensure websocket events invalidate resources rather than carrying full mesh payloads.
+- [x] Ensure viewport modules do not rebuild topology when only field buffers or display state changes.
+- [x] Add or update focused tests for mesh-resource invalidation and viewport model building.
 
 **Verification:**
 
@@ -383,16 +383,16 @@ For viewport or cross-section rendering changes, also run a browser smoke that p
 
 ## 9. Done Criteria
 
-- [ ] Backend mesh algorithms do not have known order-dependent sanitizer behavior.
-- [ ] Edge/corner/surface transition semantics match physics note 0102.
-- [ ] Non-box transition shell grading uses the same geometric growth semantics as analytic box transitions.
-- [ ] Boundary-layer build provenance reports realized Gmsh status, not only requested intent.
-- [ ] Realized airbox distance-band tests cover near/mid/far/corner regions.
-- [ ] Thin-film preset has deterministic smoke coverage and clear provenance.
-- [ ] Python DSL, ProblemIR metadata, runtime metadata, and script export preserve mesh controls.
-- [ ] API v2 exposes scoped mesh counts/statistics needed for airbox/object diagnosis.
-- [ ] Control-room mesh UI reads through typed API facade/resource hooks and no direct transport.
-- [ ] Final Python, Rust API, frontend type/test, and diff hygiene gates pass.
+- [x] Backend mesh algorithms do not have known order-dependent sanitizer behavior.
+- [x] Edge/corner/surface transition semantics match physics note 0102.
+- [x] Non-box transition shell grading uses the same geometric growth semantics as analytic box transitions.
+- [x] Boundary-layer build provenance reports realized Gmsh status, not only requested intent.
+- [x] Realized airbox distance-band tests cover near/mid/far/corner regions.
+- [x] Thin-film preset has deterministic smoke coverage and clear provenance.
+- [x] Python DSL, ProblemIR metadata, runtime metadata, and script export preserve mesh controls.
+- [x] API v2 exposes scoped mesh counts/statistics needed for airbox/object diagnosis.
+- [x] Control-room mesh UI reads through typed API facade/resource hooks and no direct transport.
+- [x] Final Python, Rust API, frontend type/test, and diff hygiene gates pass.
 
 ## 10. Current Audit Snapshot - 2026-05-30
 
@@ -449,3 +449,67 @@ git diff --check -- docs/plans/active/mesh-system-holistic-audit-and-repair-plan
 ```
 
 The broader command `pnpm --dir apps/control-room test -- ...` invoked the full Vitest suite and failed in `src/design/styles/designStyles.test.ts` on a Catppuccin token-location assertion. That failure is unrelated to mesh logic, but it means the current frontend-wide test gate is not green.
+
+## 11. Repair Completion Snapshot - 2026-05-30
+
+The repair workstreams above have been implemented and verified in the current worktree.
+
+### Implemented Repairs
+
+- Multi-object OCC sanitizer now evaluates all geometries before choosing the realized 3D algorithm, so a later lofted `ArchWaveguide` cannot bypass the unsafe-Delaunay guard.
+- Non-box edge refinement no longer inherits surface `transition_distance`; only explicit `edge_transition_distance` expands the edge plume beyond `edge_thickness`.
+- Generic component-aware `TransitionShellThreshold` fields now carry geometric grading metadata, matching the analytic box transition path.
+- Boundary-layer provenance now reports the realized Gmsh application result (`applied`, `degraded`, or `ignored`) instead of inferring status only from requested intent.
+- Realized Gmsh airbox coverage now has a distance-band regression that checks near/mid/far and diagonal airbox bins.
+- Thin-film flat `ArchWaveguide` materialization now has deterministic smoke coverage for provenance, partitioning, and bounded element count.
+- Airbox mesh policy and airbox mesh quality selections are distinct in the control-room tree/inspector model.
+- Full frontend quality gates were made green by aligning the design-token test with the current `tokens.css`/`theme.css` split and removing a lint-blocking synchronous state update in the 2D viewport theme-color effect.
+
+### Final Verification Evidence
+
+```bash
+env PYTHONPATH=packages/fullmag-py/src python3 -m py_compile \
+  packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py \
+  packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py \
+  packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py \
+  packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py \
+  packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py \
+  packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py
+# passed
+
+env PYTHONPATH=packages/fullmag-py/src python3 -m pytest \
+  packages/fullmag-py/tests/test_api.py \
+  packages/fullmag-py/tests/test_meshing.py -vv
+# 313 passed, 1 skipped
+
+cargo test -p fullmag-api router_v2 --no-fail-fast
+# 246 passed
+
+pnpm --dir apps/control-room generate:api
+# passed
+
+pnpm --dir apps/control-room lint
+# passed
+
+pnpm --dir apps/control-room typecheck
+# passed
+
+pnpm --dir apps/control-room test
+# 184 files passed, 1006 tests passed
+
+CONTROL_ROOM_URL=http://localhost:3100/workspace \
+  pnpm --dir apps/control-room smoke:cross-section-workflow
+# Cross-section workflow smoke passed: viewport-2d=webgl requests=37
+
+git diff --check -- \
+  packages/fullmag-py/src/fullmag/meshing \
+  packages/fullmag-py/tests/test_meshing.py \
+  packages/fullmag-py/tests/test_api.py \
+  crates/fullmag-api/src \
+  apps/control-room/src \
+  docs/physics \
+  docs/plans
+# passed
+```
+
+The Playwright cross-section smoke had to be rerun outside the sandbox because sandboxed Chromium failed at startup with `sandbox_host_linux.cc:41 shutdown: Operation not permitted`.

@@ -57,6 +57,7 @@ void fem_mesh_topology_helpers_are_owned_by_core_module() {
     const char *mesh_symbols[] = {
         "bool initialize_mesh_plan_fields(",
         "void initialize_magnetic_masks(",
+        "bool validate_magnetic_mesh_has_active_region(",
         "bool validate_periodic_plan_compatibility(",
         "bool build_static_periodic_reduction(",
         "bool validate_periodic_scalar_field_classes(",
@@ -168,7 +169,7 @@ void fem_mesh_topology_helpers_are_owned_by_core_module() {
 
 void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
     fullmag::fem::Context ctx;
-    ctx.mesh.n_nodes = 3;
+    ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.n_boundary_faces = 1;
 
@@ -176,8 +177,9 @@ void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
     };
-    const uint32_t elements[] = {0u, 1u, 2u, 0u};
+    const uint32_t elements[] = {0u, 1u, 2u, 3u};
     const uint32_t element_markers[] = {7u};
     const uint32_t boundary_faces[] = {0u, 1u, 2u};
     const uint32_t boundary_markers[] = {3u};
@@ -201,13 +203,13 @@ void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
     std::string error;
     check(fullmag::fem::initialize_mesh_plan_fields(ctx, mesh, error), error.c_str());
 
-    check(ctx.mesh.nodes_xyz == std::vector<double>(nodes, nodes + 9), "mesh nodes copied");
+    check(ctx.mesh.nodes_xyz == std::vector<double>(nodes, nodes + 12), "mesh nodes copied");
     check(ctx.mesh.elements == std::vector<uint32_t>(elements, elements + 4), "mesh elements copied");
     check(ctx.mesh.element_markers == std::vector<uint32_t>({7u}), "mesh element markers copied");
     check(ctx.mesh.boundary_faces == std::vector<uint32_t>({0u, 1u, 2u}), "mesh boundary faces copied");
     check(ctx.mesh.boundary_markers == std::vector<uint32_t>({3u}), "mesh boundary markers copied");
     check(ctx.mesh.periodic_node_pairs == std::vector<uint32_t>({1u, 2u}), "periodic pairs copied");
-    check(ctx.mesh.periodic_reduced_node_count == 2u, "periodic reduction built");
+    check(ctx.mesh.periodic_reduced_node_count == 3u, "periodic reduction built");
     check(ctx.mesh.periodic_boundary_marker_set.count(11u) == 1u, "periodic boundary marker A copied");
     check(ctx.mesh.periodic_boundary_marker_set.count(12u) == 1u, "periodic boundary marker B copied");
 
@@ -218,6 +220,66 @@ void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
     check(
         error.find("FEM mesh periodic_node_pairs pointer is null") != std::string::npos,
         "periodic node-pair pointer error string");
+
+    mesh.periodic_node_pairs = periodic_node_pairs;
+    mesh.periodic_boundary_pair_markers = nullptr;
+    check(
+        !fullmag::fem::initialize_mesh_plan_fields(ctx, mesh, error),
+        "periodic boundary-pair marker count requires pointer");
+    check(
+        error.find("periodic_boundary_pair_markers pointer is null") != std::string::npos,
+        "periodic boundary-pair marker pointer error string");
+}
+
+void mesh_plan_import_rejects_invalid_topology() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.n_elements = 1;
+    ctx.mesh.n_boundary_faces = 1;
+
+    const double nodes[] = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    const uint32_t valid_elements[] = {0u, 1u, 2u, 3u};
+    const uint32_t invalid_index_elements[] = {0u, 1u, 2u, 4u};
+    const uint32_t duplicate_node_elements[] = {0u, 1u, 2u, 2u};
+    const uint32_t boundary_faces[] = {0u, 1u, 2u};
+
+    fullmag_fem_mesh_desc mesh{};
+    mesh.nodes_xyz = nodes;
+    mesh.n_nodes = ctx.mesh.n_nodes;
+    mesh.elements = invalid_index_elements;
+    mesh.n_elements = ctx.mesh.n_elements;
+    mesh.boundary_faces = boundary_faces;
+    mesh.n_boundary_faces = ctx.mesh.n_boundary_faces;
+
+    std::string error;
+    check(
+        !fullmag::fem::initialize_mesh_plan_fields(ctx, mesh, error),
+        "element connectivity outside node range must fail");
+    check(
+        error.find("element connectivity") != std::string::npos,
+        "invalid element connectivity error string");
+
+    mesh.elements = duplicate_node_elements;
+    check(
+        !fullmag::fem::initialize_mesh_plan_fields(ctx, mesh, error),
+        "degenerate duplicate-node tetrahedron must fail");
+    check(
+        error.find("degenerate tetrahedron") != std::string::npos,
+        "duplicate-node tetrahedron error string");
+
+    mesh.elements = valid_elements;
+    mesh.boundary_faces = nullptr;
+    check(
+        !fullmag::fem::initialize_mesh_plan_fields(ctx, mesh, error),
+        "boundary-face count requires pointer");
+    check(
+        error.find("boundary_faces pointer is null") != std::string::npos,
+        "boundary-face pointer error string");
 }
 
 void magnetic_masks_follow_shared_marker_policy() {
@@ -242,14 +304,30 @@ void magnetic_masks_follow_shared_marker_policy() {
     ctx.mesh.element_markers = {0u, 0u};
     fullmag::fem::initialize_magnetic_masks(ctx);
     check(
+        ctx.mesh.magnetic_element_mask == std::vector<uint8_t>({0u, 0u}),
+        "explicit all-zero markers are treated as all-air");
+
+    ctx.mesh.element_markers.clear();
+    fullmag::fem::initialize_magnetic_masks(ctx);
+    check(
         ctx.mesh.magnetic_element_mask == std::vector<uint8_t>({1u, 1u}),
-        "all-zero markers are treated as fully magnetic");
+        "missing element markers are treated as fully magnetic");
 
     ctx.mesh.element_markers = {3u, 7u};
     fullmag::fem::initialize_magnetic_masks(ctx);
     check(
         ctx.mesh.magnetic_element_mask == std::vector<uint8_t>({1u, 1u}),
         "all-nonzero markers are treated as fully magnetic");
+
+    std::string error;
+    ctx.mesh.element_markers = {0u, 0u};
+    fullmag::fem::initialize_magnetic_masks(ctx);
+    check(
+        !fullmag::fem::validate_magnetic_mesh_has_active_region(ctx, error),
+        "all-air explicit markers must fail active magnetic region validation");
+    check(
+        error.find("at least one magnetic") != std::string::npos,
+        "all-air active-region validation error string");
 }
 
 void periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields() {
@@ -298,6 +376,7 @@ void periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields
 int main() {
     fem_mesh_topology_helpers_are_owned_by_core_module();
     mesh_plan_import_copies_geometry_markers_and_periodic_pairs();
+    mesh_plan_import_rejects_invalid_topology();
     magnetic_masks_follow_shared_marker_policy();
     periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields();
     return 0;

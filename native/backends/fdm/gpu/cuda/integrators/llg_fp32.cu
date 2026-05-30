@@ -66,7 +66,7 @@ __global__ void llg_rhs_fp32_kernel(
     float rhs_z = -gamma_bar * (precession_scale * pz + alpha * dz);
 
     // --- Zhang-Li STT (CIP) ---
-    // tau_ZL = -b * m x (m x (j.grad)m) - beta * b * m x (j.grad)m
+    // Explicit Gilbert form of Zhang-Li: scaled v_perp and m x v terms.
     float jx = static_cast<float>(stt.current_density_x);
     float jy = static_cast<float>(stt.current_density_y);
     float jz = static_cast<float>(stt.current_density_z);
@@ -138,13 +138,16 @@ __global__ void llg_rhs_fp32_kernel(
         float double_cross_z = m0 * cross_y - m1 * cross_x;
 
         float beta = static_cast<float>(stt.stt_beta);
-        rhs_x += -double_cross_x - beta * cross_x;
-        rhs_y += -double_cross_y - beta * cross_y;
-        rhs_z += -double_cross_z - beta * cross_z;
+        float inv_gilbert_stt = 1.0f / (1.0f + alpha * alpha);
+        float adiabatic_scale = (1.0f + alpha * beta) * inv_gilbert_stt;
+        float cross_scale = (alpha - beta) * inv_gilbert_stt;
+        rhs_x += adiabatic_scale * (-double_cross_x) + cross_scale * cross_x;
+        rhs_y += adiabatic_scale * (-double_cross_y) + cross_scale * cross_y;
+        rhs_z += adiabatic_scale * (-double_cross_z) + cross_scale * cross_z;
     }
     
     // --- Slonczewski STT (CPP/SOT) ---
-    // tau_STT = beta_STT * [ m x (m x p) + epsilon' * m x p ]
+    // Explicit Gilbert form of Slonczewski field-equivalent direct RHS.
     if (stt.has_slonczewski_stt) {
         float px = static_cast<float>(stt.stt_p_x);
         float py = static_cast<float>(stt.stt_p_y);
@@ -158,6 +161,10 @@ __global__ void llg_rhs_fp32_kernel(
         float g = (P_val * L2) / ((L2 + 1.0f) + (L2 - 1.0f) * m_dot_p);
         
         float beta_STT = static_cast<float>(stt.stt_cpp_pf) * g;
+        float inv_gilbert_stt = 1.0f / (1.0f + alpha * alpha);
+        float e_prime = static_cast<float>(stt.stt_epsilon_prime);
+        float damping_like_scale = beta_STT * (1.0f + alpha * e_prime) * inv_gilbert_stt;
+        float field_like_scale = beta_STT * (e_prime - alpha) * inv_gilbert_stt;
         
         // m x p
         float m_cross_px = m1 * pz - m2 * py;
@@ -169,10 +176,9 @@ __global__ void llg_rhs_fp32_kernel(
         float double_m_cross_py = m2 * m_cross_px - m0 * m_cross_pz;
         float double_m_cross_pz = m0 * m_cross_py - m1 * m_cross_px;
         
-        float e_prime = static_cast<float>(stt.stt_epsilon_prime);
-        rhs_x += beta_STT * (double_m_cross_px + e_prime * m_cross_px);
-        rhs_y += beta_STT * (double_m_cross_py + e_prime * m_cross_py);
-        rhs_z += beta_STT * (double_m_cross_pz + e_prime * m_cross_pz);
+        rhs_x += damping_like_scale * double_m_cross_px + field_like_scale * m_cross_px;
+        rhs_y += damping_like_scale * double_m_cross_py + field_like_scale * m_cross_py;
+        rhs_z += damping_like_scale * double_m_cross_pz + field_like_scale * m_cross_pz;
     }
 
     // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model

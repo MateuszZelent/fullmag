@@ -109,6 +109,31 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects Airbox quality nodes as realized airbox mesh selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:mesh:airbox-quality",
+      kind: "airbox.mesh-quality",
+      label: "Airbox Quality",
+      parentId: "model:mesh",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.mesh-quality",
+      label: "Airbox Quality",
+      nodeId: "model:mesh:airbox-quality",
+      objectId: null,
+      ref: {
+        kind: "airbox.mesh-quality",
+        nodeId: "model:mesh:airbox-quality",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+  });
+
   it("selects object authoring child groups as scene-object selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

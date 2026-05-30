@@ -36,6 +36,40 @@ bool initialize_stt_plan_fields(
 
     ctx.stt.zhang_li_enabled = plan.has_zhang_li_stt != 0;
     ctx.stt.slonczewski_enabled = plan.has_slonczewski_stt != 0;
+    const bool stt_enabled = ctx.stt.zhang_li_enabled || ctx.stt.slonczewski_enabled;
+    if (stt_enabled) {
+        for (double component : plan.stt_current_density_am2) {
+            if (!std::isfinite(component)) {
+                error = "stt_current_density_am2 components must be finite";
+                return false;
+            }
+        }
+        if (!std::isfinite(plan.stt_degree) || plan.stt_degree <= 0.0 || plan.stt_degree > 1.0) {
+            error = "stt_degree must be finite and in (0, 1]";
+            return false;
+        }
+        if (!std::isfinite(plan.stt_beta)) {
+            error = "stt_beta must be finite";
+            return false;
+        }
+        if (!std::isfinite(plan.stt_epsilon_prime)) {
+            error = "stt_epsilon_prime must be finite";
+            return false;
+        }
+        if (!std::isfinite(plan.stt_free_layer_thickness) || plan.stt_free_layer_thickness < 0.0) {
+            error = "stt_free_layer_thickness must be finite and non-negative";
+            return false;
+        }
+        if (!std::isfinite(plan.stt_current_sign)) {
+            error = "stt_current_sign must be finite";
+            return false;
+        }
+    }
+    if (ctx.stt.slonczewski_enabled &&
+        (!std::isfinite(plan.stt_lambda) || plan.stt_lambda < 1.0)) {
+        error = "stt_lambda must be finite and >= 1 for Slonczewski STT";
+        return false;
+    }
     ctx.stt.current_density_am2 = {
         plan.stt_current_density_am2[0],
         plan.stt_current_density_am2[1],

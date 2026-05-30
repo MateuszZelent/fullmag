@@ -57,10 +57,11 @@ bool gpu_rk_add_zhang_li_torque(
         reason = "GPU RK Zhang-Li STT requires device-resident mesh geometry";
         return false;
     }
-    if (gpu.materials.ms == nullptr || gpu.local_interactions.vector.x == nullptr ||
+    if (gpu.materials.ms == nullptr || gpu.materials.alpha == nullptr ||
+        gpu.local_interactions.vector.x == nullptr ||
         gpu.local_interactions.vector.y == nullptr || gpu.local_interactions.vector.z == nullptr ||
         gpu.local_interactions.node_weight == nullptr) {
-        reason = "GPU RK Zhang-Li STT requires device-resident Ms and Zhang-Li work buffers";
+        reason = "GPU RK Zhang-Li STT requires device-resident Ms, alpha, and Zhang-Li work buffers";
         return false;
     }
     fullmag_cuda_add_zhang_li_stt_rhs(
@@ -71,6 +72,7 @@ bool gpu_rk_add_zhang_li_torque(
         m.y,
         m.z,
         gpu.materials.ms,
+        gpu.materials.alpha,
         gpu.mesh_regions.magnetic_node_mask,
         gpu.local_interactions.vector.x,
         gpu.local_interactions.vector.y,
@@ -85,6 +87,7 @@ bool gpu_rk_add_zhang_li_torque(
         ctx.stt.current_density_am2[2],
         ctx.stt.degree,
         ctx.stt.beta,
+        ctx.material_fields.material.damping,
         static_cast<int>(ctx.mesh.n_elements),
         n,
         stream);

@@ -2376,6 +2376,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                 "style": {
                                     "surface_color_source": "orientation",
                                     "surface_mono_color": "#00ffaa",
+                                    "point_color": "#66eeff",
                                     "vector_color_mode": "orientation",
                                     "vector_mono_color": "#ff00aa",
                                     "vector_alpha": 0.45,
@@ -2429,6 +2430,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
         json["overrides"][0]["style"]["surface_color_source"],
         "orientation"
     );
+    assert_eq!(json["overrides"][0]["style"]["point_color"], "#66eeff");
     assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
     assert_eq!(json["overrides"][0]["style"]["vector_budget"], 384);
     assert_eq!(json["overrides"][0]["style"]["vector_length_scale"], 1.75);
@@ -3838,6 +3840,18 @@ async fn mesh_universe_quality_fallback_reports_volume_ratio() {
         .as_f64()
         .expect("fallback quality should include volume ratio");
     assert!((volume_ratio - 50.0).abs() < 1.0e-9);
+    assert_eq!(
+        json["quality"]["global"]["characteristic_size"]["histogram"][0]["count"],
+        1
+    );
+    assert_eq!(
+        json["quality"]["global"]["edge_length"]["histogram"][0]["count"],
+        3
+    );
+    assert_eq!(
+        json["quality"]["global"]["volume"]["histogram"][0]["count"],
+        1
+    );
 }
 
 #[tokio::test]
@@ -4772,6 +4786,121 @@ async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
     assert_eq!(u32::from_le_bytes(body[20..24].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(body[24..28].try_into().unwrap()), 3);
     assert_eq!(u32::from_le_bytes(body[28..32].try_into().unwrap()), 1);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_image_returns_png_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&color_scale=viridis&resolution=512&wireframe=true&legend=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png"),
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-renderer")
+            .and_then(|value| value.to_str().ok()),
+        Some("cross-section-image-v1"),
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..8], b"\x89PNG\r\n\x1a\n");
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_image_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+    let uri = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=512";
+
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert!(body_bytes(second).await.is_empty());
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_image_rejects_invalid_resolution() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=777")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_image_returns_204_without_fem_mesh() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=512")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -10075,7 +10204,7 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
         snapshot.mesh_revision = 31;
         snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "m": {
+            "H_demag": {
                 "values": [
                     [0.0, 0.1, 0.2],
                     [1.0, 1.1, 1.2],
@@ -10098,7 +10227,7 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=airbox")
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=airbox")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -10136,6 +10265,70 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
         first_value, 4.0,
         "airbox scope should start at airbox node values"
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 30;
+        snapshot.mesh_revision = 32;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let airbox_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(airbox_response.status(), StatusCode::NOT_FOUND);
+
+    let air_part_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=part&scope_id=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(air_part_response.status(), StatusCode::NOT_FOUND);
+
+    let legacy_air_object_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=__air__")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy_air_object_response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -11805,6 +11998,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "bounds_visible",
         "surface_visible",
         "wireframe_visible",
+        "point_color",
         "points_visible",
         "vectors_visible",
         "render_mode",
@@ -11852,6 +12046,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vector_length_scale",
         "vector_thickness",
         "wireframe_color",
+        "point_color",
     ] {
         assert!(
             override_style_props.contains(required),
@@ -11932,6 +12127,7 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
     for path in [
         "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
         "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
         "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",

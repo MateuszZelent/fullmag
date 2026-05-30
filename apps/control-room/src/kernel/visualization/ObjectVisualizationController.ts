@@ -38,6 +38,7 @@ export interface VisualizationTargetSettings {
   boundsVisible: boolean;
   geometryScope: VisualizationGeometryScope;
   opacityPercent: number;
+  pointColor: string;
   pointsVisible: boolean;
   primitiveVisible?: boolean;
   renderMode: VisualizationRenderMode;
@@ -105,6 +106,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
   geometryScope: "surface",
   opacityPercent: 100,
+  pointColor: "var(--fm-border-strong)",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "surface+edges",
@@ -129,10 +131,11 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 };
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
-  activeQuantityId: "m",
+  activeQuantityId: "H_demag",
   boundsVisible: false,
   geometryScope: "full",
   opacityPercent: 28,
+  pointColor: "var(--fm-info)",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "wireframe",
@@ -145,7 +148,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
-  vectorMonoColor: "var(--fm-accent)",
+  vectorMonoColor: "var(--fm-info)",
   vectorSurfaceOffsetEnabled: false,
   vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
@@ -425,6 +428,9 @@ function resolveVisualizationStateTargetOverride(
     display.points.visible === null
       ? {}
       : { pointsVisible: display.points.visible }),
+    ...(style?.point_color === undefined || style.point_color === null
+      ? {}
+      : { pointColor: style.point_color }),
     ...(display?.surface?.visible === undefined ||
     display.surface.visible === null
       ? {}
@@ -532,6 +538,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.surfaceColorSource === undefined
       ? {}
       : { surface_color_source: normalized.surfaceColorSource }),
+    ...(normalized.pointColor === undefined
+      ? {}
+      : { point_color: normalized.pointColor }),
     ...(normalized.shaderMonoColor === undefined
       ? {}
       : { surface_mono_color: normalized.shaderMonoColor }),
@@ -847,6 +856,8 @@ function visualizationSettingsFromResolvedTarget(
     geometryScope: settings.geometry_scope,
     opacityPercent: layerOpacityToPercent(settings.opacity),
     pointsVisible: settings.points_visible,
+    pointColor:
+      settings.point_color ?? DEFAULT_AIRBOX_VISUALIZATION.pointColor,
     renderMode: settings.render_mode,
     shaderMonoColor: settings.surface_mono_color,
     shaderVisible: settings.surface_visible,
@@ -996,6 +1007,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.shaderColorMode === undefined
       ? {}
       : { shaderColorMode: patch.shaderColorMode }),
+    ...(patch.pointColor === undefined
+      ? {}
+      : { pointColor: patch.pointColor }),
     ...(patch.shaderMonoColor === undefined
       ? {}
       : { shaderMonoColor: patch.shaderMonoColor }),

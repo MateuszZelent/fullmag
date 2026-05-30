@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
@@ -15,6 +15,10 @@ use crate::error::ApiError;
 use crate::fem_cross_section::{
     cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
     serialize_cross_section_fmcs, serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
+};
+use crate::fem_cross_section_image::{
+    render_cross_section_png, validate_cross_section_image_query, CrossSectionImageColorScale,
+    CrossSectionImageRenderOptions,
 };
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
@@ -58,6 +62,20 @@ pub struct MeshSharedDomainCrossSectionQualityQuery {
     pub plane: SlicePlane,
     pub position_percent: f64,
     pub metric: CrossSectionQualityMetric,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MeshSharedDomainCrossSectionImageQuery {
+    pub plane: SlicePlane,
+    pub position_percent: f64,
+    pub metric: CrossSectionQualityMetric,
+    pub color_scale: Option<CrossSectionImageColorScale>,
+    pub resolution: Option<u32>,
+    pub wireframe: Option<bool>,
+    pub legend: Option<bool>,
+    pub shrink_factor: Option<f64>,
+    pub filter_expression: Option<String>,
 }
 
 #[utoipa::path(
@@ -601,6 +619,142 @@ pub async fn get_mesh_shared_domain_cross_section(
         include_wireframe,
     ));
     Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
+    params(MeshSharedDomainCrossSectionImageQuery),
+    responses(
+        (status = 200, description = "Server-rendered shared-domain FEM cross-section image", content_type = "image/png"),
+        (status = 304, description = "Cross-section image not modified for the supplied ETag"),
+        (status = 204, description = "No FEM mesh or no data for the requested metric"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "FEM topology unavailable for cross-section"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_shared_domain_cross_section_image(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MeshSharedDomainCrossSectionImageQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let color_scale = query.color_scale.unwrap_or_default();
+    let resolution = query.resolution.unwrap_or(1024);
+    let wireframe = query.wireframe.unwrap_or(true);
+    let legend = query.legend.unwrap_or(true);
+    let shrink_factor = query.shrink_factor.unwrap_or(1.0);
+    validate_cross_section_image_query(query.position_percent, resolution, shrink_factor)?;
+
+    let snapshot = current_snapshot(&state).await?;
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let artifact = snapshot
+        .mesh_workspace
+        .as_ref()
+        .map(read_mesh_quality_data_artifact)
+        .transpose()?
+        .flatten();
+    let cut_norm = query.position_percent / 100.0;
+    let resolved = resolve_slice_query(
+        &FieldSliceQuery {
+            plane: query.plane,
+            component: None,
+            cut_world: None,
+            cut_norm: Some(cut_norm),
+            x_size: None,
+            y_size: None,
+            max_points: None,
+            include_arrows: None,
+            arrow_every: None,
+            max_arrows: None,
+        },
+        1,
+    )?;
+    let overlay = collect_fem_slice_overlay(
+        FemSliceOverlayInput {
+            nodes: &mesh.nodes,
+            elements: &mesh.elements,
+            element_markers: &mesh.element_markers,
+        },
+        &resolved,
+    )?;
+    let (values, quality_source) = if let Some(artifact) = artifact.as_ref() {
+        if let Some(values) =
+            cross_section_quality_from_fmmq(&overlay, &artifact.bytes, query.metric)?
+        {
+            (
+                values,
+                format!(
+                    "fmmq:{}:{}:{}",
+                    artifact.path, artifact.byte_size, artifact.element_count
+                ),
+            )
+        } else if let Some(values) = cross_section_quality_from_parent_tets(
+            &overlay,
+            &mesh.nodes,
+            &mesh.elements,
+            query.metric,
+        )? {
+            (values, "parent-tet-geometry-v1".to_string())
+        } else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        }
+    } else if let Some(values) =
+        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &mesh.elements, query.metric)?
+    {
+        (values, "parent-tet-geometry-v1".to_string())
+    } else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    let png = render_cross_section_png(
+        &overlay,
+        &values,
+        CrossSectionImageRenderOptions {
+            color_scale,
+            legend,
+            metric: query.metric,
+            resolution,
+            shrink_factor,
+            wireframe,
+        },
+        query.filter_expression.as_deref(),
+    )?;
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let filter = query.filter_expression.as_deref().unwrap_or("");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-shared-domain-cross-section-image:{}:{generation_id}:{}:{:.17e}:{}:{}:{}:{}:{:.17e}:{}:{}:{}:png-v1",
+        snapshot.mesh_revision,
+        overlay.plane.as_str(),
+        overlay.cut_norm,
+        query.metric.as_str(),
+        color_scale.as_str(),
+        resolution,
+        wireframe,
+        shrink_factor,
+        legend,
+        filter,
+        quality_source,
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+            &headers,
+            &etag,
+            png,
+            HeaderValue::from_static("image/png"),
+        );
+    response.headers_mut().insert(
+        "x-fullmag-resource-key",
+        HeaderValue::from_static("meshing/meshes/shared-domain/cross-section/image"),
+    );
+    response.headers_mut().insert(
+        "x-fullmag-renderer",
+        HeaderValue::from_static("cross-section-image-v1"),
+    );
+    Ok(response)
 }
 
 #[utoipa::path(
@@ -1854,6 +2008,222 @@ fn legacy_domain_quality_statistics(marker: u32, label: &str, quality: &Value) -
     }))
 }
 
+fn merge_mesh_scope_size_statistics(
+    quality: &mut Value,
+    mesh: Option<&FemMeshPayload>,
+    marker: u32,
+) {
+    let Some(size_statistics) = mesh.and_then(|mesh| mesh_scope_size_statistics(mesh, marker))
+    else {
+        return;
+    };
+    let Some(global) = quality.get_mut("global").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(size_statistics) = size_statistics.as_object() else {
+        return;
+    };
+
+    for key in ["characteristic_size", "edge_length", "volume"] {
+        let Some(fallback) = size_statistics.get(key).and_then(Value::as_object) else {
+            continue;
+        };
+        match global.get_mut(key) {
+            Some(Value::Object(existing)) => {
+                for (field, value) in fallback {
+                    let should_fill = match existing.get(field) {
+                        Some(Value::Array(items)) => items.is_empty(),
+                        Some(Value::Null) | None => true,
+                        _ => false,
+                    };
+                    if should_fill {
+                        existing.insert(field.clone(), value.clone());
+                    }
+                }
+            }
+            Some(Value::Null) | None => {
+                global.insert(key.to_string(), Value::Object(fallback.clone()));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Value> {
+    if mesh.element_markers.len() != mesh.elements.len() {
+        return None;
+    }
+
+    let mut volumes = Vec::new();
+    let mut characteristic_sizes = Vec::new();
+    let mut edge_lengths = Vec::new();
+
+    for (element_index, element) in mesh.elements.iter().enumerate() {
+        if mesh.element_markers[element_index] != marker {
+            continue;
+        }
+        let Some(tet) = element_nodes(mesh, element) else {
+            continue;
+        };
+        edge_lengths.extend(tet_edge_lengths(tet));
+        let volume = tet_volume(tet).abs();
+        if volume > 0.0 && volume.is_finite() {
+            volumes.push(volume);
+            characteristic_sizes.push((volume * 6.0 * 2.0_f64.sqrt()).cbrt());
+        }
+    }
+
+    if volumes.is_empty() && edge_lengths.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "characteristic_size": distribution_statistics(&characteristic_sizes),
+        "edge_length": distribution_statistics(&edge_lengths),
+        "volume": distribution_statistics(&volumes),
+    }))
+}
+
+fn element_nodes(mesh: &FemMeshPayload, element: &[u32; 4]) -> Option<[[f64; 3]; 4]> {
+    Some([
+        *mesh.nodes.get(element[0] as usize)?,
+        *mesh.nodes.get(element[1] as usize)?,
+        *mesh.nodes.get(element[2] as usize)?,
+        *mesh.nodes.get(element[3] as usize)?,
+    ])
+}
+
+fn tet_edge_lengths(tet: [[f64; 3]; 4]) -> [f64; 6] {
+    [
+        distance(tet[0], tet[1]),
+        distance(tet[0], tet[2]),
+        distance(tet[0], tet[3]),
+        distance(tet[1], tet[2]),
+        distance(tet[1], tet[3]),
+        distance(tet[2], tet[3]),
+    ]
+}
+
+fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+fn tet_volume(tet: [[f64; 3]; 4]) -> f64 {
+    let a = sub(tet[1], tet[0]);
+    let b = sub(tet[2], tet[0]);
+    let c = sub(tet[3], tet[0]);
+    dot(a, cross(b, c)) / 6.0
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn distribution_statistics(values: &[f64]) -> Value {
+    let finite_values = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if finite_values.is_empty() {
+        return Value::Null;
+    }
+    let min = finite_values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = finite_values
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mean = finite_values.iter().sum::<f64>() / finite_values.len() as f64;
+    let variance = finite_values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / finite_values.len() as f64;
+    json!({
+        "min": min,
+        "max": max,
+        "mean": mean,
+        "std": variance.sqrt(),
+        "ratio": if min > 0.0 { Value::from(max / min) } else { Value::Null },
+        "histogram": size_histogram_bins(&finite_values, 30),
+    })
+}
+
+fn size_histogram_bins(values: &[f64], bin_count: usize) -> Vec<Value> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if !min.is_finite() || !max.is_finite() {
+        return Vec::new();
+    }
+    if (max - min).abs() <= f64::EPSILON * max.abs().max(1.0) {
+        return vec![json!({ "lo": min, "hi": max, "count": values.len() })];
+    }
+
+    let bins = bin_count.max(1);
+    let edges = if min > 0.0 {
+        let ratio = (max / min).powf(1.0 / bins as f64);
+        (0..=bins)
+            .map(|index| {
+                if index == bins {
+                    max
+                } else {
+                    min * ratio.powf(index as f64)
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let width = (max - min) / bins as f64;
+        (0..=bins)
+            .map(|index| {
+                if index == bins {
+                    max
+                } else {
+                    min + width * index as f64
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut counts = vec![0usize; bins];
+    for value in values {
+        let mut bin_index = bins - 1;
+        for index in 0..bins {
+            if *value < edges[index + 1] || index == bins - 1 {
+                bin_index = index;
+                break;
+            }
+        }
+        counts[bin_index] += 1;
+    }
+
+    counts
+        .into_iter()
+        .enumerate()
+        .map(|(index, count)| {
+            json!({
+                "lo": edges[index],
+                "hi": edges[index + 1],
+                "count": count,
+            })
+        })
+        .collect()
+}
+
 fn merge_quality_field(target: &mut Value, key: &str, value: Value) {
     if let Value::Object(fields) = target {
         fields.insert(key.to_string(), value);
@@ -1892,6 +2262,7 @@ fn universe_quality(mesh_workspace: &Value, mesh: Option<&FemMeshPayload>) -> Va
                 .and_then(|quality| legacy_domain_quality_statistics(0, "Airbox", quality))
         })
         .unwrap_or_else(|| json!({}));
+    merge_mesh_scope_size_statistics(&mut quality, mesh, 0);
     merge_quality_field(&mut quality, "marker", json!(0));
     merge_quality_field(
         &mut quality,

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 
 namespace fullmag::fem {
@@ -110,19 +111,30 @@ void add_slonczewski_stt_rhs_aos(
         if (!(ms > 0.0)) {
             continue;
         }
+        const double alpha = scalar_field_value(
+            ctx.material_fields.alpha_field,
+            i,
+            ctx.material_fields.material.damping);
         const double prefactor =
-            (ctx.stt.current_sign * j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
+            (ctx.stt.current_sign * j_mag * HBAR *
+             ctx.material_fields.material.gyromagnetic_ratio) /
+            (2.0 * E_CHARGE * kMu0 * ms * thickness);
         const double m_dot_p = dot3(m, p);
         const double g = (degree * lambda_sq) /
             ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
         const double beta_stt = prefactor * g;
+        const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        const double damping_like =
+            beta_stt * (1.0 + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
+        const double field_like =
+            beta_stt * (ctx.stt.epsilon_prime - alpha) * inv_gilbert;
 
         const Vec3 m_cross_p = cross3(m, p);
         const Vec3 m_cross_m_cross_p = cross3(m, m_cross_p);
         const Vec3 torque = {
-            beta_stt * (m_cross_m_cross_p[0] + ctx.stt.epsilon_prime * m_cross_p[0]),
-            beta_stt * (m_cross_m_cross_p[1] + ctx.stt.epsilon_prime * m_cross_p[1]),
-            beta_stt * (m_cross_m_cross_p[2] + ctx.stt.epsilon_prime * m_cross_p[2]),
+            damping_like * m_cross_m_cross_p[0] + field_like * m_cross_p[0],
+            damping_like * m_cross_m_cross_p[1] + field_like * m_cross_p[1],
+            damping_like * m_cross_m_cross_p[2] + field_like * m_cross_p[2],
         };
         rhs_xyz[base + 0] += torque[0];
         rhs_xyz[base + 1] += torque[1];

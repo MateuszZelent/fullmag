@@ -85,7 +85,7 @@ describe("buildModelTree", () => {
     expect(
       flattened.find((node) => node.id === "model:mesh:airbox-quality"),
     ).toMatchObject({
-      kind: "airbox.mesh",
+      kind: "airbox.mesh-quality",
       label: "Airbox Quality",
       parentId: "model:mesh",
     });

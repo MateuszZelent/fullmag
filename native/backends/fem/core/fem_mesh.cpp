@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace fullmag::fem {
@@ -28,6 +29,51 @@ void copy_optional_span(
     if (source != nullptr && count > 0) {
         std::copy(source, source + count, destination.begin());
     }
+}
+
+template <typename T>
+void copy_present_span(
+    const T *source,
+    size_t count,
+    std::vector<T> &destination)
+{
+    destination.clear();
+    if (source != nullptr && count > 0) {
+        destination.assign(source, source + count);
+    }
+}
+
+double tetrahedron_volume_from_nodes(
+    const double *nodes_xyz,
+    const uint32_t *elements,
+    uint32_t element_index)
+{
+    const size_t base = static_cast<size_t>(element_index) * 4u;
+    const auto read_coord = [&](uint32_t node, int axis) -> double {
+        return nodes_xyz[static_cast<size_t>(node) * 3u + static_cast<size_t>(axis)];
+    };
+
+    const uint32_t n0 = elements[base + 0];
+    const uint32_t n1 = elements[base + 1];
+    const uint32_t n2 = elements[base + 2];
+    const uint32_t n3 = elements[base + 3];
+
+    const double ax = read_coord(n1, 0) - read_coord(n0, 0);
+    const double ay = read_coord(n1, 1) - read_coord(n0, 1);
+    const double az = read_coord(n1, 2) - read_coord(n0, 2);
+    const double bx = read_coord(n2, 0) - read_coord(n0, 0);
+    const double by = read_coord(n2, 1) - read_coord(n0, 1);
+    const double bz = read_coord(n2, 2) - read_coord(n0, 2);
+    const double cx = read_coord(n3, 0) - read_coord(n0, 0);
+    const double cy = read_coord(n3, 1) - read_coord(n0, 1);
+    const double cz = read_coord(n3, 2) - read_coord(n0, 2);
+
+    const double determinant =
+        ax * (by * cz - bz * cy) -
+        ay * (bx * cz - bz * cx) +
+        az * (bx * cy - by * cx);
+
+    return std::abs(determinant) / 6.0;
 }
 
 double tetrahedron_volume(
@@ -63,6 +109,79 @@ double tetrahedron_volume(
     return std::abs(determinant) / 6.0;
 }
 
+bool validate_mesh_topology(
+    const Context &ctx,
+    const fullmag_fem_mesh_desc &mesh,
+    std::string &error)
+{
+    if (ctx.mesh.n_nodes > 0 && mesh.nodes_xyz == nullptr) {
+        error = "FEM mesh nodes pointer is null";
+        return false;
+    }
+    if (ctx.mesh.n_elements > 0 && mesh.elements == nullptr) {
+        error = "FEM mesh elements pointer is null";
+        return false;
+    }
+    if (ctx.mesh.n_boundary_faces > 0 && mesh.boundary_faces == nullptr) {
+        error = "FEM mesh boundary_faces pointer is null";
+        return false;
+    }
+    if (mesh.periodic_boundary_pair_count > 0 &&
+        mesh.periodic_boundary_pair_markers == nullptr) {
+        error = "FEM mesh periodic_boundary_pair_markers pointer is null";
+        return false;
+    }
+
+    const size_t node_scalar_count = static_cast<size_t>(ctx.mesh.n_nodes) * 3u;
+    for (size_t i = 0; i < node_scalar_count; ++i) {
+        if (!std::isfinite(mesh.nodes_xyz[i])) {
+            error = "FEM mesh node coordinates must be finite";
+            return false;
+        }
+    }
+
+    constexpr double kMinTetVolume = 1e-300;
+    for (uint32_t element = 0; element < ctx.mesh.n_elements; ++element) {
+        const size_t base = static_cast<size_t>(element) * 4u;
+        const uint32_t n0 = mesh.elements[base + 0u];
+        const uint32_t n1 = mesh.elements[base + 1u];
+        const uint32_t n2 = mesh.elements[base + 2u];
+        const uint32_t n3 = mesh.elements[base + 3u];
+        if (n0 >= ctx.mesh.n_nodes || n1 >= ctx.mesh.n_nodes ||
+            n2 >= ctx.mesh.n_nodes || n3 >= ctx.mesh.n_nodes) {
+            error = "FEM mesh element connectivity references node outside mesh";
+            return false;
+        }
+        if (n0 == n1 || n0 == n2 || n0 == n3 ||
+            n1 == n2 || n1 == n3 || n2 == n3) {
+            error = "FEM mesh degenerate tetrahedron contains duplicate node indices";
+            return false;
+        }
+        const double volume = tetrahedron_volume_from_nodes(mesh.nodes_xyz, mesh.elements, element);
+        if (!(volume > kMinTetVolume) || !std::isfinite(volume)) {
+            error = "FEM mesh degenerate tetrahedron has non-positive volume";
+            return false;
+        }
+    }
+
+    for (uint32_t face = 0; face < ctx.mesh.n_boundary_faces; ++face) {
+        const size_t base = static_cast<size_t>(face) * 3u;
+        const uint32_t n0 = mesh.boundary_faces[base + 0u];
+        const uint32_t n1 = mesh.boundary_faces[base + 1u];
+        const uint32_t n2 = mesh.boundary_faces[base + 2u];
+        if (n0 >= ctx.mesh.n_nodes || n1 >= ctx.mesh.n_nodes || n2 >= ctx.mesh.n_nodes) {
+            error = "FEM mesh boundary face references node outside mesh";
+            return false;
+        }
+        if (n0 == n1 || n0 == n2 || n1 == n2) {
+            error = "FEM mesh degenerate boundary face contains duplicate node indices";
+            return false;
+        }
+    }
+
+    return true;
+}
+
 } // namespace
 
 bool initialize_mesh_plan_fields(
@@ -74,6 +193,9 @@ bool initialize_mesh_plan_fields(
         error = "FEM mesh periodic_node_pairs pointer is null";
         return false;
     }
+    if (!validate_mesh_topology(ctx, mesh, error)) {
+        return false;
+    }
 
     ctx.mesh.nodes_xyz.assign(
         mesh.nodes_xyz,
@@ -81,11 +203,10 @@ bool initialize_mesh_plan_fields(
     ctx.mesh.elements.assign(
         mesh.elements,
         mesh.elements + static_cast<size_t>(ctx.mesh.n_elements) * 4u);
-    copy_optional_span(
+    copy_present_span(
         mesh.element_markers,
         static_cast<size_t>(ctx.mesh.n_elements),
-        ctx.mesh.element_markers,
-        0u);
+        ctx.mesh.element_markers);
     copy_optional_span(
         mesh.boundary_faces,
         static_cast<size_t>(ctx.mesh.n_boundary_faces) * 3u,
@@ -127,17 +248,9 @@ void initialize_magnetic_masks(Context &ctx)
 {
     ctx.mesh.magnetic_element_mask.assign(static_cast<size_t>(ctx.mesh.n_elements), 1u);
     if (!ctx.mesh.element_markers.empty()) {
-        bool has_air = false;
-        bool has_magnetic = false;
         for (size_t i = 0; i < ctx.mesh.element_markers.size(); ++i) {
-            has_air = has_air || ctx.mesh.element_markers[i] == 0u;
-            has_magnetic = has_magnetic || ctx.mesh.element_markers[i] != 0u;
-        }
-        if (has_air && has_magnetic) {
-            for (size_t i = 0; i < ctx.mesh.element_markers.size(); ++i) {
-                ctx.mesh.magnetic_element_mask[i] =
-                    ctx.mesh.element_markers[i] != 0u ? 1u : 0u;
-            }
+            ctx.mesh.magnetic_element_mask[i] =
+                ctx.mesh.element_markers[i] != 0u ? 1u : 0u;
         }
     }
 
@@ -151,6 +264,23 @@ void initialize_magnetic_masks(Context &ctx)
             ctx.mesh.magnetic_node_mask[ctx.mesh.elements[base + static_cast<size_t>(v)]] = 1u;
         }
     }
+}
+
+bool validate_magnetic_mesh_has_active_region(const Context &ctx, std::string &error)
+{
+    if (ctx.mesh.magnetic_element_mask.empty()) {
+        error = "FEM mesh magnetic element mask is not initialized";
+        return false;
+    }
+    const bool has_magnetic_element = std::any_of(
+        ctx.mesh.magnetic_element_mask.begin(),
+        ctx.mesh.magnetic_element_mask.end(),
+        [](uint8_t value) { return value != 0u; });
+    if (!has_magnetic_element) {
+        error = "FEM mesh must contain at least one magnetic tetrahedral element";
+        return false;
+    }
+    return true;
 }
 
 bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)

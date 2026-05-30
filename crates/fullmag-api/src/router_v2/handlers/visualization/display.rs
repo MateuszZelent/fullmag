@@ -1312,12 +1312,12 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
         contrast_max: update
             .contrast_max
             .or_else(|| quantity.as_ref().and_then(|quantity| quantity.contrast_max)),
-        vector_glyphs: update.vector_glyphs.or_else(|| {
-            nested_vectors.and_then(|vectors| vectors.visible)
-        }),
-        vector_density: update.vector_density.or_else(|| {
-            nested_vectors.and_then(|vectors| vectors.density)
-        }),
+        vector_glyphs: update
+            .vector_glyphs
+            .or_else(|| nested_vectors.and_then(|vectors| vectors.visible)),
+        vector_density: update
+            .vector_density
+            .or_else(|| nested_vectors.and_then(|vectors| vectors.density)),
         slice_mode: update.slice_mode.clone().or_else(|| {
             slice.and_then(|slice| slice.mode).map(|mode| match mode {
                 SliceVisualizationMode::AllLayers => "all".to_string(),
@@ -1754,6 +1754,7 @@ fn object_target_settings(
         bounds_visible: layers.bounds.visible,
         geometry_scope: VisualizationTargetGeometryScope::Full,
         opacity: layers.surface.opacity,
+        point_color: "var(--fm-border-strong)".to_string(),
         points_visible: layers.points.visible,
         render_mode: VisualizationTargetRenderMode::Surface,
         surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
@@ -1785,6 +1786,7 @@ fn airbox_target_settings(
         bounds_visible: layers.airbox.bounds.visible,
         geometry_scope: VisualizationTargetGeometryScope::Full,
         opacity: layers.airbox.opacity,
+        point_color: "var(--fm-info)".to_string(),
         points_visible: layers.airbox.points.visible,
         render_mode: VisualizationTargetRenderMode::Wireframe,
         surface_color_source: SurfaceColorSource::Solid,
@@ -1860,6 +1862,9 @@ fn apply_visualization_target_override(
         }
         if let Some(surface_mono_color) = &style.surface_mono_color {
             settings.surface_mono_color = surface_mono_color.clone();
+        }
+        if let Some(point_color) = &style.point_color {
+            settings.point_color = point_color.clone();
         }
         if let Some(vector_color_mode) = style.vector_color_mode {
             settings.vector_color_mode = vector_color_mode;

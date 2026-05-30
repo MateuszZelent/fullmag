@@ -13,6 +13,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { isMagneticOnlyQuantityId } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
@@ -563,6 +564,9 @@ export function useViewport3DSceneModel({
       }).effectiveSettings,
     [objectVisualizationSnapshot, renderingState],
   );
+  const airboxQuantityCompatible = !isMagneticOnlyQuantityId(
+    airboxSettings.activeQuantityId,
+  );
   const getPartSettings = useCallback(
     (part: Viewport3DMeshPart) =>
       resolveTargetVisualization({
@@ -588,10 +592,13 @@ export function useViewport3DSceneModel({
   const airboxVectorsVisible = viewport3DAirboxVectorsVisible(
     airboxSettings.visible,
     airboxSettings.vectorsVisible,
+    airboxQuantityCompatible,
     vectorDomain,
   );
   const airboxSurfaceColorMode =
-    airboxSettings.visible && airboxSettings.shaderVisible
+    airboxQuantityCompatible &&
+    airboxSettings.visible &&
+    airboxSettings.shaderVisible
       ? surfaceColorSourceToColorMode(airboxSettings.surfaceColorSource)
       : null;
   const airboxFieldVectorEnabled = Boolean(
@@ -644,6 +651,7 @@ export function useViewport3DSceneModel({
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
+    airboxQuantityCompatible,
     fallbackSettings,
     getPartSettings,
     scalarColorPalette,
@@ -662,12 +670,14 @@ export function useViewport3DSceneModel({
             partFieldVectors.set(partModel.part.id, fieldVector);
           }
         }
-        for (const partModel of currentTopologyRenderModel.airboxParts) {
-          const fieldVector = targetQuantityFieldVectors.data.get(
-            airboxSettings.activeQuantityId,
-          );
-          if (fieldVector) {
-            partFieldVectors.set(partModel.part.id, fieldVector);
+        if (airboxQuantityCompatible) {
+          for (const partModel of currentTopologyRenderModel.airboxParts) {
+            const fieldVector = targetQuantityFieldVectors.data.get(
+              airboxSettings.activeQuantityId,
+            );
+            if (fieldVector) {
+              partFieldVectors.set(partModel.part.id, fieldVector);
+            }
           }
         }
       }
@@ -686,6 +696,7 @@ export function useViewport3DSceneModel({
     [
       airboxFieldVectors.data,
       airboxSettings.activeQuantityId,
+      airboxQuantityCompatible,
       currentTopologyRenderModel,
       fieldRenderOptions,
       getPartSettings,

@@ -17,6 +17,7 @@ function settings(
     boundsVisible: false,
     geometryScope: "full",
     opacityPercent: 100,
+    pointColor: "#999999",
     pointsVisible: false,
     renderMode: "surface",
     shaderColorMode: "orientation",

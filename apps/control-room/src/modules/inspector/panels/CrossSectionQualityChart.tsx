@@ -17,9 +17,35 @@ interface CrossSectionHistogramBin {
   count: number;
 }
 
-function getCSSVar(name: string, fallback: string): string {
-  if (typeof document === "undefined") return fallback;
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+interface BinPayload {
+  name: string;
+  count: number;
+  pct: string;
+}
+
+function cssVar(name: string): string {
+  return `var(${name})`;
+}
+
+function ChartTooltipContent({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: BinPayload }>;
+  [key: string]: unknown;
+}) {
+  if (!active || !payload?.length) return null;
+  const data = payload[0]?.payload;
+  if (!data) return null;
+  return (
+    <div className="fm-mesh-chart-tooltip">
+      <span className="fm-mesh-chart-tooltip__label">{data.name}</span>
+      <span className="fm-mesh-chart-tooltip__value">
+        {data.count.toLocaleString("en-US")} elements ({data.pct}%)
+      </span>
+    </div>
+  );
 }
 
 export function CrossSectionQualityChart({
@@ -30,12 +56,10 @@ export function CrossSectionQualityChart({
   totalCount: number;
 }) {
   const colors = useMemo(() => ({
-    bar: getCSSVar("--fm-accent", "#89b4fa"),
-    text: getCSSVar("--fm-text-muted", "#6c7086"),
-    grid: getCSSVar("--fm-border-subtle", "#313244"),
-    tooltipBg: getCSSVar("--fm-bg-panel-raised", "#313244"),
-    tooltipBorder: getCSSVar("--fm-border-subtle", "#313244"),
-    tooltipText: getCSSVar("--fm-text-primary", "#cdd6f4"),
+    bar: cssVar("--fm-accent"),
+    barMuted: "color-mix(in srgb, var(--fm-accent) 35%, transparent)",
+    text: cssVar("--fm-text-muted"),
+    grid: cssVar("--fm-border-subtle"),
   }), []);
 
   if (bins.length === 0) return null;
@@ -50,6 +74,12 @@ export function CrossSectionQualityChart({
     <div className="fm-mesh-quality-chart" aria-label={`Quality histogram with ${bins.length} bins`}>
       <ResponsiveContainer width="100%" height={80}>
         <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+          <defs>
+            <linearGradient id="crossSectionAccentGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={colors.bar} stopOpacity={0.95} />
+              <stop offset="100%" stopColor={colors.bar} stopOpacity={0.35} />
+            </linearGradient>
+          </defs>
           <XAxis
             dataKey="name"
             tick={{ fontSize: 9, fill: colors.text }}
@@ -63,22 +93,10 @@ export function CrossSectionQualityChart({
             allowDecimals={false}
           />
           <Tooltip
-            contentStyle={{
-              background: colors.tooltipBg,
-              border: `1px solid ${colors.tooltipBorder}`,
-              borderRadius: "var(--fm-radius-sm)",
-              color: colors.tooltipText,
-              fontSize: "11px",
-              fontFamily: "var(--fm-font-mono)",
-            }}
-            labelStyle={{ color: colors.tooltipText, fontWeight: 600 }}
-            formatter={(value: unknown, _name: unknown, entry: unknown) => {
-              const v = typeof value === "number" ? value : 0;
-              const pct = (entry as { payload?: { pct?: string } })?.payload?.pct ?? "0";
-              return [`${v} elements (${pct}%)`, "Count"];
-            }}
+            content={<ChartTooltipContent />}
+            cursor={{ fill: colors.barMuted, radius: 2 }}
           />
-          <Bar dataKey="count" fill={colors.bar} radius={[2, 2, 0, 0]} />
+          <Bar dataKey="count" fill="url(#crossSectionAccentGradient)" radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </div>

@@ -24,6 +24,7 @@ describe("ObjectVisualizationController", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
       opacityPercent: 100,
+      pointColor: "var(--fm-border-strong)",
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",
@@ -39,8 +40,10 @@ describe("ObjectVisualizationController", () => {
       wireframeVisible: true,
     });
     expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
+      activeQuantityId: "H_demag",
       geometryScope: "full",
       opacityPercent: 28,
+      pointColor: "var(--fm-info)",
       renderMode: "wireframe",
       shaderColorMode: "monochrome",
       shaderMonoColor: "var(--fm-airbox-fill)",
@@ -48,7 +51,7 @@ describe("ObjectVisualizationController", () => {
       surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
-      vectorMonoColor: "var(--fm-accent)",
+      vectorMonoColor: "var(--fm-info)",
       vectorThickness: 1,
       vectorsVisible: false,
       wireframeColor: "var(--fm-airbox-wire)",
@@ -57,7 +60,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("patches and normalizes per-target shader wireframe and vector style fields", () => {
+  it("patches and normalizes per-target shader point wireframe and vector style fields", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "arch", kind: "object" as const };
 
@@ -68,6 +71,7 @@ describe("ObjectVisualizationController", () => {
       vectorColorMode: "x",
       vectorMonoColor: "#44ccff",
       vectorThickness: -3,
+      pointColor: "#22ff99",
       wireframeColor: "#111111",
       wireframeOpacityPercent: -20,
     });
@@ -80,6 +84,7 @@ describe("ObjectVisualizationController", () => {
       vectorColorMode: "x",
       vectorMonoColor: "#44ccff",
       vectorThickness: 0.1,
+      pointColor: "#22ff99",
       wireframeColor: "#111111",
       wireframeOpacityPercent: 0,
     });
@@ -126,6 +131,7 @@ describe("ObjectVisualizationController", () => {
         vectorAlphaPercent: 44,
         vectorColorMode: "magnitude",
         vectorThickness: 2,
+        pointColor: "#66eeff",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
       }),
@@ -138,6 +144,7 @@ describe("ObjectVisualizationController", () => {
         vectorAlphaPercent: 44,
         vectorColorMode: "magnitude",
         vectorThickness: 2,
+        pointColor: "#66eeff",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
       }),
@@ -148,6 +155,7 @@ describe("ObjectVisualizationController", () => {
       vectorAlphaPercent: 44,
       vectorColorMode: "magnitude",
       vectorThickness: 2,
+      pointColor: "#66eeff",
       wireframeColor: "#888888",
       wireframeOpacityPercent: 75,
     });
@@ -423,6 +431,7 @@ describe("ObjectVisualizationController", () => {
                 vector_length_scale: 1.75,
                 vector_mono_color: "#ff00aa",
                 vector_thickness: 2,
+                point_color: "#66eeff",
                 wireframe_color: "#111111",
               },
               quantity: {
@@ -448,6 +457,7 @@ describe("ObjectVisualizationController", () => {
         vectorLengthScale: 1.75,
         vectorMonoColor: "#ff00aa",
         vectorThickness: 2,
+        pointColor: "#66eeff",
         vectorsVisible: true,
         visible: true,
         wireframeColor: "#111111",
@@ -472,6 +482,7 @@ describe("ObjectVisualizationController", () => {
           vectorLengthScale: 1.75,
           vectorMonoColor: "#ff00aa",
           vectorThickness: 2,
+          pointColor: "#66eeff",
           vectorsVisible: false,
           visible: true,
           wireframeColor: "#111111",
@@ -496,6 +507,7 @@ describe("ObjectVisualizationController", () => {
       style: {
         surface_color_source: "solid",
         surface_mono_color: "#00ffaa",
+        point_color: "#66eeff",
         vector_alpha: 0.4,
         vector_budget: 384,
         vector_color_mode: "x",
@@ -630,6 +642,7 @@ describe("ObjectVisualizationController", () => {
               vector_length_scale: 1.75,
               vector_mono_color: "#445566",
               vector_thickness: 1.5,
+              point_color: "#123abc",
               vectors_visible: false,
               visible: true,
               wireframe_color: "#778899",
@@ -653,6 +666,7 @@ describe("ObjectVisualizationController", () => {
       vectorLengthScale: 1.75,
       vectorMonoColor: "#445566",
       vectorThickness: 1.5,
+      pointColor: "#123abc",
       wireframeColor: "#778899",
       wireframeOpacityPercent: 40,
     });

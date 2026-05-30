@@ -13,6 +13,7 @@ import {
   WORKSPACE_LAYOUT_STORAGE_KEY,
 } from "../layout/layoutModel";
 import type { SlotId } from "../types";
+import type { ModuleId } from "../types";
 
 const CONTROL_ROOM_UI_STATE_VERSION = 1;
 
@@ -78,6 +79,7 @@ export function applyControlRoomUiState(
 function layoutStateToJson(state: LayoutState): JsonObject {
   return {
     activeModuleTab: state.activeModuleTab,
+    activeViewportMainModuleId: state.activeViewportMainModuleId,
     focusedSlot: state.focusedSlot,
     panelVisible: {
       bottom: state.panelVisible.bottom,
@@ -91,12 +93,16 @@ function readLayoutState(record: JsonObject | null): LayoutState | null {
   if (!record) return null;
 
   const activeModuleTab = readRibbonTab(record.activeModuleTab);
+  const activeViewportMainModuleId =
+    readModuleId(record.activeViewportMainModuleId) ??
+    DEFAULT_LAYOUT.activeViewportMainModuleId;
   const panelVisible = readPanelVisible(asRecord(record.panelVisible));
   const focusedSlot = readFocusedSlot(record.focusedSlot);
   if (!activeModuleTab || !panelVisible) return null;
 
   return {
     activeModuleTab,
+    activeViewportMainModuleId,
     focusedSlot,
     panelVisible,
   };
@@ -126,6 +132,12 @@ function readFocusedSlot(value: JsonValue | undefined): SlotId | null {
   if (value === null || value === undefined) return null;
   return typeof value === "string" && SLOT_IDS.includes(value as SlotId)
     ? (value as SlotId)
+    : null;
+}
+
+function readModuleId(value: JsonValue | undefined): ModuleId | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
     : null;
 }
 

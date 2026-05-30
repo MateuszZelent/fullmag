@@ -183,7 +183,7 @@ struct Context {
     double current_density_x = 0.0;
     double current_density_y = 0.0;
     double current_density_z = 0.0;
-    double stt_u_pf = 0.0;     // Precomputed coefficient: j * P * mu_B / (e * M_s * (1 + beta^2))
+    double stt_u_pf = 0.0;     // Precomputed coefficient: P * mu_B / (e * M_s * (1 + beta^2))
     double stt_degree = 0.0;   // P
     double stt_beta = 0.0;     // beta
 
@@ -194,7 +194,7 @@ struct Context {
     double stt_p_z = 0.0;
     double stt_lambda = 0.0;
     double stt_epsilon_prime = 0.0;
-    double stt_cpp_pf = 0.0;   // Precomputed coefficient: j * hbar / (2 * e * mu_0 * M_s * d)
+    double stt_cpp_pf = 0.0;   // Precomputed coefficient: gamma_mu0 * |j| * hbar / (2 * e * mu_0 * M_s * d)
 
     // Spin-Orbit Torque (SOT) — Manchon-Zhang DL + FL model
     bool   has_sot        = false;

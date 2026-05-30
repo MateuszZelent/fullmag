@@ -206,6 +206,7 @@ export interface VisualizationPanelSection {
     | "geometry-scope"
     | "opacity"
     | "overrides"
+    | "points"
     | "quantity-source"
     | "surface-coloring"
     | "vectors"
@@ -339,6 +340,12 @@ export function buildVisualizationPanelSections({
       ],
       id: "surface-coloring",
       title: "Surface Coloring",
+    },
+    {
+      disabled: passDisabled || !effectiveSettings.pointsVisible,
+      fields: [{ id: "pointColor", kind: "color", label: "Point color" }],
+      id: "points",
+      title: "Points",
     },
     {
       disabled: passDisabled || !effectiveSettings.wireframeVisible,

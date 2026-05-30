@@ -50,6 +50,15 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("does not build airbox field vector resource keys for magnetic-only quantities", () => {
+    expect(
+      resolveViewport3DAirboxFieldVectorResourceKeys("m", [{ id: "airbox" }]),
+    ).toEqual(new Map());
+    expect(
+      resolveViewport3DAirboxFieldVectorResourceKeys("h_ex", [{ id: "airbox" }]),
+    ).toEqual(new Map());
+  });
+
   it("builds stable full-field keys for target-specific quantities", () => {
     expect(
       resolveViewport3DQuantityFieldVectorResourceKeys(["h_eff", "m", "h_eff"]),

@@ -82,6 +82,9 @@ bool build_context_from_plan(
     }
 
     initialize_magnetic_masks(ctx);
+    if (!validate_magnetic_mesh_has_active_region(ctx, error)) {
+        return false;
+    }
 
     // Precompute per-node dual volumes for thermal noise after mesh masks exist.
     compute_node_volumes(ctx);

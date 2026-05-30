@@ -652,6 +652,7 @@ describe("study runtime command contributions", () => {
       ui_state: {
         kernel_layout: {
           activeModuleTab: "home",
+          activeViewportMainModuleId: "viewport-3d",
           focusedSlot: null,
           panelVisible: {
             bottom: true,
@@ -692,6 +693,7 @@ describe("study runtime command contributions", () => {
       ui_state: {
         kernel_layout: {
           activeModuleTab: "study",
+          activeViewportMainModuleId: "analysis-plots",
           focusedSlot: "panel-right",
           panelVisible: {
             bottom: false,
@@ -749,6 +751,7 @@ describe("study runtime command contributions", () => {
     expect(fieldVectorListener).toHaveBeenCalledWith("session-imported");
     expect(layout.get()).toMatchObject({
       activeModuleTab: "study",
+      activeViewportMainModuleId: "analysis-plots",
       focusedSlot: "panel-right",
       panelVisible: {
         bottom: false,

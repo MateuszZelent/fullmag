@@ -78,6 +78,15 @@ interface BinPayload {
   fraction: number;
 }
 
+function formatSizeMarkerValue(value: number | null): string {
+  if (value === null) return "unknown";
+  const abs = Math.abs(value);
+  if (abs > 0 && (abs < 1e-3 || abs >= 1e4)) {
+    return value.toExponential(2);
+  }
+  return value.toPrecision(3);
+}
+
 function ChartTooltipContent({
   active,
   payload,
@@ -89,11 +98,16 @@ function ChartTooltipContent({
   if (!active || !payload?.length) return null;
   const data = payload[0]?.payload;
   if (!data) return null;
+  const percent =
+    typeof data.fraction === "number"
+      ? (data.fraction * 100).toFixed(1)
+      : null;
   return (
     <div className="fm-mesh-chart-tooltip">
       <span className="fm-mesh-chart-tooltip__label">{data.binLabel}</span>
       <span className="fm-mesh-chart-tooltip__value">
         {data.count.toLocaleString("en-US")} elements
+        {percent !== null ? ` (${percent}%)` : ""}
       </span>
     </div>
   );
@@ -135,11 +149,16 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
       metric.histogram.map((bin) => ({
         binLabel: bin.label,
         count: bin.count,
-        fill: barFill(bin, metric.threshold, colors.accent, colors.warning),
+        fill: barFill(
+          bin,
+          metric.threshold,
+          "url(#accentGradient)",
+          "url(#warningGradient)",
+        ),
         fraction: bin.fraction,
         name: shortLabel(bin.label),
       })),
-    [metric.histogram, metric.threshold, colors.accent, colors.warning],
+    [metric.histogram, metric.threshold],
   );
 
   if (data.length === 0) return null;
@@ -158,6 +177,16 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
           margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
           barCategoryGap="12%"
         >
+          <defs>
+            <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={colors.accent} stopOpacity={0.95} />
+              <stop offset="100%" stopColor={colors.accent} stopOpacity={0.35} />
+            </linearGradient>
+            <linearGradient id="warningGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={colors.warning} stopOpacity={0.95} />
+              <stop offset="100%" stopColor={colors.warning} stopOpacity={0.35} />
+            </linearGradient>
+          </defs>
           <XAxis
             dataKey="name"
             tick={{ fill: colors.textMuted, fontSize: 9 }}
@@ -212,9 +241,9 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
               }}
             />
           ) : null}
-          <Bar dataKey="count" radius={[2, 2, 0, 0]} maxBarSize={32}>
+          <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={32}>
             {data.map((entry) => (
-              <Cell key={entry.name} fill={entry.fill} fillOpacity={0.82} />
+              <Cell key={entry.name} fill={entry.fill} fillOpacity={0.85} />
             ))}
           </Bar>
         </BarChart>
@@ -258,6 +287,12 @@ export function SizeDistributionChart({ distribution }: SizeDistributionChartPro
           margin={{ top: 4, right: 4, bottom: 0, left: -20 }}
           barCategoryGap="12%"
         >
+          <defs>
+            <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={colors.accent} stopOpacity={0.95} />
+              <stop offset="100%" stopColor={colors.accent} stopOpacity={0.35} />
+            </linearGradient>
+          </defs>
           <XAxis
             dataKey="name"
             tick={{ fill: colors.textMuted, fontSize: 9 }}
@@ -276,11 +311,34 @@ export function SizeDistributionChart({ distribution }: SizeDistributionChartPro
             content={<ChartTooltipContent />}
             cursor={{ fill: colors.accentMuted, radius: 2 }}
           />
+          <ReferenceLine
+            x={data[0]?.name}
+            stroke={colors.warning}
+            strokeDasharray="3 3"
+            strokeWidth={1}
+            label={{
+              fill: colors.warning,
+              fontSize: 9,
+              position: "insideTopLeft",
+              value: `min ${formatSizeMarkerValue(distribution.min)}`,
+            }}
+          />
+          <ReferenceLine
+            x={data[data.length - 1]?.name}
+            stroke={colors.warning}
+            strokeDasharray="3 3"
+            strokeWidth={1}
+            label={{
+              fill: colors.warning,
+              fontSize: 9,
+              position: "insideTopRight",
+              value: `max ${formatSizeMarkerValue(distribution.max)}`,
+            }}
+          />
           <Bar
             dataKey="count"
-            fill={colors.accent}
-            fillOpacity={0.72}
-            radius={[2, 2, 0, 0]}
+            fill="url(#accentGradient)"
+            radius={[4, 4, 0, 0]}
             maxBarSize={32}
           />
         </BarChart>

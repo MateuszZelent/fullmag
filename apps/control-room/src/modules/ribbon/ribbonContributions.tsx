@@ -4223,6 +4223,18 @@ function buildSelectedVisualizationGroup(
             commandInput: (checked: boolean) => checked,
           },
           {
+            type: "color",
+            id: "selected:point-color",
+            label: "Point color",
+            value: settings?.pointColor ?? targetDefaults.pointColor,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.pointsVisible,
+            commandId: "visualization.target.set-point-color",
+            commandInput: (value: unknown) => value,
+          },
+          {
             type: "item",
             id: "selected:clear",
             label: "Clear per-object overrides",

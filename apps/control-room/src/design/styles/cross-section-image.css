@@ -1,0 +1,96 @@
+.fm-cross-section-image {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--fm-bg-viewport);
+  color: var(--fm-text-primary);
+}
+
+.fm-cross-section-image--empty {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.fm-cross-section-image__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-2);
+}
+
+.fm-cross-section-image__plot-tabs {
+  display: flex;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  overflow-x: auto;
+}
+
+.fm-cross-section-image__plot-tab {
+  display: grid;
+  grid-template-rows: auto auto;
+  min-width: 118px;
+  max-width: 180px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-chrome);
+  color: var(--fm-text-secondary);
+  cursor: pointer;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  text-align: left;
+}
+
+.fm-cross-section-image__plot-tab[aria-selected="true"] {
+  border-color: var(--fm-accent);
+  color: var(--fm-text-primary);
+  box-shadow: inset 0 0 0 1px var(--fm-accent-soft);
+}
+
+.fm-cross-section-image__plot-tab span,
+.fm-cross-section-image__plot-tab small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-cross-section-image__plot-tab span {
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-cross-section-image__plot-tab small {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-cross-section-image__stage {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: var(--fm-space-3);
+}
+
+.fm-cross-section-image__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+  object-fit: contain;
+}
+
+.fm-cross-section-image__empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
+}

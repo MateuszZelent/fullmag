@@ -67,6 +67,10 @@ export const MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
 );
 
+export const MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
+);
+
 export const MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
 );

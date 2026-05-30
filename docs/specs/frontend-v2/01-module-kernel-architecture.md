@@ -42,14 +42,16 @@ Slots are stable mount points owned by the kernel:
 | `app-menu` | top menu bar | main menu renderer |
 | `ribbon` | context command groups | geometry, mesh, solver, view commands |
 | `panel-left` | primary navigation | explorer, results navigator |
-| `viewport-main` | central primary view | 3D viewport, 2D viewport |
-| `viewport-aux` | split or secondary view | slice view, profile view, small chart |
+| `viewport-main` | central primary view, optionally tabbed by kernel | 3D viewport, cross-section image, analysis plots |
+| `viewport-aux` | split or secondary view for optional future modules | slice view, profile view, small chart |
 | `panel-right` | selected object details | inspector, properties, provenance |
 | `panel-bottom` | temporal/output docks | charts, logs, jobs, diagnostics |
 | `status-bar` | connection and runtime state | backend, precision, revisions |
 | `overlay` | global transient surfaces | command palette, dialogs, toasts |
 
 Slots are not feature flags. A disabled module means its manifest is not registered or its capability gate fails; the slot remains valid.
+
+When multiple modules are eligible for `viewport-main`, the kernel renders them through a tab host. Only the active center-surface module is mounted. Inactive center surfaces must not be retained through hidden DOM panels, CSS-only hiding, cached React subtrees, or Radix `forceMount`. This is a lifecycle contract: switching away from `viewport-3d` releases its WebGL context, resource subscriptions, timers, render buffers, and client-ack effects.
 
 ## 4. Manifest Contract
 
@@ -164,9 +166,9 @@ export const CORE_MODULES = [
   ribbonManifest,
   explorerManifest,
   viewport3dManifest,
-  viewport2dManifest,
+  crossSectionImageManifest,
+  analysisPlotsManifest,
   inspectorManifest,
-  chartsManifest,
   consoleManifest,
   statusBarManifest,
 ] satisfies ModuleManifest[];

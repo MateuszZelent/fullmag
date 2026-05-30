@@ -355,9 +355,16 @@ fn push_field_descriptor(
 
 #[derive(Debug, Clone)]
 struct ResolvedFieldScope {
+    domain: ResolvedFieldScopeDomain,
     kind: String,
     id: Option<String>,
     node_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedFieldScopeDomain {
+    Air,
+    Magnetic,
 }
 
 impl ResolvedFieldScope {
@@ -374,6 +381,7 @@ fn resolve_field_scope(
     snapshot: &SessionStateResponse,
     workspace_selection: Option<&crate::schemas::workspace::WorkspaceSelectionResource>,
     raw_point_count: usize,
+    quantity_id: &str,
 ) -> Result<Option<ResolvedFieldScope>, ApiError> {
     let Some(scope_kind) = query
         .scope_kind
@@ -425,6 +433,13 @@ fn resolve_field_scope(
             )));
         }
     };
+    if quantity_spatial_domain(quantity_id) == "magnetic_only"
+        && scope.domain == ResolvedFieldScopeDomain::Air
+    {
+        return Err(ApiError::not_found(format!(
+            "field '{quantity_id}' is not available on airbox mesh scope"
+        )));
+    }
     let node_indices = scope
         .node_indices
         .into_iter()
@@ -477,6 +492,7 @@ fn resolve_object_scope(
                 || part.id == object_id)
     }) {
         return Ok(ResolvedFieldScope {
+            domain: ResolvedFieldScopeDomain::Magnetic,
             kind: "object".to_string(),
             id: Some(object_id.to_string()),
             node_indices: node_indices_for_part(part),
@@ -489,6 +505,11 @@ fn resolve_object_scope(
         .find(|segment| object_ids_match(&segment.object_id, object_id))
         .ok_or_else(|| ApiError::not_found(format!("object mesh not found: {object_id}")))?;
     Ok(ResolvedFieldScope {
+        domain: if segment.object_id == "__air__" {
+            ResolvedFieldScopeDomain::Air
+        } else {
+            ResolvedFieldScopeDomain::Magnetic
+        },
         kind: "object".to_string(),
         id: Some(object_id.to_string()),
         node_indices: node_indices_for_segment(mesh, segment),
@@ -548,6 +569,11 @@ fn resolve_part_scope(
         .find(|part| part.id == part_id)
         .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
     Ok(ResolvedFieldScope {
+        domain: if part.role == "air" {
+            ResolvedFieldScopeDomain::Air
+        } else {
+            ResolvedFieldScopeDomain::Magnetic
+        },
         kind: public_kind.to_string(),
         id: Some(part.id.clone()),
         node_indices: node_indices_for_part(part),
@@ -730,6 +756,7 @@ pub async fn get_field_vector(
         snapshot,
         workspace_selection.as_ref(),
         raw_point_count,
+        quantity_id,
     )?;
 
     drop(guard);

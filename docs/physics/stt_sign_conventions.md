@@ -15,7 +15,9 @@ Semantic-only placeholders today:
 4. **InterfaceCppSTT**
 5. **DriftDiffusionSpinTorque**
 
-Executable direct torques are added to the LLG equation:
+Executable spin torques are added to the LLG equation as explicit direct-RHS
+terms after any field-form torque has been converted through the same Gilbert
+convention as `H_eff`:
 
 $$
 \frac{\partial \mathbf{m}}{\partial t} = -\gamma \mu_0 \, \mathbf{m} \times \mathbf{H}_\mathrm{eff} + \alpha \, \mathbf{m} \times \frac{\partial \mathbf{m}}{\partial t} + \boldsymbol{\tau}_\mathrm{STT}
@@ -57,15 +59,17 @@ where:
 
 - **Positive current** flows from the **free layer** to the **fixed (reference) layer** along +z.
 - `spin_polarization` $\hat{\mathbf{p}}$ is the **unit vector of the reference layer magnetization**.
-- When J > 0 and $\hat{\mathbf{p}} = (0,0,1)$: electrons flow from reference to free → torque **favors parallel** alignment with $\hat{\mathbf{p}}$.
-- When J < 0: torque **favors antiparallel** alignment → can destabilize, drive precession.
+- The implemented direct RHS follows the written algebraic sign. For
+  $\mathbf{m}\perp\hat{\mathbf{p}}$, positive `current_sign * |J|` drives the
+  damping-like basis vector $\mathbf{m}\times(\mathbf{m}\times\hat{\mathbf{p}})$;
+  reversing `current_sign` reverses the Slonczewski drive.
 
 ### Prefactor
 
 The Slonczewski torque prefactor is:
 
 $$
-\sigma = \frac{\hbar J P}{2 e \mu_0 M_s d} \cdot g(\mathbf{m} \cdot \hat{\mathbf{p}})
+\sigma_0 = \frac{\hbar |J| \gamma_{\mu0} P}{2 e \mu_0 M_s d} \cdot g(\mathbf{m} \cdot \hat{\mathbf{p}})
 $$
 
 where $g(\cos\theta)$ depends on $\Lambda$:
@@ -76,6 +80,20 @@ $$
 
 For $\Lambda = 1$, $g = 1/2$ (no angular asymmetry).
 
+The explicit Fullmag direct-RHS form is:
+
+$$
+\boldsymbol{\tau}_\mathrm{Slonc}
+= \frac{\mathrm{currentSign}\,\sigma_0}{1+\alpha^2}
+\left[
+(1+\alpha\varepsilon')\,\mathbf{m}\times(\mathbf{m}\times\hat{\mathbf{p}})
++(\varepsilon'-\alpha)\,\mathbf{m}\times\hat{\mathbf{p}}
+\right].
+$$
+
+This is the direct-RHS equivalent of adding the corresponding Slonczewski field
+to `H_eff`; `gamma_mu0` converts the field-scale prefactor to `1/s`.
+
 ---
 
 ## Zhang–Li STT (CIP)
@@ -83,13 +101,22 @@ For $\Lambda = 1$, $g = 1/2$ (no angular asymmetry).
 ### Torque expression
 
 $$
-\boldsymbol{\tau}_\mathrm{ZL} = -(\mathbf{u} \cdot \nabla)\mathbf{m} + \beta \, \mathbf{m} \times (\mathbf{u} \cdot \nabla)\mathbf{m}
+\mathbf{v} = (\mathbf{u} \cdot \nabla)\mathbf{m}, \qquad
+\mathbf{v}_\perp = -\mathbf{m}\times(\mathbf{m}\times\mathbf{v})
 $$
 
 where:
 
 $$
-\mathbf{u} = \frac{J P g \mu_B}{2 e M_s}
+\mathbf{u} = \frac{\mathbf{J} P \mu_B}{e M_s(1+\beta^2)}
+$$
+
+and the explicit Gilbert-form RHS contribution is:
+
+$$
+\boldsymbol{\tau}_\mathrm{ZL}
+= \frac{(1+\alpha\beta)\mathbf{v}_\perp
+-(\beta-\alpha)\mathbf{m}\times\mathbf{v}}{1+\alpha^2}.
 $$
 
 ### Parameters

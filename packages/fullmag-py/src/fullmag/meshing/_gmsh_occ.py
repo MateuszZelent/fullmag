@@ -128,7 +128,7 @@ def generate_shared_domain_mesh_via_occ(
     from ._gmsh_generators import (
         _configure_gmsh_threads,
         _add_geometry_to_occ,
-        _sanitize_csg_mesh_options,
+        _sanitize_csg_mesh_options_for_geometries,
         _scale_airbox_options,
         _extract_quality_metrics,
         _GmshProgressLogger,
@@ -142,9 +142,9 @@ def generate_shared_domain_mesh_via_occ(
         _configure_gmsh_threads(gmsh)
         gmsh.model.add("shared_domain_occ")
 
-        opts = _sanitize_csg_mesh_options(
+        opts = _sanitize_csg_mesh_options_for_geometries(
             options or MeshOptions(),
-            geometries[0],
+            geometries,
             context="shared-domain OCC mesh",
         )
 
@@ -464,6 +464,7 @@ def generate_shared_domain_mesh_via_occ(
             interface_surface_tags=interface_list,
             outer_boundary_surface_tags=gamma_out,
             selector_resolution=report.selector_resolution,
+            boundary_layer_result=report.boundary_layer_result,
             orphan_entities=orphan_entities,
         )
     finally:

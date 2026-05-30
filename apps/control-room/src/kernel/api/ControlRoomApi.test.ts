@@ -1288,6 +1288,47 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.parentElementIds)).toEqual([7]);
   });
 
+  it("loads shared-domain cross-section image through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(pngBytes, {
+          headers: {
+            "content-type": "image/png",
+            etag: '"cross-section-image-1"',
+            ...contractHeaders,
+          },
+        });
+      },
+    });
+
+    const result = await api.meshing.sharedDomain.crossSectionImage({
+      colorScale: "viridis",
+      filterExpression: ">=0.1",
+      legend: true,
+      metric: "gamma",
+      plane: "xy",
+      positionPercent: 50,
+      resolution: 1024,
+      shrinkFactor: 0.95,
+      wireframe: true,
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready cross-section image, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?color_scale=viridis&filter_expression=%3E%3D0.1&legend=true&metric=gamma&plane=xy&position_percent=50&resolution=1024&shrink_factor=0.95&wireframe=true",
+    );
+    expect(result.etag).toBe('"cross-section-image-1"');
+    expect(result.byteLength).toBe(4);
+    expect(Array.from(new Uint8Array(result.data))).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  });
+
   it("loads shared-domain cross-section quality through the v2 binary facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({

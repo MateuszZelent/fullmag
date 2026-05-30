@@ -1578,6 +1578,15 @@
         ],
         "type": "object"
       },
+      "CrossSectionImageColorScale": {
+        "enum": [
+          "jet",
+          "viridis",
+          "hot",
+          "coolwarm"
+        ],
+        "type": "string"
+      },
       "CrossSectionQualityMetric": {
         "enum": [
           "gamma",
@@ -10523,6 +10532,9 @@
             "format": "double",
             "type": "number"
           },
+          "point_color": {
+            "type": "string"
+          },
           "points_visible": {
             "type": "boolean"
           },
@@ -10584,6 +10596,7 @@
           "bounds_visible",
           "geometry_scope",
           "opacity",
+          "point_color",
           "points_visible",
           "render_mode",
           "surface_color_source",
@@ -11193,6 +11206,12 @@
       },
       "VisualizationTargetStyleOverride": {
         "properties": {
+          "point_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "surface_color_source": {
             "oneOf": [
               {
@@ -14772,6 +14791,115 @@
           },
           "304": {
             "description": "Cross-section geometry not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionQualityMetric"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_scale",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionImageColorScale"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wireframe",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "legend",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "shrink_factor",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "filter_expression",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "Server-rendered shared-domain FEM cross-section image"
+          },
+          "204": {
+            "description": "No FEM mesh or no data for the requested metric"
+          },
+          "304": {
+            "description": "Cross-section image not modified for the supplied ETag"
+          },
+          "400": {
+            "description": "Invalid query parameters"
           },
           "404": {
             "description": "No active workspace"

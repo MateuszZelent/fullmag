@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace as _dc_replace
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -189,6 +189,25 @@ def _sanitize_csg_mesh_options(
     resolved = _sanitize_volume_mesh_options(opts, context=context)
     if (
         _geometry_contains_arch_waveguide(geometry)
+        and resolved.algorithm_3d == ALGO_3D_DELAUNAY
+    ):
+        emit_progress(
+            f"Gmsh: {context}: algorithm_3d=1 (Delaunay) fails boundary recovery "
+            "for lofted ArchWaveguide solids in Gmsh 4.15; falling back to HXT"
+        )
+        return _dc_replace(resolved, algorithm_3d=ALGO_3D_HXT)
+    return resolved
+
+
+def _sanitize_csg_mesh_options_for_geometries(
+    opts: MeshOptions,
+    geometries: Sequence[Geometry],
+    *,
+    context: str,
+) -> MeshOptions:
+    resolved = _sanitize_volume_mesh_options(opts, context=context)
+    if (
+        any(_geometry_contains_arch_waveguide(geometry) for geometry in geometries)
         and resolved.algorithm_3d == ALGO_3D_DELAUNAY
     ):
         emit_progress(
@@ -1098,6 +1117,7 @@ def generate_shared_domain_mesh_from_components(
             interface_surface_tags=interface_surface_tags,
             outer_boundary_surface_tags=outer_boundary_surface_tags,
             selector_resolution=application_report.selector_resolution,
+            boundary_layer_result=application_report.boundary_layer_result,
             orphan_entities=orphan_entities,
         )
     finally:

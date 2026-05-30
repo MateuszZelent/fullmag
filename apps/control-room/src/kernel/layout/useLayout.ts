@@ -3,6 +3,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import { useKernel } from "../KernelContext";
+import type { ModuleId } from "../types";
 
 import type { LayoutState, PanelPosition, RibbonTabId } from "./layoutTypes";
 
@@ -19,7 +20,12 @@ export function useLayoutActions() {
     [layout],
   );
 
-  return { setActiveTab, togglePanel } as const;
+  const setActiveViewportMainModule = useCallback(
+    (moduleId: ModuleId) => layout.setActiveViewportMainModule(moduleId),
+    [layout],
+  );
+
+  return { setActiveTab, setActiveViewportMainModule, togglePanel } as const;
 }
 
 export function useLayoutSelector<T>(

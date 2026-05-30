@@ -101,7 +101,7 @@ describe("SlotHost", () => {
   it("auto-discovers a module registered only for viewport-aux", () => {
     const kernel = makeKernel();
     kernel.modules.register({
-      id: "viewport-2d-test",
+      id: "viewport-aux-test",
       title: "2D Test",
       version: "0.1.0",
       slots: ["viewport-aux"],

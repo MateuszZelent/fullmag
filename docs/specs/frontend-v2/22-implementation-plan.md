@@ -101,10 +101,11 @@ Frontend v2 governance gate status on 2026-05-22:
 - [ ] Add mesh/topology/field resource hooks.
 - [ ] Verify quantity switches do not rebuild topology and idle frames stop.
 
-## Phase 6 - 2D, Charts, Console, Results
+## Phase 6 - 2D Analysis, Charts, Console, Results
 
-- [ ] Implement `viewport-2d` slice/profile module.
-- [ ] Reuse the object/airbox visualization target registry for 2D slice layers before adding 2D-specific override fields.
+- [x] Replace the live `viewport-2d` WebGL cross-section path with tabbed `cross-section-image` PNG preview/export.
+- [x] Add `analysis-plots` as the lightweight center-surface plot module.
+- [ ] Reuse the object/airbox visualization target registry for any future 2D slice layers before adding 2D-specific override fields.
 - [ ] Gate 2D object-scoped slice/profile commands for primitive-only or mesh-stale Geometry objects with explicit disabled/stale explanations.
 - [ ] Implement charts module and scalar series model.
 - [ ] Implement engine console from log resources.

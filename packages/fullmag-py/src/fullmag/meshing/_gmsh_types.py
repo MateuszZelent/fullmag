@@ -73,6 +73,12 @@ class MeshStatisticsScope:
     volume_std: float
     volume_ratio: float | None
     volume_total: float
+    characteristic_size_min: float
+    characteristic_size_max: float
+    characteristic_size_mean: float
+    characteristic_size_std: float
+    characteristic_size_ratio: float | None
+    characteristic_size_histogram: list[dict[str, object]]
     edge_length_min: float
     edge_length_max: float
     edge_length_mean: float
@@ -772,6 +778,31 @@ def _quality_histogram_bins(counts: list[int], lo: float, hi: float) -> list[dic
     ]
 
 
+def _size_histogram_bins(
+    values: NDArray[np.float64],
+    *,
+    bin_count: int = 30,
+) -> list[dict[str, object]]:
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return []
+    min_value = float(np.min(finite_values))
+    max_value = float(np.max(finite_values))
+    if math.isclose(min_value, max_value):
+        return [{"lo": min_value, "hi": max_value, "count": int(finite_values.size)}]
+    if min_value > 0.0:
+        edges = np.geomspace(min_value, max_value, num=bin_count + 1)
+    else:
+        edges = np.linspace(min_value, max_value, num=bin_count + 1)
+    if not np.all(np.diff(edges) > 0.0):
+        return [{"lo": min_value, "hi": max_value, "count": int(finite_values.size)}]
+    counts, edges = np.histogram(finite_values, bins=edges)
+    return [
+        {"lo": float(edges[index]), "hi": float(edges[index + 1]), "count": int(count)}
+        for index, count in enumerate(counts)
+    ]
+
+
 def _quality_below_threshold(
     values: list[float] | None,
     threshold: float,
@@ -852,6 +883,25 @@ def _mesh_scope_statistics(
     volume_std = float(np.std(abs_volumes)) if abs_volumes.size else 0.0
     volume_total = float(np.sum(abs_volumes)) if abs_volumes.size else 0.0
     volume_ratio = volume_max / volume_min if volume_min > 0.0 else None
+    characteristic_sizes = np.cbrt(abs_volumes * 6.0 * math.sqrt(2.0))
+    characteristic_size_min = (
+        float(np.min(characteristic_sizes)) if characteristic_sizes.size else 0.0
+    )
+    characteristic_size_max = (
+        float(np.max(characteristic_sizes)) if characteristic_sizes.size else 0.0
+    )
+    characteristic_size_mean = (
+        float(np.mean(characteristic_sizes)) if characteristic_sizes.size else 0.0
+    )
+    characteristic_size_std = (
+        float(np.std(characteristic_sizes)) if characteristic_sizes.size else 0.0
+    )
+    characteristic_size_ratio = (
+        characteristic_size_max / characteristic_size_min
+        if characteristic_size_min > 0.0
+        else None
+    )
+    characteristic_size_histogram = _size_histogram_bins(characteristic_sizes)
     edge_length_min = float(np.min(edge_lengths)) if edge_lengths.size else 0.0
     edge_length_max = float(np.max(edge_lengths)) if edge_lengths.size else 0.0
     edge_length_mean = float(np.mean(edge_lengths)) if edge_lengths.size else 0.0
@@ -884,6 +934,12 @@ def _mesh_scope_statistics(
         volume_std=volume_std,
         volume_ratio=volume_ratio,
         volume_total=volume_total,
+        characteristic_size_min=characteristic_size_min,
+        characteristic_size_max=characteristic_size_max,
+        characteristic_size_mean=characteristic_size_mean,
+        characteristic_size_std=characteristic_size_std,
+        characteristic_size_ratio=characteristic_size_ratio,
+        characteristic_size_histogram=characteristic_size_histogram,
         edge_length_min=edge_length_min,
         edge_length_max=edge_length_max,
         edge_length_mean=edge_length_mean,
@@ -1048,6 +1104,14 @@ def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object
             "ratio": scope.volume_ratio,
             "total": scope.volume_total,
         },
+        "characteristic_size": {
+            "min": scope.characteristic_size_min,
+            "max": scope.characteristic_size_max,
+            "mean": scope.characteristic_size_mean,
+            "std": scope.characteristic_size_std,
+            "ratio": scope.characteristic_size_ratio,
+            "histogram": scope.characteristic_size_histogram,
+        },
         "edge_length": {
             "min": scope.edge_length_min,
             "max": scope.edge_length_max,
@@ -1198,4 +1262,5 @@ class SharedDomainMeshResult:
     interface_surface_tags: list[int]
     outer_boundary_surface_tags: list[int]
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
+    boundary_layer_result: dict[str, object] | None = None
     orphan_entities: list[dict[str, object]] = field(default_factory=list)

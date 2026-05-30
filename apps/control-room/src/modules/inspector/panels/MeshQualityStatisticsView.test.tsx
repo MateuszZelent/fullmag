@@ -10,6 +10,17 @@ describe("MeshQualityStatisticsView", () => {
   it("renders quality histograms and worst elements without raw JSON", () => {
     const statistics = normalizeMeshQualityStatistics({
       global: {
+        characteristic_size: {
+          histogram: [
+            { count: 9, hi: 3e-9, lo: 1e-9 },
+            { count: 15, hi: 9e-9, lo: 3e-9 },
+          ],
+          max: 9e-9,
+          mean: 5e-9,
+          min: 1e-9,
+          ratio: 9,
+          std: 1e-9,
+        },
         edge_length: {
           histogram: [
             { count: 7, hi: 2e-9, lo: 1e-9 },
@@ -58,8 +69,11 @@ describe("MeshQualityStatisticsView", () => {
     expect(html).toContain("3 / 24");
     expect(html).toContain("2 / 24");
     expect(html).toContain("Element size distributions");
+    expect(html).toContain("Published tetra-size, edge-length, and volume bins");
+    expect(html).toContain("Tetra size");
     expect(html).toContain("Edge length");
     expect(html).toContain("Element volume");
+    expect(html).toContain("1.00e-9 to 3.00e-9");
     expect(html).toContain("1.00e-9 to 2.00e-9");
     expect(html).toContain("Element 7");
     expect(html).toContain("Domain 1");

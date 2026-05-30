@@ -326,7 +326,7 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
       },
       {
         id: "model:mesh:airbox-quality",
-        kind: "airbox.mesh",
+        kind: "airbox.mesh-quality",
         label: "Airbox Quality",
         parentId: "model:mesh",
         badge: "airbox",

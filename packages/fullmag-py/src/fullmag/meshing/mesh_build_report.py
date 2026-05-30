@@ -36,6 +36,7 @@ def _build_shared_domain_build_report(
     fallbacks_triggered: list[str],
     mesh_options: MeshOptions,
     selector_resolution: list[dict[str, object]] | None = None,
+    boundary_layer_result: Mapping[str, object] | None = None,
     orphan_entities: list[dict[str, object]] | None = None,
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
@@ -81,6 +82,7 @@ def _build_shared_domain_build_report(
         build_mode=build_mode,
         fallbacks_triggered=fallbacks_triggered,
         selector_resolution=selector_resolution,
+        boundary_layer_result=boundary_layer_result,
     )
     thin_film_diagnostics = _build_thin_film_diagnostics(
         geometries,
@@ -217,6 +219,7 @@ def _build_mesh_operation_statuses(
     build_mode: str,
     fallbacks_triggered: list[str],
     selector_resolution: list[dict[str, object]] | None = None,
+    boundary_layer_result: Mapping[str, object] | None = None,
 ) -> list[MeshOperationStatus]:
     statuses: list[MeshOperationStatus] = []
 
@@ -291,7 +294,23 @@ def _build_mesh_operation_statuses(
         boundary_layer_has_targets = (
             boundary_layer_has_explicit_targets or boundary_layer_has_selector_targets
         )
+        boundary_layer_application_status = None
+        boundary_layer_application_reason = None
+        boundary_layer_application_field_id = None
+        if isinstance(boundary_layer_result, Mapping):
+            status_value = boundary_layer_result.get("status")
+            if isinstance(status_value, str) and status_value:
+                boundary_layer_application_status = status_value
+            reason_value = boundary_layer_result.get("reason")
+            if isinstance(reason_value, str) and reason_value:
+                boundary_layer_application_reason = reason_value
+            field_id_value = boundary_layer_result.get("field_id")
+            if isinstance(field_id_value, (int, np.integer)):
+                boundary_layer_application_field_id = int(field_id_value)
+
         boundary_layer_applied = boundary_layer_valid and boundary_layer_has_targets
+        realized_status = "applied" if boundary_layer_applied else "ignored"
+        actual_method = "gmsh_boundary_layer" if boundary_layer_applied else None
         reason = None
         if not boundary_layer_valid:
             reason = "boundary_layer_count and boundary_layer_thickness must both be positive"
@@ -301,14 +320,23 @@ def _build_mesh_operation_statuses(
                 if boundary_layer_has_requested_selectors
                 else "no explicit boundary-layer target surfaces or curves were provided"
             )
+        elif boundary_layer_application_status in {"applied", "degraded", "ignored"}:
+            realized_status = boundary_layer_application_status
+            reason = boundary_layer_application_reason
+            if realized_status == "applied":
+                actual_method = "gmsh_boundary_layer"
+            elif realized_status == "degraded":
+                actual_method = "background_size_field"
+            else:
+                actual_method = None
         statuses.append(
             MeshOperationStatus(
                 kind="boundary_layer",
                 scope="global",
                 requested=True,
-                status="applied" if boundary_layer_applied else "ignored",
+                status=realized_status,
                 requested_method="gmsh_boundary_layer",
-                actual_method="gmsh_boundary_layer" if boundary_layer_applied else None,
+                actual_method=actual_method,
                 reason=reason,
                 details={
                     "target_selector": (
@@ -333,6 +361,7 @@ def _build_mesh_operation_statuses(
                     "layer_count": opts.boundary_layer_count,
                     "first_layer_thickness": opts.boundary_layer_thickness,
                     "stretching": opts.boundary_layer_stretching or 1.2,
+                    "gmsh_field_id": boundary_layer_application_field_id,
                     "experimental": True,
                 },
             )

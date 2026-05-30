@@ -25,6 +25,7 @@ constexpr double kMu0Test = 4.0e-7 * kPiTest;
 constexpr double kHbarTest = 1.054571817e-34;
 constexpr double kElectronChargeTest = 1.60217662e-19;
 constexpr double kBohrMagnetonTest = 9.274009994e-24;
+constexpr double kGammaMu0Test = 2.211e5;
 
 void check(bool condition, const char *msg) {
     if (!condition) {
@@ -373,6 +374,7 @@ fullmag::fem::Context make_slonczewski_context() {
     ctx.stt.free_layer_thickness = 1.0e-9;
     ctx.stt.current_sign = 1.0;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.gyromagnetic_ratio = kGammaMu0Test;
     return ctx;
 }
 
@@ -384,7 +386,7 @@ void slonczewski_cpp_rhs_uses_current_sign_and_field_like_term() {
     fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
 
     const double prefactor =
-        (1.0e12 * kHbarTest) /
+        (1.0e12 * kHbarTest * kGammaMu0Test) /
         (2.0 * kElectronChargeTest * kMu0Test *
          ctx.material_fields.material.saturation_magnetisation * ctx.stt.free_layer_thickness);
     const double beta_stt = prefactor * 0.5;
@@ -408,7 +410,7 @@ void macrospin_cpp_sign_and_precession_direction_match_reference() {
     fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
 
     const double prefactor =
-        (1.0e12 * kHbarTest) /
+        (1.0e12 * kHbarTest * kGammaMu0Test) /
         (2.0 * kElectronChargeTest * kMu0Test *
          ctx.material_fields.material.saturation_magnetisation * ctx.stt.free_layer_thickness);
     const double beta_stt = prefactor * 0.5;
@@ -449,7 +451,7 @@ void slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zer
 
     const double fallback_thickness = 2.0e-9;
     const double prefactor =
-        (1.0e12 * kHbarTest) /
+        (1.0e12 * kHbarTest * kGammaMu0Test) /
         (2.0 * kElectronChargeTest * kMu0Test *
          ctx.material_fields.material.saturation_magnetisation * fallback_thickness);
     const double beta_stt = prefactor * 0.5;
@@ -459,6 +461,30 @@ void slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zer
         -beta_stt,
         beta_stt * 1e-12,
         "Slonczewski geometry-derived thickness fallback");
+}
+
+void slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping() {
+    auto ctx = make_slonczewski_context();
+    ctx.material_fields.material.damping = 0.2;
+    ctx.stt.epsilon_prime = 0.35;
+    const std::vector<double> m = {1.0, 0.0, 0.0};
+    std::vector<double> rhs(3u, 0.0);
+
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
+
+    const double prefactor =
+        (1.0e12 * kHbarTest * kGammaMu0Test) /
+        (2.0 * kElectronChargeTest * kMu0Test *
+         ctx.material_fields.material.saturation_magnetisation * ctx.stt.free_layer_thickness);
+    const double beta_stt = prefactor * 0.5;
+    const double alpha = ctx.material_fields.material.damping;
+    const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    const double damping_like = beta_stt * (1.0 + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
+    const double field_like = beta_stt * (ctx.stt.epsilon_prime - alpha) * inv_gilbert;
+
+    check_near(rhs[0], 0.0, 0.0, "Slonczewski Gilbert-equivalent rhs x");
+    check_near(rhs[1], -field_like, std::abs(field_like) * 1e-12, "Slonczewski Gilbert-equivalent field-like y");
+    check_near(rhs[2], -damping_like, std::abs(damping_like) * 1e-12, "Slonczewski Gilbert-equivalent damping-like z");
 }
 
 void slonczewski_skips_nonmagnetic_nodes() {
@@ -483,6 +509,7 @@ fullmag::fem::Context make_zhang_li_context() {
     ctx.stt.degree = 1.0;
     ctx.stt.beta = 0.0;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.damping = 0.0;
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -492,6 +519,37 @@ fullmag::fem::Context make_zhang_li_context() {
     ctx.mesh.elements = {0, 1, 2, 3};
     ctx.mesh.magnetic_element_mask = {1u};
     return ctx;
+}
+
+void zhang_li_rhs_uses_gilbert_alpha_beta_projection() {
+    auto ctx = make_zhang_li_context();
+    ctx.stt.beta = 0.2;
+    ctx.material_fields.material.damping = 0.5;
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> rhs(12u, 0.0);
+
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, rhs);
+
+    const double u_x =
+        (ctx.stt.degree * kBohrMagnetonTest * ctx.stt.current_density_am2[0]) /
+        (kElectronChargeTest * ctx.material_fields.material.saturation_magnetisation *
+         (1.0 + ctx.stt.beta * ctx.stt.beta));
+    const double alpha = ctx.material_fields.material.damping;
+    const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    const double adiabatic = (1.0 + alpha * ctx.stt.beta) * u_x * inv_gilbert;
+    const double nonadiabatic_y = (ctx.stt.beta - alpha) * u_x * inv_gilbert;
+
+    check_near(rhs[0], 0.0, 0.0, "Zhang-Li Gilbert node0 rhs x");
+    check_near(rhs[1], nonadiabatic_y, std::abs(nonadiabatic_y) * 1e-12, "Zhang-Li Gilbert node0 rhs y");
+    check_near(rhs[2], adiabatic, adiabatic * 1e-12, "Zhang-Li Gilbert node0 rhs z");
+    check_near(rhs[3], -adiabatic, adiabatic * 1e-12, "Zhang-Li Gilbert node1 rhs x");
+    check_near(rhs[4], nonadiabatic_y, std::abs(nonadiabatic_y) * 1e-12, "Zhang-Li Gilbert node1 rhs y");
+    check_near(rhs[5], adiabatic, adiabatic * 1e-12, "Zhang-Li Gilbert node1 rhs z");
 }
 
 void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
@@ -619,6 +677,24 @@ void stt_plan_import_copies_parameters_and_validates_family() {
     check(
         error.find("stt_spin_polarization") != std::string::npos,
         "STT spin-polarization error should identify the field");
+
+    plan.stt_spin_polarization[2] = 1.0;
+    plan.stt_lambda = 0.5;
+    check(
+        !fullmag::fem::initialize_stt_plan_fields(ctx, plan, error),
+        "Slonczewski lambda below one must fail");
+    check(
+        error.find("stt_lambda") != std::string::npos,
+        "STT lambda validation error should identify the field");
+
+    plan.stt_lambda = 1.0;
+    plan.stt_degree = -0.1;
+    check(
+        !fullmag::fem::initialize_stt_plan_fields(ctx, plan, error),
+        "negative STT degree must fail");
+    check(
+        error.find("stt_degree") != std::string::npos,
+        "STT degree validation error should identify the field");
 }
 
 } // namespace
@@ -634,8 +710,10 @@ int main() {
     slonczewski_cpp_rhs_uses_current_sign_and_field_like_term();
     macrospin_cpp_sign_and_precession_direction_match_reference();
     slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zero();
+    slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
+    zhang_li_rhs_uses_gilbert_alpha_beta_projection();
     zhang_li_current_direction_reverses_rhs();
     zhang_li_adds_torque_without_scaling_existing_rhs();
     combined_stt_updates_max_rhs();

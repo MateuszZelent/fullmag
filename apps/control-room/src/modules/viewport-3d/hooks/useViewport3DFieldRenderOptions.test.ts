@@ -74,16 +74,21 @@ describe("sameViewport3DFieldRenderOptions", () => {
       viewport3DAirboxVectorsVisible(
         false,
         true,
+        true,
         "all",
       ),
     ).toBe(false);
   });
 
   it("allows airbox vector fields only for visible airbox-compatible domains", () => {
-    expect(viewport3DAirboxVectorsVisible(true, true, "all")).toBe(true);
-    expect(viewport3DAirboxVectorsVisible(true, true, "airbox_only")).toBe(true);
-    expect(viewport3DAirboxVectorsVisible(true, true, "magnetic_only")).toBe(false);
-    expect(viewport3DAirboxVectorsVisible(true, true, "object")).toBe(false);
-    expect(viewport3DAirboxVectorsVisible(true, true, "part")).toBe(false);
+    expect(viewport3DAirboxVectorsVisible(true, true, true, "all")).toBe(true);
+    expect(viewport3DAirboxVectorsVisible(true, true, true, "airbox_only")).toBe(true);
+    expect(viewport3DAirboxVectorsVisible(true, true, true, "magnetic_only")).toBe(false);
+    expect(viewport3DAirboxVectorsVisible(true, true, true, "object")).toBe(false);
+    expect(viewport3DAirboxVectorsVisible(true, true, true, "part")).toBe(false);
+  });
+
+  it("does not allow airbox vectors for magnetic-only quantities", () => {
+    expect(viewport3DAirboxVectorsVisible(true, true, false, "all")).toBe(false);
   });
 });

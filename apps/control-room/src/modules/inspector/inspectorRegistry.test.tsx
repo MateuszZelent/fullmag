@@ -66,6 +66,12 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves Airbox mesh quality selections to the Airbox mesh quality panel", () => {
+    expect(resolveInspectorPanel({ kind: "airbox.mesh-quality" })?.id).toBe(
+      "airbox-mesh-quality",
+    );
+  });
+
   it("resolves cross-section selections to the cross-section inspector", () => {
     expect(resolveInspectorPanel({ kind: "mesh.cross-section" })?.id).toBe(
       "cross-section",

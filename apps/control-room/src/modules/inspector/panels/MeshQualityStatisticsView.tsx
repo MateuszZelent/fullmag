@@ -93,7 +93,9 @@ function formatDistributionValue(
   value: number | null,
 ): string {
   if (value === null) return "unknown";
-  return distribution.id === "edge_length" ? formatLength(value) : formatValue(value);
+  return distribution.id === "edge_length" || distribution.id === "tetra_size"
+    ? formatLength(value)
+    : formatValue(value);
 }
 
 function SizeDistributionCard({
@@ -246,7 +248,7 @@ export function MeshQualityStatisticsView({
         <section className="fm-mesh-size-distributions">
           <div className="fm-mesh-size-distributions__header">
             <h4>Element size distributions</h4>
-            <span>Published edge-length and volume bins from the mesh report.</span>
+            <span>Published tetra-size, edge-length, and volume bins from the mesh report.</span>
           </div>
           {statistics.sizeDistributions.map((distribution) => (
             <SizeDistributionCard

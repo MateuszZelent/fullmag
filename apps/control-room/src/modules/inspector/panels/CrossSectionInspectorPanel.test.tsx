@@ -73,7 +73,7 @@ vi.mock("@/kernel/resources/crossSectionResources", () => ({
 const selection: Selection = {
   kind: "mesh.cross-section",
   label: "Cross-section parent tet 8",
-  moduleSource: "viewport-2d",
+  moduleSource: "cross-section-image",
   nodeId: "model:mesh:quality:cross-section:8",
   objectId: null,
   ref: {

@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag core
-- Last updated: 2026-04-18
+- Last updated: 2026-05-30
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
@@ -14,7 +14,7 @@ Fullmag already has canonical public semantics for:
 2. `CurrentTransport(model="prescribed_density")`,
 3. `OerstedField(model="from_current_solution", source="...")`.
 
-The remaining execution gap is not in authoring. It is in the public FEM execution path:
+Before this executable slice, the gap was not in authoring. It was in the public FEM execution path:
 
 1. native FEM does not yet consume STT plan inputs,
 2. `from_current_solution` only executes through an exact cylindrical reduction,
@@ -57,8 +57,8 @@ $$
 \boldsymbol{\tau}_\mathrm{Slonc}
 = \beta_\mathrm{stt}(J, P, \Lambda, M_s, d)
 \left[
-\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
-+ \varepsilon' \, \mathbf{m} \times \hat{\mathbf{p}}
+\frac{(1+\alpha\varepsilon')\mathbf{m} \times (\mathbf{m} \times \hat{\mathbf{p}})
++(\varepsilon'-\alpha)\mathbf{m} \times \hat{\mathbf{p}}}{1+\alpha^2}
 \right],
 $$
 
@@ -66,7 +66,7 @@ with
 
 $$
 \beta_\mathrm{stt}
-= \frac{\hbar J}{2 e \mu_0 M_s d}
+= \frac{\hbar |J| \gamma_{\mu0}}{2 e \mu_0 M_s d}
 \frac{P \Lambda^2}{(\Lambda^2 + 1) + (\Lambda^2 - 1)(\mathbf{m}\cdot\hat{\mathbf{p}})}.
 $$
 
@@ -74,13 +74,17 @@ For the Zhang-Li torque,
 
 $$
 \boldsymbol{\tau}_\mathrm{ZL}
-= -\mathbf{m} \times \left( \mathbf{m} \times (\mathbf{u}\cdot\nabla)\mathbf{m} \right)
-- \beta\, \mathbf{m} \times (\mathbf{u}\cdot\nabla)\mathbf{m},
+= \frac{(1+\alpha\beta)\mathbf{v}_\perp
+-(\beta-\alpha)\mathbf{m}\times\mathbf{v}}{1+\alpha^2},
 $$
 
 with drift velocity
 
 $$
+\mathbf{v} = (\mathbf{u}\cdot\nabla)\mathbf{m},
+\qquad
+\mathbf{v}_\perp = -\mathbf{m}\times(\mathbf{m}\times\mathbf{v}),
+\qquad
 \mathbf{u} = b\,\mathbf{J},
 \qquad
 b = \frac{P\mu_B}{e M_s (1+\beta^2)}.
@@ -131,6 +135,7 @@ remains preferred.
 | $e$ | elementary charge | C |
 | $\hbar$ | reduced Planck constant | J s |
 | $\mu_0$ | vacuum permeability | N/A^2 |
+| $\gamma_{\mu0}$ | reduced gyromagnetic ratio used by LLG | m/(A s) |
 | $\mathbf{x}_{c,e}$ | source-element centroid | m |
 | $V_e$ | source-element volume | m^3 |
 | $a_e$ | equivalent-sphere regularization radius | m |
@@ -158,8 +163,8 @@ remains preferred.
 ### 3.2 FEM
 
 - Planner resolves executable STT families onto the native FEM CPU/GPU lane.
-- Slonczewski torque is evaluated nodewise from the current plan inputs and added directly to the RHS after the standard LLG contribution.
-- Zhang-Li torque is evaluated from per-element P1 gradients of magnetization, quadrature-averaged and distributed to nodes with lumped weights, then added directly to the RHS.
+- Slonczewski torque is evaluated nodewise from the current plan inputs and added directly to the RHS after the standard LLG contribution. The stored direct term is the Gilbert-explicit equivalent of the corresponding Slonczewski effective field.
+- Zhang-Li torque is evaluated from per-element P1 gradients of magnetization, quadrature-averaged and distributed to nodes with lumped weights, then added directly to the RHS with the explicit `(1 + alpha beta)/(1 + alpha^2)` and `(beta - alpha)/(1 + alpha^2)` factors.
 - `OerstedField(model="from_current_solution")` lowers in two ordered branches:
   - exact infinite-cylinder reduction when the source region is cylindrical and axis-aligned,
   - otherwise midpoint Biot-Savart per-node field generation on the resolved FEM mesh.
@@ -250,9 +255,11 @@ Provenance must preserve:
 ### 6.1 Analytical checks
 
 1. Slonczewski torque vanishes when $\mathbf{m} \parallel \hat{\mathbf{p}}$ and $\varepsilon' = 0$.
-2. Zhang-Li torque vanishes for spatially uniform magnetization.
-3. Midpoint Biot-Savart field preserves the expected circulation sign around a straight prescribed-current wire.
-4. Cylindrical sources still select the exact cylinder realization instead of the midpoint fallback.
+2. Slonczewski direct RHS matches the effective-field form after Gilbert conversion for nonzero $\alpha$.
+3. Zhang-Li torque vanishes for spatially uniform magnetization.
+4. Zhang-Li direct RHS includes the Boris-style explicit Gilbert $\alpha/\beta$ factors.
+5. Midpoint Biot-Savart field preserves the expected circulation sign around a straight prescribed-current wire.
+6. Cylindrical sources still select the exact cylinder realization instead of the midpoint fallback.
 
 ### 6.2 Cross-backend checks
 

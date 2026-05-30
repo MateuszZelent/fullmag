@@ -13,6 +13,7 @@ import {
   type WorkspaceColumnLayout,
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
+import { ViewportTabHost } from "./ViewportTabHost";
 import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 import {
@@ -47,7 +48,11 @@ function SortableWorkspaceColumn({
             <span>{column.label}</span>
             <GripVertical size={12} aria-hidden="true" />
           </div>
-          <SlotHost slotId={column.slotId} />
+          {column.slotId === "viewport-main" ? (
+            <ViewportTabHost />
+          ) : (
+            <SlotHost slotId={column.slotId} />
+          )}
         </div>
       )}
     </SortableItem>
@@ -144,7 +149,7 @@ export function WorkspaceDockLayout() {
             <span>Viewport</span>
             <GripVertical size={12} aria-hidden="true" />
           </div>
-          <SlotHost slotId="viewport-main" />
+          <ViewportTabHost />
         </div>
         {hasAuxViewportModule ? (
           <div className="fm-dock-column">
@@ -195,9 +200,7 @@ export function WorkspaceDockLayout() {
                     id={column.slotId}
                     minSize={column.minSize}
                   >
-                    <SortableWorkspaceColumn
-                      column={column}
-                    />
+                    <SortableWorkspaceColumn column={column} />
                   </ResizablePanel>
                   {index < visibleColumns.length - 1 ? (
                     <ResizableHandle className="fm-resize-handle--vertical" />

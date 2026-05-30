@@ -63,6 +63,12 @@ const PANELS: InspectorPanelContribution[] = [
     component: AirboxMeshPolicyPanel,
   },
   {
+    id: "airbox-mesh-quality",
+    title: "Airbox Mesh Quality",
+    selectionKinds: ["airbox.mesh-quality"],
+    component: AirboxMeshPolicyPanel,
+  },
+  {
     id: "object-mesh-policy",
     title: "Object Mesh Policy",
     selectionKinds: ["object.mesh"],

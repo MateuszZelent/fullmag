@@ -248,6 +248,18 @@ pub(crate) fn serialize_cross_section_quality_fmqs(values: &[f32]) -> Vec<u8> {
 }
 
 impl CrossSectionQualityMetric {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            CrossSectionQualityMetric::Gamma => "gamma",
+            CrossSectionQualityMetric::Sicn => "sicn",
+            CrossSectionQualityMetric::Volume => "volume",
+            CrossSectionQualityMetric::Skewness => "skewness",
+            CrossSectionQualityMetric::AspectRatio => "aspect_ratio",
+            CrossSectionQualityMetric::MaxAngle => "max_angle",
+            CrossSectionQualityMetric::MinEdge => "min_edge",
+        }
+    }
+
     fn is_parent_tet_geometry_metric(self) -> bool {
         matches!(
             self,

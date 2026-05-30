@@ -203,11 +203,21 @@ void add_zhang_li_stt_rhs_aos(
             const uint32_t node = nodes[local];
             const size_t base = static_cast<size_t>(node) * 3u;
             const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
+            const double alpha = scalar_field_value(
+                ctx.material_fields.alpha_field,
+                node,
+                ctx.material_fields.material.damping);
+            const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
             const Vec3 c = cross3(m, dm);
             const Vec3 dc = cross3(m, c);
-            workspace.rhs_xyz[base + 0] += nodal_weight * (-dc[0] - beta * c[0]);
-            workspace.rhs_xyz[base + 1] += nodal_weight * (-dc[1] - beta * c[1]);
-            workspace.rhs_xyz[base + 2] += nodal_weight * (-dc[2] - beta * c[2]);
+            const double adiabatic_scale = (1.0 + alpha * beta) * inv_gilbert;
+            const double cross_scale = (alpha - beta) * inv_gilbert;
+            workspace.rhs_xyz[base + 0] +=
+                nodal_weight * (adiabatic_scale * (-dc[0]) + cross_scale * c[0]);
+            workspace.rhs_xyz[base + 1] +=
+                nodal_weight * (adiabatic_scale * (-dc[1]) + cross_scale * c[1]);
+            workspace.rhs_xyz[base + 2] +=
+                nodal_weight * (adiabatic_scale * (-dc[2]) + cross_scale * c[2]);
             workspace.node_weight[node] += nodal_weight;
         }
     }

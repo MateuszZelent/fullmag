@@ -1,7 +1,7 @@
 # Airbox mesh grading: geometric vs linear
 
 - Status: draft
-- Last updated: 2026-05-29
+- Last updated: 2026-05-30
 - Related specs: `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
 - Related code:
   - `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py`
@@ -253,8 +253,8 @@ study.universe(
 - [x] Use boundary-aware fallback distance instead of max-axis gap only
 - [x] Add unrestricted air-side corner endpoint refinement field
 - [x] Split edge and endpoint/corner transition distances from surface transition distance
-- [ ] Add realized distance-band regression tests for corners
-- [ ] Update `_size_field_plan.py` transition fields to use geometric growth
+- [x] Add realized distance-band regression tests for corners
+- [x] Update `_size_field_plan.py` transition fields to use geometric growth
 - [ ] Add full solver-quality validation for Poisson-airbox demag
 - [ ] Deprecation warning for linear grading
 

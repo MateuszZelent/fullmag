@@ -16,6 +16,7 @@ describe("LayoutController", () => {
     const { controller } = setup();
     const state = controller.get();
     expect(state.activeModuleTab).toBe("home");
+    expect(state.activeViewportMainModuleId).toBe("viewport-3d");
     expect(state.panelVisible).toEqual({ left: true, right: true, bottom: true });
     expect(state.focusedSlot).toBeNull();
   });
@@ -27,6 +28,16 @@ describe("LayoutController", () => {
 
     controller.setActiveTab("mesh");
     expect(controller.get().activeModuleTab).toBe("mesh");
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("setActiveViewportMainModule() changes center viewport surface and emits layout-changed", () => {
+    const { bus, controller } = setup();
+    const listener = vi.fn();
+    bus.on("workspace:layout-changed", listener);
+
+    controller.setActiveViewportMainModule("cross-section-image");
+    expect(controller.get().activeViewportMainModuleId).toBe("cross-section-image");
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
@@ -71,6 +82,9 @@ describe("LayoutController", () => {
     const panelVisible = controller.get().panelVisible;
 
     controller.setFocusedSlot("viewport-main");
+    expect(controller.get().panelVisible).toBe(panelVisible);
+
+    controller.setActiveViewportMainModule("analysis-plots");
     expect(controller.get().panelVisible).toBe(panelVisible);
 
     controller.setActiveTab("study");

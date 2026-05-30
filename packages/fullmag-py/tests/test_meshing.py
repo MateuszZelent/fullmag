@@ -76,6 +76,7 @@ from fullmag.meshing.gmsh_bridge import (
 from fullmag.meshing._gmsh_generators import (
     _add_airbox_volume_clamp_fields,
     _build_stl_volume_model_for_component,
+    _sanitize_csg_mesh_options_for_geometries,
 )
 from fullmag.meshing._airbox_grading import (
     _add_airbox_grading_field,
@@ -480,6 +481,23 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(distance, np.sqrt(27.0))
         self.assertGreater(distance, 3.0)
 
+    def test_csg_sanitizer_checks_all_geometries_for_lofted_arch_waveguide(self) -> None:
+        box = fm.Box(20e-9, 10e-9, 2e-9, name="box")
+        arch = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=2e-9,
+            arch_height=12e-9,
+            name="arch",
+        )
+        resolved = _sanitize_csg_mesh_options_for_geometries(
+            MeshOptions(algorithm_3d=ALGO_3D_DELAUNAY),
+            [box, arch],
+            context="test shared-domain OCC mesh",
+        )
+
+        self.assertEqual(resolved.algorithm_3d, ALGO_3D_HXT)
+
     def test_airbox_boundary_distance_is_zero_when_boxes_match(self) -> None:
         distance = _airbox_boundary_distance_from_bbox(
             object_bounds_min=(-1.0, -2.0, -3.0),
@@ -749,6 +767,25 @@ class MeshScaffoldTests(unittest.TestCase):
             stats["global"]["edge_length"]["mean"],
             (1.0 + np.sqrt(2.0)) / 2.0,
         )
+        characteristic_size = (6.0 * np.sqrt(2.0) / 6.0) ** (1.0 / 3.0)
+        self.assertAlmostEqual(
+            stats["global"]["characteristic_size"]["min"],
+            characteristic_size,
+        )
+        self.assertAlmostEqual(
+            stats["global"]["characteristic_size"]["max"],
+            characteristic_size,
+        )
+        self.assertEqual(
+            stats["global"]["characteristic_size"]["histogram"],
+            [
+                {
+                    "lo": characteristic_size,
+                    "hi": characteristic_size,
+                    "count": 1,
+                }
+            ],
+        )
         self.assertEqual(
             {
                 "global_elements": stats["global"]["element_count"],
@@ -765,6 +802,37 @@ class MeshScaffoldTests(unittest.TestCase):
                 "worst_element_gamma": 0.25,
             },
         )
+
+    def test_meshdata_to_ir_reports_thirty_characteristic_size_bins(self) -> None:
+        scales = np.asarray([1.0, 1.5, 2.0, 3.0, 5.0, 8.0], dtype=np.float64)
+        nodes: list[list[float]] = []
+        elements: list[list[int]] = []
+        for index, scale in enumerate(scales):
+            base = len(nodes)
+            offset = float(index) * 20.0
+            nodes.extend(
+                [
+                    [offset, 0.0, 0.0],
+                    [offset + float(scale), 0.0, 0.0],
+                    [offset, float(scale), 0.0],
+                    [offset, 0.0, float(scale)],
+                ]
+            )
+            elements.append([base, base + 1, base + 2, base + 3])
+
+        mesh = MeshData(
+            nodes=np.asarray(nodes, dtype=np.float64),
+            elements=np.asarray(elements, dtype=np.int32),
+            element_markers=np.zeros(len(elements), dtype=np.int32),
+            boundary_faces=np.empty((0, 3), dtype=np.int32),
+            boundary_markers=np.empty((0,), dtype=np.int32),
+        )
+
+        stats = mesh.to_ir("scaled")["mesh_statistics"]
+        bins = stats["global"]["characteristic_size"]["histogram"]
+
+        self.assertEqual(len(bins), 30)
+        self.assertEqual(sum(bin_["count"] for bin_ in bins), len(elements))
 
     def test_quality_arrays_reorder_to_mesh_element_tags(self) -> None:
         quality = MeshQualityReport(
@@ -1186,6 +1254,41 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(boundary_layer["status"], "applied")
         self.assertEqual(boundary_layer["details"]["target_selector"], "explicit_surfaces_or_curves")
         self.assertEqual(boundary_layer["details"]["target_surface_tags"], [11, 12])
+
+    def test_shared_domain_report_marks_boundary_layer_degraded_from_realization(self) -> None:
+        geometry = fm.Box(2.0, 2.0, 2.0, name="free_layer")
+        mesh_options = MeshOptions(
+            boundary_layer_count=3,
+            boundary_layer_thickness=1e-9,
+            boundary_layer_stretching=1.3,
+            boundary_layer_target_surface_tags=[11, 12],
+        )
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=None,
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=[],
+            region_markers=[{"geometry_name": "free_layer", "marker": 1}],
+            build_mode="component_aware",
+            fallbacks_triggered=[],
+            mesh_options=mesh_options,
+            boundary_layer_result={
+                "field_id": 42,
+                "status": "degraded",
+                "reason": "setAsBoundaryLayer unavailable: test",
+            },
+        )
+        statuses = {
+            (entry["kind"], entry["scope"]): entry
+            for entry in report.to_dict()["operation_statuses"]  # type: ignore[index]
+        }
+        boundary_layer = statuses[("boundary_layer", "global")]
+        self.assertEqual(boundary_layer["status"], "degraded")
+        self.assertEqual(boundary_layer["actual_method"], "background_size_field")
+        self.assertIn("setAsBoundaryLayer unavailable", boundary_layer["reason"])
+        self.assertEqual(boundary_layer["details"]["gmsh_field_id"], 42)
 
     def test_shared_domain_report_serializes_selector_and_orphan_diagnostics(self) -> None:
         geometry = fm.Box(2.0, 2.0, 2.0, name="free_layer")
@@ -3734,7 +3837,7 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         self.assertIn("1 tetrahedra, 4 nodes", output)
 
-    def test_element_metric_summary_reports_five_characteristic_size_bins(self) -> None:
+    def test_element_metric_summary_reports_thirty_characteristic_size_bins(self) -> None:
         scales = np.asarray([1.0, 1.5, 2.0, 3.0, 5.0, 8.0], dtype=np.float64)
         nodes: list[list[float]] = []
         elements: list[list[int]] = []
@@ -3766,7 +3869,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertIsNotNone(metrics)
         bins = metrics["characteristic_size_bins"]
-        self.assertEqual(len(bins), 5)
+        self.assertEqual(len(bins), 30)
         self.assertEqual(sum(count for _start, _end, count in bins), len(elements))
 
     def test_normalize_gmsh_log_line_keeps_useful_progress(self) -> None:
@@ -3991,6 +4094,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(fields), 1)
         self.assertEqual(fields[0]["kind"], "TransitionShellThreshold")
         self.assertEqual(fields[0]["params"]["GeometryName"], "left")
+        self.assertEqual(fields[0]["params"]["Grading"], "geometric")
 
     def test_object_core_relaxation_expands_to_supported_fields(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -4267,7 +4371,7 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(fields[0]["params"]["DistMin"], 2e-9)
         self.assertAlmostEqual(fields[0]["params"]["DistMax"], 62e-9)
 
-    def test_edge_threshold_preserves_near_edge_shell_before_transition(self) -> None:
+    def test_edge_threshold_does_not_inherit_surface_transition_distance(self) -> None:
         left = fm.Cylinder(2.0, 1.0, name="left")
         fields = _build_perimeter_refinement_fields(
             [left],
@@ -4285,8 +4389,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(fields[0]["kind"], "EdgeDistanceThreshold")
         self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 2e-9)
         self.assertAlmostEqual(fields[0]["params"]["SizeMax"], 500e-9)
-        self.assertAlmostEqual(fields[0]["params"]["DistMin"], 2e-9)
-        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 222e-9)
+        self.assertAlmostEqual(fields[0]["params"]["DistMin"], 0.0)
+        self.assertAlmostEqual(fields[0]["params"]["DistMax"], 2e-9)
 
     def test_edge_threshold_uses_explicit_edge_transition_distance(self) -> None:
         left = fm.Cylinder(2.0, 1.0, name="left")
@@ -4957,7 +5061,14 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(region_markers), 2)
         self.assertEqual(report.build_mode, "conformal_occ")
         self.assertFalse(report.degraded)
-        self.assertEqual(report.fallbacks_triggered, [])
+        self.assertTrue(
+            set(report.fallbacks_triggered).issubset(
+                {
+                    "conformal_occ_hxt_degenerate_retry_delaunay",
+                    "conformal_occ_delaunay_degenerate_retry_frontal",
+                }
+            )
+        )
         self.assertIn("ComponentVolumeConstant", report.used_size_field_kinds)
 
     def test_multi_object_box_and_cylinder_preserve_object_priority_under_coarse_airbox(self) -> None:
@@ -5050,6 +5161,156 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             abs(baseline["cylinder_p95"] - coarse_airbox["cylinder_p95"]),
             10.0e-9,
         )
+
+    def test_airbox_geometric_grading_populates_distance_bands_and_diagonal(self) -> None:
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        body = fm.Box((40e-9, 40e-9, 20e-9), name="body")
+        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[body],
+            hints=fm.FEM(order=1, hmax=80e-9),
+            study_universe={
+                "mode": "manual",
+                "size": [240e-9, 200e-9, 120e-9],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmax": 80e-9,
+                "airbox_hmin": 12e-9,
+                "airbox_growth_rate": 1.3,
+                "airbox_grading": "geometric",
+            },
+            per_object_recipes={
+                "body": PerObjectMeshRecipe(hmax=8e-9, hmin=3e-9),
+            },
+        )
+
+        self.assertEqual(region_markers, [{"geometry_name": "body", "marker": 1}])
+        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertFalse(report.degraded)
+
+        air_mask = np.asarray(mesh.element_markers, dtype=np.int32) == 0
+        air_elements = mesh.elements[air_mask]
+        self.assertGreater(air_elements.shape[0], 50)
+
+        tetra = np.asarray(mesh.nodes[air_elements], dtype=np.float64)
+        centroids = tetra.mean(axis=1)
+        edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+        mean_edge = np.mean(
+            np.stack(
+                [
+                    np.linalg.norm(tetra[:, start] - tetra[:, end], axis=1)
+                    for start, end in edge_pairs
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+
+        object_min = np.asarray([-20e-9, -20e-9, -10e-9], dtype=np.float64)
+        object_max = np.asarray([20e-9, 20e-9, 10e-9], dtype=np.float64)
+        air_min = np.asarray([-120e-9, -100e-9, -60e-9], dtype=np.float64)
+        air_max = np.asarray([120e-9, 100e-9, 60e-9], dtype=np.float64)
+        axis_fraction = np.zeros_like(centroids)
+        for axis in range(3):
+            lower = centroids[:, axis] < object_min[axis]
+            upper = centroids[:, axis] > object_max[axis]
+            axis_fraction[lower, axis] = (
+                (object_min[axis] - centroids[lower, axis])
+                / (object_min[axis] - air_min[axis])
+            )
+            axis_fraction[upper, axis] = (
+                (centroids[upper, axis] - object_max[axis])
+                / (air_max[axis] - object_max[axis])
+            )
+        distance_fraction = np.max(axis_fraction, axis=1)
+
+        near = distance_fraction <= 0.30
+        mid = (distance_fraction > 0.30) & (distance_fraction <= 0.70)
+        far = distance_fraction > 0.70
+        diagonal_transition = (
+            (np.count_nonzero(axis_fraction > 0.45, axis=1) >= 2)
+            & (distance_fraction < 0.90)
+        )
+
+        self.assertGreater(np.count_nonzero(near), 0)
+        self.assertGreater(np.count_nonzero(mid), 0)
+        self.assertGreater(np.count_nonzero(far), 0)
+        self.assertGreater(np.count_nonzero(diagonal_transition), 0)
+
+        near_median = float(np.median(mean_edge[near]))
+        mid_median = float(np.median(mean_edge[mid]))
+        far_median = float(np.median(mean_edge[far]))
+        diagonal_median = float(np.median(mean_edge[diagonal_transition]))
+
+        self.assertLessEqual(near_median, mid_median * 1.15)
+        self.assertLessEqual(mid_median, far_median * 1.25)
+        self.assertLess(near_median, far_median * 0.85)
+        self.assertGreater(diagonal_median, near_median)
+        self.assertLess(diagonal_median, 80e-9)
+
+    def test_flat_arch_thin_film_materialization_records_provenance_and_partitions(self) -> None:
+        try:
+            import gmsh
+        except ImportError:
+            self.skipTest("gmsh not available")
+
+        waveguide = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=2e-9,
+            arch_height=0.0,
+            name="waveguide",
+        )
+
+        mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[waveguide],
+            hints=fm.FEM(order=1, hmax=80e-9),
+            study_universe={
+                "mode": "manual",
+                "size": [220e-9, 140e-9, 60e-9],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmax": 80e-9,
+                "airbox_hmin": 18e-9,
+            },
+            mesh_workflow={
+                "mesh_options": {
+                    "mesh_strategy": "thin_film_tetrahedral",
+                    "through_thickness_elements": 1,
+                    "compute_quality": False,
+                    "per_element_quality": False,
+                },
+                "per_geometry": [
+                    {
+                        "geometry": "waveguide",
+                        "bulk_hmax": "20e-9",
+                        "interface_hmax": "14e-9",
+                        "interface_thickness": "4e-9",
+                        "transition_distance": "24e-9",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(region_markers, [{"geometry_name": "waveguide", "marker": 1}])
+        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertFalse(report.degraded)
+        self.assertLess(mesh.n_elements, 20000)
+        self.assertGreater(np.count_nonzero(np.asarray(mesh.element_markers) == 0), 0)
+        self.assertGreater(np.count_nonzero(np.asarray(mesh.element_markers) == 1), 0)
+
+        statuses = {
+            (entry["kind"], entry["scope"]): entry
+            for entry in report.to_dict()["operation_statuses"]  # type: ignore[index]
+        }
+        thin_film = statuses[("thin_film", "waveguide")]
+        self.assertEqual(thin_film["status"], "applied")
+        self.assertEqual(thin_film["actual_method"], "feature_aware_tetrahedral")
+        self.assertIn("ComponentVolumeConstant", report.used_size_field_kinds)
+        self.assertIn("AxisAlignedBoxDistanceThreshold", report.used_size_field_kinds)
+        self.assertNotIn("EdgeDistanceThreshold", report.used_size_field_kinds)
+        self.assertNotIn("CornerDistanceThreshold", report.used_size_field_kinds)
 
     def test_occ_shared_domain_skips_stl_surface_preparation(self) -> None:
         try:

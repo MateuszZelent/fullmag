@@ -19,6 +19,22 @@ use crate::{
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+fn gilbert_slonczewski_scales(beta_stt: f64, epsilon_prime: f64, alpha: f64) -> (f64, f64) {
+    let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    (
+        beta_stt * (1.0 + alpha * epsilon_prime) * inv_gilbert,
+        beta_stt * (epsilon_prime - alpha) * inv_gilbert,
+    )
+}
+
+fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
+    let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    (
+        (1.0 + alpha * beta) * inv_gilbert,
+        (alpha - beta) * inv_gilbert,
+    )
+}
+
 impl ExchangeLlgProblem {
     // ===================================================================
     // Observables
@@ -2081,6 +2097,8 @@ impl ExchangeLlgProblem {
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
+        let alpha = self.material.damping;
+        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
         let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
         let ux = b * cfg.current_density[0];
         let uy = b * cfg.current_density[1];
@@ -2162,7 +2180,11 @@ impl ExchangeLlgProblem {
                 let dcy = m2 * cx - m0 * cz;
                 let dcz = m0 * cy - m1 * cx;
 
-                [-dcx - beta * cx, -dcy - beta * cy, -dcz - beta * cz]
+                [
+                    adiabatic_scale * (-dcx) + cross_scale * cx,
+                    adiabatic_scale * (-dcy) + cross_scale * cy,
+                    adiabatic_scale * (-dcz) + cross_scale * cz,
+                ]
             })
             .collect()
     }
@@ -2178,9 +2200,11 @@ impl ExchangeLlgProblem {
         const MU0_CONST: f64 = 1.2566370614359173e-6;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
+        let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
+            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2200,6 +2224,8 @@ impl ExchangeLlgProblem {
 
                 let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
                 let beta_stt = prefactor * g;
+                let (damping_like, field_like) =
+                    gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
 
                 let mcp_x = m1 * pz - m2 * py;
                 let mcp_y = m2 * px - m0 * pz;
@@ -2210,9 +2236,9 @@ impl ExchangeLlgProblem {
                 let mmcp_z = m0 * mcp_y - m1 * mcp_x;
 
                 [
-                    beta_stt * (mmcp_x + eps_prime * mcp_x),
-                    beta_stt * (mmcp_y + eps_prime * mcp_y),
-                    beta_stt * (mmcp_z + eps_prime * mcp_z),
+                    damping_like * mmcp_x + field_like * mcp_x,
+                    damping_like * mmcp_y + field_like * mcp_y,
+                    damping_like * mmcp_z + field_like * mcp_z,
                 ]
             })
             .collect()
@@ -2275,6 +2301,8 @@ impl ExchangeLlgProblem {
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
+        let alpha = self.material.damping;
+        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
         let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
         let ux = b * cfg.current_density[0];
         let uy = b * cfg.current_density[1];
@@ -2356,9 +2384,9 @@ impl ExchangeLlgProblem {
             let dcy = m2 * cx - m0 * cz;
             let dcz = m0 * cy - m1 * cx;
 
-            o[0] += -dcx - beta * cx;
-            o[1] += -dcy - beta * cy;
-            o[2] += -dcz - beta * cz;
+            o[0] += adiabatic_scale * (-dcx) + cross_scale * cx;
+            o[1] += adiabatic_scale * (-dcy) + cross_scale * cy;
+            o[2] += adiabatic_scale * (-dcz) + cross_scale * cz;
         };
 
         #[cfg(feature = "parallel")]
@@ -2386,6 +2414,8 @@ impl ExchangeLlgProblem {
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
+        let alpha = self.material.damping;
+        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
         let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
         let ux = b * cfg.current_density[0];
         let uy = b * cfg.current_density[1];
@@ -2462,9 +2492,9 @@ impl ExchangeLlgProblem {
             let dcy = m2 * cx - m0 * cz;
             let dcz = m0 * cy - m1 * cx;
 
-            out.x[flat] += -dcx - beta * cx;
-            out.y[flat] += -dcy - beta * cy;
-            out.z[flat] += -dcz - beta * cz;
+            out.x[flat] += adiabatic_scale * (-dcx) + cross_scale * cx;
+            out.y[flat] += adiabatic_scale * (-dcy) + cross_scale * cy;
+            out.z[flat] += adiabatic_scale * (-dcz) + cross_scale * cz;
         }
     }
 
@@ -2479,9 +2509,11 @@ impl ExchangeLlgProblem {
         const MU0_CONST: f64 = 1.2566370614359173e-6;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
+        let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
+            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2500,6 +2532,7 @@ impl ExchangeLlgProblem {
 
             let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
             let beta_stt = prefactor * g;
+            let (damping_like, field_like) = gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
 
             let mcp_x = m1 * pz - m2 * py;
             let mcp_y = m2 * px - m0 * pz;
@@ -2509,9 +2542,9 @@ impl ExchangeLlgProblem {
             let mmcp_y = m2 * mcp_x - m0 * mcp_z;
             let mmcp_z = m0 * mcp_y - m1 * mcp_x;
 
-            o[0] += beta_stt * (mmcp_x + eps_prime * mcp_x);
-            o[1] += beta_stt * (mmcp_y + eps_prime * mcp_y);
-            o[2] += beta_stt * (mmcp_z + eps_prime * mcp_z);
+            o[0] += damping_like * mmcp_x + field_like * mcp_x;
+            o[1] += damping_like * mmcp_y + field_like * mcp_y;
+            o[2] += damping_like * mmcp_z + field_like * mcp_z;
         };
 
         #[cfg(feature = "parallel")]
@@ -2539,9 +2572,11 @@ impl ExchangeLlgProblem {
         const MU0_CONST: f64 = 1.2566370614359173e-6;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
+        let alpha = self.material.damping;
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = cfg.current_sign * (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = cfg.current_sign * (js * HBAR * self.dynamics.gyromagnetic_ratio)
+            / (2.0 * E_CHARGE * MU0_CONST * ms * d);
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -2560,6 +2595,7 @@ impl ExchangeLlgProblem {
 
             let g = (p_degree * l2) / ((l2 + 1.0) + (l2 - 1.0) * m_dot_p);
             let beta_stt = prefactor * g;
+            let (damping_like, field_like) = gilbert_slonczewski_scales(beta_stt, eps_prime, alpha);
 
             let mcp_x = m1 * pz - m2 * py;
             let mcp_y = m2 * px - m0 * pz;
@@ -2569,9 +2605,9 @@ impl ExchangeLlgProblem {
             let mmcp_y = m2 * mcp_x - m0 * mcp_z;
             let mmcp_z = m0 * mcp_y - m1 * mcp_x;
 
-            out.x[flat] += beta_stt * (mmcp_x + eps_prime * mcp_x);
-            out.y[flat] += beta_stt * (mmcp_y + eps_prime * mcp_y);
-            out.z[flat] += beta_stt * (mmcp_z + eps_prime * mcp_z);
+            out.x[flat] += damping_like * mmcp_x + field_like * mcp_x;
+            out.y[flat] += damping_like * mmcp_y + field_like * mcp_y;
+            out.z[flat] += damping_like * mmcp_z + field_like * mcp_z;
         }
     }
 
@@ -3465,5 +3501,100 @@ impl ExchangeLlgProblem {
         {
             (0..magnetization.len()).map(compute).collect()
         }
+    }
+}
+
+#[cfg(test)]
+mod stt_tests {
+    use super::*;
+    use crate::{CellSize, GridShape, LlgConfig, MaterialParameters};
+
+    fn check_close(actual: f64, expected: f64, tolerance: f64) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {expected:.17e}, got {actual:.17e}"
+        );
+    }
+
+    fn one_cell_problem(damping: f64) -> ExchangeLlgProblem {
+        ExchangeLlgProblem::new(
+            GridShape::new(1, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, damping).unwrap(),
+            LlgConfig::default(),
+        )
+    }
+
+    #[test]
+    fn slonczewski_direct_torque_matches_effective_field_form() {
+        let problem = one_cell_problem(0.2);
+        let cfg = SlonczewskiSttConfig {
+            current_density_magnitude: 1.0e12,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.0,
+            epsilon_prime: 0.35,
+            degree: 1.0,
+            thickness: 1.0e-9,
+            current_sign: 1.0,
+        };
+        let m = [1.0, 0.0, 0.0];
+        let torque = problem.slonczewski_stt_torque(&[m], &cfg);
+
+        let beta_stt =
+            cfg.current_density_magnitude * 1.054571817e-34 * problem.dynamics.gyromagnetic_ratio
+                / (2.0
+                    * 1.60217662e-19
+                    * 1.2566370614359173e-6
+                    * problem.material.saturation_magnetisation
+                    * cfg.thickness)
+                * 0.5;
+        let m_cross_p = [0.0, -1.0, 0.0];
+        let h_st = [
+            -beta_stt * m_cross_p[0] / problem.dynamics.gyromagnetic_ratio,
+            -beta_stt * m_cross_p[1] / problem.dynamics.gyromagnetic_ratio,
+            -beta_stt * (m_cross_p[2] + cfg.epsilon_prime) / problem.dynamics.gyromagnetic_ratio,
+        ];
+        let expected = problem.llg_rhs_from_field(m, h_st);
+
+        for component in 0..3 {
+            check_close(
+                torque[0][component],
+                expected[component],
+                expected[component].abs() * 1e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn zhang_li_direct_torque_uses_gilbert_alpha_beta_projection() {
+        let problem = ExchangeLlgProblem::new(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.5).unwrap(),
+            LlgConfig::default(),
+        );
+        let cfg = ZhangLiSttConfig {
+            current_density: [1.0e12, 0.0, 0.0],
+            spin_polarization: 1.0,
+            non_adiabaticity: 0.2,
+        };
+        let m = vec![[1.0, 0.0, 0.0], [1.0, 0.0, 1.0]];
+        let torque = problem.zhang_li_stt_torque(&m, &cfg);
+
+        let u_x = cfg.spin_polarization * 9.274009994e-24 * cfg.current_density[0]
+            / (1.60217662e-19
+                * problem.material.saturation_magnetisation
+                * (1.0 + cfg.non_adiabaticity * cfg.non_adiabaticity));
+        let alpha = problem.material.damping;
+        let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+        let adiabatic = (1.0 + alpha * cfg.non_adiabaticity) * u_x * inv_gilbert;
+        let cross_y = (cfg.non_adiabaticity - alpha) * u_x * inv_gilbert;
+
+        check_close(torque[0][0], 0.0, 0.0);
+        check_close(torque[0][1], 0.0, 0.0);
+        check_close(torque[0][2], 0.0, 0.0);
+        check_close(torque[1][0], -adiabatic, adiabatic.abs() * 1e-12);
+        check_close(torque[1][1], cross_y, cross_y.abs() * 1e-12);
+        check_close(torque[1][2], adiabatic, adiabatic.abs() * 1e-12);
     }
 }

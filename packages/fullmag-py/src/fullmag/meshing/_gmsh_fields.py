@@ -24,10 +24,18 @@ class BoundaryLayerResult:
     status: str
     reason: str | None = None
 
+    def to_report_dict(self) -> dict[str, object]:
+        return {
+            "field_id": self.field_id,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class MeshOptionsApplicationReport:
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
+    boundary_layer_result: dict[str, object] | None = None
 
 
 FIELD_SCHEMAS: dict[str, set[str]] = {
@@ -133,6 +141,7 @@ def _apply_mesh_options(
             gmsh.option.setNumber("Mesh.Smoothing", max(opts.smoothing_steps, 5))
 
     extra_field_ids: list[int] = list(preexisting_field_ids or [])
+    boundary_layer_result: dict[str, object] | None = None
 
     if resolved_curvature > 0:
         fid = _add_curvature_surface_field(
@@ -194,6 +203,7 @@ def _apply_mesh_options(
             ),
             hscale=hscale,
         )
+        boundary_layer_result = result.to_report_dict()
         if result.field_id is not None and result.status == "degraded":
             extra_field_ids.append(result.field_id)
         if result.status in {"applied", "degraded"}:
@@ -240,7 +250,10 @@ def _apply_mesh_options(
             component_volume_tags=component_volume_tags,
             component_surface_tags=component_surface_tags,
         )
-    return MeshOptionsApplicationReport(selector_resolution=selector_resolution)
+    return MeshOptionsApplicationReport(
+        selector_resolution=selector_resolution,
+        boundary_layer_result=boundary_layer_result,
+    )
 
 
 def _apply_post_mesh_options(gmsh: Any, opts: MeshOptions) -> None:

@@ -6,6 +6,17 @@ describe("mesh quality statistics model", () => {
   it("normalizes backend SICN/gamma histograms and worst elements", () => {
     const statistics = normalizeMeshQualityStatistics({
       global: {
+        characteristic_size: {
+          histogram: [
+            { count: 2, hi: 3e-9, lo: 1e-9 },
+            { count: 22, hi: 9e-9, lo: 3e-9 },
+          ],
+          max: 9e-9,
+          mean: 5e-9,
+          min: 1e-9,
+          ratio: 9,
+          std: 1e-9,
+        },
         edge_length: {
           histogram: [
             { count: 6, hi: 2e-9, lo: 1e-9 },
@@ -111,6 +122,13 @@ describe("mesh quality statistics model", () => {
       qualitySource: "gmsh",
       sizeDistributions: [
         {
+          id: "tetra_size",
+          max: 9e-9,
+          mean: 5e-9,
+          min: 1e-9,
+          ratio: 9,
+        },
+        {
           id: "edge_length",
           max: 4e-9,
           mean: 2e-9,
@@ -135,6 +153,10 @@ describe("mesh quality statistics model", () => {
       label: "0.900 to 1.000",
     });
     expect(statistics?.sizeDistributions[0]?.histogram[0]).toMatchObject({
+      count: 2,
+      label: "1.00e-9 to 3.00e-9",
+    });
+    expect(statistics?.sizeDistributions[1]?.histogram[0]).toMatchObject({
       count: 6,
       label: "1.00e-9 to 2.00e-9",
     });

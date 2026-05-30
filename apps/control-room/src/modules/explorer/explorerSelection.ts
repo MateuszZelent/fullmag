@@ -28,7 +28,11 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
-  if (node.kind === "airbox.mesh" || node.kind === "airbox.visualization") {
+  if (
+    node.kind === "airbox.mesh" ||
+    node.kind === "airbox.mesh-quality" ||
+    node.kind === "airbox.visualization"
+  ) {
     return {
       kind: node.kind,
       nodeId: node.id,

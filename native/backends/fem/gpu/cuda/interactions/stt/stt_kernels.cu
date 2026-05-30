@@ -84,6 +84,7 @@ __global__ void slonczewski_stt_rhs_kernel(
     const double *__restrict__ my,
     const double *__restrict__ mz,
     const double *__restrict__ ms,
+    const double *__restrict__ alpha,
     const uint8_t *__restrict__ magnetic_node_mask,
     double *__restrict__ dmx,
     double *__restrict__ dmy,
@@ -91,6 +92,8 @@ __global__ void slonczewski_stt_rhs_kernel(
     double *__restrict__ block_max_rhs,
     double current_density_mag,
     double current_sign,
+    double gamma_mu0,
+    double uniform_alpha,
     double free_layer_thickness,
     double degree,
     double lambda,
@@ -109,15 +112,21 @@ __global__ void slonczewski_stt_rhs_kernel(
     if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
         const double ms_i = ms[i];
         if (current_density_mag > 0.0 && free_layer_thickness > 0.0 && ms_i > 0.0) {
+            const double alpha_i = alpha != nullptr ? alpha[i] : uniform_alpha;
             const double lmx = mx[i], lmy = my[i], lmz = mz[i];
             const double lambda_sq = lambda * lambda;
             const double m_dot_p = lmx * px + lmy * py + lmz * pz;
             const double denominator = (lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p;
             const double g = denominator != 0.0 ? (degree * lambda_sq) / denominator : 0.0;
             const double beta_stt =
-                ((current_sign * current_density_mag * kHbar) /
+                ((current_sign * current_density_mag * kHbar * gamma_mu0) /
                  (2.0 * kElectronCharge * kMu0 * ms_i * free_layer_thickness)) *
                 g;
+            const double inv_gilbert = 1.0 / (1.0 + alpha_i * alpha_i);
+            const double damping_like =
+                beta_stt * (1.0 + alpha_i * epsilon_prime) * inv_gilbert;
+            const double field_like =
+                beta_stt * (epsilon_prime - alpha_i) * inv_gilbert;
 
             const double mxp_x = lmy * pz - lmz * py;
             const double mxp_y = lmz * px - lmx * pz;
@@ -126,9 +135,9 @@ __global__ void slonczewski_stt_rhs_kernel(
             const double mxmxp_y = lmz * mxp_x - lmx * mxp_z;
             const double mxmxp_z = lmx * mxp_y - lmy * mxp_x;
 
-            dmx[i] += beta_stt * (mxmxp_x + epsilon_prime * mxp_x);
-            dmy[i] += beta_stt * (mxmxp_y + epsilon_prime * mxp_y);
-            dmz[i] += beta_stt * (mxmxp_z + epsilon_prime * mxp_z);
+            dmx[i] += damping_like * mxmxp_x + field_like * mxp_x;
+            dmy[i] += damping_like * mxmxp_y + field_like * mxp_y;
+            dmz[i] += damping_like * mxmxp_z + field_like * mxp_z;
         }
         rhs_norm = sqrt(dmx[i] * dmx[i] + dmy[i] * dmy[i] + dmz[i] * dmz[i]);
     }
@@ -165,6 +174,7 @@ __global__ void zhang_li_element_rhs_kernel(
     const double *__restrict__ my,
     const double *__restrict__ mz,
     const double *__restrict__ ms,
+    const double *__restrict__ alpha,
     double *__restrict__ work_x,
     double *__restrict__ work_y,
     double *__restrict__ work_z,
@@ -174,6 +184,7 @@ __global__ void zhang_li_element_rhs_kernel(
     double current_z,
     double degree,
     double beta,
+    double uniform_alpha,
     int element_count)
 {
     constexpr double kMuB = 9.274009994e-24;
@@ -228,15 +239,25 @@ __global__ void zhang_li_element_rhs_kernel(
         const double lmx = mx[node];
         const double lmy = my[node];
         const double lmz = mz[node];
+        const double alpha_i = alpha != nullptr ? alpha[node] : uniform_alpha;
         const double c_x = lmy * dm_z - lmz * dm_y;
         const double c_y = lmz * dm_x - lmx * dm_z;
         const double c_z = lmx * dm_y - lmy * dm_x;
         const double dc_x = lmy * c_z - lmz * c_y;
         const double dc_y = lmz * c_x - lmx * c_z;
         const double dc_z = lmx * c_y - lmy * c_x;
-        stt_atomic_add_double(&work_x[node], nodal_weight * (-dc_x - beta * c_x));
-        stt_atomic_add_double(&work_y[node], nodal_weight * (-dc_y - beta * c_y));
-        stt_atomic_add_double(&work_z[node], nodal_weight * (-dc_z - beta * c_z));
+        const double inv_gilbert = 1.0 / (1.0 + alpha_i * alpha_i);
+        const double adiabatic_scale = (1.0 + alpha_i * beta) * inv_gilbert;
+        const double cross_scale = (alpha_i - beta) * inv_gilbert;
+        stt_atomic_add_double(
+            &work_x[node],
+            nodal_weight * (adiabatic_scale * (-dc_x) + cross_scale * c_x));
+        stt_atomic_add_double(
+            &work_y[node],
+            nodal_weight * (adiabatic_scale * (-dc_y) + cross_scale * c_y));
+        stt_atomic_add_double(
+            &work_z[node],
+            nodal_weight * (adiabatic_scale * (-dc_z) + cross_scale * c_z));
         stt_atomic_add_double(&node_weight[node], nodal_weight);
     }
 }
@@ -280,6 +301,7 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     const double *my,
     const double *mz,
     const double *ms,
+    const double *alpha,
     const uint8_t *magnetic_node_mask,
     double *dmx,
     double *dmy,
@@ -287,6 +309,8 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
     double *block_max_rhs,
     double current_density_mag,
     double current_sign,
+    double gamma_mu0,
+    double uniform_alpha,
     double free_layer_thickness,
     double degree,
     double lambda,
@@ -303,6 +327,7 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
         my,
         mz,
         ms,
+        alpha,
         magnetic_node_mask,
         dmx,
         dmy,
@@ -310,6 +335,8 @@ void fullmag_cuda_add_slonczewski_stt_rhs(
         block_max_rhs,
         current_density_mag,
         current_sign,
+        gamma_mu0,
+        uniform_alpha,
         free_layer_thickness,
         degree,
         lambda,
@@ -328,6 +355,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
     const double *my,
     const double *mz,
     const double *ms,
+    const double *alpha,
     const uint8_t *magnetic_node_mask,
     double *work_x,
     double *work_y,
@@ -342,6 +370,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
     double current_z,
     double degree,
     double beta,
+    double uniform_alpha,
     int element_count,
     int node_count,
     cudaStream_t stream)
@@ -362,6 +391,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
         my,
         mz,
         ms,
+        alpha,
         work_x,
         work_y,
         work_z,
@@ -371,6 +401,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
         current_z,
         degree,
         beta,
+        uniform_alpha,
         element_count);
     zhang_li_normalize_add_rhs_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
         magnetic_node_mask,

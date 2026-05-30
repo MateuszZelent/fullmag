@@ -378,7 +378,7 @@ function VisualizationSurfaceColoringSection({
 }: {
   patch: PatchVisualizationTarget;
   patchColor: (
-    field: "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
+    field: "pointColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
     value: string,
   ) => void;
   pending: boolean;
@@ -447,6 +447,29 @@ function VisualizationQuantitySection({
           </option>
         ))}
       </FormField>
+    </InspectorSection>
+  );
+}
+
+function VisualizationPointsSection({
+  patchColor,
+  pending,
+  sectionDisabled,
+  settings,
+}: {
+  patchColor: (field: "pointColor", value: string) => void;
+  pending: boolean;
+  sectionDisabled: SectionDisabled;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Points">
+      <ColorField
+        disabled={pending || sectionDisabled("points")}
+        label="Point color"
+        value={settings.pointColor}
+        onChange={(value) => patchColor("pointColor", value)}
+      />
     </InspectorSection>
   );
 }
@@ -831,9 +854,13 @@ function useObjectVisualizationPanelState(
   }
 
   function patchColor(
-    field: "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
+    field: "pointColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
     value: string,
   ) {
+    if (field === "pointColor") {
+      void patch({ pointColor: value });
+      return;
+    }
     if (field === "shaderMonoColor") {
       void patch(surfaceSolidColorPatch(value));
       return;
@@ -1053,6 +1080,12 @@ function ObjectVisualizationPanelView({
         pending={pending}
         sectionDisabled={sectionDisabled}
         fieldCatalog={fieldCatalog}
+        settings={settings}
+      />
+      <VisualizationPointsSection
+        patchColor={patchColor}
+        pending={pending}
+        sectionDisabled={sectionDisabled}
         settings={settings}
       />
       <VisualizationWireframeSection

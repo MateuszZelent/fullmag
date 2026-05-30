@@ -825,7 +825,7 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             opacity: 0.28,
-            points: { opacity: 1, visible: false },
+            points: { opacity: 1, visible: true },
             surface: { opacity: 1, visible: true },
             vectors: { density: 128, domain: "airbox_only", visible: true },
             visible: true,
@@ -868,6 +868,9 @@ describe("ribbon structure", () => {
     const wireframeColorNode = renderAction?.menu?.find(
       (node) => node.type === "color" && node.id === "selected:wireframe-color",
     );
+    const pointColorNode = renderAction?.menu?.find(
+      (node) => node.type === "color" && node.id === "selected:point-color",
+    );
     const visibleNode = renderAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "selected:visible",
     );
@@ -881,11 +884,16 @@ describe("ribbon structure", () => {
       disabled: false,
       value: "var(--fm-airbox-wire)",
     });
+    expect(pointColorNode).toMatchObject({
+      disabled: false,
+      value: "var(--fm-info)",
+    });
 
     if (
       surfaceColoringNode?.type !== "radio-group" ||
       vectorThicknessNode?.type !== "slider" ||
       wireframeColorNode?.type !== "color" ||
+      pointColorNode?.type !== "color" ||
       visibleNode?.type !== "checkbox"
     ) {
       throw new Error("Expected selected airbox style controls");
@@ -895,6 +903,7 @@ describe("ribbon structure", () => {
     await runRibbonNode(surfaceColoringNode, "component_x", commandContext);
     await runRibbonNode(vectorThicknessNode, 2.4, commandContext);
     await runRibbonNode(wireframeColorNode, "#ffffff", commandContext);
+    await runRibbonNode(pointColorNode, "#66eeff", commandContext);
     await runRibbonNode(visibleNode, false, commandContext);
 
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
@@ -902,6 +911,7 @@ describe("ribbon structure", () => {
         shaderColorMode: "x",
         surfaceColorSource: "component_x",
         vectorThickness: 2.4,
+        pointColor: "#66eeff",
         wireframeColor: "#ffffff",
       });
     expect(patches).toEqual([

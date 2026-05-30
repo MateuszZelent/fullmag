@@ -21,7 +21,7 @@ This is not a second Fullmag product and not an FDM/FEM fork. It is one browser 
 9. `12-ribbon-toolbar-command-system.md` - ribbon, toolbar, command palette, shortcuts.
 10. `13-inspector-and-property-editing.md` - inspector registry, transactions, validation.
 11. `14-viewport-3d-module.md` - 3D viewport internals and WebGL lifecycle.
-12. `15-viewport-2d-module.md` - 2D slice and profile viewport.
+12. `15-viewport-2d-module.md` - 2D analysis surfaces and superseded live viewport notes.
 13. `16-charts-analysis-module.md` - charts, analysis, scalar histories.
 14. `17-performance-memory-profiler.md` - rendering, memory, profiling, budgets.
 15. `18-testing-quality-gates.md` - required verification gates.

@@ -71,7 +71,7 @@ export function buildCrossSectionNodes(
         crossSectionPlotId: plot.id,
         icon: "gauge" as const,
         status: "ready" as const,
-        contextCommands: ["viewport-2d.toggle", "workspace.focus-selection"],
+        contextCommands: ["cross-section-image.open", "workspace.focus-selection"],
       };
     }),
   );
@@ -85,7 +85,7 @@ export function buildCrossSectionNodes(
     icon: "layers",
     status: "ready",
     contextCommands: [
-      "viewport-2d.toggle",
+      "cross-section-image.open",
       "explorer.expand-all",
       "explorer.collapse-all",
     ],

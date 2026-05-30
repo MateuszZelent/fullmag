@@ -183,7 +183,7 @@ def _build_perimeter_refinement_fields(
             if "edge_hmax" in refinement and "edge_thickness" in refinement:
                 edge_thickness = float(refinement["edge_thickness"])
                 edge_transition_distance = _coerce_positive_float(
-                    entry.get("edge_transition_distance") or entry.get("transition_distance")
+                    entry.get("edge_transition_distance")
                 ) if entry is not None else None
                 edge_dist_min = edge_thickness if edge_transition_distance is not None else 0.0
                 edge_dist_max = (
@@ -660,6 +660,7 @@ def _build_transition_fields(
                 "DistMin": float(transition_dist_min),
                 "DistMax": float(transition_dist_max),
                 "Sampling": 20,
+                "Grading": "geometric",
                 "Source": "explicit" if transition_distance_requested is not None else "auto",
             }
             fields.append(

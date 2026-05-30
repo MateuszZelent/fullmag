@@ -735,11 +735,12 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
             label: "Airbox".to_string(),
             source: VisualizationTargetSource::Airbox,
             settings: VisualizationResolvedTargetSettings {
-                active_quantity_id: "m".to_string(),
+                active_quantity_id: "H_demag".to_string(),
                 visible: false,
                 bounds_visible: false,
                 geometry_scope: VisualizationTargetGeometryScope::Full,
                 opacity: 0.18,
+                point_color: "var(--fm-info)".to_string(),
                 points_visible: false,
                 render_mode: VisualizationTargetRenderMode::Wireframe,
                 surface_color_source: SurfaceColorSource::Solid,
@@ -749,7 +750,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 vector_budget: DEFAULT_AIRBOX_VECTOR_BUDGET,
                 vector_color_mode: VectorColorMode::Orientation,
                 vector_length_scale: 1.0,
-                vector_mono_color: "var(--fm-accent)".to_string(),
+                vector_mono_color: "var(--fm-info)".to_string(),
                 vector_thickness: 1.0,
                 vectors_visible: false,
                 wireframe_color: "var(--fm-airbox-wire)".to_string(),
@@ -789,6 +790,7 @@ pub struct VisualizationResolvedTargetSettings {
     pub bounds_visible: bool,
     pub geometry_scope: VisualizationTargetGeometryScope,
     pub opacity: f64,
+    pub point_color: String,
     pub points_visible: bool,
     pub render_mode: VisualizationTargetRenderMode,
     pub surface_color_source: SurfaceColorSource,
@@ -842,6 +844,8 @@ pub struct VisualizationTargetStyleOverride {
     pub surface_color_source: Option<SurfaceColorSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_mono_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_color_mode: Option<VectorColorMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -13,6 +13,8 @@ const CANVAS_SCREENSHOT_TIMEOUT_MS = 15_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
 const CROSS_SECTION_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section";
+const CROSS_SECTION_IMAGE_PATH =
+  "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image";
 const CROSS_SECTION_QUALITY_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality";
 
@@ -124,7 +126,7 @@ try {
 
   await page
     .locator(".fm-cross-section-inspector button")
-    .filter({ hasText: "Create 2D Plot" })
+    .filter({ hasText: "Generate Image" })
     .first()
     .click();
 
@@ -151,31 +153,25 @@ try {
     "Explorer plane parameters",
   );
 
-  const canvas2d = page.locator(".fm-viewport-2d canvas");
-  await waitForWebGLCanvasReady(canvas2d, "2D cross-section viewport");
+  const crossSectionImage = page.locator(".fm-cross-section-image__img");
+  await waitForLocatorVisible(crossSectionImage, "cross-section image");
   await waitForLocatorText(
-    page.locator(".fm-viewport-2d"),
+    page.locator(".fm-cross-section-image"),
     "Smoke 2D Cross",
-    "2D plot tab",
+    "cross-section image surface",
   );
-  await waitForLocatorText(
-    page.locator(".fm-viewport-2d__hud"),
-    "polygons",
-    "2D viewport HUD",
-  );
-  const sample2d = await sampleCanvasComposite(page, canvas2d, ".fm-viewport-2d");
-  if (!sample2d.nonBlank) {
-    throw new Error(
-      `2D cross-section canvas composite is blank: ${sample2d.variedPixels}/${sample2d.sampledPixels} sampled pixels differ from background.`,
-    );
+  const imageState = await crossSectionImage.evaluate((node) => ({
+    complete: node.complete,
+    naturalHeight: node.naturalHeight,
+    naturalWidth: node.naturalWidth,
+  }));
+  if (!imageState.complete || imageState.naturalWidth <= 0 || imageState.naturalHeight <= 0) {
+    throw new Error(`Cross-section PNG did not load: ${JSON.stringify(imageState)}`);
   }
 
   const requestedPaths = new Set(fixtureRequests.map((request) => request.path));
-  if (!requestedPaths.has(CROSS_SECTION_PATH)) {
-    throw new Error("2D viewport did not request cross-section geometry.");
-  }
-  if (!requestedPaths.has(CROSS_SECTION_QUALITY_PATH)) {
-    throw new Error("2D viewport did not request cross-section quality.");
+  if (!requestedPaths.has(CROSS_SECTION_IMAGE_PATH)) {
+    throw new Error("Cross-section image module did not request the PNG resource.");
   }
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
@@ -188,7 +184,7 @@ try {
       "3d=cut-frame",
       "explorer=draft+plot-1+parameters",
       "inspector=commit",
-      "viewport-2d=webgl",
+      "cross-section-image=png",
       `requests=${fixtureRequests.length}`,
     ].join(" "),
   );
@@ -240,6 +236,16 @@ async function installCrossSectionFixtureApi(page, requests) {
     }
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") {
       await fulfillJson(route, sharedDomainManifestFixture());
+      return;
+    }
+    if (path === CROSS_SECTION_IMAGE_PATH) {
+      await fulfillBinary(
+        route,
+        makeCrossSectionPngBuffer(),
+        '"cross-section-image-fixture"',
+        200,
+        "image/png",
+      );
       return;
     }
     if (path === CROSS_SECTION_PATH) {
@@ -465,11 +471,17 @@ async function fulfillJson(route, body, status = 200) {
   });
 }
 
-async function fulfillBinary(route, arrayBuffer, etag, status = 200) {
+async function fulfillBinary(
+  route,
+  arrayBuffer,
+  etag,
+  status = 200,
+  contentType = "application/octet-stream",
+) {
   await route.fulfill({
     body: Buffer.from(arrayBuffer),
     headers: fixtureHeaders({
-      "content-type": "application/octet-stream",
+      "content-type": contentType,
       etag,
     }),
     status,
@@ -963,6 +975,14 @@ function makeCrossSectionQualityBuffer() {
   view.setFloat32(16, 0.18, true);
   new Float32Array(buffer, 20, valueCount).set([0.18]);
   return buffer;
+}
+
+function makeCrossSectionPngBuffer() {
+  const buffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR42mP8z8BQz0AEYBxVSFUBAA2TAYPdiun8AAAAAElFTkSuQmCC",
+    "base64",
+  );
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
 function parsePng(buffer) {

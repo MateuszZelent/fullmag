@@ -44,6 +44,7 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
   opacityFromSettings,
   percentToUnit,
+  pointColorFromSettings,
   resolveCameraInteractionSettings,
   shaderColorFromSettings,
   shaderUsesVertexColors,
@@ -335,7 +336,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
               renderOrder={RENDER_POLICIES.points.renderOrder}
             >
               <pointsMaterial
-                color={wireframeColorFromSettings(renderSettings, colors.wire)}
+                color={pointColorFromSettings(renderSettings, colors.wire)}
                 opacity={opacity}
                 sizeAttenuation={false}
                 size={3}
@@ -345,7 +346,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           ) : (
             <BoundsPoints
               bounds={resolveMeshPartBounds(part)}
-              color={wireframeColorFromSettings(renderSettings, colors.wire)}
+              color={pointColorFromSettings(renderSettings, colors.wire)}
               opacity={opacity}
             />
           )
@@ -425,7 +426,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
             renderOrder={RENDER_POLICIES.points.renderOrder}
           >
             <pointsMaterial
-                color={wireframeColorFromSettings(renderSettings, colors.wire)}
+              color={pointColorFromSettings(renderSettings, colors.wire)}
               opacity={opacity}
               sizeAttenuation={false}
               size={3}
@@ -435,7 +436,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         ) : (
           <BoundsPoints
             bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(renderSettings, colors.wire)}
+            color={pointColorFromSettings(renderSettings, colors.wire)}
             opacity={opacity}
           />
         )

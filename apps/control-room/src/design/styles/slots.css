@@ -42,6 +42,46 @@
   letter-spacing: 0.01em;
 }
 
+.fm-viewport-tabs {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-viewport);
+}
+
+.fm-viewport-tabs__root {
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.fm-viewport-tabs__bar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-chrome);
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-viewport-tabs__list {
+  display: inline-flex;
+  height: 26px;
+  min-width: 0;
+}
+
+.fm-viewport-tabs__trigger {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-viewport-tabs__surface {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
 /* Status bar — left-aligned, pill-separated status fields */
 .fm-status-bar {
   display: flex;

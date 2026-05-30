@@ -177,6 +177,9 @@ Current mesh build and object-mesh resource routes:
 | `/v2/sessions/current/meshing/builds/current` | `GET` | Read the active/current mesh build projection. |
 | `/v2/sessions/current/meshing/builds/latest-successful` | `GET` | Read the latest successful mesh build projection. |
 | `/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element` | `GET` | Read binary `FMMQ` per-element quality arrays for heatmap overlays. |
+| `/v2/sessions/current/meshing/meshes/shared-domain/cross-section` | `GET` | Read binary `FMCS` shared-domain cross-section geometry for statistics and advanced inspection. |
+| `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality` | `GET` | Read binary `FMQS` quality values for a shared-domain cross-section. |
+| `/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image` | `GET` | Read a server-rendered PNG preview/export for a shared-domain cross-section. |
 | `/v2/sessions/current/meshing/meshes/universe/quality` | `GET` | Read universe/airbox mesh quality diagnostics; when the airbox scope exists, `quality.global` is the airbox quality scope. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/topology` | `GET` | Read object-scoped binary topology when available. |
 | `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |
@@ -213,6 +216,8 @@ The frontend should use:
 
 React components must not call `fetch()` directly and must not hand-roll `/v1` or `/v2` endpoint
 strings outside the central API client/facade layer.
+
+Server-rendered image resources, including shared-domain cross-section PNGs, are still v2 resources. Components consume them through `ControlRoomApi` and resource hooks that own ETag handling, object URL creation, and object URL revocation.
 
 Visualization client acknowledgement writes also go through the central facade. The realtime websocket
 may invalidate `visualization/client-acks`, but it remains an invalidation stream; the ACK payload

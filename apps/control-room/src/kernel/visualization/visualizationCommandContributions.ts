@@ -225,7 +225,7 @@ function stringPatchCommand(
   title: string,
   patchKey: keyof Pick<
     VisualizationTargetPatch,
-    "shaderMonoColor" | "vectorMonoColor" | "wireframeColor"
+    "pointColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor"
   >,
 ): CommandContribution {
   return {
@@ -310,6 +310,11 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     "visualization.target.set-vector-mono-color",
     "Set selected target vector color",
     "vectorMonoColor",
+  ),
+  stringPatchCommand(
+    "visualization.target.set-point-color",
+    "Set selected target point color",
+    "pointColor",
   ),
   stringPatchCommand(
     "visualization.target.set-wireframe-color",

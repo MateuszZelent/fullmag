@@ -30,7 +30,7 @@ export interface MeshWorstElement {
 
 export interface MeshSizeDistribution {
   histogram: MeshQualityHistogramBin[];
-  id: "edge_length" | "volume";
+  id: "edge_length" | "tetra_size" | "volume";
   label: string;
   max: number | null;
   mean: number | null;
@@ -243,6 +243,11 @@ export function normalizeMeshQualityStatistics(
     "Edge length",
     global.edge_length,
   );
+  const tetraSizeDistribution = normalizeSizeDistribution(
+    "tetra_size",
+    "Tetra size",
+    global.characteristic_size,
+  );
   const volumeDistribution = normalizeSizeDistribution(
     "volume",
     "Element volume",
@@ -269,6 +274,7 @@ export function normalizeMeshQualityStatistics(
     metrics,
     qualitySource: asString(record.quality_source),
     sizeDistributions: [
+      tetraSizeDistribution,
       edgeLengthDistribution,
       volumeDistribution,
     ].filter(

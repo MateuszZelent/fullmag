@@ -8,6 +8,7 @@ import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     layout: {
+      setActiveViewportMainModule: vi.fn(),
       setFocusedSlot: vi.fn(),
       setPanelVisible: vi.fn(),
     },
@@ -48,6 +49,6 @@ describe("CrossSectionDraftEditor", () => {
     expect(html).toContain('max="180"');
     expect(html).toContain('min="-180"');
     expect(html).not.toContain('aria-label="Rotation" disabled=""');
-    expect(html).toContain("Create 2D Plot");
+    expect(html).toContain("Generate Image");
   });
 });

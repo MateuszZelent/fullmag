@@ -15,6 +15,8 @@ As of 2026-05-22, `apps/control-room` registers these manifests through `src/mod
 | `ribbon` | `src/modules/ribbon` | `ribbon` | implemented |
 | `explorer` | `src/modules/explorer` | `panel-left` | implemented |
 | `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
+| `cross-section-image` | `src/modules/cross-section-image` | `viewport-main` | planned replacement for live mesh-section WebGL |
+| `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | planned center-surface chart module |
 | `viewport-aux` slot | `src/kernel/layout` | `viewport-aux` | implemented as an empty auxiliary dock slot, rendered only when a registered module targets it |
 | `inspector` | `src/modules/inspector` | `panel-right` | implemented |
 | `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented as the current footer/log dock |
@@ -68,12 +70,15 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 | Module | Slot | Responsibility | Data source |
 |---|---|---|---|
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
-| `viewport-2d` | `viewport-main`, `viewport-aux` | Slices, projections, probes, line profiles, and mesh cross-sections. | Slice/profile/cross-section resources and field or mesh catalog. |
-| `charts` | `panel-bottom`, `viewport-aux` | Scalar histories, energies, convergence, analysis series. | Scalar and analysis resources. |
+| `cross-section-image` | `viewport-main` | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
+| `analysis-plots` | `viewport-main`, `panel-bottom` | Scalar histories, energies, convergence, profiles, and analysis series. | Scalar and analysis resources through a chart adapter. |
+| `viewport-2d` | disabled after replacement | Legacy live WebGL slices, projections, probes, line profiles, and mesh cross-sections. | Removed from default registration once `cross-section-image` is active. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
 | `view-controls` | `ribbon`, `viewport-main` overlay | Camera, layer, quantity, clip, selection, display controls. | Command registry and visualization resource. |
 
 Viewport modules consume domain-neutral render models. FDM/FEM interpretation belongs to adapters.
+
+`viewport-main` is a tabbed center surface when more than one visualization module targets it. The active tab is the only mounted heavy surface. Inactive `viewport-3d` must not keep WebGL, field-vector hooks, topology hooks, render-model builders, or client acknowledgement effects active.
 
 ## 5. Runtime Modules
 

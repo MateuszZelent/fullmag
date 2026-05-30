@@ -8,8 +8,8 @@
 Frontend v2 has one viewport slot family and multiple viewport modules:
 
 - `viewport-3d` for WebGL/Three.js 3D scene rendering;
-- `viewport-2d` for slices, projections, probes, and profiles;
-- `charts` for scalar and analysis plots in docks or auxiliary slots;
+- `cross-section-image` for server-rendered mesh cross-section verification and PNG export;
+- `analysis-plots` for scalar and analysis plots in center tabs or docks;
 - `view-controls` for layer, camera, quantity, clipping, and display commands.
 
 These modules share the same kernel slot and command model. They do not duplicate the workspace shell.
@@ -21,7 +21,7 @@ These modules share the same kernel slot and command model. They do not duplicat
 3. Topology rebuilds are separate from field-buffer swaps.
 4. Render loops are dirty-driven, not always-on.
 5. Every GPU resource has explicit ownership and disposal.
-6. 2D viewports do not keep WebGL objects alive unless the active mode explicitly owns a WebGL-backed renderer, such as a large mesh cross-section; those resources follow the same dirty-driven rendering and teardown rules as `viewport-3d`.
+6. Non-3D center surfaces do not keep `viewport-3d` mounted. Server-rendered cross-section images use no browser WebGL. Any future WebGL-backed 2D mode must follow the same active-only mounting and teardown rules as `viewport-3d`.
 7. Warm quantity switching reads published data resources; it does not enqueue preview-control commands unless the data truly does not exist.
 8. Viewport modules can be disabled without breaking explorer, inspector, charts, or runtime commands.
 
@@ -95,10 +95,22 @@ Unmounting a viewport module must release:
 
 The diagnostics module must expose resource counts in development mode.
 
-## 7. Detailed Specs
+## 7. Center Surface Tabs
+
+When multiple modules target `viewport-main`, the kernel owns center-surface tab state. Switching tabs must unmount the previously active heavy module instead of hiding it. A non-3D tab must have:
+
+- no mounted `.fm-viewport-3d` root;
+- no R3F canvas;
+- no active 3D topology, quality, or field-vector resource listeners;
+- no `Viewport3DModule` render measurements;
+- no `viewport-main` client acknowledgements emitted by the 3D renderer.
+
+Global realtime invalidation and registry controllers may remain active, but they must not fetch 3D-only resources or rebuild 3D render models without a mounted 3D module.
+
+## 8. Detailed Specs
 
 - 3D viewport internals: `14-viewport-3d-module.md`
-- 2D viewport internals: `15-viewport-2d-module.md`
+- 2D analysis surfaces and superseded live viewport notes: `15-viewport-2d-module.md`
 - per-object visualization control: `23-per-object-visualization-control.md`
 - geometry object authoring lifecycle: `24-geometry-object-authoring-lifecycle.md`
 - Charts and analysis: `16-charts-analysis-module.md`

@@ -31,7 +31,8 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/explorer.css";',
         '@import "../src/design/styles/inspector.css";',
         '@import "../src/design/styles/viewport-3d.css";',
-        '@import "../src/design/styles/viewport-2d.css";',
+        '@import "../src/design/styles/cross-section-image.css";',
+        '@import "../src/design/styles/analysis-plots.css";',
         '@import "../src/design/styles/footer.css";',
         '@import "../src/design/styles/command-palette.css";',
         '@import "../src/design/styles/registry-inspector.css";',
@@ -52,14 +53,13 @@ describe("control-room design styles", () => {
   });
 
   it("maps dark and light themes to Catppuccin Mocha and Latte", () => {
-    const tokensCss = readAppFile("src/design/styles/tokens.css");
     const themeCss = readAppFile("src/design/styles/theme.css");
 
-    expect(tokensCss).toContain("--fm-bg-app: #1e1e2e;");
-    expect(tokensCss).toContain("--fm-bg-viewport: #11111b;");
-    expect(tokensCss).toContain("--fm-text-primary: #cdd6f4;");
-    expect(tokensCss).toContain("--fm-accent: #89b4fa;");
-    expect(tokensCss).toContain("--fm-info: #89dceb;");
+    expect(themeCss).toContain("--fm-bg-app: #1e1e2e;");
+    expect(themeCss).toContain("--fm-bg-viewport: #11111b;");
+    expect(themeCss).toContain("--fm-text-primary: #cdd6f4;");
+    expect(themeCss).toContain("--fm-accent: #89b4fa;");
+    expect(themeCss).toContain("--fm-info: #89dceb;");
     expect(themeCss).toContain("--fm-bg-app: #eff1f5;");
     expect(themeCss).toContain("--fm-bg-viewport: #dce0e8;");
     expect(themeCss).toContain("--fm-text-primary: #4c4f69;");

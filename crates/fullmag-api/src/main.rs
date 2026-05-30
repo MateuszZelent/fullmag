@@ -34,6 +34,7 @@ mod build_info;
 mod error;
 mod feature_flags;
 mod fem_cross_section;
+mod fem_cross_section_image;
 mod fem_slice;
 mod fem_slice_overlay;
 mod fem_spatial_index;

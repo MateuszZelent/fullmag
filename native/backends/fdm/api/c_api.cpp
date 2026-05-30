@@ -393,12 +393,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         double js = sqrt(ctx->current_density_x*ctx->current_density_x +
                          ctx->current_density_y*ctx->current_density_y +
                          ctx->current_density_z*ctx->current_density_z);
-        // Standard prefactor: j * hbar / (2 * e * mu_0 * M_s * d)
+        // Explicit-RHS prefactor: gamma_mu0 * j * hbar / (2 * e * mu_0 * M_s * d)
         // Use explicit free layer thickness if provided, otherwise cell dz
         double d_free = plan->stt_free_layer_thickness > 0.0
                       ? plan->stt_free_layer_thickness : ctx->dz;
         double current_sign = plan->stt_current_sign == 0.0 ? 1.0 : plan->stt_current_sign;
-        ctx->stt_cpp_pf = current_sign * (js * hbar) / (2.0 * e * mu_0 * ctx->Ms * d_free);
+        ctx->stt_cpp_pf = current_sign * (js * hbar * ctx->gamma) / (2.0 * e * mu_0 * ctx->Ms * d_free);
     } else {
         ctx->stt_cpp_pf = 0.0;
     }

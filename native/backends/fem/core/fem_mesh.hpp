@@ -55,11 +55,13 @@ bool initialize_mesh_plan_fields(
 /*
  * Initialize magnetic element and node masks from imported FEM mesh markers.
  *
- * Matches the shared Rust FEM convention: mixed zero/non-zero element markers
- * treat zero as air, while all-zero and all-nonzero marker sets are interpreted
- * as a fully magnetic domain. The node mask is the union of magnetic elements.
+ * Missing element markers mean the whole mesh is magnetic. Explicit marker 0
+ * means air, including an all-zero marker array. The node mask is the union of
+ * magnetic elements.
  */
 void initialize_magnetic_masks(Context &ctx);
+
+bool validate_magnetic_mesh_has_active_region(const Context &ctx, std::string &error);
 
 /*
  * Validate static-periodic native FEM plan compatibility.

@@ -38,6 +38,8 @@ export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =
   components["schemas"]["CrossSectionQualityMetric"];
+export type CrossSectionImageColorScale =
+  components["schemas"]["CrossSectionImageColorScale"];
 export type SliceMeshColorScale = components["schemas"]["SliceMeshColorScale"];
 export type SliceMeshQualityMetric =
   components["schemas"]["SliceMeshQualityMetric"];
@@ -46,6 +48,17 @@ export interface CrossSectionQuery {
   includeWireframe?: boolean;
   plane: CrossSectionPlane;
   positionPercent: number;
+}
+export interface CrossSectionImageQuery {
+  colorScale?: CrossSectionImageColorScale;
+  filterExpression?: string | null;
+  legend?: boolean;
+  metric: CrossSectionQualityMetric;
+  plane: CrossSectionPlane;
+  positionPercent: number;
+  resolution?: 512 | 1024 | 2048;
+  shrinkFactor?: number;
+  wireframe?: boolean;
 }
 export interface CrossSectionQualityQuery {
   metric: CrossSectionQualityMetric;

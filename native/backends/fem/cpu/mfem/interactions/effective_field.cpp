@@ -57,9 +57,6 @@ bool refresh_initial_effective_field_from_plan(
     if (plan.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
         return true;
     }
-    if (!ctx.exchange.enabled && !ctx.demag.enabled) {
-        return true;
-    }
     return context_refresh_exchange_field_mfem(ctx, error);
 }
 

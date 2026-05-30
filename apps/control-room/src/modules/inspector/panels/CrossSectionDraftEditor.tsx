@@ -60,7 +60,8 @@ export function CrossSectionDraftEditor({
       },
       "inspector",
     );
-    kernel.layout.setFocusedSlot("viewport-aux");
+    kernel.layout.setActiveViewportMainModule("cross-section-image");
+    kernel.layout.setFocusedSlot("viewport-main");
     kernel.layout.setPanelVisible("right", true);
   };
 
@@ -225,7 +226,7 @@ export function CrossSectionDraftEditor({
         />
         <div className="fm-inspector-toolbar">
           <Button size="sm" type="button" variant="primary" onClick={commitDraft}>
-            Create 2D Plot
+            Generate Image
           </Button>
         </div>
       </InspectorSection>

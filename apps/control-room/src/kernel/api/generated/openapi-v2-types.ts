@@ -900,6 +900,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality": {
         parameters: {
             query?: never;
@@ -2263,6 +2279,8 @@ export interface components {
             /** Format: double */
             utilization_cpu_percent: number;
         };
+        /** @enum {string} */
+        CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm";
         /** @enum {string} */
         CrossSectionQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
         CurrentRunResource: {
@@ -4496,6 +4514,7 @@ export interface components {
             geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
             opacity: number;
+            point_color: string;
             points_visible: boolean;
             render_mode: components["schemas"]["VisualizationTargetRenderMode"];
             surface_color_source: components["schemas"]["SurfaceColorSource"];
@@ -4674,6 +4693,7 @@ export interface components {
         /** @enum {string} */
         VisualizationTargetSource: "airbox" | "scene_object" | "mesh_part";
         VisualizationTargetStyleOverride: {
+            point_color?: string | null;
             surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
             surface_mono_color?: string | null;
             /** Format: double */
@@ -6957,6 +6977,71 @@ export interface operations {
             };
             /** @description Cross-section geometry not modified for the supplied ETag */
             304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                metric: components["schemas"]["CrossSectionQualityMetric"];
+                color_scale?: components["schemas"]["CrossSectionImageColorScale"];
+                resolution?: number;
+                wireframe?: boolean;
+                legend?: boolean;
+                shrink_factor?: number;
+                filter_expression?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-rendered shared-domain FEM cross-section image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description No FEM mesh or no data for the requested metric */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section image not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

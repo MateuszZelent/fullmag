@@ -64,8 +64,8 @@ bool gpu_rk_add_slonczewski_torque(
         reason = "GPU RK Slonczewski STT requires explicit or geometry-derived free-layer thickness";
         return false;
     }
-    if (gpu.materials.ms == nullptr) {
-        reason = "GPU RK Slonczewski STT requires device-resident Ms";
+    if (gpu.materials.ms == nullptr || gpu.materials.alpha == nullptr) {
+        reason = "GPU RK Slonczewski STT requires device-resident Ms and alpha";
         return false;
     }
     fullmag_cuda_add_slonczewski_stt_rhs(
@@ -73,6 +73,7 @@ bool gpu_rk_add_slonczewski_torque(
         m.y,
         m.z,
         gpu.materials.ms,
+        gpu.materials.alpha,
         gpu.mesh_regions.magnetic_node_mask,
         rhs.x,
         rhs.y,
@@ -80,6 +81,8 @@ bool gpu_rk_add_slonczewski_torque(
         gpu.reductions.scalar_workspace,
         gpu_rk_current_density_magnitude(ctx),
         ctx.stt.current_sign,
+        ctx.material_fields.material.gyromagnetic_ratio,
+        ctx.material_fields.material.damping,
         slonczewski_thickness,
         ctx.stt.degree > 0.0 ? ctx.stt.degree : 1.0,
         ctx.stt.lambda,

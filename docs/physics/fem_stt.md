@@ -1,7 +1,7 @@
 # FEM Spin-Transfer Torque
 
-- Status: native FEM CPU module contract
-- Last updated: 2026-05-18
+- Status: native FEM CPU/GPU module contract
+- Last updated: 2026-05-30
 - Implementation: `native/backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
@@ -10,8 +10,10 @@
 
 ## Pole / torque
 
-Spin-transfer torque is a direct `dm/dt` contribution. It is not an effective
-field and must not be added to `H_eff`.
+Spin-transfer torque is a direct `dm/dt` contribution. It is not stored in
+`H_eff`. For torque families that are often written as effective fields,
+Fullmag stores the algebraically equivalent explicit Gilbert RHS term in
+`tau_direct`.
 
 The executable native FEM CPU module currently supports:
 
@@ -42,9 +44,25 @@ The Slonczewski path is local per node:
 
 ```text
 tau = beta_stt * [m x (m x p) + epsilon_prime * (m x p)]
-beta_stt = current_sign * |J| hbar / (2 e mu0 Ms d) * g(m.p)
+beta_stt = current_sign * |J| hbar gamma_mu0 / (2 e mu0 Ms d) * g(m.p)
 g(m.p) = P Lambda^2 / [(Lambda^2 + 1) + (Lambda^2 - 1) m.p]
 ```
+
+With nonzero Gilbert damping, the explicit direct-RHS form used by Fullmag is
+the effective-field-equivalent form:
+
+```text
+tau =
+  beta_stt / (1 + alpha^2)
+    * [(1 + alpha epsilon_prime) * m x (m x p)
+       + (epsilon_prime - alpha) * (m x p)]
+```
+
+For `alpha = 0`, this reduces to the simpler expression above. The
+`gamma_mu0` factor converts the field-scale Slonczewski coefficient into a
+`1/s` direct RHS contribution. This is equivalent to the Boris-style
+implementation that inserts a Slonczewski field into `H_eff`, provided the same
+angular efficiency and current-sign convention are used.
 
 The module uses explicit `stt_free_layer_thickness` when provided. Otherwise it
 derives a magnetic thickness from the mesh extent along the current-density
@@ -68,7 +86,9 @@ u = stt_degree * mu_B * J / [e Ms (1 + beta^2)]
 and projects the element RHS back to nodes with lumped P1 weights:
 
 ```text
-tau = -m x [m x ((u.grad) m)] - beta * [m x ((u.grad) m)]
+v = (u.grad) m
+v_perp = -m x (m x v)
+tau = [(1 + alpha beta) * v_perp - (beta - alpha) * (m x v)] / (1 + alpha^2)
 ```
 
 Source ownership: Zhang-Li CIP is isolated in `stt_zhang_li.hpp/.cpp`. It owns
@@ -94,6 +114,7 @@ report a standalone energy term.
 | field-like coefficient | `epsilon_prime` | `1` |
 | Zhang-Li non-adiabaticity | `beta` | `1` |
 | free-layer thickness | `d` | `m` |
+| reduced gyromagnetic ratio | `gamma_mu0` | `m/(A s)` |
 | RHS torque | `tau` | `1/s` |
 
 ## Warunki brzegowe
@@ -143,4 +164,4 @@ Required before production qualification:
 - public API validation for Slonczewski and Zhang-Li parameter domains;
 - sign-convention regression against small reference trajectories;
 - mesh-resolution check for Zhang-Li gradient projection;
-- parity check before any shared CPU/GPU STT capability label.
+- parity check before any `validated` CPU/GPU STT capability label.

@@ -76,6 +76,7 @@ from ._size_field_plan import (
 
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
 _DEFAULT_AIRBOX_GRADING = "geometric"
+_SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 
 
 def _conformal_occ_degenerate_retry(
@@ -700,7 +701,11 @@ def _element_metric_summary_for_mask(
     characteristic_min = float(np.min(characteristic))
     characteristic_max = float(np.max(characteristic))
     if characteristic_max > characteristic_min and not math.isclose(characteristic_min, characteristic_max):
-        bin_edges = np.geomspace(characteristic_min, characteristic_max, num=6)
+        bin_edges = np.geomspace(
+            characteristic_min,
+            characteristic_max,
+            num=_SIZE_DISTRIBUTION_HISTOGRAM_BINS + 1,
+        )
         if np.all(np.diff(bin_edges) > 0.0):
             bin_counts, bin_edges = np.histogram(characteristic, bins=bin_edges)
             characteristic_bins = [
@@ -1508,6 +1513,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         fallbacks_triggered=fallbacks_triggered,
         mesh_options=mesh_options,
         selector_resolution=result.selector_resolution if result is not None else [],
+        boundary_layer_result=result.boundary_layer_result if result is not None else None,
         orphan_entities=result.orphan_entities if result is not None else [],
     )
     emit_progress_event(

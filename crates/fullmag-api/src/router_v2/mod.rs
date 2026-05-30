@@ -210,6 +210,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_shared_domain_cross_section),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image",
+            get(handlers::meshing::get_mesh_shared_domain_cross_section_image),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
             get(handlers::meshing::get_mesh_shared_domain_cross_section_quality),
         )

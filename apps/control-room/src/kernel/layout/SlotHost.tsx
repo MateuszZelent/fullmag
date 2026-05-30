@@ -39,15 +39,16 @@ function ensureLazyCached(manifest: ModuleManifest): void {
  * Renders a resolved module using createElement to avoid
  * react-hooks/static-components lint violations with dynamic component types.
  */
-function MountedModule({
-  manifestId,
+export function MountedModule({
+  manifest,
   kernel,
   slotId,
 }: {
-  manifestId: string;
+  manifest: ModuleManifest;
   kernel: ReturnType<typeof useKernel>;
   slotId: SlotId;
 }) {
+  ensureLazyCached(manifest);
   const [config, setConfigState] = useState<ModuleConfig>({});
   const setConfig = useCallback(
     (patch: Partial<ModuleConfig>) =>
@@ -57,10 +58,10 @@ function MountedModule({
 
   return (
     <Suspense fallback={<div className="fm-slot__loading">Loading…</div>}>
-      {createElement(lazyCache.get(manifestId)!, {
+      {createElement(lazyCache.get(manifest.id)!, {
         config,
         kernel,
-        moduleId: manifestId,
+        moduleId: manifest.id,
         setConfig,
         slotId,
       })}
@@ -87,10 +88,6 @@ export function SlotHost({ slotId, moduleManifest }: SlotHostProps) {
     manifest = registered[0] ?? null;
   }
 
-  if (manifest) {
-    ensureLazyCached(manifest);
-  }
-
   if (!manifest) {
     return (
       <section className="fm-slot" data-slot-id={slotId}>
@@ -101,7 +98,7 @@ export function SlotHost({ slotId, moduleManifest }: SlotHostProps) {
 
   return (
     <section className="fm-slot" data-slot-id={slotId}>
-      <MountedModule kernel={kernel} manifestId={manifest.id} slotId={slotId} />
+      <MountedModule kernel={kernel} manifest={manifest} slotId={slotId} />
     </section>
   );
 }
