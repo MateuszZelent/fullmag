@@ -8,12 +8,22 @@ type ResourceListener = (revision: ResourceRevision) => void;
 
 export class ResourceInvalidationController {
   private readonly revisions = new Map<ResourceKey, ResourceRevision>();
+  private readonly prefixRevisions = new Map<ResourceKey, ResourceRevision>();
   private readonly listeners = new Map<ResourceKey, Set<ResourceListener>>();
 
   constructor(private readonly bus: EventBus<KernelEventMap>) {}
 
   getRevision(resourceKey: ResourceKey): ResourceRevision | null {
-    return this.revisions.get(resourceKey) ?? null;
+    let revision = this.revisions.get(resourceKey) ?? null;
+    for (const [prefix, prefixRevision] of this.prefixRevisions) {
+      if (resourceKey !== prefix && resourceKey.startsWith(prefix)) {
+        revision =
+          revision === null
+            ? prefixRevision
+            : latestRevision(revision, prefixRevision);
+      }
+    }
+    return revision;
   }
 
   invalidate(resourceKey: ResourceKey, revision: ResourceRevision): void {
@@ -37,6 +47,11 @@ export class ResourceInvalidationController {
     resourcePrefix: ResourceKey,
     revision: ResourceRevision,
   ): void {
+    const current = this.prefixRevisions.get(resourcePrefix);
+    if (current !== revision && !isOlderNumericRevision(revision, current)) {
+      this.prefixRevisions.set(resourcePrefix, revision);
+    }
+
     for (const resourceKey of this.listeners.keys()) {
       if (
         resourceKey !== resourcePrefix &&
@@ -60,6 +75,16 @@ export class ResourceInvalidationController {
       }
     };
   }
+}
+
+function latestRevision(
+  current: ResourceRevision,
+  next: ResourceRevision,
+): ResourceRevision {
+  if (typeof current === "number" && typeof next === "number") {
+    return Math.max(current, next);
+  }
+  return next;
 }
 
 function isOlderNumericRevision(

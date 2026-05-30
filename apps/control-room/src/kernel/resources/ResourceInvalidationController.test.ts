@@ -75,4 +75,23 @@ describe("ResourceInvalidationController", () => {
     expect(scalarListener).not.toHaveBeenCalled();
     expect(controller.getRevision("data:fields:m:full")).toBe(7);
   });
+
+  it("applies prefix revisions to child resources subscribed after invalidation", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+
+    controller.invalidatePrefix("data:fields", 7);
+
+    expect(controller.getRevision("data:fields:m:full")).toBe(7);
+  });
+
+  it("does not move numeric child revisions backwards through prefix revisions", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+
+    controller.invalidate("data:fields:m:full", 9);
+    controller.invalidatePrefix("data:fields", 8);
+
+    expect(controller.getRevision("data:fields:m:full")).toBe(9);
+  });
 });

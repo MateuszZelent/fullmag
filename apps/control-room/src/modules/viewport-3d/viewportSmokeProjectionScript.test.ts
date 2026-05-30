@@ -9,6 +9,14 @@ const screenshotScriptUrl = new URL(
   "../../../scripts/screenshot-viewport-3d.mjs",
   import.meta.url,
 );
+const memoryChurnScriptUrl = new URL(
+  "../../../scripts/audit-viewport-3d-memory-churn.mjs",
+  import.meta.url,
+);
+const profileSwitchScriptUrl = new URL(
+  "../../../scripts/audit-viewport-3d-profile-switch.mjs",
+  import.meta.url,
+);
 
 describe("viewport smoke projection round-trip", () => {
   it("toggles relative to the initial projection state", () => {
@@ -121,5 +129,29 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("await installFdmFixtureApi(page, missingSessionFixtureRequests)");
     expect(screenshotScript).toContain("allowMissingSessionSmoke");
     expect(screenshotScript).toContain("isAllowedMissingSessionResponse");
+  });
+
+  it("keeps the memory churn fixture isolated from live realtime websocket events", () => {
+    const memoryChurnScript = readFileSync(memoryChurnScriptUrl, "utf8");
+
+    expect(memoryChurnScript).toContain("disableRealtime: true");
+    expect(memoryChurnScript).toContain(
+      "Cached quantity switching refetched field resources",
+    );
+  });
+
+  it("finds viewport diagnostics by content instead of a fixed HUD index", () => {
+    const profileSwitchScript = readFileSync(profileSwitchScriptUrl, "utf8");
+
+    expect(profileSwitchScript).toContain("openViewport3D(page)");
+    expect(profileSwitchScript).toContain(
+      "spans.some((span) => span.textContent?.includes(\"geo:\"))",
+    );
+    expect(profileSwitchScript).toContain(
+      "spans.find((span) => span.textContent?.includes(\"geo:\"))",
+    );
+    expect(profileSwitchScript).not.toContain(
+      "locator(\".fm-viewport-3d__hud span\").nth(4)",
+    );
   });
 });

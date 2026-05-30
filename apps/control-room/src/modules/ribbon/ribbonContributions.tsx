@@ -259,7 +259,38 @@ const homeTab: RibbonTabContent = {
       subtitle: "layout",
       tone: "neutral",
       actions: [
-        { id: "ws-3d",      icon: icon(Box),       label: "3D",      shortcut: "1", active: true, iconColor: "text-indigo-400", menu: radioMenu("home-workspace", "Workspace mode", "3d", [["3d", "3D viewport"], ["2d", "2D slice"], ["analysis", "Analysis"]]) },
+        {
+          id: "viewport-3d.open",
+          icon: icon(Box),
+          label: "3D",
+          shortcut: "1",
+          iconColor: "text-indigo-400",
+          menu: [
+            {
+              type: "radio-group",
+              id: "home-workspace:radio",
+              label: "Workspace mode",
+              value: "3d",
+              items: [
+                {
+                  commandId: "viewport-3d.open",
+                  label: "3D viewport",
+                  value: "3d",
+                },
+                {
+                  commandId: "cross-section-image.open",
+                  label: "Cross-section image",
+                  value: "cross-section",
+                },
+                {
+                  commandId: "analysis-plots.open",
+                  label: "Analysis",
+                  value: "analysis",
+                },
+              ],
+            },
+          ],
+        },
         {
           id: "home-camera-rotation",
           icon: icon(Camera),
@@ -1566,9 +1597,29 @@ function buildHomeWorkspaceGroup(
     actions: group.actions.map((action) =>
       action.id === "home-camera-rotation"
         ? buildCameraRotationModeAction(context)
+        : action.id === "viewport-3d.open"
+          ? {
+              ...action,
+              menu: action.menu?.map((node) =>
+                node.type === "radio-group" && node.id === "home-workspace:radio"
+                  ? {
+                      ...node,
+                      value: activeViewportMainModuleValue(context),
+                    }
+                  : node,
+              ),
+            }
         : action,
     ),
   };
+}
+
+function activeViewportMainModuleValue(context: RibbonBuildContext): string {
+  const activeModuleId =
+    context.commandContext?.layout?.get().activeViewportMainModuleId;
+  if (activeModuleId === "cross-section-image") return "cross-section";
+  if (activeModuleId === "analysis-plots") return "analysis";
+  return "3d";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

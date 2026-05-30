@@ -24,18 +24,18 @@ describe("ObjectVisualizationController", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
       opacityPercent: 100,
-      pointColor: "#8caaee",
+      pointColor: "var(--fm-border-strong)",
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
-      shaderMonoColor: "#babbf1",
+      shaderMonoColor: "var(--fm-surface-magnetic)",
       shaderVisible: true,
       surfaceColorSource: "orientation",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
-      vectorMonoColor: "#99d1db",
+      vectorMonoColor: "var(--fm-accent)",
       vectorThickness: 1,
       vectorsVisible: false,
-      wireframeColor: "#8caaee",
+      wireframeColor: "var(--fm-border-strong)",
       wireframeOpacityPercent: 100,
       wireframeVisible: true,
     });
@@ -43,18 +43,18 @@ describe("ObjectVisualizationController", () => {
       activeQuantityId: "H_demag",
       geometryScope: "full",
       opacityPercent: 28,
-      pointColor: "#e78284",
+      pointColor: "var(--fm-info)",
       renderMode: "wireframe",
       shaderColorMode: "monochrome",
-      shaderMonoColor: "#ea999c",
+      shaderMonoColor: "var(--fm-airbox-fill)",
       shaderVisible: false,
       surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
-      vectorMonoColor: "#e78284",
+      vectorMonoColor: "var(--fm-info)",
       vectorThickness: 1,
       vectorsVisible: false,
-      wireframeColor: "#e78284",
+      wireframeColor: "var(--fm-airbox-wire)",
       wireframeOpacityPercent: 100,
       wireframeVisible: true,
     });
@@ -289,6 +289,28 @@ describe("ObjectVisualizationController", () => {
     });
     expect(controller.getSnapshot().overrides[visualizationTargetKey(target)])
       .not.toHaveProperty("renderMode");
+  });
+
+  it("stores global render-mode defaults as canonical display flags", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "arch-waveguide", kind: "object" as const };
+
+    controller.patchDefaults("object", renderModePatch("points"));
+
+    expect(controller.getSettings(target)).toMatchObject({
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: false,
+      wireframeVisible: false,
+    });
+    expect(controller.getSnapshot().defaults.object).toMatchObject({
+      pointsVisible: true,
+      shaderVisible: false,
+      wireframeVisible: false,
+    });
+    expect(controller.getSnapshot().defaults.object).not.toHaveProperty(
+      "renderMode",
+    );
   });
 
   it("merges per-target overrides over a caller-provided global base", () => {
@@ -636,6 +658,51 @@ describe("ObjectVisualizationController", () => {
       vectorBudget: 64,
       vectorsVisible: true,
       visible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("derives airbox render mode from canonical display flags", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        targets: {
+          airbox: {
+            label: "Airbox",
+            scope: "airbox",
+            scope_id: "airbox",
+            settings: {
+              active_quantity_id: "H_demag",
+              bounds_visible: false,
+              geometry_scope: "full",
+              opacity: 0.28,
+              point_color: "var(--fm-info)",
+              points_visible: false,
+              render_mode: "surface",
+              surface_color_source: "solid",
+              surface_mono_color: "var(--fm-airbox-fill)",
+              surface_visible: false,
+              vector_alpha: 1,
+              vector_budget: 1200,
+              vector_color_mode: "orientation",
+              vector_length_scale: 1,
+              vector_mono_color: "var(--fm-info)",
+              vector_thickness: 1,
+              vectors_visible: false,
+              visible: true,
+              wireframe_color: "var(--fm-airbox-wire)",
+              wireframe_opacity: 1,
+              wireframe_visible: true,
+            },
+            source: "airbox",
+          },
+          objects: [],
+          parts: [],
+        },
+      }),
+    ).toMatchObject({
+      pointsVisible: false,
+      renderMode: "wireframe",
+      shaderVisible: false,
       wireframeVisible: true,
     });
   });

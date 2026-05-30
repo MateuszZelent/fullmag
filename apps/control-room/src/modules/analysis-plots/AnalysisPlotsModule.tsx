@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  shouldLoadRuntimeScalars,
   useScalarWindowResource,
   useSolverEnergyHistoryResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 
 import {
   ANALYSIS_PLOT_VIEWBOX,
@@ -12,9 +14,21 @@ import {
 } from "./analysisPlotModel";
 
 export default function AnalysisPlotsModule() {
-  const energyHistory = useSolverEnergyHistoryResource(240);
+  const scalarsRevision = useSessionStatusSelector(
+    (status) => status.data?.resources.scalars_revision ?? null,
+  );
+  const loadScalars = shouldLoadRuntimeScalars(
+    true,
+    scalarsRevision === null
+      ? null
+      : { resources: { scalars_revision: scalarsRevision } },
+  );
+  const energyHistory = useSolverEnergyHistoryResource(240, {
+    enabled: loadScalars,
+  });
   const scalarWindow = useScalarWindowResource({
     columns: ["step", "e_total", "mx", "my", "mz"],
+    enabled: loadScalars,
     limit: 240,
   });
   const energyPoints =

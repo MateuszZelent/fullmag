@@ -657,7 +657,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIsNotNone(field_id)
         self.assertEqual(
             list(fields.kinds.values()),
-            ["Distance", "MathEval", "MathEval", "Min", "MathEval", "Min"],
+            ["Distance", "MathEval", "MathEval", "Min", "MathEval", "Max"],
         )
         envelope_expr = fields.strings[(5, "F")]
         self.assertIn("exp(", envelope_expr)
@@ -1653,6 +1653,38 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_options.algorithm_3d, ALGO_3D_HXT)
         self.assertEqual(mesh_options.hmin, 1e-9)
         self.assertEqual(mesh_options.size_fields, [])
+
+    def test_non_component_fallback_skips_edge_corner_size_fields(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=2e-9,
+            arch_height=0.0,
+            name="arch",
+        )
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {},
+                "per_geometry": [
+                    {
+                        "geometry": "arch",
+                        "hmax": 20e-9,
+                        "edge_hmax": 5e-9,
+                        "edge_thickness": 5e-9,
+                        "corner_hmax": 5e-9,
+                        "corner_extent": 5e-9,
+                    }
+                ],
+            },
+            geometries=[geometry],
+            default_hmax=500e-9,
+            component_aware=False,
+        )
+
+        kinds = [field["kind"] for field in mesh_options.size_fields]
+        self.assertNotIn("EdgeDistanceThreshold", kinds)
+        self.assertNotIn("CornerDistanceThreshold", kinds)
 
     def test_transition_distance_zero_disables_auto_transition_field(self) -> None:
         geometry = fm.Box(size=(100e-9, 80e-9, 2e-9), name="film")

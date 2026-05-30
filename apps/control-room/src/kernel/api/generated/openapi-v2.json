@@ -14853,6 +14853,15 @@
           },
           {
             "in": "query",
+            "name": "rotation_degrees",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
             "name": "wireframe",
             "required": false,
             "schema": {

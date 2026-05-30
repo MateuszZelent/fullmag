@@ -20,6 +20,7 @@ import {
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type SurfaceColorSource,
+  type VisualizationStoredTargetPatch,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -186,8 +187,8 @@ function objectVisualizationPanelSnapshotEquals(
 }
 
 function visualizationTargetPatchEquals(
-  previous: VisualizationTargetPatch | undefined,
-  next: VisualizationTargetPatch | undefined,
+  previous: VisualizationStoredTargetPatch | undefined,
+  next: VisualizationStoredTargetPatch | undefined,
 ): boolean {
   if (previous === next) return true;
   if (!previous || !next) return previous === next;
@@ -195,7 +196,7 @@ function visualizationTargetPatchEquals(
   const keys = new Set([
     ...Object.keys(previous),
     ...Object.keys(next),
-  ] as Array<keyof VisualizationTargetPatch>);
+  ] as Array<keyof VisualizationStoredTargetPatch>);
   for (const key of keys) {
     if (!Object.is(previous[key], next[key])) {
       return false;

@@ -1313,6 +1313,7 @@ describe("ControlRoomApi", () => {
       plane: "xy",
       positionPercent: 50,
       resolution: 1024,
+      rotationDegrees: 17,
       shrinkFactor: 0.95,
       wireframe: true,
     });
@@ -1322,7 +1323,7 @@ describe("ControlRoomApi", () => {
       throw new Error(`Expected ready cross-section image, received ${result.status}`);
     }
     expect(observedUrl).toBe(
-      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?color_scale=viridis&filter_expression=%3E%3D0.1&legend=true&metric=gamma&plane=xy&position_percent=50&resolution=1024&shrink_factor=0.95&wireframe=true",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?color_scale=viridis&filter_expression=%3E%3D0.1&legend=true&metric=gamma&plane=xy&position_percent=50&resolution=1024&rotation_degrees=17&shrink_factor=0.95&wireframe=true",
     );
     expect(result.etag).toBe('"cross-section-image-1"');
     expect(result.byteLength).toBe(4);

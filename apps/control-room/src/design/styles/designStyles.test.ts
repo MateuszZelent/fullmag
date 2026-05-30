@@ -1,8 +1,16 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const appRoot = process.cwd();
+const stylesRoot = path.join(appRoot, "src/design/styles");
+const locallyScopedCssVars = new Set([
+  "--depth",
+  "--fm-mesh-build-progress",
+  "--fm-refresh-progress",
+  "--pct",
+  "--radix-accordion-content-height",
+]);
 
 function readAppFile(relativePath: string): string {
   return readFileSync(path.join(appRoot, relativePath), "utf8");
@@ -66,4 +74,35 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-accent: #1e66f5;");
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
+
+  it("defines every shared CSS custom property used by design styles", () => {
+    const defined = new Set<string>();
+    const used = new Set<string>();
+
+    for (const filePath of listCssFiles(stylesRoot)) {
+      const css = readFileSync(filePath, "utf8");
+      for (const match of css.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) {
+        defined.add(match[1]);
+      }
+      for (const match of css.matchAll(/var\(\s*(--[a-zA-Z0-9_-]+)/g)) {
+        used.add(match[1]);
+      }
+    }
+
+    const missing = [...used]
+      .filter((name) => !defined.has(name) && !locallyScopedCssVars.has(name))
+      .sort();
+
+    expect(missing).toEqual([]);
+  });
 });
+
+function listCssFiles(directory: string): string[] {
+  return readdirSync(directory)
+    .flatMap((entry) => {
+      const filePath = path.join(directory, entry);
+      if (statSync(filePath).isDirectory()) return listCssFiles(filePath);
+      return filePath.endsWith(".css") ? [filePath] : [];
+    })
+    .sort();
+}

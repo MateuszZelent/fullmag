@@ -12,6 +12,10 @@ Frontend v2 is an OpenAPI v2 client. The browser contract is the session-scoped 
 
 All JSON transport moves through generated v2 types and generated v2 path/client code. Product semantics live above that in a handwritten facade, resource hooks, command adapters, binary codecs, and domain adapters.
 
+OpenAPI `info.version` and the runtime compatibility contract are not the same value. The current
+Swagger catalog is `2.0.0`; `ControlRoomApi` validates the runtime response header
+`x-api-contract-version: 1.0.0`, and realtime envelopes carry `contract_version: "1.0.0"`.
+
 Current `apps/control-room` implementation:
 
 - `pnpm --dir apps/control-room generate:api` prints backend OpenAPI v2 from `fullmag-api`, generates TypeScript with `openapi-typescript`, and regenerates the `openapi-fetch` transport/path wrapper;

@@ -13,6 +13,8 @@ import {
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { Button } from "@/shared/ui/Button";
 
+import { createObjectUrl, revokeObjectUrl } from "./objectUrl";
+
 const FALLBACK_QUERY: CrossSectionImageQuery = {
   metric: "skewness",
   plane: "xy",
@@ -112,6 +114,7 @@ function crossSectionImageQueryFromPlot(
     plane: plot.plane,
     positionPercent: plot.positionPercent,
     resolution: 1024,
+    rotationDegrees: plot.rotationDegrees,
     shrinkFactor: plot.renderOptions.shrinkFactor,
     wireframe: plot.renderOptions.wireframeVisible,
   };
@@ -119,16 +122,13 @@ function crossSectionImageQueryFromPlot(
 
 function useObjectUrl(data: ArrayBuffer | null, contentType: string): string | null {
   const url = useMemo(() => {
-    if (!data || typeof URL === "undefined") {
-      return null;
-    }
-    return URL.createObjectURL(new Blob([data], { type: contentType }));
+    return createObjectUrl(data, contentType);
   }, [contentType, data]);
 
   useEffect(() => {
     if (!url) return undefined;
     return () => {
-      URL.revokeObjectURL(url);
+      revokeObjectUrl(url);
     };
   }, [url]);
 

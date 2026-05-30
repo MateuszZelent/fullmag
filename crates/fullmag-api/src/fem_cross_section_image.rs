@@ -48,6 +48,7 @@ pub(crate) struct CrossSectionImageRenderOptions {
     pub legend: bool,
     pub metric: CrossSectionQualityMetric,
     pub resolution: u32,
+    pub rotation_degrees: f64,
     pub shrink_factor: f64,
     pub wireframe: bool,
 }
@@ -70,6 +71,86 @@ struct PlotTransform {
     u_min: f64,
     v_max: f64,
     scale: f64,
+}
+
+#[derive(Debug, Clone)]
+struct RenderPolygon {
+    vertices: Vec<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RenderSegment {
+    a: [f64; 2],
+    b: [f64; 2],
+}
+
+#[derive(Debug, Clone)]
+struct RenderGeometry {
+    bounds: SliceOverlayBounds,
+    polygons: Vec<RenderPolygon>,
+    segments: Vec<RenderSegment>,
+}
+
+impl RenderGeometry {
+    fn from_overlay(overlay: &FemSliceOverlay, rotation_degrees: f64) -> Self {
+        if rotation_degrees.abs() < f64::EPSILON {
+            return Self {
+                bounds: overlay.bounds,
+                polygons: overlay
+                    .polygons
+                    .iter()
+                    .map(|polygon| RenderPolygon {
+                        vertices: polygon.vertices.clone(),
+                    })
+                    .collect(),
+                segments: overlay
+                    .segments
+                    .iter()
+                    .map(|segment| RenderSegment {
+                        a: segment.a,
+                        b: segment.b,
+                    })
+                    .collect(),
+            };
+        }
+
+        let center = [
+            (overlay.bounds.u_min + overlay.bounds.u_max) * 0.5,
+            (overlay.bounds.v_min + overlay.bounds.v_max) * 0.5,
+        ];
+        let angle = rotation_degrees.to_radians();
+        let (sin, cos) = angle.sin_cos();
+        let rotate = |point: [f64; 2]| -> [f64; 2] {
+            let du = point[0] - center[0];
+            let dv = point[1] - center[1];
+            [
+                center[0] + du * cos - dv * sin,
+                center[1] + du * sin + dv * cos,
+            ]
+        };
+
+        let polygons = overlay
+            .polygons
+            .iter()
+            .map(|polygon| RenderPolygon {
+                vertices: polygon.vertices.iter().copied().map(rotate).collect(),
+            })
+            .collect::<Vec<_>>();
+        let segments = overlay
+            .segments
+            .iter()
+            .map(|segment| RenderSegment {
+                a: rotate(segment.a),
+                b: rotate(segment.b),
+            })
+            .collect::<Vec<_>>();
+        let bounds = bounds_for_geometry(&polygons, &segments).unwrap_or(overlay.bounds);
+        Self {
+            bounds,
+            polygons,
+            segments,
+        }
+    }
 }
 
 impl PlotTransform {
@@ -112,6 +193,7 @@ impl PlotTransform {
 pub(crate) fn validate_cross_section_image_query(
     position_percent: f64,
     resolution: u32,
+    rotation_degrees: f64,
     shrink_factor: f64,
 ) -> Result<(), ApiError> {
     if !position_percent.is_finite() || !(0.0..=100.0).contains(&position_percent) {
@@ -122,6 +204,11 @@ pub(crate) fn validate_cross_section_image_query(
     if !matches!(resolution, 512 | 1024 | 2048) {
         return Err(ApiError::bad_request(
             "invalid_query: resolution must be one of 512, 1024, 2048",
+        ));
+    }
+    if !rotation_degrees.is_finite() || !(-180.0..=180.0).contains(&rotation_degrees) {
+        return Err(ApiError::bad_request(
+            "invalid_query: rotation_degrees must be finite and in [-180, 180]",
         ));
     }
     if !shrink_factor.is_finite()
@@ -165,7 +252,8 @@ pub(crate) fn render_cross_section_png(
 
         let legend_width = if options.legend { width.min(170) } else { 0 };
         let plot_width = width.saturating_sub(legend_width).max(1);
-        let bounds = padded_bounds(overlay.bounds);
+        let geometry = RenderGeometry::from_overlay(overlay, options.rotation_degrees);
+        let bounds = padded_bounds(geometry.bounds);
         let transform = PlotTransform::new(bounds, plot_width, height);
         root.draw(&Rectangle::new(
             [
@@ -204,7 +292,7 @@ pub(crate) fn render_cross_section_png(
         });
 
         let span = (max - min).abs().max(f32::EPSILON);
-        for (polygon, value) in overlay
+        for (polygon, value) in geometry
             .polygons
             .iter()
             .zip(quality_values.iter().copied())
@@ -223,7 +311,7 @@ pub(crate) fn render_cross_section_png(
         }
 
         if options.wireframe {
-            for segment in &overlay.segments {
+            for segment in &geometry.segments {
                 root.draw(&PathElement::new(
                     vec![
                         transform.point((segment.a[0], segment.a[1])),
@@ -285,6 +373,39 @@ fn padded_bounds(bounds: SliceOverlayBounds) -> SliceOverlayBounds {
         v_min: bounds.v_min - v_span * 0.02,
         v_max: bounds.v_max + v_span * 0.02,
     }
+}
+
+fn bounds_for_geometry(
+    polygons: &[RenderPolygon],
+    segments: &[RenderSegment],
+) -> Option<SliceOverlayBounds> {
+    let mut u_min = f64::INFINITY;
+    let mut u_max = f64::NEG_INFINITY;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    let mut seen = false;
+
+    for point in polygons
+        .iter()
+        .flat_map(|polygon| polygon.vertices.iter().copied())
+        .chain(segments.iter().flat_map(|segment| [segment.a, segment.b]))
+    {
+        if !point[0].is_finite() || !point[1].is_finite() {
+            continue;
+        }
+        seen = true;
+        u_min = u_min.min(point[0]);
+        u_max = u_max.max(point[0]);
+        v_min = v_min.min(point[1]);
+        v_max = v_max.max(point[1]);
+    }
+
+    seen.then_some(SliceOverlayBounds {
+        u_min,
+        u_max,
+        v_min,
+        v_max,
+    })
 }
 
 fn axis_label(axis: &str) -> String {
@@ -848,6 +969,7 @@ mod tests {
                 legend: true,
                 metric: CrossSectionQualityMetric::Volume,
                 resolution: 512,
+                rotation_degrees: 0.0,
                 shrink_factor: 1.0,
                 wireframe: true,
             },

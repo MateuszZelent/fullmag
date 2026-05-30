@@ -1162,6 +1162,7 @@ export class ControlRoomApi {
       plane: query.plane,
       position_percent: query.positionPercent,
       resolution: query.resolution,
+      rotation_degrees: query.rotationDegrees,
       shrink_factor: query.shrinkFactor,
       wireframe: query.wireframe,
     });

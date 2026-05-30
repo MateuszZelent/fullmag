@@ -72,6 +72,7 @@ pub struct MeshSharedDomainCrossSectionImageQuery {
     pub metric: CrossSectionQualityMetric,
     pub color_scale: Option<CrossSectionImageColorScale>,
     pub resolution: Option<u32>,
+    pub rotation_degrees: Option<f64>,
     pub wireframe: Option<bool>,
     pub legend: Option<bool>,
     pub shrink_factor: Option<f64>,
@@ -642,10 +643,16 @@ pub async fn get_mesh_shared_domain_cross_section_image(
 ) -> Result<axum::response::Response, ApiError> {
     let color_scale = query.color_scale.unwrap_or_default();
     let resolution = query.resolution.unwrap_or(1024);
+    let rotation_degrees = query.rotation_degrees.unwrap_or(0.0);
     let wireframe = query.wireframe.unwrap_or(true);
     let legend = query.legend.unwrap_or(true);
     let shrink_factor = query.shrink_factor.unwrap_or(1.0);
-    validate_cross_section_image_query(query.position_percent, resolution, shrink_factor)?;
+    validate_cross_section_image_query(
+        query.position_percent,
+        resolution,
+        rotation_degrees,
+        shrink_factor,
+    )?;
 
     let snapshot = current_snapshot(&state).await?;
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
@@ -718,6 +725,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
             legend,
             metric: query.metric,
             resolution,
+            rotation_degrees,
             shrink_factor,
             wireframe,
         },
@@ -726,13 +734,14 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
     let filter = query.filter_expression.as_deref().unwrap_or("");
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "mesh-shared-domain-cross-section-image:{}:{generation_id}:{}:{:.17e}:{}:{}:{}:{}:{:.17e}:{}:{}:{}:png-v1",
+        "mesh-shared-domain-cross-section-image:{}:{generation_id}:{}:{:.17e}:{}:{}:{}:{:.17e}:{}:{:.17e}:{}:{}:{}:png-v2",
         snapshot.mesh_revision,
         overlay.plane.as_str(),
         overlay.cut_norm,
         query.metric.as_str(),
         color_scale.as_str(),
         resolution,
+        rotation_degrees,
         wireframe,
         shrink_factor,
         legend,

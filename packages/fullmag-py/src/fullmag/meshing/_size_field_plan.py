@@ -86,9 +86,11 @@ def _perimeter_refinement_config(
         return None
 
     if not component_aware:
-        raise ValueError(
-            f"{geometry.geometry_name}: edge/corner refinement currently requires component-aware shared-domain meshing"
+        emit_progress(
+            f"Gmsh: warning - edge/corner refinement for '{geometry.geometry_name}' "
+            "requires component-aware shared-domain meshing; skipping in fallback path"
         )
+        return None
 
     if (edge_hmax is None) != (edge_thickness is None):
         raise ValueError(

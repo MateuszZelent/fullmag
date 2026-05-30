@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
+use crate::schemas::realtime::{RealtimeResourceName, RealtimeResourceRevisionMap};
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
     CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
@@ -9526,6 +9527,100 @@ async fn asyncapi_document_returns_200() {
         json["channels"]["/v2/sessions/current/events/ws"]["subscribe"]["operationId"],
         "subscribeCurrentLiveRealtime"
     );
+}
+
+#[tokio::test]
+async fn asyncapi_document_matches_realtime_rust_schema_names() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/platform/asyncapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let async_revision_properties = json["components"]["schemas"]["RealtimeResourceRevisionMap"]
+        ["properties"]
+        .as_object()
+        .expect("revision map properties should be an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let rust_revision_properties = serde_json::to_value(RealtimeResourceRevisionMap {
+        topology_revision: 1,
+        field_catalog_revision: 1,
+        field_revision: 1,
+        slice_revision: 1,
+        artifact_revision: 1,
+        command_completion_revision: 1,
+        fields_revision: 1,
+        scalars_revision: 1,
+        domain_generation_id: 1,
+        artifacts_revision: 1,
+        engine_log_revision: 1,
+        solver_profile_revision: 1,
+        display_revision: 1,
+        workspace_revision: 1,
+        mesh_revision: 1,
+        mesh_build_revision: 1,
+        commands_revision: 1,
+        stages_revision: 1,
+        scene_revision: Some(1),
+        visualization_state_revision: 1,
+    })
+    .expect("revision map should serialize")
+    .as_object()
+    .expect("revision map should serialize as an object")
+    .keys()
+    .cloned()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(async_revision_properties, rust_revision_properties);
+
+    let async_resource_names = json["components"]["schemas"]["RealtimeResourceChange"]
+        ["properties"]["resource"]["enum"]
+        .as_array()
+        .expect("resource enum should be an array")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("resource enum values should be strings")
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    let rust_resource_names = [
+        RealtimeResourceName::Display,
+        RealtimeResourceName::Workspace,
+        RealtimeResourceName::Fields,
+        RealtimeResourceName::Scalars,
+        RealtimeResourceName::Domain,
+        RealtimeResourceName::Artifacts,
+        RealtimeResourceName::Logs,
+        RealtimeResourceName::Diagnostics,
+        RealtimeResourceName::Mesh,
+        RealtimeResourceName::MeshBuilds,
+        RealtimeResourceName::Commands,
+        RealtimeResourceName::Stages,
+        RealtimeResourceName::SceneDocument,
+        RealtimeResourceName::VisualizationState,
+        RealtimeResourceName::VisualizationClientAcks,
+    ]
+    .into_iter()
+    .map(|name| {
+        serde_json::to_value(name)
+            .expect("resource name should serialize")
+            .as_str()
+            .expect("resource name should serialize as a string")
+            .to_string()
+    })
+    .collect::<BTreeSet<_>>();
+    assert_eq!(async_resource_names, rust_resource_names);
 }
 
 #[tokio::test]

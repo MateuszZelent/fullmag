@@ -6,6 +6,7 @@ import {
   openApiV2PathLiterals,
   openApiV2Path,
 } from "./generated/openapi-v2-paths";
+import * as apiPaths from "./apiPaths";
 
 describe("generated OpenAPI v2 transport", () => {
   it("is generated from the backend v2 resource tree", () => {
@@ -46,5 +47,17 @@ describe("generated OpenAPI v2 transport", () => {
     expect(calls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/status",
     ]);
+  });
+
+  it("promotes every generated OpenAPI path through the handwritten API path boundary", () => {
+    const promotedPaths = new Set(
+      Object.values(apiPaths).flatMap((value) =>
+        typeof value === "string" && value.startsWith("/v2/") ? [value] : [],
+      ),
+    );
+
+    expect(
+      openApiV2PathLiterals.filter((path) => !promotedPaths.has(path)),
+    ).toEqual([]);
   });
 });

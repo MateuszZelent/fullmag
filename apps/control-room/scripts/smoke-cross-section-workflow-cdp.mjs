@@ -114,6 +114,29 @@ try {
   if (!imageState?.complete || imageState.naturalWidth <= 0 || imageState.naturalHeight <= 0) {
     throw new Error(`Cross-section PNG did not load: ${JSON.stringify(imageState)}`);
   }
+  await assertNoViewport3DCanvas("Cross-section image tab");
+
+  const imageRequest = fixtureRequests.find(
+    (request) => request.path === CROSS_SECTION_IMAGE_PATH,
+  );
+  if (!imageRequest) {
+    throw new Error("Cross-section image module did not request the PNG resource.");
+  }
+  const imageParams = new URLSearchParams(imageRequest.search);
+  if (imageParams.get("rotation_degrees") !== "17") {
+    throw new Error(
+      `Cross-section PNG request did not include rotation_degrees=17: ${imageRequest.search}`,
+    );
+  }
+
+  const non3dRequestStart = fixtureRequests.length;
+  await clickTabByText("Analysis");
+  await waitForText(".fm-analysis-plots", "No scalar samples");
+  await assertNoViewport3DCanvas("Analysis tab");
+  assertNo3DResourceRequestsSince(non3dRequestStart, "Analysis tab");
+
+  await clickTabByText("3D Viewport");
+  await waitForWebGLCanvasReady(".fm-viewport-3d canvas", "3D viewport after tab restore");
 
   const requestedPaths = new Set(fixtureRequests.map((request) => request.path));
   if (!requestedPaths.has(CROSS_SECTION_IMAGE_PATH)) {
@@ -132,6 +155,7 @@ try {
       "explorer=draft+plot-1+parameters",
       "inspector=commit",
       "cross-section-image=png",
+      "analysis=no-3d",
       `requests=${fixtureRequests.length}`,
     ].join(" "),
   );
@@ -151,7 +175,11 @@ async function startFixtureServer() {
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
     const path = requestUrl.pathname;
-    fixtureRequests.push({ method: request.method ?? "GET", path });
+    fixtureRequests.push({
+      method: request.method ?? "GET",
+      path,
+      search: requestUrl.search,
+    });
 
     if (request.method === "OPTIONS") {
       writeEmpty(response, 204);
@@ -647,6 +675,46 @@ async function waitForCanvasCompositeChange(
     ? `${lastDelta.changedPixels}/${lastDelta.sampledPixels} sampled pixels changed; threshold=${lastDelta.minimumChangedPixels}`
     : "no canvas sample was collected";
   throw new Error(`${label} timed out: ${suffix}.`);
+}
+
+async function assertNoViewport3DCanvas(label) {
+  const state = await evaluate(
+    `() => ({
+      canvasCount: document.querySelectorAll(".fm-viewport-3d canvas").length,
+      viewportCount: document.querySelectorAll(".fm-viewport-3d").length
+    })`,
+  );
+  if (state.viewportCount > 0 || state.canvasCount > 0) {
+    throw new Error(
+      `${label} still has a 3D viewport mounted: ${JSON.stringify(state)}`,
+    );
+  }
+}
+
+function assertNo3DResourceRequestsSince(startIndex, label) {
+  const unexpected = fixtureRequests
+    .slice(startIndex)
+    .filter((request) => is3DOnlyResourcePath(request.path));
+  if (unexpected.length > 0) {
+    throw new Error(
+      `${label} triggered 3D-only resources: ${unexpected.map(formatRequest).join(", ")}`,
+    );
+  }
+}
+
+function is3DOnlyResourcePath(path) {
+  return (
+    path === "/v2/sessions/current/data/domain/meta" ||
+    path === "/v2/sessions/current/data/domain/topology" ||
+    path === "/v2/sessions/current/model/scene" ||
+    path === "/v2/sessions/current/model/universe" ||
+    path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest" ||
+    path.startsWith("/v2/sessions/current/data/fields")
+  );
+}
+
+function formatRequest(request) {
+  return `${request.method} ${request.path}${request.search ?? ""}`;
 }
 
 async function waitForCondition(label, predicate) {

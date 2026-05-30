@@ -135,20 +135,6 @@ def _rectangular_airbox_fraction_expression(
     return f"Min(Max(Max({axes[0]}, {axes[1]}), {axes[2]}), 1)"
 
 
-def _airbox_envelope_inner_size(
-    *,
-    h_inner: float,
-    h_outer: float,
-    grading_ratio: float,
-) -> float:
-    if h_outer <= h_inner or grading_ratio <= 1.0:
-        return h_inner
-    # The surface-distance field owns the very fine near-interface halo.  The
-    # rectangular envelope only prevents the rest of the airbox from becoming a
-    # flat h_outer plateau, so start it at a coarse-but-still-constraining size.
-    return min(h_outer, max(h_inner, h_outer / (grading_ratio ** 4)))
-
-
 def _add_rectangular_airbox_envelope_field(
     gmsh: Any,
     *,
@@ -169,17 +155,12 @@ def _add_rectangular_airbox_envelope_field(
     if fraction is None:
         return None
 
-    envelope_inner = _airbox_envelope_inner_size(
-        h_inner=float(h_inner),
-        h_outer=float(h_outer),
-        grading_ratio=float(grading_ratio),
-    )
     field_id = gmsh.model.mesh.field.add("MathEval")
     gmsh.model.mesh.field.setString(
         field_id,
         "F",
         _geometric_size_profile_expression(
-            size_min=envelope_inner,
+            size_min=float(h_inner),
             size_max=float(h_outer),
             ramp=fraction,
             growth_rate=float(grading_ratio),
@@ -266,7 +247,7 @@ def _add_airbox_grading_field(
     if envelope_field is None:
         return local_field
 
-    combined = gmsh.model.mesh.field.add("Min")
+    combined = gmsh.model.mesh.field.add("Max")
     gmsh.model.mesh.field.setNumbers(
         combined,
         "FieldsList",

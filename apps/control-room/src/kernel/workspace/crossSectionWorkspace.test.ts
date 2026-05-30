@@ -90,6 +90,17 @@ describe("crossSectionWorkspace", () => {
     });
   });
 
+  it("keeps an empty draft name editable and falls back when committing", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+
+    const draft = updateCrossSectionDraft({ name: "" });
+    const plot = commitCrossSectionDraft();
+
+    expect(draft?.name).toBe("");
+    expect(plot?.name).toBe("Plot 1");
+  });
+
   it("resolves active frame rotation from an editable draft before saved plots", () => {
     resetCrossSectionWorkspaceForTests();
     beginCrossSectionDraft(visualizationState);

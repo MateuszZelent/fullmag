@@ -49,13 +49,14 @@ describe("cross-section resources", () => {
           plane: "yz",
           positionPercent: 75,
           resolution: 2048,
+          rotationDegrees: 17,
           shrinkFactor: 0.95,
           wireframe: true,
         },
         "image-rev",
       ),
     ).toBe(
-      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH}?color_scale=coolwarm&filter_expression=%3E%3D0.1&legend=false&metric=sicn&plane=yz&position_percent=75&resolution=2048&shrink_factor=0.95&wireframe=true#revision=image-rev`,
+      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH}?color_scale=coolwarm&filter_expression=%3E%3D0.1&legend=false&metric=sicn&plane=yz&position_percent=75&resolution=2048&rotation_degrees=17&shrink_factor=0.95&wireframe=true#revision=image-rev`,
     );
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { __analysisPlotsTestUtils } from "./AnalysisPlotsModule";
 import { buildLineChartModel } from "./analysisPlotModel";
 
 describe("analysisPlotModel", () => {
@@ -21,5 +22,27 @@ describe("analysisPlotModel", () => {
 
   it("returns null without finite samples", () => {
     expect(buildLineChartModel([{ x: Number.NaN, y: 1 }])).toBeNull();
+  });
+});
+
+describe("analysis plot scalar selection", () => {
+  it("uses physical scalar columns before time metadata", () => {
+    expect(
+      __analysisPlotsTestUtils.resolveScalarValueColumn([
+        "step",
+        "time",
+        "solver_dt",
+        "mx",
+      ]),
+    ).toBe(3);
+    expect(
+      __analysisPlotsTestUtils.scalarPointsFromWindow({
+        columns: ["step", "time", "solver_dt", "e_total"],
+        rows: [[4, 0.25, 0.01, -12.5]],
+      }),
+    ).toMatchObject({
+      points: [{ x: 4, y: -12.5 }],
+      yLabel: "e_total",
+    });
   });
 });

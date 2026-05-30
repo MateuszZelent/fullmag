@@ -27,6 +27,7 @@ interface RealtimeClientOptions {
 
 export class RealtimeClient {
   private closedByClient = false;
+  private lastSeenSeq: number | null = null;
   private reconnectCancel: (() => void) | null = null;
   private socket: RealtimeWebSocketLike | null = null;
   private readonly handleClose = () => {
@@ -59,6 +60,7 @@ export class RealtimeClient {
         status: null,
       });
       this.bridge.handleEvent(parsed);
+      this.recordSequence(parsed);
     } catch {
       this.options.diagnostics?.record({
         byteLength,
@@ -91,10 +93,11 @@ export class RealtimeClient {
     this.reconnectCancel?.();
     this.reconnectCancel = null;
 
+    const url = this.connectionUrl();
     const socket = this.options.createSocket?.(
-      this.options.url,
+      url,
       FULLMAG_LIVE_SUBPROTOCOL,
-    ) ?? new WebSocket(this.options.url, FULLMAG_LIVE_SUBPROTOCOL);
+    ) ?? new WebSocket(url, FULLMAG_LIVE_SUBPROTOCOL);
     this.options.diagnostics?.record({
       byteLength: byteLengthFromText(FULLMAG_LIVE_SUBPROTOCOL),
       channel: "websocket",
@@ -104,7 +107,7 @@ export class RealtimeClient {
       messageType: FULLMAG_LIVE_SUBPROTOCOL,
       method: "WS",
       outcome: "sent",
-      path: pathFromUrl(this.options.url),
+      path: pathFromUrl(url),
       requestId: "websocket",
       status: null,
     });
@@ -141,6 +144,30 @@ export class RealtimeClient {
         this.connect();
       }
     }, REALTIME_RECONNECT_DELAY_MS);
+  }
+
+  private connectionUrl(): string {
+    if (this.lastSeenSeq === null) {
+      return this.options.url;
+    }
+
+    try {
+      const url = new URL(this.options.url);
+      url.searchParams.set("after_seq", String(this.lastSeenSeq));
+      return url.toString();
+    } catch {
+      const separator = this.options.url.includes("?") ? "&" : "?";
+      return `${this.options.url}${separator}after_seq=${this.lastSeenSeq}`;
+    }
+  }
+
+  private recordSequence(event: Record<string, unknown>): void {
+    const seq = event.seq;
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) {
+      return;
+    }
+
+    this.lastSeenSeq = Math.max(this.lastSeenSeq ?? 0, seq);
   }
 }
 

@@ -57,6 +57,7 @@ export interface CrossSectionImageQuery {
   plane: CrossSectionPlane;
   positionPercent: number;
   resolution?: 512 | 1024 | 2048;
+  rotationDegrees?: number;
   shrinkFactor?: number;
   wireframe?: boolean;
 }

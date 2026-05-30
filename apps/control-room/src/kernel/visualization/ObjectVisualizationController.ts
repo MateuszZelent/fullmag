@@ -63,17 +63,21 @@ export interface VisualizationTargetSettings {
 }
 
 export type VisualizationTargetPatch = Partial<VisualizationTargetSettings>;
+export type VisualizationStoredTargetPatch = Omit<
+  VisualizationTargetPatch,
+  "renderMode"
+>;
 
 export interface ObjectVisualizationSnapshot {
-  defaults: Partial<Record<VisualizationTargetKind, VisualizationTargetPatch>>;
-  overrides: Record<string, VisualizationTargetPatch>;
+  defaults: Partial<Record<VisualizationTargetKind, VisualizationStoredTargetPatch>>;
+  overrides: Record<string, VisualizationStoredTargetPatch>;
   version: number;
 }
 
 export interface ResolvedTargetVisualization {
   baseSettings: VisualizationTargetSettings;
   effectiveSettings: VisualizationTargetSettings;
-  override: VisualizationTargetPatch | null;
+  override: VisualizationStoredTargetPatch | null;
   revision: string;
   settings: VisualizationTargetSettings;
 }
@@ -106,12 +110,12 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
   geometryScope: "surface",
   opacityPercent: 100,
-  pointColor: "#8caaee",
+  pointColor: "var(--fm-border-strong)",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "surface+edges",
   shaderColorMode: "orientation",
-  shaderMonoColor: "#babbf1",
+  shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
   surfaceColorSource: "orientation",
   vectorAlphaPercent: 100,
@@ -119,13 +123,13 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
-  vectorMonoColor: "#99d1db",
+  vectorMonoColor: "var(--fm-accent)",
   vectorSurfaceOffsetEnabled: false,
   vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
-  wireframeColor: "#8caaee",
+  wireframeColor: "var(--fm-border-strong)",
   wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
@@ -135,12 +139,12 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
   geometryScope: "full",
   opacityPercent: 28,
-  pointColor: "#e78284",
+  pointColor: "var(--fm-info)",
   pointsVisible: false,
   primitiveVisible: false,
   renderMode: "wireframe",
   shaderColorMode: "monochrome",
-  shaderMonoColor: "#ea999c",
+  shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: false,
   surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
@@ -148,13 +152,13 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorCenteringEnabled: true,
   vectorColorMode: "orientation",
   vectorLengthScale: 1,
-  vectorMonoColor: "#e78284",
+  vectorMonoColor: "var(--fm-info)",
   vectorSurfaceOffsetEnabled: false,
   vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
-  wireframeColor: "#e78284",
+  wireframeColor: "var(--fm-airbox-wire)",
   wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
@@ -170,10 +174,10 @@ const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
 export class ObjectVisualizationController {
   private readonly defaults = new Map<
     VisualizationTargetKind,
-    VisualizationTargetPatch
+    VisualizationStoredTargetPatch
   >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
-  private readonly overrides = new Map<string, VisualizationTargetPatch>();
+  private readonly overrides = new Map<string, VisualizationStoredTargetPatch>();
   private snapshot: ObjectVisualizationSnapshot = {
     defaults: {},
     overrides: {},
@@ -406,7 +410,7 @@ export function resolveTargetVisualization({
 function resolveVisualizationStateTargetOverride(
   state: VisualizationStateResource | null | undefined,
   target: VisualizationTargetRef,
-): VisualizationTargetPatch | null {
+): VisualizationStoredTargetPatch | null {
   const override = state?.overrides?.find(
     (entry) => entry.scope === target.kind && entry.scope_id === target.id,
   );
@@ -414,7 +418,7 @@ function resolveVisualizationStateTargetOverride(
   const display = override.display ?? null;
   const style = override.style ?? null;
   const visible = display?.visible ?? override.visible;
-  const patch: VisualizationTargetPatch = {
+  const patch: VisualizationStoredTargetPatch = {
     ...(display?.geometry_scope === undefined || display.geometry_scope === null
       ? {}
       : { geometryScope: display.geometry_scope }),
@@ -1088,7 +1092,7 @@ export function visualizationTargetKey(target: VisualizationTargetRef): string {
 
 function normalizePatch(
   patch: VisualizationTargetPatch,
-): VisualizationTargetPatch {
+): VisualizationStoredTargetPatch {
   const normalized = Object.fromEntries(
     Object.entries(patch).filter(([, value]) => value !== undefined),
   ) as VisualizationTargetPatch;
@@ -1261,11 +1265,11 @@ function resolveRenderMode({
 }
 
 function samePatch(
-  left: VisualizationTargetPatch,
-  right: VisualizationTargetPatch,
+  left: VisualizationStoredTargetPatch,
+  right: VisualizationStoredTargetPatch,
 ): boolean {
-  const leftKeys = Object.keys(left) as Array<keyof VisualizationTargetPatch>;
-  const rightKeys = Object.keys(right) as Array<keyof VisualizationTargetPatch>;
+  const leftKeys = Object.keys(left) as Array<keyof VisualizationStoredTargetPatch>;
+  const rightKeys = Object.keys(right) as Array<keyof VisualizationStoredTargetPatch>;
   if (leftKeys.length !== rightKeys.length) {
     return false;
   }

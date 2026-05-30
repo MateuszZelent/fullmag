@@ -123,4 +123,44 @@ describe("RealtimeClient", () => {
     sockets[1].emit("close", "");
     expect(reconnectCallbacks).toHaveLength(1);
   });
+
+  it("reconnects with the last processed sequence cursor", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const sockets: FakeWebSocket[] = [];
+    const socketUrls: string[] = [];
+    const reconnectCallbacks: Array<() => void> = [];
+    const eventsUrl = `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`;
+    const client = new RealtimeClient({
+      bridge: new RealtimeInvalidationBridge(resources),
+      createSocket: (url) => {
+        socketUrls.push(url);
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      scheduleReconnect: (callback) => {
+        reconnectCallbacks.push(callback);
+        return () => {};
+      },
+      url: eventsUrl,
+    });
+
+    client.connect();
+    sockets[0].emit(
+      "message",
+      JSON.stringify({
+        payload: { current_seq: 14 },
+        seq: 14,
+        type: "heartbeat",
+      }),
+    );
+    sockets[0].emit("close", "");
+    reconnectCallbacks[0]();
+
+    expect(socketUrls).toEqual([
+      eventsUrl,
+      `${eventsUrl}?after_seq=14`,
+    ]);
+  });
 });

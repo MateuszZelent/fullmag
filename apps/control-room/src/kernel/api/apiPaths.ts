@@ -3,6 +3,34 @@ import { openApiV2Path } from "./generated/openapi-v2-paths";
 export const API_CONTRACT_VERSION_HEADER = "x-api-contract-version";
 export const EXPECTED_API_CONTRACT_VERSION = "1.0.0";
 
+export const PLATFORM_INDEX_PATH = openApiV2Path(
+  "/v2/",
+);
+
+export const PLATFORM_ASYNCAPI_PATH = openApiV2Path(
+  "/v2/platform/asyncapi.json",
+);
+
+export const PLATFORM_ASYNCAPI_DOCS_PATH = openApiV2Path(
+  "/v2/platform/docs/asyncapi",
+);
+
+export const PLATFORM_CAPABILITIES_PATH = openApiV2Path(
+  "/v2/platform/capabilities",
+);
+
+export const PLATFORM_HEALTH_PATH = openApiV2Path(
+  "/v2/platform/health",
+);
+
+export const PLATFORM_OPENAPI_PATH = openApiV2Path(
+  "/v2/platform/openapi.json",
+);
+
+export const SESSIONS_PATH = openApiV2Path(
+  "/v2/sessions",
+);
+
 export const SESSION_EVENTS_WS_PATH = openApiV2Path(
   "/v2/sessions/current/events/ws",
 );
@@ -19,8 +47,52 @@ export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
 
+export const ANALYSIS_EIGEN_BRANCHES_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigen/branches.v2",
+);
+
+export const ANALYSIS_EIGEN_DISPERSION_CSV_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigen/dispersion.csv",
+);
+
+export const ANALYSIS_EIGEN_MODE_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigen/modes/{sample_index}/{mode_index}",
+);
+
+export const ANALYSIS_EIGEN_SPECTRUM_V2_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigen/spectrum.v2",
+);
+
+export const ANALYSIS_EIGENMODES_BRANCHES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigenmodes/branches",
+);
+
+export const ANALYSIS_EIGENMODES_DISPERSION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigenmodes/dispersion",
+);
+
+export const ANALYSIS_EIGENMODE_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigenmodes/modes/{mode_id}",
+);
+
+export const ANALYSIS_EIGENMODES_SPECTRUM_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/eigenmodes/spectrum",
+);
+
 export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
+);
+
+export const DATA_QUANTITIES_PATH = openApiV2Path(
+  "/v2/sessions/current/data/quantities",
+);
+
+export const DATA_ARTIFACTS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/artifacts",
+);
+
+export const DATA_ARTIFACT_PATH = openApiV2Path(
+  "/v2/sessions/current/data/artifacts/{artifact_id}",
 );
 
 export const DATA_SCALARS_PATH = openApiV2Path(
@@ -33,6 +105,58 @@ export const DATA_DOMAIN_META_PATH = openApiV2Path(
 
 export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/topology",
+);
+
+export const DATA_DOMAIN_SLICE_MESH_OVERLAY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/domain/slice/mesh-overlay",
+);
+
+export const DATA_FIELD_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/meta",
+);
+
+export const DATA_FIELD_PROJECTION_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/meta",
+);
+
+export const DATA_FIELD_PROJECTION_SCALAR_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/scalar",
+);
+
+export const DATA_FIELD_PROJECTION_MATRIX_JSON_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json",
+);
+
+export const DATA_FIELD_PROJECTION_RENDER_PNG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/render.png",
+);
+
+export const DATA_FIELD_PROJECTION_EMPTY_MASK_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask",
+);
+
+export const DATA_FIELD_PROJECTION_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/projection/profile",
+);
+
+export const DATA_FIELD_SLICE_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta",
+);
+
+export const DATA_FIELD_SLICE_SCALAR_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/scalar",
+);
+
+export const DATA_FIELD_SLICE_MATRIX_JSON_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json",
+);
+
+export const DATA_FIELD_SLICE_RENDER_PNG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png",
+);
+
+export const DATA_FIELD_SLICE_ARROWS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/arrows",
 );
 
 export const DATA_FIELD_VECTOR_PATH = openApiV2Path(
@@ -83,6 +207,10 @@ export const MESHING_CAPABILITIES_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/capabilities",
 );
 
+export const MESHING_PERIODIC_PAIRS_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+);
+
 export const MESHING_SEMANTICS_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/semantics",
 );
@@ -113,6 +241,14 @@ export const MESHING_OBJECT_QUALITY_PATH = openApiV2Path(
 
 export const MESHING_OBJECT_SIZE_FIELD_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field",
+);
+
+export const MESHING_INTERFACE_REPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/report",
+);
+
+export const MESHING_INTERFACE_QUALITY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/quality",
 );
 
 export const MESHING_UNIVERSE_REPORT_PATH = openApiV2Path(
@@ -147,6 +283,10 @@ export const MESHING_OBJECT_POLICY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/policies/objects/{object_id}",
 );
 
+export const MESHING_INTERFACE_POLICY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/policies/interfaces/{interface_id}",
+);
+
 export const MESHING_UNIVERSE_POLICY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/policies/universe",
 );
@@ -163,12 +303,20 @@ export const MODEL_UNIVERSE_PATH = openApiV2Path(
   "/v2/sessions/current/model/universe",
 );
 
+export const MODEL_UNIVERSE_FIT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/universe/fit",
+);
+
 export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
 );
 
 export const MODEL_STUDY_PATH = openApiV2Path(
   "/v2/sessions/current/model/study",
+);
+
+export const MODEL_SCRIPT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/script",
 );
 
 export const MODEL_TRANSACTIONS_PATH = openApiV2Path(
@@ -239,8 +387,28 @@ export const VISUALIZATION_STATE_PATH = openApiV2Path(
   "/v2/sessions/current/visualization/state",
 );
 
+export const VISUALIZATION_DISPLAY_PATH = openApiV2Path(
+  "/v2/sessions/current/visualization/display",
+);
+
 export const VISUALIZATION_CLIENT_ACKS_PATH = openApiV2Path(
   "/v2/sessions/current/visualization/client-acks",
+);
+
+export const WORKSPACE_LAYOUT_PATH = openApiV2Path(
+  "/v2/sessions/current/workspace/layout",
+);
+
+export const WORKSPACE_RIBBON_PATH = openApiV2Path(
+  "/v2/sessions/current/workspace/ribbon",
+);
+
+export const WORKSPACE_SELECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/workspace/selection",
+);
+
+export const WORKSPACE_TREE_ACTIVE_NODE_PATH = openApiV2Path(
+  "/v2/sessions/current/workspace/tree/active-node",
 );
 
 export const SIMULATION_COMMANDS_PATH = openApiV2Path(
@@ -301,4 +469,12 @@ export const PERSISTENCE_IMPORTS_PATH = openApiV2Path(
 
 export const PERSISTENCE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/imports/inspections",
+);
+
+export const PERSISTENCE_ASSET_IMPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/assets/import",
+);
+
+export const PERSISTENCE_RECOVERY_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/recovery",
 );

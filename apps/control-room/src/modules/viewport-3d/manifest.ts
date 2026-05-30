@@ -150,6 +150,20 @@ export const viewport3dManifest: ModuleManifest = {
   contributes: {
     commands: [
       {
+        id: "viewport-3d.open",
+        title: "Open 3D Scene",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: (context) =>
+          context.layout?.get().activeViewportMainModuleId === "viewport-3d",
+        run: (context) => {
+          context.layout?.setActiveViewportMainModule("viewport-3d");
+          context.layout?.setFocusedSlot("viewport-main");
+          return { status: "completed" };
+        },
+      },
+      {
         id: "viewport-3d.fit",
         title: "Fit 3D View",
         group: "viewport-3d",

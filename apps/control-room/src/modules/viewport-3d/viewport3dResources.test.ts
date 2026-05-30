@@ -6,6 +6,7 @@ import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 
 import {
+  cachedBinaryResourceMatchesRevision,
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
@@ -121,6 +122,28 @@ describe("viewport3dResources", () => {
       }),
     ).resolves.toBe("cached-field");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("treats cached binary data as fresh until a resource revision changes", () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    cache.set("field:m", {
+      byteLength: 4,
+      data: "cached-field",
+      etag: '"field-1"',
+    });
+
+    expect(cachedBinaryResourceMatchesRevision(cache, "field:m", null)).toBe(
+      true,
+    );
+    expect(
+      cachedBinaryResourceMatchesRevision(cache, "field:m", '"field-1"'),
+    ).toBe(true);
+    expect(cachedBinaryResourceMatchesRevision(cache, "field:m", 2)).toBe(
+      false,
+    );
+    expect(
+      cachedBinaryResourceMatchesRevision(cache, "field:m", '"field-2"'),
+    ).toBe(false);
   });
 
   it("stores decoded binary data returned by the API", async () => {

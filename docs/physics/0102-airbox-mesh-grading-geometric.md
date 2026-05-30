@@ -83,7 +83,7 @@ $$
 \psi(s,g) =
 \begin{cases}
 s, & g \le 1 \\
-\frac{\exp(\log(g)s)-1}{g-1}, & g > 1
+\frac{\log(1 + (g - 1)s)}{\log(g)}, & g > 1
 \end{cases}
 $$
 
@@ -152,7 +152,7 @@ gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", interface_surfaces)
 f_growth = gmsh.model.mesh.field.add("MathEval")
 growth_rate = 1.3  # standard COMSOL default
 # s = clamp(distance / dist_max, 0, 1)
-# psi(s, g) = (exp(log(g) * s) - 1) / (g - 1)
+# psi(s, g) = log(1 + (g - 1) * s) / log(g)
 # h(r) = h_inner * exp(log(h_outer / h_inner) * psi)
 gmsh.model.mesh.field.setString(
     f_growth, "F",
@@ -200,12 +200,13 @@ therefore be conservative with respect to the farthest outer-boundary point from
 the magnetic-object bounds.
 
 For explicit rectangular airboxes, the implementation combines the local
-surface-distance grading with a rectangular bbox envelope. The local field owns
-the fine interface halo; the rectangular envelope keeps the remaining airbox
-constrained until the outer boundary is reached, including diagonal directions
-from object corners to airbox corners. This prevents a visually plausible halo
-from degrading into a flat far-field plateau through most of the diagonal air
-volume.
+surface-distance grading with a rectangular bbox envelope. Both fields start at
+`h_inner` near the object bounds and reach `h_outer` at their controlled outer
+span. They are combined with `Max`, not `Min`: the local field preserves the
+fine interface halo, while the envelope prevents the local distance field from
+over-constraining the outer airbox faces and corners below the requested
+far-field target. Other independent refinement fields may still be combined
+outside this airbox pair with the normal global `Min` stack.
 
 ### 4.5 Air-side edge and corner constraints
 

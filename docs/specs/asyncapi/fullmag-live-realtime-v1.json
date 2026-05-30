@@ -91,31 +91,47 @@
       "RealtimeResourceRevisionMap": {
         "type": "object",
         "required": [
+          "topology_revision",
+          "field_catalog_revision",
+          "field_revision",
+          "slice_revision",
+          "artifact_revision",
+          "command_completion_revision",
           "fields_revision",
           "scalars_revision",
           "domain_generation_id",
           "artifacts_revision",
           "engine_log_revision",
+          "solver_profile_revision",
           "display_revision",
           "workspace_revision",
           "mesh_revision",
           "mesh_build_revision",
           "commands_revision",
-          "stages_revision"
+          "stages_revision",
+          "visualization_state_revision"
         ],
         "properties": {
+          "topology_revision": { "type": "integer", "minimum": 0 },
+          "field_catalog_revision": { "type": "integer", "minimum": 0 },
+          "field_revision": { "type": "integer", "minimum": 0 },
+          "slice_revision": { "type": "integer", "minimum": 0 },
+          "artifact_revision": { "type": "integer", "minimum": 0 },
+          "command_completion_revision": { "type": "integer", "minimum": 0 },
           "fields_revision": { "type": "integer", "minimum": 0 },
           "scalars_revision": { "type": "integer", "minimum": 0 },
           "domain_generation_id": { "type": "integer", "minimum": 0 },
           "artifacts_revision": { "type": "integer", "minimum": 0 },
           "engine_log_revision": { "type": "integer", "minimum": 0 },
+          "solver_profile_revision": { "type": "integer", "minimum": 0 },
           "display_revision": { "type": "integer", "minimum": 0 },
           "workspace_revision": { "type": "integer", "minimum": 0 },
           "mesh_revision": { "type": "integer", "minimum": 0 },
           "mesh_build_revision": { "type": "integer", "minimum": 0 },
           "commands_revision": { "type": "integer", "minimum": 0 },
           "stages_revision": { "type": "integer", "minimum": 0 },
-          "scene_revision": { "type": ["integer", "null"], "minimum": 0 }
+          "scene_revision": { "type": ["integer", "null"], "minimum": 0 },
+          "visualization_state_revision": { "type": "integer", "minimum": 0 }
         }
       },
       "RealtimeResourceChange": {
@@ -131,12 +147,15 @@
               "domain",
               "artifacts",
               "logs",
+              "diagnostics",
               "workspace",
               "mesh",
               "mesh_builds",
               "commands",
               "stages",
-              "scene_document"
+              "scene_document",
+              "visualization_state",
+              "visualization_client_acks"
             ]
           },
           "revision": { "type": "integer", "minimum": 0 },

@@ -1,12 +1,14 @@
 "use client";
 
 import {
+  Component,
   createElement,
   lazy,
   Suspense,
   useCallback,
   useState,
   type ComponentType,
+  type ReactNode,
 } from "react";
 
 import { useKernel } from "../KernelContext";
@@ -23,6 +25,62 @@ interface SlotHostProps {
  * Keyed by manifest.id so each module is wrapped exactly once.
  */
 const lazyCache = new Map<string, ComponentType<ModuleProps>>();
+
+interface ModuleErrorBoundaryProps {
+  children: ReactNode;
+  manifest: ModuleManifest;
+}
+
+interface ModuleErrorBoundaryState {
+  error: Error | null;
+  retryKey: number;
+}
+
+class ModuleErrorBoundary extends Component<
+  ModuleErrorBoundaryProps,
+  ModuleErrorBoundaryState
+> {
+  state: ModuleErrorBoundaryState = {
+    error: null,
+    retryKey: 0,
+  };
+
+  static getDerivedStateFromError(
+    error: Error,
+  ): Partial<ModuleErrorBoundaryState> {
+    return { error };
+  }
+
+  private retry = () => {
+    this.setState(({ retryKey }) => ({
+      error: null,
+      retryKey: retryKey + 1,
+    }));
+  };
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="fm-slot__error" role="alert">
+          <strong>{this.props.manifest.title} failed to mount</strong>
+          <span>{this.state.error.message}</span>
+          <button type="button" onClick={this.retry}>
+            Retry
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <Suspense
+        key={this.state.retryKey}
+        fallback={<div className="fm-slot__loading">Loading…</div>}
+      >
+        {this.props.children}
+      </Suspense>
+    );
+  }
+}
 
 function ensureLazyCached(manifest: ModuleManifest): void {
   if (!lazyCache.has(manifest.id)) {
@@ -57,7 +115,10 @@ export function MountedModule({
   );
 
   return (
-    <Suspense fallback={<div className="fm-slot__loading">Loading…</div>}>
+    <ModuleErrorBoundary
+      key={`${slotId}:${manifest.id}`}
+      manifest={manifest}
+    >
       {createElement(lazyCache.get(manifest.id)!, {
         config,
         kernel,
@@ -65,7 +126,7 @@ export function MountedModule({
         setConfig,
         slotId,
       })}
-    </Suspense>
+    </ModuleErrorBoundary>
   );
 }
 

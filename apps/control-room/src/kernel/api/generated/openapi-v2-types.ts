@@ -7006,6 +7006,7 @@ export interface operations {
                 metric: components["schemas"]["CrossSectionQualityMetric"];
                 color_scale?: components["schemas"]["CrossSectionImageColorScale"];
                 resolution?: number;
+                rotation_degrees?: number;
                 wireframe?: boolean;
                 legend?: boolean;
                 shrink_factor?: number;

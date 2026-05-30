@@ -71,6 +71,7 @@ export function resolveCrossSectionImageResourceKey(
   params.set("plane", stableQuery.plane);
   params.set("position_percent", String(stableQuery.positionPercent));
   params.set("resolution", String(stableQuery.resolution ?? 1024));
+  params.set("rotation_degrees", String(stableQuery.rotationDegrees ?? 0));
   params.set("shrink_factor", String(stableQuery.shrinkFactor ?? 1));
   params.set("wireframe", String(stableQuery.wireframe ?? true));
   return `${CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY}?${params.toString()}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
@@ -266,6 +267,7 @@ function normalizeCrossSectionImageQuery(
     plane: query.plane,
     positionPercent: query.positionPercent,
     resolution: query.resolution ?? 1024,
+    rotationDegrees: query.rotationDegrees ?? 0,
     shrinkFactor: query.shrinkFactor ?? 1,
     wireframe: query.wireframe ?? true,
   };

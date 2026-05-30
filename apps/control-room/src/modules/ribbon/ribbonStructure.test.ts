@@ -258,6 +258,7 @@ describe("ribbon structure", () => {
       }),
       "test",
     );
+    expect(selectionSet).toHaveBeenCalledTimes(2);
     expect(setPanelVisible).toHaveBeenCalledWith("left", true);
     expect(setPanelVisible).toHaveBeenCalledWith("right", true);
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
@@ -366,7 +367,7 @@ describe("ribbon structure", () => {
     });
     expect(solidColorNode).toMatchObject({
       disabled: false,
-      value: "#babbf1",
+      value: "var(--fm-surface-magnetic)",
     });
     expect(vectorAlphaNode).toMatchObject({ value: 100 });
     expect(visibilityNode).toMatchObject({
@@ -882,11 +883,11 @@ describe("ribbon structure", () => {
     expect(vectorThicknessNode).toMatchObject({ disabled: false, value: 1 });
     expect(wireframeColorNode).toMatchObject({
       disabled: false,
-      value: "#e78284",
+      value: "var(--fm-airbox-wire)",
     });
     expect(pointColorNode).toMatchObject({
       disabled: false,
-      value: "#e78284",
+      value: "var(--fm-info)",
     });
 
     if (
@@ -1817,170 +1818,43 @@ describe("ribbon structure", () => {
     ]);
   });
 
-  it("patches canonical visualization slice state from 2D Slice controls", async () => {
-    const { context, patches } = createVisualizationRibbonContext({
-      slice: {
-        axis: "z",
-        auto_contrast: true,
-        colormap: "viridis",
-        component: "magnitude",
-        position_percent: 50,
-        projection_include_air_as_zero: false,
-        projection_reduction: "mean",
-        projection_resolution: 128,
-        projection_samples: 32,
-        quantity_id: "m",
-        render_mode: "heatmap",
-        show_airbox: false,
-        show_airbox_vectors: false,
-        show_magnetic_texture: true,
-        show_mesh: false,
-        show_primitives: true,
-        show_quantity: true,
-        show_vectors: false,
-        airbox_render_mode: "wireframe",
-        layer_index: null,
-        mode: "single",
-        thickness_percent: null,
-      },
-    });
+  it("keeps the View Cross-Section group scoped to image workflows", () => {
+    const { context } = createVisualizationRibbonContext({});
     const content = buildRibbonTabContent("view", context);
     const sliceGroup = content?.groups.find((group) => group.id === "view-slice-2d");
-    const planeAction = sliceGroup?.actions.find(
-      (action) => action.id === "view-slice-plane",
-    );
-    const layersAction = sliceGroup?.actions.find(
-      (action) => action.id === "view-slice-layers",
-    );
-    const axisNode = planeAction?.menu?.find(
-      (node) => node.type === "radio-group" && node.id === "slice:plane:axis",
-    );
-    const positionNode = planeAction?.menu?.find(
-      (node) => node.type === "slider" && node.id === "slice:plane:position",
-    );
-    const meshNode = layersAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "slice:mesh:wireframe",
-    );
-    const quantityNode = layersAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "slice:layers:quantity",
-    );
-    const contrastNode = layersAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "slice:layers:auto-contrast",
-    );
+    const actionIds = sliceGroup?.actions.map((action) => action.id);
+    const menuNodeIds =
+      sliceGroup?.actions.flatMap((action) =>
+        (action.menu ?? []).map((node) => node.id),
+      ) ?? [];
 
-    expect(axisNode).toMatchObject({ value: "z" });
-    expect(positionNode).toMatchObject({ value: 50 });
-    expect(meshNode).toMatchObject({ checked: false });
-    if (
-      axisNode?.type !== "radio-group" ||
-      positionNode?.type !== "slider" ||
-      meshNode?.type !== "checkbox" ||
-      quantityNode?.type !== "checkbox" ||
-      contrastNode?.type !== "checkbox"
-    ) {
-      throw new Error("Expected active 2D slice controls");
-    }
-
-    await runRibbonNode(axisNode, "x", context);
-    await runRibbonNode(positionNode, 12.5, context);
-    await runRibbonNode(meshNode, true, context);
-    await runRibbonNode(quantityNode, false, context);
-    await runRibbonNode(contrastNode, false, context);
-
-    expect(patches).toEqual([
-      { slice: { axis: "x" } },
-      { slice: { position_percent: 12.5 } },
-      { slice: { show_mesh: true } },
-      { slice: { show_quantity: false } },
-      { slice: { auto_contrast: false } },
-    ]);
-  });
-
-  it("patches 2D cross-section quality controls through visualization slice state", async () => {
-    const { context, patches } = createVisualizationRibbonContext({
-      slice: {
-        axis: "z",
-        auto_contrast: true,
-        colormap: "viridis",
-        component: "magnitude",
-        position_percent: 50,
-        projection_include_air_as_zero: false,
-        projection_reduction: "mean",
-        projection_resolution: 128,
-        projection_samples: 32,
-        quantity_id: "m",
-        render_mode: "heatmap",
-        show_airbox: false,
-        show_airbox_vectors: false,
-        show_magnetic_texture: true,
-        show_mesh: true,
-        show_primitives: true,
-        show_quantity: true,
-        show_vectors: false,
-        airbox_render_mode: "wireframe",
-        layer_index: null,
-        mesh_color_scale: "jet",
-        mesh_filter_expression: "",
-        mesh_quality_metric: "gamma",
-        mesh_shrink_factor: 1,
-        mode: "single",
-        thickness_percent: null,
-      },
+    expect(sliceGroup).toMatchObject({
+      subtitle: "image tabs",
+      title: "Cross-Section",
     });
-    const content = buildRibbonTabContent("view", context);
-    const qualityAction = content?.groups
-      .find((group) => group.id === "view-slice-2d")
-      ?.actions.find((action) => action.id === "view-slice-quality");
-    const metricNode = qualityAction?.menu?.find(
-      (node) => node.type === "radio-group" && node.id === "slice:quality:metric",
-    );
-    const colorScaleNode = qualityAction?.menu?.find(
-      (node) => node.type === "radio-group" && node.id === "slice:quality:color-scale",
-    );
-    const filterNode = qualityAction?.menu?.find(
-      (node) => node.type === "text" && node.id === "slice:quality:filter",
-    );
-    const shrinkNode = qualityAction?.menu?.find(
-      (node) => node.type === "slider" && node.id === "slice:quality:shrink",
-    );
-
-    expect(metricNode).toMatchObject({ value: "gamma" });
-    expect(
-      metricNode?.type === "radio-group"
-        ? metricNode.items.map((item) => item.value)
-        : [],
-    ).toEqual([
-      "skewness",
-      "gamma",
-      "sicn",
-      "volume",
-      "aspect_ratio",
-      "max_angle",
-      "min_edge",
+    expect(actionIds).toEqual([
+      RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
+      "cross-section-image.open",
+      "analysis-plots.open",
     ]);
-    expect(colorScaleNode).toMatchObject({ value: "jet" });
-    expect(filterNode).toMatchObject({ value: "" });
-    expect(shrinkNode).toMatchObject({ value: 1 });
-    if (
-      metricNode?.type !== "radio-group" ||
-      colorScaleNode?.type !== "radio-group" ||
-      filterNode?.type !== "text" ||
-      shrinkNode?.type !== "slider"
-    ) {
-      throw new Error("Expected active 2D cross-section quality controls");
-    }
-
-    await runRibbonNode(metricNode, "sicn", context);
-    await runRibbonNode(colorScaleNode, "hot", context);
-    await runRibbonNode(filterNode, "quality < 0.3", context);
-    await runRibbonNode(shrinkNode, 0.75, context);
-
-    expect(patches).toEqual([
-      { slice: { mesh_quality_metric: "sicn" } },
-      { slice: { mesh_color_scale: "hot" } },
-      { slice: { mesh_filter_expression: "quality < 0.3" } },
-      { slice: { mesh_shrink_factor: 0.75 } },
-    ]);
+    expect(menuNodeIds).not.toEqual(
+      expect.arrayContaining([
+        "slice:plane:axis",
+        "slice:plane:position",
+        "slice:quality:metric",
+        "slice:quality:color-scale",
+        "slice:quality:filter",
+        "slice:quality:shrink",
+      ]),
+    );
+    expect(content?.groups.map((group) => group.title)).not.toContain("2D Slice");
+    expect(actionIds).not.toEqual(
+      expect.arrayContaining([
+        "view-slice-plane",
+        "view-slice-layers",
+        "view-slice-quality",
+      ]),
+    );
   });
 
   it("wires View orientation controls to command ids", () => {

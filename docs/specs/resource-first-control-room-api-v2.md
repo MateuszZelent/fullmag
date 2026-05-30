@@ -16,6 +16,13 @@ New frontend and backend API work targets:
 - `GET /v2/platform/docs/swagger/`
 - `/v2/sessions/current/...`
 
+Version vocabulary has two deliberately separate axes:
+
+- OpenAPI `info.version` is the Swagger document/catalog version and is currently `2.0.0`.
+- Runtime compatibility uses `x-api-contract-version: 1.0.0` on HTTP responses and
+  `contract_version: "1.0.0"` in realtime envelopes. Browser clients validate this runtime
+  contract version, not the Swagger `info.version`.
+
 The older public `/v1/live/current/...` tree has been removed. Only
 `/v1/internal/live/current/...` may remain as a backend-only runtime bridge; it is not browser API.
 

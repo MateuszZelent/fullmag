@@ -80,6 +80,7 @@ await page.addInitScript(({ baseUrl }) => {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
     controlRoomApiBase: baseUrl,
+    disableRealtime: true,
   };
 }, { baseUrl: apiBase });
 

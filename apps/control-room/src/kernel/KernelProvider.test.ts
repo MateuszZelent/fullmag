@@ -48,4 +48,14 @@ describe("KernelProvider performance contracts", () => {
       "diagnostics: kernel.diagnostics",
     );
   });
+
+  it("allows controlled browser audits to disable realtime websocket coupling", () => {
+    expect(kernelProviderSource).toContain("disableRealtime");
+    expect(kernelProviderSource).toContain(
+      "controlRoomRealtimeDisabledFromBrowser()",
+    );
+    expect(kernelProviderSource).toContain(
+      "if (controlRoomRealtimeDisabledFromBrowser())",
+    );
+  });
 });

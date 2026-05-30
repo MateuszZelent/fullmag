@@ -19,6 +19,7 @@ import {
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
+  ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
@@ -125,6 +126,16 @@ export async function loadCachedBinaryResource<TData>(
   return result.data;
 }
 
+export function cachedBinaryResourceMatchesRevision<TData>(
+  cache: ResourceCache<TData>,
+  key: string,
+  revision: ResourceRevision | null,
+): boolean {
+  const cached = cache.peek(key);
+  if (!cached) return false;
+  return revision === null || cached.etag === revision;
+}
+
 export function resolveViewport3DFieldVectorResourceKey(
   quantityId: string,
   query: FieldVectorQuery = {},
@@ -225,7 +236,7 @@ export function useViewport3DFieldVector(
   fieldQuery: FieldVectorQuery = {},
   enabled = true,
 ) {
-  const { api } = useKernel();
+  const { api, resources } = useKernel();
   const component = fieldQuery.component ?? "full";
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
@@ -247,8 +258,15 @@ export function useViewport3DFieldVector(
         fieldVectorCache,
         requestKey,
         (etag) => api.data.fields.vector(quantityId, query, { etag, signal }),
+        {
+          preferCached: cachedBinaryResourceMatchesRevision(
+            fieldVectorCache,
+            requestKey,
+            resources.getRevision(requestKey),
+          ),
+        },
       ),
-    [api, quantityId, query, requestKey],
+    [api, quantityId, query, requestKey, resources],
   );
   const resolveRevision = useCallback(
     () => fieldVectorCache.peek(requestKey)?.etag ?? null,
@@ -268,7 +286,7 @@ export function useViewport3DAirboxFieldVectors(
   airboxParts: readonly { id: string }[],
   enabled = true,
 ) {
-  const { api } = useKernel();
+  const { api, resources } = useKernel();
   const requestKeys = useMemo(
     () => resolveViewport3DAirboxFieldVectorResourceKeys(quantityId, airboxParts),
     [airboxParts, quantityId],
@@ -296,6 +314,13 @@ export function useViewport3DAirboxFieldVectors(
                 },
                 { etag, signal },
               ),
+            {
+              preferCached: cachedBinaryResourceMatchesRevision(
+                fieldVectorCache,
+                key,
+                resources.getRevision(key),
+              ),
+            },
           );
           return [partId, data] as const;
         }),
@@ -308,7 +333,7 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
     },
-    [api, quantityId, requestKeys],
+    [api, quantityId, requestKeys, resources],
   );
   const resolveRevision = useCallback(() => {
     const revisions = Array.from(requestKeys.values()).map(
@@ -329,7 +354,7 @@ export function useViewport3DQuantityFieldVectors(
   quantityIds: readonly string[],
   enabled = true,
 ) {
-  const { api } = useKernel();
+  const { api, resources } = useKernel();
   const requestKeys = useMemo(
     () => resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds),
     [quantityIds],
@@ -356,6 +381,13 @@ export function useViewport3DQuantityFieldVectors(
                 },
                 { etag, signal },
               ),
+            {
+              preferCached: cachedBinaryResourceMatchesRevision(
+                fieldVectorCache,
+                key,
+                resources.getRevision(key),
+              ),
+            },
           );
           return [quantityId, data] as const;
         }),
@@ -368,7 +400,7 @@ export function useViewport3DQuantityFieldVectors(
         ),
       );
     },
-    [api, requestKeys],
+    [api, requestKeys, resources],
   );
   const resolveRevision = useCallback(() => {
     const revisions = Array.from(requestKeys.values()).map(

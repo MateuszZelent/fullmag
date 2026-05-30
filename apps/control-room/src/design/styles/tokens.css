@@ -24,6 +24,7 @@
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
   --fm-font-mono: "JetBrains Mono", "Cascadia Code", monospace;
+  --fm-font-size-2xs: 10px;
   --fm-font-size-xs: 11px;
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;

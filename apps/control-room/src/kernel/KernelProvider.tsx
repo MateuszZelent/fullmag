@@ -123,6 +123,10 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
   const startupVisible = useSimulationStartupOverlayVisibility();
 
   useEffect(() => {
+    if (controlRoomRealtimeDisabledFromBrowser()) {
+      return;
+    }
+
     if (startupVisible) {
       return;
     }
@@ -150,6 +154,13 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
   }, [kernel, startupVisible]);
 
   return null;
+}
+
+function controlRoomRealtimeDisabledFromBrowser(): boolean {
+  const auditWindow = window as Window & {
+    __FULLMAG_CONFIG__?: { disableRealtime?: boolean };
+  };
+  return auditWindow.__FULLMAG_CONFIG__?.disableRealtime === true;
 }
 
 function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
@@ -205,7 +216,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
     const auditWindow = window as Window & {
-      __FULLMAG_CONFIG__?: { allowMissingSessionSmoke?: boolean };
+      __FULLMAG_CONFIG__?: {
+        allowMissingSessionSmoke?: boolean;
+        disableRealtime?: boolean;
+      };
       __FULLMAG_CONTROL_ROOM_AUDIT__?: {
         setGlobalQuantity: (quantityId: string) => Promise<void>;
       };
