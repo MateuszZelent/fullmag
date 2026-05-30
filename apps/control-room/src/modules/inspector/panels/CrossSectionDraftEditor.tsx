@@ -86,34 +86,62 @@ export function CrossSectionDraftEditor({
           <option disabled value="custom">Custom</option>
         </FormField>
         <div className="fm-inspector-form-field fm-inspector-form-field--inline">
-          <label className="fm-inspector-form-field__label">Plane</label>
+          <span className="fm-inspector-form-field__label">Plane</span>
           <Tabs
             className="fm-inspector-axis-tabs"
             value={draft.plane}
-            onValueChange={(value) => updateDraft({ plane: value as CrossSectionPlane })}
+            onValueChange={(value) =>
+              updateDraft({ plane: value as CrossSectionPlane })
+            }
           >
             <TabsList aria-label="Cut plane axis">
-              <TabsTrigger value="xy" className="fm-inspector-axis-tab" data-axis="z">XY</TabsTrigger>
-              <TabsTrigger value="xz" className="fm-inspector-axis-tab" data-axis="y">XZ</TabsTrigger>
-              <TabsTrigger value="yz" className="fm-inspector-axis-tab" data-axis="x">YZ</TabsTrigger>
+              <TabsTrigger
+                value="xy"
+                className="fm-inspector-axis-tab"
+                data-axis="z"
+              >
+                XY
+              </TabsTrigger>
+              <TabsTrigger
+                value="xz"
+                className="fm-inspector-axis-tab"
+                data-axis="y"
+              >
+                XZ
+              </TabsTrigger>
+              <TabsTrigger
+                value="yz"
+                className="fm-inspector-axis-tab"
+                data-axis="x"
+              >
+                YZ
+              </TabsTrigger>
             </TabsList>
           </Tabs>
         </div>
         <div className="fm-inspector-form-field">
           <div className="fm-inspector-form-field--inline">
-            <label className="fm-inspector-form-field__label">Position</label>
+            <label
+              className="fm-inspector-form-field__label"
+              htmlFor="fm-cross-section-position-input"
+            >
+              Position
+            </label>
             <div className="fm-inspector-form-field__control">
               <input
                 aria-label="Position"
                 className="fm-inspector-input"
                 disabled={false}
+                id="fm-cross-section-position-input"
                 inputMode="decimal"
                 max={100}
                 min={0}
                 step={0.5}
                 type="number"
                 value={draft.positionPercent}
-                onChange={(event) => updateDraft({ positionPercent: Number(event.target.value) })}
+                onChange={(event) =>
+                  updateDraft({ positionPercent: Number(event.target.value) })
+                }
               />
               <span className="fm-inspector-form-field__unit">%</span>
             </div>
@@ -127,24 +155,34 @@ export function CrossSectionDraftEditor({
             type="range"
             value={draft.positionPercent}
             style={{ "--pct": `${draft.positionPercent}%` } as React.CSSProperties}
-            onChange={(event) => updateDraft({ positionPercent: Number(event.target.value) })}
+            onChange={(event) =>
+              updateDraft({ positionPercent: Number(event.target.value) })
+            }
           />
         </div>
         <div className="fm-inspector-form-field">
           <div className="fm-inspector-form-field--inline">
-            <label className="fm-inspector-form-field__label">Rotation</label>
+            <label
+              className="fm-inspector-form-field__label"
+              htmlFor="fm-cross-section-rotation-input"
+            >
+              Rotation
+            </label>
             <div className="fm-inspector-form-field__control">
               <input
                 aria-label="Rotation"
                 className="fm-inspector-input"
                 disabled={false}
+                id="fm-cross-section-rotation-input"
                 inputMode="decimal"
                 max={180}
                 min={-180}
                 step={1}
                 type="number"
                 value={draft.rotationDegrees}
-                onChange={(event) => updateDraft({ rotationDegrees: Number(event.target.value) })}
+                onChange={(event) =>
+                  updateDraft({ rotationDegrees: Number(event.target.value) })
+                }
               />
               <span className="fm-inspector-form-field__unit">deg</span>
             </div>
@@ -157,8 +195,14 @@ export function CrossSectionDraftEditor({
             step={1}
             type="range"
             value={draft.rotationDegrees}
-            style={{ "--pct": `${((draft.rotationDegrees + 180) / 360) * 100}%` } as React.CSSProperties}
-            onChange={(event) => updateDraft({ rotationDegrees: Number(event.target.value) })}
+            style={
+              {
+                "--pct": `${((draft.rotationDegrees + 180) / 360) * 100}%`,
+              } as React.CSSProperties
+            }
+            onChange={(event) =>
+              updateDraft({ rotationDegrees: Number(event.target.value) })
+            }
           />
         </div>
       </InspectorSection>

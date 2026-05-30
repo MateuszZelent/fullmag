@@ -14,7 +14,8 @@ use serde_json::{json, Value};
 use crate::error::ApiError;
 use crate::fem_cross_section::{
     cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
-    serialize_cross_section_fmcs, serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
+    per_element_quality_metric_from_fmmq, serialize_cross_section_fmcs,
+    serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
 };
 use crate::fem_cross_section_image::{
     render_cross_section_png, validate_cross_section_image_query, CrossSectionImageColorScale,
@@ -25,14 +26,14 @@ use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
-    MeshCapabilitiesResource, MeshInterfaceConfigReplaceRequest, MeshInterfaceConfigResource,
-    MeshInterfaceQualityResource, MeshInterfaceReportResource, MeshLastSuccessfulBuildResource,
-    MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
-    MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
-    MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicPairResource,
-    MeshPeriodicPairsResource, MeshQualityGatesResource, MeshRealizedSizeFieldResource,
-    MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource, MeshRegionResource,
-    MeshSemanticsResource, MeshSharedDomainBuildReportResource,
+    MeshCapabilitiesResource, MeshHistogramBinElementsResource, MeshInterfaceConfigReplaceRequest,
+    MeshInterfaceConfigResource, MeshInterfaceQualityResource, MeshInterfaceReportResource,
+    MeshLastSuccessfulBuildResource, MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest,
+    MeshObjectConfigResource, MeshObjectQualityResource, MeshObjectReportResource,
+    MeshObjectSegmentResource, MeshObjectSizeFieldResource, MeshPartResource,
+    MeshPeriodicPairResource, MeshPeriodicPairsResource, MeshQualityGatesResource,
+    MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource,
+    MeshRegionResource, MeshSemanticsResource, MeshSharedDomainBuildReportResource,
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
@@ -1582,6 +1583,56 @@ pub async fn get_mesh_part_topology(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements",
+    params(
+        ("mesh_id" = String, Path, description = "Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh."),
+        ("part_id" = String, Path, description = "Stable FEM mesh part id, for example airbox"),
+        ("metric" = String, Path, description = "Histogram metric: characteristic_size, tetra_size, edge_length, volume, sicn, or gamma"),
+        ("bin_index" = u32, Path, description = "Zero-based histogram bin index")
+    ),
+    responses(
+        (status = 200, description = "Source element and node indices for a mesh histogram bin", body = MeshHistogramBinElementsResource),
+        (status = 204, description = "No FEM mesh available"),
+        (status = 400, description = "Invalid histogram metric or bin index"),
+        (status = 404, description = "No active workspace, mesh, or mesh part"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_histogram_bin_elements(
+    State(state): State<Arc<AppState>>,
+    Path((mesh_id, part_id, metric, bin_index)): Path<(String, String, String, u32)>,
+) -> Result<axum::response::Response, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    if !matches_shared_domain_mesh_id(mesh, &mesh_id) {
+        return Err(ApiError::not_found(format!("mesh not found: {mesh_id}")));
+    }
+    let metric = MeshHistogramMetric::from_path_segment(&metric)?;
+    let quality_values = if let Some(quality_metric) = metric.quality_metric() {
+        let mesh_workspace = current_mesh_workspace(&snapshot)?;
+        let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? else {
+            return Err(ApiError::bad_request(format!(
+                "histogram metric {} requires per-element mesh quality data",
+                metric.as_str()
+            )));
+        };
+        per_element_quality_metric_from_fmmq(&artifact.bytes, quality_metric)?.ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "per-element mesh quality data does not include {}",
+                metric.as_str()
+            ))
+        })?
+    } else {
+        Vec::new()
+    };
+    let resource = mesh_histogram_bin_elements(mesh, &part_id, metric, bin_index, &quality_values)?;
+    Ok(Json(resource).into_response())
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/meshing/policies/interfaces/{interface_id}",
     params(
         ("interface_id" = String, Path, description = "Canonical stable interface id")
@@ -2111,6 +2162,225 @@ fn mesh_scope_size_statistics(mesh: &FemMeshPayload, marker: u32) -> Option<Valu
     }))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeshHistogramMetric {
+    CharacteristicSize,
+    EdgeLength,
+    Gamma,
+    Sicn,
+    Volume,
+}
+
+impl MeshHistogramMetric {
+    fn from_path_segment(value: &str) -> Result<Self, ApiError> {
+        match value {
+            "characteristic_size" | "tetra_size" => Ok(Self::CharacteristicSize),
+            "edge_length" => Ok(Self::EdgeLength),
+            "gamma" => Ok(Self::Gamma),
+            "sicn" => Ok(Self::Sicn),
+            "volume" => Ok(Self::Volume),
+            other => Err(ApiError::bad_request(format!(
+                "unsupported mesh histogram metric: {other}"
+            ))),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CharacteristicSize => "characteristic_size",
+            Self::EdgeLength => "edge_length",
+            Self::Gamma => "gamma",
+            Self::Sicn => "sicn",
+            Self::Volume => "volume",
+        }
+    }
+
+    fn quality_metric(self) -> Option<CrossSectionQualityMetric> {
+        match self {
+            Self::Gamma => Some(CrossSectionQualityMetric::Gamma),
+            Self::Sicn => Some(CrossSectionQualityMetric::Sicn),
+            Self::CharacteristicSize | Self::EdgeLength | Self::Volume => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MeshHistogramSample {
+    element_index: u32,
+    value: f64,
+}
+
+fn matches_shared_domain_mesh_id(mesh: &FemMeshPayload, mesh_id: &str) -> bool {
+    matches!(mesh_id, "shared-domain" | "shared_domain" | "study_domain")
+        || mesh.mesh_id == mesh_id
+        || mesh.mesh_name == mesh_id
+}
+
+fn mesh_histogram_bin_elements(
+    mesh: &FemMeshPayload,
+    part_id: &str,
+    metric: MeshHistogramMetric,
+    bin_index: u32,
+    quality_values: &[f64],
+) -> Result<MeshHistogramBinElementsResource, ApiError> {
+    let part = mesh
+        .mesh_parts
+        .iter()
+        .find(|part| part.id == part_id)
+        .ok_or_else(|| ApiError::not_found(format!("mesh part not found: {part_id}")))?;
+    let element_indices = part_source_element_indices(mesh, part)?;
+    let samples = mesh_histogram_samples(mesh, &element_indices, metric, quality_values)?;
+    let values = samples
+        .iter()
+        .map(|sample| sample.value)
+        .collect::<Vec<_>>();
+    let edges = size_histogram_edges(&values, 30);
+    let bin_index_usize = bin_index as usize;
+    if edges.len() < 2 || bin_index_usize + 1 >= edges.len() {
+        return Err(ApiError::bad_request(format!(
+            "histogram bin {bin_index} is out of range for metric {}",
+            metric.as_str()
+        )));
+    }
+
+    let mut selected_elements = BTreeSet::new();
+    for sample in samples {
+        if value_in_histogram_bin(sample.value, &edges, bin_index_usize) {
+            selected_elements.insert(sample.element_index);
+        }
+    }
+    let mut selected_nodes = BTreeSet::new();
+    for element_index in &selected_elements {
+        let element = mesh.elements.get(*element_index as usize).ok_or_else(|| {
+            ApiError::internal(format!(
+                "mesh element index {element_index} is out of range"
+            ))
+        })?;
+        selected_nodes.extend(element.iter().copied());
+    }
+
+    Ok(MeshHistogramBinElementsResource {
+        mesh_id: mesh.mesh_id.clone(),
+        part_id: part.id.clone(),
+        metric: metric.as_str().to_string(),
+        bin_index,
+        element_indices: selected_elements.into_iter().collect(),
+        node_indices: selected_nodes.into_iter().collect(),
+    })
+}
+
+fn part_source_element_indices(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+) -> Result<Vec<usize>, ApiError> {
+    let start = part.element_start as usize;
+    let end = start.saturating_add(part.element_count as usize);
+    if end > mesh.elements.len() {
+        return Err(ApiError::internal(format!(
+            "mesh part {} references elements outside the solver mesh",
+            part.id
+        )));
+    }
+    Ok((start..end).collect())
+}
+
+fn mesh_histogram_samples(
+    mesh: &FemMeshPayload,
+    element_indices: &[usize],
+    metric: MeshHistogramMetric,
+    quality_values: &[f64],
+) -> Result<Vec<MeshHistogramSample>, ApiError> {
+    let mut samples = Vec::new();
+    for element_index in element_indices {
+        match metric {
+            MeshHistogramMetric::CharacteristicSize => {
+                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "mesh element index {element_index} is out of range"
+                    ))
+                })?;
+                let Some(tet) = element_nodes(mesh, element) else {
+                    continue;
+                };
+                let volume = tet_volume(tet).abs();
+                if volume > 0.0 && volume.is_finite() {
+                    samples.push(MeshHistogramSample {
+                        element_index: *element_index as u32,
+                        value: (volume * 6.0 * 2.0_f64.sqrt()).cbrt(),
+                    });
+                }
+            }
+            MeshHistogramMetric::Volume => {
+                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "mesh element index {element_index} is out of range"
+                    ))
+                })?;
+                let Some(tet) = element_nodes(mesh, element) else {
+                    continue;
+                };
+                let volume = tet_volume(tet).abs();
+                if volume > 0.0 && volume.is_finite() {
+                    samples.push(MeshHistogramSample {
+                        element_index: *element_index as u32,
+                        value: volume,
+                    });
+                }
+            }
+            MeshHistogramMetric::EdgeLength => {
+                let element = mesh.elements.get(*element_index).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "mesh element index {element_index} is out of range"
+                    ))
+                })?;
+                let Some(tet) = element_nodes(mesh, element) else {
+                    continue;
+                };
+                samples.extend(tet_edge_lengths(tet).into_iter().filter_map(|value| {
+                    value.is_finite().then_some(MeshHistogramSample {
+                        element_index: *element_index as u32,
+                        value,
+                    })
+                }));
+            }
+            MeshHistogramMetric::Gamma | MeshHistogramMetric::Sicn => {
+                let value = quality_values.get(*element_index).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "quality payload is missing value for mesh element {element_index}"
+                    ))
+                })?;
+                if value.is_finite() {
+                    samples.push(MeshHistogramSample {
+                        element_index: *element_index as u32,
+                        value: *value,
+                    });
+                }
+            }
+        }
+    }
+    if samples.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "mesh part has no finite {} histogram values",
+            metric.as_str()
+        )));
+    }
+    Ok(samples)
+}
+
+fn value_in_histogram_bin(value: f64, edges: &[f64], bin_index: usize) -> bool {
+    let Some(lo) = edges.get(bin_index).copied() else {
+        return false;
+    };
+    let Some(hi) = edges.get(bin_index + 1).copied() else {
+        return false;
+    };
+    if bin_index + 2 == edges.len() {
+        value >= lo && value <= hi
+    } else {
+        value >= lo && value < hi
+    }
+}
+
 fn element_nodes(mesh: &FemMeshPayload, element: &[u32; 4]) -> Option<[[f64; 3]; 4]> {
     Some([
         *mesh.nodes.get(element[0] as usize)?,
@@ -2189,43 +2459,19 @@ fn distribution_statistics(values: &[f64]) -> Value {
 }
 
 fn size_histogram_bins(values: &[f64], bin_count: usize) -> Vec<Value> {
-    if values.is_empty() {
+    let edges = size_histogram_edges(values, bin_count);
+    if edges.len() < 2 {
         return Vec::new();
     }
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if !min.is_finite() || !max.is_finite() {
-        return Vec::new();
-    }
-    if (max - min).abs() <= f64::EPSILON * max.abs().max(1.0) {
-        return vec![json!({ "lo": min, "hi": max, "count": values.len() })];
+    if (edges[edges.len() - 1] - edges[0]).abs()
+        <= f64::EPSILON * edges[edges.len() - 1].abs().max(1.0)
+    {
+        return vec![
+            json!({ "lo": edges[0], "hi": edges[edges.len() - 1], "count": values.len() }),
+        ];
     }
 
-    let bins = bin_count.max(1);
-    let edges = if min > 0.0 {
-        let ratio = (max / min).powf(1.0 / bins as f64);
-        (0..=bins)
-            .map(|index| {
-                if index == bins {
-                    max
-                } else {
-                    min * ratio.powf(index as f64)
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        let width = (max - min) / bins as f64;
-        (0..=bins)
-            .map(|index| {
-                if index == bins {
-                    max
-                } else {
-                    min + width * index as f64
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
+    let bins = edges.len() - 1;
     let mut counts = vec![0usize; bins];
     for value in values {
         let mut bin_index = bins - 1;
@@ -2249,6 +2495,45 @@ fn size_histogram_bins(values: &[f64], bin_count: usize) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+fn size_histogram_edges(values: &[f64], bin_count: usize) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if !min.is_finite() || !max.is_finite() {
+        return Vec::new();
+    }
+    if (max - min).abs() <= f64::EPSILON * max.abs().max(1.0) {
+        return vec![min, max];
+    }
+
+    let bins = bin_count.max(1);
+    if min > 0.0 {
+        let ratio = (max / min).powf(1.0 / bins as f64);
+        (0..=bins)
+            .map(|index| {
+                if index == bins {
+                    max
+                } else {
+                    min * ratio.powf(index as f64)
+                }
+            })
+            .collect()
+    } else {
+        let width = (max - min) / bins as f64;
+        (0..=bins)
+            .map(|index| {
+                if index == bins {
+                    max
+                } else {
+                    min + width * index as f64
+                }
+            })
+            .collect()
+    }
 }
 
 fn merge_quality_field(target: &mut Value, key: &str, value: Value) {

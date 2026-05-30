@@ -1,6 +1,8 @@
 import { inflateSync } from "node:zlib";
 
 const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+const VIEWPORT_3D_SELECTOR = ".fm-viewport-3d";
+const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -152,44 +154,12 @@ page.on("response", (response) => {
 
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  const canvas = page.locator(".fm-viewport-3d canvas");
+  const canvas = page.locator(VIEWPORT_3D_CANVAS_SELECTOR);
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
-  await canvas.evaluate((node) =>
-    new Promise((resolve) => {
-      const deadline = performance.now() + 5_000;
-      const ready = () => {
-        const rect = node.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      };
-      const tick = () => {
-        if (ready() || performance.now() > deadline) {
-          resolve(undefined);
-          return;
-        }
-        requestAnimationFrame(tick);
-      };
-      if (ready()) {
-        resolve(undefined);
-        return;
-      }
-      requestAnimationFrame(tick);
-    }),
-  );
+  await waitForCanvasClipBox(page);
 
-  const hasContext = await canvas.evaluate((node) => {
-    const canvasNode = node;
-    const context = canvasNode.getContext("webgl2") ?? canvasNode.getContext("webgl");
-    return Boolean(context);
-  });
-  const drawingBuffer = await canvas.evaluate((node) => {
-    const canvasNode = node;
-    const context = canvasNode.getContext("webgl2") ?? canvasNode.getContext("webgl");
-    return {
-      height: context?.drawingBufferHeight ?? 0,
-      width: context?.drawingBufferWidth ?? 0,
-    };
-  });
-  const pixelSample = await sampleCanvasComposite(page, canvas);
+  const { drawingBuffer, hasContext } = await readCanvasContextState(page);
+  const pixelSample = await sampleCanvasComposite(page);
 
   if (!hasContext) {
     throw new Error("3D viewport canvas has no WebGL context.");
@@ -207,7 +177,7 @@ try {
   if (errors.length > 0) {
     throw new Error("Browser console errors:\n" + errors.join("\n"));
   }
-  await verifyCameraGesturesStayLocal({ canvas, page });
+  await verifyCameraGesturesStayLocal({ page });
   if (cameraOnlySmoke) {
     console.log(`Viewport 3D camera smoke passed at ${url}.`);
   } else {
@@ -231,9 +201,9 @@ try {
   await browser.close();
 }
 
-async function verifyCameraGesturesStayLocal({ canvas, page }) {
-  const box = await canvas.boundingBox();
-  if (!box || box.width <= 0 || box.height <= 0) {
+async function verifyCameraGesturesStayLocal({ page }) {
+  const box = await readCanvasClipBox(page);
+  if (box.width <= 0 || box.height <= 0) {
     throw new Error("Cannot run camera gesture smoke: viewport canvas has no bounds.");
   }
   const x = box.x + box.width * 0.5;
@@ -289,7 +259,7 @@ async function verifyCameraGesturesStayLocal({ canvas, page }) {
     );
   }
 
-  const pixelSample = await sampleCanvasComposite(page, canvas);
+  const pixelSample = await sampleCanvasComposite(page);
   if (!pixelSample.nonBlank) {
     throw new Error(
       `3D viewport canvas became blank after camera gestures: ${pixelSample.variedPixels}/${pixelSample.sampledPixels} sampled pixels differ from background.`,
@@ -301,12 +271,75 @@ async function verifyCameraGesturesStayLocal({ canvas, page }) {
 }
 
 async function readViewportCameraSignature(page) {
-  return page.locator(".fm-viewport-3d").evaluate((node) =>
-    [
-      node.getAttribute("data-camera-position") ?? "",
-      node.getAttribute("data-camera-target") ?? "",
-      node.getAttribute("data-camera-projection") ?? "",
-    ].join("|"),
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    return [
+      node?.getAttribute("data-camera-position") ?? "",
+      node?.getAttribute("data-camera-target") ?? "",
+      node?.getAttribute("data-camera-projection") ?? "",
+    ].join("|");
+  }, VIEWPORT_3D_SELECTOR);
+}
+
+async function readCanvasContextState(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    if (!(node instanceof HTMLCanvasElement)) {
+      return {
+        drawingBuffer: { height: 0, width: 0 },
+        hasContext: false,
+      };
+    }
+    const context = node.getContext("webgl2") ?? node.getContext("webgl");
+    return {
+      drawingBuffer: {
+        height: context?.drawingBufferHeight ?? 0,
+        width: context?.drawingBufferWidth ?? 0,
+      },
+      hasContext: Boolean(context),
+    };
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
+}
+
+async function waitForCanvasClipBox(page) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() <= deadline) {
+    const box = await readCanvasClipBox(page);
+    if (box.width > 0 && box.height > 0) return box;
+    await delay(100);
+  }
+  throw new Error("Timed out waiting for measurable 3D viewport canvas bounds.");
+}
+
+async function readCanvasClipBox(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    if (!(node instanceof HTMLCanvasElement)) {
+      return { height: 0, width: 0, x: 0, y: 0 };
+    }
+    const rect = node.getBoundingClientRect();
+    return {
+      height: rect.height,
+      width: rect.width,
+      x: rect.x,
+      y: rect.y,
+    };
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
+}
+
+async function readCanvasBackground(page) {
+  return page.evaluate(
+    ({ canvasSelector, viewportSelector }) => {
+      const canvas = document.querySelector(canvasSelector);
+      const viewport =
+        canvas?.closest(viewportSelector) ??
+        document.querySelector(viewportSelector);
+      return viewport ? getComputedStyle(viewport).backgroundColor : "";
+    },
+    {
+      canvasSelector: VIEWPORT_3D_CANVAS_SELECTOR,
+      viewportSelector: VIEWPORT_3D_SELECTOR,
+    },
   );
 }
 
@@ -490,7 +523,7 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
   const initialActive = await projectionToggle.getAttribute("data-active");
   const firstExpectedActive = initialActive === "true" ? "false" : "true";
   const secondExpectedActive = initialActive === "true" ? "true" : "false";
-  const initialProjectionSample = await sampleCanvasComposite(page, canvas);
+  const initialProjectionSample = await sampleCanvasComposite(page);
 
   await projectionToggle.click();
   await waitForCondition(
@@ -536,7 +569,7 @@ async function verifyProjectionRoundTrip({ canvas, page }) {
 async function verifyDimensionFrameCage({ canvas, page }) {
   const commandId = "viewport-3d.dimension-frame-cage";
   await selectDimensionFrameMode(page, "Off");
-  const offSample = await sampleCanvasComposite(page, canvas);
+  const offSample = await sampleCanvasComposite(page);
   await selectDimensionFrameMode(page, "Floor + vertical");
   await waitForCanvasCompositeChange(
     page,
@@ -551,15 +584,21 @@ async function verifyDimensionFrameCage({ canvas, page }) {
 }
 
 async function selectDimensionFrameMode(page, name) {
-  await page.getByRole("tab", { name: "View" }).first().click();
-  const frameAction = page.locator('[data-action-id="view-dimension-frame"]');
-  await frameAction.waitFor({
-    state: "visible",
-    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
-  });
-  await frameAction.click();
-  await page.getByRole("menuitemradio", { exact: true, name }).click();
+  await page.getByRole("tab", { name: "View" }).first().click({ force: true });
+  await clickFreshAction(page, '[data-action-id="view-dimension-frame"]', "open dimension frame menu");
+  await page
+    .getByRole("menuitemradio", { exact: true, name })
+    .click({ force: true });
   await waitForBrowserPaint(page);
+}
+
+async function clickFreshAction(page, selector, label) {
+  await waitForCondition(label, async () => {
+    const action = page.locator(selector).first();
+    await action.waitFor({ state: "visible", timeout: 2_000 });
+    await action.click({ force: true, timeout: 2_000 });
+    return true;
+  });
 }
 
 async function verifyGeometryAuthoringFlow({
@@ -913,7 +952,7 @@ async function waitForCanvasCompositeChange(
   options = {},
 ) {
   return waitForCondition(label, async () => {
-    const current = await sampleCanvasComposite(page, canvas);
+    const current = await sampleCanvasComposite(page);
     if (!current.nonBlank) {
       throw new Error(
         failureMessage +
@@ -942,7 +981,7 @@ async function waitForCanvasCompositeChange(
 
 async function waitForCanvasChange(page, canvas, baseline, label) {
   return waitForCondition(label, async () => {
-    const current = await sampleCanvasComposite(page, canvas);
+    const current = await sampleCanvasComposite(page);
     const diff = canvasCompositeDifference(baseline, current);
     if (diff.changed) return current;
     throw new Error(
@@ -1007,26 +1046,15 @@ function withTimeout(promise, timeoutMs, label) {
   });
 }
 
-async function sampleCanvasComposite(page, canvas) {
-  const box = await canvas.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return {
-      height: rect.height,
-      width: rect.width,
-      x: rect.x,
-      y: rect.y,
-    };
-  });
+async function sampleCanvasComposite(page) {
+  const box = await readCanvasClipBox(page);
   if (box.width <= 0 || box.height <= 0) {
     throw new Error(
       `3D viewport canvas has no measurable bounding box: ${box.width}x${box.height}.`,
     );
   }
 
-  const background = await canvas.evaluate((node) => {
-    const viewport = node.closest(".fm-viewport-3d");
-    return viewport ? getComputedStyle(viewport).backgroundColor : "";
-  });
+  const background = await readCanvasBackground(page);
   const backgroundRgb = parseCssRgb(background);
   const png = await withTimeout(
     page.screenshot({

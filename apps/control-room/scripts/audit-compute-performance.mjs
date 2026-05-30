@@ -1317,9 +1317,10 @@ function checkTopologyIndexBufferCache() {
     "const partVolumeEdgeIndexCache = new WeakMap",
     "const surfaceEdgeIndexCache = new WeakMap<Uint32Array, Uint32Array | null>()",
     "function getCachedPartTopologyValue",
+    "function lazyValue",
     "buildPartSurfaceIndicesUncached(part, topology)",
     "buildPartVolumeEdgeIndicesUncached(part, topology)",
-    "buildCachedSurfaceEdgeIndices(surfaceIndices)",
+    "buildCachedSurfaceEdgeIndices(surfaceIndices())",
   ]);
 }
 

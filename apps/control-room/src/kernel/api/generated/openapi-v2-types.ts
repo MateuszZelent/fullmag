@@ -1076,6 +1076,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/policies/interfaces/{interface_id}": {
         parameters: {
             query?: never;
@@ -3106,6 +3122,15 @@ export interface components {
             geometry_name: string;
             /** Format: int32 */
             marker: number;
+        };
+        MeshHistogramBinElementsResource: {
+            /** Format: int32 */
+            bin_index: number;
+            element_indices: number[];
+            mesh_id: string;
+            metric: string;
+            node_indices: number[];
+            part_id: string;
         };
         MeshInterfaceConfigReplaceRequest: {
             config?: Record<string, never> | null;
@@ -7417,6 +7442,56 @@ export interface operations {
                 };
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh. */
+                mesh_id: string;
+                /** @description Stable FEM mesh part id, for example airbox */
+                part_id: string;
+                /** @description Histogram metric: characteristic_size, tetra_size, edge_length, volume, sicn, or gamma */
+                metric: string;
+                /** @description Zero-based histogram bin index */
+                bin_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source element and node indices for a mesh histogram bin */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshHistogramBinElementsResource"];
+                };
+            };
+            /** @description No FEM mesh available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid histogram metric or bin index */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, mesh, or mesh part */
             404: {
                 headers: {
                     [name: string]: unknown;

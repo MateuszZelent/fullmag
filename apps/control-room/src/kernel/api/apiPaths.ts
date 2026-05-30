@@ -299,6 +299,10 @@ export const MESHING_PART_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
 );
 
+export const MESHING_HISTOGRAM_BIN_ELEMENTS_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements",
+);
+
 export const MODEL_UNIVERSE_PATH = openApiV2Path(
   "/v2/sessions/current/model/universe",
 );

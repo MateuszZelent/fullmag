@@ -7,7 +7,7 @@ export type ThreadManagerLane =
   | "react"
   | "other";
 
-export interface ThreadManagerRow {
+interface ThreadManagerRow {
   averageMs: number;
   id: string;
   label: string;
@@ -20,7 +20,7 @@ export interface ThreadManagerRow {
   totalMs: number;
 }
 
-export interface ThreadManagerWorkerRow {
+interface ThreadManagerWorkerRow {
   detail: string;
   id: string;
   label: string;
@@ -36,7 +36,7 @@ export interface ThreadManagerModel {
   workerRows: ThreadManagerWorkerRow[];
 }
 
-export interface ThreadManagerActivityRow {
+interface ThreadManagerActivityRow {
   id: string;
   label: string;
   lane: ThreadManagerLane;
@@ -85,7 +85,7 @@ export function buildThreadManagerModel(
   let sampleCount = 0;
   let totalMeasuredMs = 0;
 
-  const orderedEntries = [...entries].sort(
+  const orderedEntries = entries.toSorted(
     (left, right) => left.timestampMs - right.timestampMs,
   );
   for (const entry of orderedEntries) {
@@ -384,16 +384,15 @@ function readDetailValue(detail: string | null | undefined, key: string): string
 function readDirtyReasonCounts(detail: string): Array<[string, number]> {
   const match = detail.match(/(?:^|;)dirty=([^;]+)(?:;|$)/);
   if (!match?.[1] || match[1] === "none") return [];
-  return match[1]
-    .split(",")
-    .map((item): [string, number] | null => {
-      const [reason, countText] = item.split(":");
-      if (!reason || !countText) return null;
-      const count = Number(countText);
-      if (!Number.isFinite(count) || count <= 0) return null;
-      return [reason, count];
-    })
-    .filter((item): item is [string, number] => item !== null);
+  const counts: Array<[string, number]> = [];
+  for (const item of match[1].split(",")) {
+    const [reason, countText] = item.split(":");
+    if (!reason || !countText) continue;
+    const count = Number(countText);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    counts.push([reason, count]);
+  }
+  return counts;
 }
 
 function buildWorkerRows(rows: ThreadManagerRow[]): ThreadManagerWorkerRow[] {

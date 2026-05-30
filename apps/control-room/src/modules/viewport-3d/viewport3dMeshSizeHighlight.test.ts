@@ -92,6 +92,7 @@ function highlight(
     distributionLabel: "Tetra size",
     hi: 1.5,
     lo: 1,
+    resource: null,
     scope: { kind: "all" },
     ...patch,
   };
@@ -146,5 +147,23 @@ describe("buildViewport3DMeshSizeHighlightModel", () => {
 
     expect(model?.matchedElementCount).toBe(1);
     expect(Array.from(model?.edgeIndices ?? [])).toContain(5);
+  });
+
+  it("uses API-selected source element indices when provided", () => {
+    const model = buildViewport3DMeshSizeHighlightModel(
+      topologyFixture(),
+      topologyModelFixture(),
+      femDomainFixture(),
+      highlight({
+        hi: 0.1,
+        lo: 0,
+        scope: { kind: "airbox" },
+      }),
+      { elementIndices: [1] },
+    );
+
+    expect(model?.matchedElementCount).toBe(1);
+    expect(model?.sampledElementCount).toBe(1);
+    expect(Array.from(model?.edgeIndices ?? [])).toContain(7);
   });
 });

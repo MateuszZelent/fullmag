@@ -73,6 +73,9 @@ test-desktop:
 repo-check:
     python3 scripts/check_repo_consistency.py
 
+verify-fem-meshing-production:
+    bash scripts/verify_fem_meshing_production.sh
+
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
     else ./scripts/ci-resource-first-gates.sh --strict; fi

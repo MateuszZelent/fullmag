@@ -909,7 +909,7 @@ class ProblemApiTests(unittest.TestCase):
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
         study_universe = loaded.problem.runtime_metadata["study_universe"]
         self.assertEqual(study_universe["airbox_hmax"], 500e-9)
-        self.assertEqual(study_universe["airbox_hmin"], 10e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 20e-9)
         self.assertEqual(study_universe["airbox_growth_rate"], 1.5)
         self.assertEqual(mesh_workflow["fem"]["hmax"], 20e-9)
         mesh_options = mesh_workflow["mesh_options"]
@@ -922,17 +922,17 @@ class ProblemApiTests(unittest.TestCase):
         arch_mesh = per_geometry[0]
         self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
         self.assertEqual(arch_mesh["maximum_element_size"], 20e-9)
-        self.assertEqual(arch_mesh["minimum_element_size"], 2e-9)
-        self.assertEqual(arch_mesh["interface_hmax"], 20e-9)
+        self.assertEqual(arch_mesh["minimum_element_size"], 5e-9)
+        self.assertEqual(arch_mesh["interface_hmax"], 40e-9)
         self.assertEqual(arch_mesh["interface_thickness"], 20e-9)
         self.assertEqual(arch_mesh["transition_distance"], 120e-9)
         self.assertEqual(arch_mesh["mesh_strategy"], "thin_film_tetrahedral")
         self.assertEqual(arch_mesh["through_thickness_elements"], 1)
-        self.assertEqual(arch_mesh["edge_hmax"], 2e-9)
-        self.assertEqual(arch_mesh["edge_thickness"], 2e-9)
+        self.assertEqual(arch_mesh["edge_hmax"], 20e-9)
+        self.assertEqual(arch_mesh["edge_thickness"], 20e-9)
         self.assertEqual(arch_mesh["edge_transition_distance"], 60e-9)
-        self.assertEqual(arch_mesh["corner_hmax"], 2e-9)
-        self.assertEqual(arch_mesh["corner_extent"], 2e-9)
+        self.assertEqual(arch_mesh["corner_hmax"], 20e-9)
+        self.assertEqual(arch_mesh["corner_extent"], 20e-9)
         self.assertEqual(arch_mesh["corner_transition_distance"], 40e-9)
         self.assertNotIn("algorithm_3d", arch_mesh)
         self.assertNotIn("optimize", arch_mesh)
@@ -945,12 +945,12 @@ class ProblemApiTests(unittest.TestCase):
         object_mesh = scene["objects"][0]["object_mesh"]
         self.assertEqual(object_mesh["mesh_strategy"], "thin_film_tetrahedral")
         self.assertIsNone(object_mesh["algorithm_3d"])
-        self.assertEqual(object_mesh["hmin"], "2e-09")
-        self.assertEqual(object_mesh["edge_maximum_element_size"], "2e-09")
-        self.assertEqual(object_mesh["edge_thickness"], "2e-09")
+        self.assertEqual(object_mesh["hmin"], "5e-09")
+        self.assertEqual(object_mesh["edge_maximum_element_size"], "5e-09")
+        self.assertEqual(object_mesh["edge_thickness"], "5e-09")
         self.assertEqual(object_mesh["edge_transition_distance"], "6e-08")
-        self.assertEqual(object_mesh["corner_maximum_element_size"], "2e-09")
-        self.assertEqual(object_mesh["corner_extent"], "2e-09")
+        self.assertEqual(object_mesh["corner_maximum_element_size"], "5e-09")
+        self.assertEqual(object_mesh["corner_extent"], "5e-09")
         self.assertEqual(object_mesh["corner_transition_distance"], "4e-08")
         self.assertEqual(object_mesh["interface_maximum_element_size"], "2e-08")
 
@@ -3932,9 +3932,94 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_entry["corner_transition_distance"], "2e-08")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn('mesh_strategy="thin_film_tetrahedral"', rewritten)
-        self.assertIn("through_thickness_elements=1", rewritten)
+        self.assertIn("body.mesh.thin_film(", rewritten)
+        self.assertIn("layers=1", rewritten)
         self.assertIn("edge_transition_distance=3e-08", rewritten)
+        self.assertIn("corner_transition_distance=2e-08", rewritten)
+
+    def test_mesh_controls_round_trip_for_production_thin_film(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("mesh_roundtrip")
+        study.engine("fem")
+        study.universe(
+            mode="auto",
+            size=(200e-9, 120e-9, 40e-9),
+            center=(0.0, 0.0, 0.0),
+        )
+        study.universe.mesh(
+            maximum_element_size=80e-9,
+            minimum_element_size=5e-9,
+            maximum_element_growth_rate=1.4,
+            grading="geometric",
+        )
+
+        body = study.geometry(
+            fm.ArchWaveguide(
+                length=100e-9,
+                width=40e-9,
+                height=2e-9,
+                arch_height=0.0,
+                name="arch",
+            ),
+            name="body",
+        )
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh.thin_film(
+            maximum_element_size=20e-9,
+            minimum_element_size=2e-9,
+            interface_maximum_element_size=8e-9,
+            interface_thickness=4e-9,
+            transition_distance=60e-9,
+            edge_maximum_element_size=5e-9,
+            edge_thickness=5e-9,
+            edge_transition_distance=40e-9,
+            corner_maximum_element_size=5e-9,
+            corner_extent=5e-9,
+            corner_transition_distance=30e-9,
+            layers=1,
+        )
+        study.build_domain_mesh()
+        study.run(1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_production_thin_film_mesh.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+            with patch(
+                "fullmag.model.problem.build_geometry_assets_for_request",
+                return_value=None,
+            ):
+                ir = loaded.problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+
+        workflow = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"]
+        study_universe = ir["problem_meta"]["runtime_metadata"]["study_universe"]
+        self.assertEqual(study_universe["airbox_hmax"], 80e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 5e-9)
+        self.assertEqual(study_universe["airbox_growth_rate"], 1.4)
+        per_geometry = workflow["per_geometry"][0]
+        self.assertEqual(per_geometry["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(per_geometry["through_thickness_elements"], 1)
+        self.assertEqual(per_geometry["edge_transition_distance"], 40e-9)
+        self.assertEqual(per_geometry["corner_transition_distance"], 30e-9)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        self.assertEqual(mesh_entry["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(mesh_entry["edge_transition_distance"], "4e-08")
+        self.assertEqual(mesh_entry["corner_transition_distance"], "3e-08")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("body.mesh.thin_film(", rewritten)
+        self.assertIn("edge_transition_distance=4e-08", rewritten)
+        self.assertIn("corner_transition_distance=3e-08", rewritten)
+        self.assertIn("layers=1", rewritten)
 
     def test_edge_transition_distance_requires_edge_refinement(self) -> None:
         fm.reset()

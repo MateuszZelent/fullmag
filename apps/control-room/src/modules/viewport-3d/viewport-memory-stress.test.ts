@@ -24,8 +24,9 @@ describe("viewport 3D memory stress", () => {
   it("releases inactive decoded field buffers across repeated quantity switches", async () => {
     const store = new ResourceRuntimeStore<{ values: Float32Array }>();
     let allocatedBytes = 0;
+    const quantityIndices = Array.from({ length: 200 }, (_, index) => index);
 
-    for (let index = 0; index < 200; index += 1) {
+    async function runQuantitySwitch(index: number): Promise<void> {
       const resourceKey = `data/fields/q${index}/samples/vector`;
       const unsubscribe = store.subscribe(resourceKey, () => undefined);
       const values = new Float32Array(4096);
@@ -53,6 +54,13 @@ describe("viewport 3D memory stress", () => {
         readyCount: 0,
       });
     }
+
+    // Keep the sequence explicit: each resource must be released before the next switch.
+    let sequence = Promise.resolve();
+    for (const index of quantityIndices) {
+      sequence = sequence.then(() => runQuantitySwitch(index));
+    }
+    await sequence;
 
     expect(allocatedBytes).toBeGreaterThan(0);
   });

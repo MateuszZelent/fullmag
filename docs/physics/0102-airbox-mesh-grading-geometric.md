@@ -10,6 +10,9 @@
   - `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`
   - `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`
 
+Production-readiness criteria for this grading contract are defined in
+`docs/physics/0105-fem-meshing-production-acceptance.md`.
+
 ## 1. Problem statement
 
 The current Fullmag airbox meshing uses **linear interpolation** for element size as a function

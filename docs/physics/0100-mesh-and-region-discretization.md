@@ -4,6 +4,9 @@
 - Last updated: 2026-03-23
 - Related specs: `docs/specs/geometry-policy-v0.md`, `docs/specs/exchange-bc-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
 
+Production-readiness criteria for FEM shared-domain meshing are defined in
+`docs/physics/0105-fem-meshing-production-acceptance.md`.
+
 ## 1. Problem statement
 
 Geometry imports, region tagging, and material assignment are the first point where backend-neutral physics semantics meet backend-specific numerical representation.

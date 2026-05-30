@@ -385,6 +385,50 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
     }
 }
 
+fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
+    FemMeshPayload {
+        mesh_name: "shared-node-test-mesh".to_string(),
+        mesh_id: "shared-node-test-mesh:1".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ],
+        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        element_markers: vec![7, 0],
+        boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
+        boundary_markers: vec![3, 4],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        object_segments: Vec::new(),
+        mesh_parts: vec![FemMeshPartPayload {
+            id: "airbox".to_string(),
+            label: "Airbox".to_string(),
+            role: "air".to_string(),
+            object_id: None,
+            geometry_id: None,
+            material_id: None,
+            element_start: 1,
+            element_count: 1,
+            boundary_face_start: 1,
+            boundary_face_count: 1,
+            boundary_face_indices: vec![1],
+            node_start: 4,
+            node_count: 4,
+            node_indices: vec![0, 1, 2, 4],
+            surface_faces: vec![[0, 1, 4]],
+            bounds_min: Some([0.0, 0.0, -1.0]),
+            bounds_max: Some([1.0, 1.0, 0.0]),
+        }],
+        domain_mesh_mode: Some("shared_domain".to_string()),
+        domain_frame: None,
+        generation_id: Some("shared-node-generation".to_string()),
+        per_domain_quality: Default::default(),
+    }
+}
+
 fn sample_scoped_mesh_statistics() -> serde_json::Value {
     serde_json::json!({
         "mesh_name": "scoped-test-mesh",
@@ -10751,6 +10795,84 @@ async fn v2_mesh_part_topology_returns_scoped_mesh() {
     assert!(
         bytes.len() < full_len,
         "part topology should be smaller than shared-domain topology"
+    );
+}
+
+#[tokio::test]
+async fn v2_mesh_histogram_bin_elements_returns_airbox_indices() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_revision = 32;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/study_domain/parts/airbox/histogram-bins/characteristic_size/0/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mesh_id"], "scoped-test-mesh:1");
+    assert_eq!(json["part_id"], "airbox");
+    assert_eq!(json["metric"], "characteristic_size");
+    assert_eq!(json["bin_index"], 0);
+    assert_eq!(json["element_indices"], serde_json::json!([1]));
+    assert_eq!(json["node_indices"], serde_json::json!([4, 5, 6, 7]));
+}
+
+#[tokio::test]
+async fn v2_mesh_histogram_bin_elements_rejects_invalid_bin() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/parts/airbox/histogram-bins/characteristic_size/1/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v2_mesh_histogram_bin_elements_preserves_shared_node_indices() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_shared_node_airbox_mesh_payload());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/parts/airbox/histogram-bins/tetra_size/0/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["element_indices"], serde_json::json!([1]));
+    assert_eq!(
+        json["node_indices"],
+        serde_json::json!([0, 1, 2, 4]),
+        "histogram selection must preserve source shared-domain node ids"
     );
 }
 

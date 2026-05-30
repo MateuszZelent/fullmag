@@ -44,9 +44,11 @@ export function explorerCrossSectionsEqual(
 ): boolean {
   if (previous.activePlotId !== next.activePlotId) return false;
   if (!crossSectionDraftEqual(previous.draft, next.draft)) return false;
-  if (previous.plots.length !== next.plots.length) return false;
-  return previous.plots.every((plot, index) =>
-    crossSectionPlotSummaryEqual(plot, next.plots[index]),
+  return (
+    previous.plots.length === next.plots.length &&
+    previous.plots.every((plot, index) =>
+      crossSectionPlotSummaryEqual(plot, next.plots[index]),
+    )
   );
 }
 

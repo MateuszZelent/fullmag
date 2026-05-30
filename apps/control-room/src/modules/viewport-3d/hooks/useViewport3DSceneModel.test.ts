@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import {
+  resolveViewport3DPrimaryFieldQuery,
   resolveViewport3DSceneCameraView,
+  resolveViewport3DTargetFieldQuery,
 } from "./useViewport3DSceneModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
@@ -19,6 +21,92 @@ const visualizationStateResourceSourceUrl = new URL(
 );
 
 describe("useViewport3DSceneModel", () => {
+  it("requests scalar field components when the primary field is only used for scalar surface colors", () => {
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(["magnitude"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "magnitude",
+      scope_kind: "full",
+    });
+  });
+
+  it("keeps full field vectors when glyphs or orientation colors need vector components", () => {
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 256,
+          scalarColorModes: new Set(["magnitude"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+    expect(
+      resolveViewport3DPrimaryFieldQuery({
+        fdmInstanceModelNeedsFieldVector: false,
+        fdmSurfaceColorMode: null,
+        fdmTopographyEnabled: false,
+        fdmVectorsVisible: false,
+        fieldRenderOptions: {
+          fullVectorBudget: 0,
+          partVectorBudgets: new Map(),
+          scalarColorModes: new Set(["orientation"]),
+          scalarColorsVisible: true,
+        },
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+  });
+
+  it("resolves target-specific scalar field queries unless vectors need full components", () => {
+    expect(
+      resolveViewport3DTargetFieldQuery({
+        surfaceColorMode: "x",
+        vectorsVisible: false,
+      }),
+    ).toEqual({
+      component: "x",
+      scope_kind: "full",
+    });
+    expect(
+      resolveViewport3DTargetFieldQuery({
+        surfaceColorMode: "orientation",
+        vectorsVisible: false,
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+    expect(
+      resolveViewport3DTargetFieldQuery({
+        surfaceColorMode: "magnitude",
+        vectorsVisible: true,
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+  });
+
   it("consumes visualization resources separately from the camera registry", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

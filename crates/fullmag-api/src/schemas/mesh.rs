@@ -484,6 +484,16 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshHistogramBinElementsResource {
+    pub mesh_id: String,
+    pub part_id: String,
+    pub metric: String,
+    pub bin_index: u32,
+    pub element_indices: Vec<u32>,
+    pub node_indices: Vec<u32>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshRegionResource {
     pub region_id: String,

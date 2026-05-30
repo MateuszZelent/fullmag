@@ -79,6 +79,7 @@ interface BinPayload {
 }
 
 export interface MeshSizeDistributionHoverBin {
+  binIndex: number;
   binLabel: string;
   count: number;
   distributionId: MeshSizeDistribution["id"];
@@ -290,6 +291,7 @@ export function SizeDistributionChart({
     const bin = distribution.histogram[index];
     if (!bin) return;
     onHoverBin?.({
+      binIndex: index,
       binLabel: bin.label,
       count: bin.count,
       distributionId: distribution.id,

@@ -3,7 +3,7 @@ export interface CrossSectionQualitySample {
   visible: boolean;
 }
 
-export interface CrossSectionQualityHistogramBin {
+interface CrossSectionQualityHistogramBin {
   count: number;
   hi: number;
   label: string;
@@ -42,13 +42,19 @@ export function buildCrossSectionQualityStatistics(
 ): CrossSectionQualityStatistics {
   const threshold = normalizedOptionalNumber(options.threshold);
   const histogramBinCount = Math.max(1, Math.floor(options.histogramBinCount ?? 10));
-  const allValues = samples
-    .map((sample) => sample.qualityValue)
-    .filter(isFiniteNumber);
-  const visibleValues = samples
-    .filter((sample) => sample.visible)
-    .map((sample) => sample.qualityValue)
-    .filter(isFiniteNumber);
+  const allValues: number[] = [];
+  const visibleValues: number[] = [];
+  let belowThresholdCount = 0;
+  for (const sample of samples) {
+    const value = sample.qualityValue;
+    if (!isFiniteNumber(value)) continue;
+    allValues.push(value);
+    if (!sample.visible) continue;
+    visibleValues.push(value);
+    if (threshold !== null && value < threshold) {
+      belowThresholdCount += 1;
+    }
+  }
 
   if (visibleValues.length === 0) {
     return {
@@ -64,13 +70,10 @@ export function buildCrossSectionQualityStatistics(
     };
   }
 
-  const sorted = [...visibleValues].sort((left, right) => left - right);
+  const sorted = visibleValues.toSorted((left, right) => left - right);
   const sum = visibleValues.reduce((total, value) => total + value, 0);
   return {
-    belowThresholdCount:
-      threshold === null
-        ? null
-        : visibleValues.filter((value) => value < threshold).length,
+    belowThresholdCount: threshold === null ? null : belowThresholdCount,
     histogram: buildQualityHistogram(visibleValues, allValues, histogramBinCount),
     max: sorted[sorted.length - 1],
     mean: sum / visibleValues.length,

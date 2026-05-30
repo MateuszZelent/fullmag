@@ -67,6 +67,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/meshing/meshes/shared-domain/topology",
   "/v2/sessions/current/meshing/meshes/universe/quality",
   "/v2/sessions/current/meshing/meshes/universe/report",
+  "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements",
   "/v2/sessions/current/meshing/policies/interfaces/{interface_id}",
   "/v2/sessions/current/meshing/policies/objects/{object_id}",
   "/v2/sessions/current/meshing/policies/shared-domain",

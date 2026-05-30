@@ -16,7 +16,7 @@ export type CrossSectionFrameExtent =
   | "object_bounds"
   | "universe";
 
-export interface CrossSectionPlotRenderOptions {
+interface CrossSectionPlotRenderOptions {
   colorScale: SliceMeshColorScale;
   frameRotationDegrees: number;
   filterExpression: string;
@@ -195,9 +195,7 @@ export function activeCrossSectionFrameRotationDegrees(
   return activeCrossSectionPlot(state)?.rotationDegrees ?? 0;
 }
 
-export function crossSectionAxisFromPlane(
-  plane: CrossSectionPlane,
-): ClipAxis {
+function crossSectionAxisFromPlane(plane: CrossSectionPlane): ClipAxis {
   return AXIS_BY_PLANE[plane];
 }
 

@@ -7,6 +7,9 @@
   - `docs/physics/0102-airbox-mesh-grading-geometric.md`
   - `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`
 
+Production-readiness criteria for thin-film FEM meshing are defined in
+`docs/physics/0105-fem-meshing-production-acceptance.md`.
+
 ## 1. Problem statement
 
 Thin magnetic films combine a nanometre-scale thickness with lateral dimensions

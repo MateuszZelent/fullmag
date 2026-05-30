@@ -4667,6 +4667,49 @@
         ],
         "type": "object"
       },
+      "MeshHistogramBinElementsResource": {
+        "properties": {
+          "bin_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "mesh_id": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "node_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "part_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mesh_id",
+          "part_id",
+          "metric",
+          "bin_index",
+          "element_indices",
+          "node_indices"
+        ],
+        "type": "object"
+      },
       "MeshInterfaceConfigReplaceRequest": {
         "properties": {
           "config": {
@@ -15236,6 +15279,75 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements",
+        "parameters": [
+          {
+            "description": "Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh.",
+            "in": "path",
+            "name": "mesh_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable FEM mesh part id, for example airbox",
+            "in": "path",
+            "name": "part_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Histogram metric: characteristic_size, tetra_size, edge_length, volume, sicn, or gamma",
+            "in": "path",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based histogram bin index",
+            "in": "path",
+            "name": "bin_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshHistogramBinElementsResource"
+                }
+              }
+            },
+            "description": "Source element and node indices for a mesh histogram bin"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "400": {
+            "description": "Invalid histogram metric or bin index"
+          },
+          "404": {
+            "description": "No active workspace, mesh, or mesh part"
           }
         },
         "tags": [

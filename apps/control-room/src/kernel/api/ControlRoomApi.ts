@@ -15,6 +15,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
@@ -114,6 +115,8 @@ import type {
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
+  MeshHistogramBinElementsResource,
+  MeshHistogramBinMetric,
   MeshLastSuccessfulBuildResource,
   MeshObjectConfigReplaceRequest,
   MeshObjectConfigResource,
@@ -209,6 +212,13 @@ type BinaryOpenApiTransportResult = {
   error?: unknown;
   response: Response;
 };
+
+export interface MeshHistogramBinElementsParams {
+  binIndex: number;
+  meshId: string;
+  metric: MeshHistogramBinMetric;
+  partId: string;
+}
 
 const CHUNKED_TOPOLOGY_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const TOPOLOGY_RANGE_CHUNK_BYTES = 8 * 1024 * 1024;
@@ -401,6 +411,22 @@ export class ControlRoomApi {
         MESHING_PART_TOPOLOGY_PATH,
         options,
         { part_id: partId },
+      ),
+    histogramBinElements: (
+      params: MeshHistogramBinElementsParams,
+      options?: RequestOptions,
+    ) =>
+      this.requestJson<MeshHistogramBinElementsResource>(
+        MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
+        options,
+        {
+          path: {
+            bin_index: params.binIndex,
+            mesh_id: params.meshId,
+            metric: params.metric,
+            part_id: params.partId,
+          },
+        },
       ),
     replaceObjectPolicy: (
       objectId: string,
@@ -1211,8 +1237,9 @@ export class ControlRoomApi {
     pathParams?: PathParams,
     query?: QueryParams,
   ): Promise<BinaryResourceResult<TData>> {
+    const measureBase = `fullmag.api.requestBinaryResource.${decoderKind}`;
     return measureControlRoomApiPerformance(
-      `fullmag.api.requestBinaryResource.${decoderKind}`,
+      measureBase,
       async () => {
         const headers: Record<string, string> = {};
         if (options.etag) {
@@ -1227,18 +1254,22 @@ export class ControlRoomApi {
         };
         let result: BinaryOpenApiTransportResult | null = null;
         try {
-          result = await this.transport.GET(path as never, {
-            cache: "no-store",
-            fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-              const resp = await this.executeBinaryOpenApiFetch(input, init);
-              requestState.lastResponse = resp;
-              return resp;
-            },
-            headers,
-            params: { path: pathParams, query },
-            parseAs: "arrayBuffer",
-            signal: options.signal,
-          } as never) as unknown as BinaryOpenApiTransportResult;
+          result = await measureControlRoomApiPerformance(
+            `${measureBase}.transport`,
+            async () =>
+              this.transport.GET(path as never, {
+                cache: "no-store",
+                fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  const resp = await this.executeBinaryOpenApiFetch(input, init);
+                  requestState.lastResponse = resp;
+                  return resp;
+                },
+                headers,
+                params: { path: pathParams, query },
+                parseAs: "arrayBuffer",
+                signal: options.signal,
+              } as never) as unknown as BinaryOpenApiTransportResult,
+          );
         } catch (error) {
           const lastResponse = requestState.lastResponse;
           if (lastResponse && !lastResponse.ok) {
@@ -1277,15 +1308,18 @@ export class ControlRoomApi {
         const byteLength = buffer.byteLength;
 
         const decodeStartedAt = nowMs();
-        const data =
-          decoderKind === "raw-bytes"
-            ? decode(buffer)
-            : await this.binaryDecodeScheduler({
-                buffer,
-                decodeInline: decode,
-                kind: decoderKind,
-                path: path as string,
-              });
+        const data = await measureControlRoomApiPerformance(
+          `${measureBase}.decode`,
+          async () =>
+            decoderKind === "raw-bytes"
+              ? decode(buffer)
+              : await this.binaryDecodeScheduler({
+                  buffer,
+                  decodeInline: decode,
+                  kind: decoderKind,
+                  path: path as string,
+                }),
+        );
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
         this.requestDiagnostics?.record({

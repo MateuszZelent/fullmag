@@ -72,10 +72,8 @@ try {
   const canvas = page.locator(".fm-viewport-3d canvas");
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
   await waitForCanvasReady(canvas);
-  await waitForDiagnostics(viewport);
-  await page.waitForTimeout(500);
-
-  const baseline = await readDiagnostics(viewport);
+  await waitForDiagnostics(page);
+  const baseline = await waitForStableDiagnostics(page);
   const sequence = [
     "interactive-lite",
     "interactive",
@@ -90,9 +88,8 @@ try {
     await setVisualProfile(page, viewport, profile);
   }
   auditActive = false;
-  await page.waitForTimeout(500);
 
-  const after = await readDiagnostics(viewport);
+  const after = await waitForStableDiagnostics(page);
   const maxGeometryGrowth = Math.max(12, baseline.geo * 2);
   const cacheGrowth = after.cacheBytes - baseline.cacheBytes;
   if (after.geo > baseline.geo + maxGeometryGrowth) {
@@ -142,7 +139,7 @@ async function openViewport3D(page) {
 async function setVisualProfile(page, viewport, profile) {
   if ((await viewport.getAttribute("data-visual-profile-id")) === profile) return;
 
-  await page.getByRole("tab", { name: "View" }).click({ force: true });
+  await page.getByRole("tab", { exact: true, name: "View" }).click({ force: true });
   await page.locator('[data-action-id="view-render-quality"]').click({ force: true });
   await page
     .getByRole("menuitemradio", { exact: true, name: profileLabel(profile) })
@@ -183,30 +180,24 @@ async function waitForCanvasReady(canvas) {
   );
 }
 
-async function waitForDiagnostics(viewport) {
-  await viewport.evaluate((node) =>
-    new Promise((resolve, reject) => {
-      const deadline = performance.now() + 15_000;
-      const tick = () => {
-        const spans = Array.from(node.querySelectorAll(".fm-viewport-3d__hud span"));
-        if (spans.some((span) => span.textContent?.includes("geo:"))) {
-          resolve(undefined);
-          return;
-        }
-        if (performance.now() > deadline) {
-          reject(new Error("Timed out waiting for viewport diagnostics HUD."));
-          return;
-        }
-        setTimeout(tick, 100);
-      };
-      tick();
-    }),
+async function waitForDiagnostics(page) {
+  await page.waitForFunction(
+    () => {
+      const spans = Array.from(
+        document.querySelectorAll(".fm-viewport-3d__hud span"),
+      );
+      return spans.some((span) => span.textContent?.includes("geo:"));
+    },
+    null,
+    { timeout: 15_000 },
   );
 }
 
-async function readDiagnostics(viewport) {
-  const value = await viewport.evaluate((node) => {
-    const spans = Array.from(node.querySelectorAll(".fm-viewport-3d__hud span"));
+async function readDiagnostics(page) {
+  const value = await page.evaluate(() => {
+    const spans = Array.from(
+      document.querySelectorAll(".fm-viewport-3d__hud span"),
+    );
     return spans.find((span) => span.textContent?.includes("geo:"))?.textContent ?? "";
   });
   return {
@@ -215,6 +206,30 @@ async function readDiagnostics(viewport) {
     geo: Number(readDiagnosticToken(value, "geo") ?? 0),
     raw: value,
   };
+}
+
+async function waitForStableDiagnostics(page) {
+  const deadline = Date.now() + 45_000;
+  let previous = null;
+  let stableSamples = 0;
+
+  while (Date.now() < deadline) {
+    const current = await readDiagnostics(page);
+    if (
+      previous &&
+      current.cacheBytes === previous.cacheBytes &&
+      current.geo === previous.geo
+    ) {
+      stableSamples += 1;
+      if (stableSamples >= 2) return current;
+    } else {
+      stableSamples = 0;
+    }
+    previous = current;
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error("Timed out waiting for stable viewport diagnostics.");
 }
 
 function readDiagnosticToken(value, key) {

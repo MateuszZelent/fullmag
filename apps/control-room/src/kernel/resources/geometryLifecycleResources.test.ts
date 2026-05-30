@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -26,6 +27,7 @@ import {
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
+  resolveMeshHistogramBinElementsResourceKey,
   resolveMeshSharedDomainManifestRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
@@ -73,6 +75,19 @@ describe("geometry lifecycle resources", () => {
         "{interaction_kind}",
         "interfacial_dmi",
       ),
+    );
+    expect(
+      resolveMeshHistogramBinElementsResourceKey({
+        binIndex: 12,
+        meshId: "study domain",
+        metric: "characteristic_size",
+        partId: "airbox part",
+      }),
+    ).toBe(
+      MESHING_HISTOGRAM_BIN_ELEMENTS_PATH.replace("{mesh_id}", "study%20domain")
+        .replace("{part_id}", "airbox%20part")
+        .replace("{metric}", "characteristic_size")
+        .replace("{bin_index}", "12"),
     );
   });
 

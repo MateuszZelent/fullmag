@@ -221,6 +221,18 @@ function buildCachedSurfaceEdgeIndices(
   return edgeIndices;
 }
 
+function lazyValue<TValue>(build: () => TValue): () => TValue {
+  let cached = false;
+  let value: TValue;
+  return () => {
+    if (!cached) {
+      value = build();
+      cached = true;
+    }
+    return value;
+  };
+}
+
 export function buildViewport3DTopologyRenderModel<
   TPart extends Viewport3DRenderablePart,
 >(
@@ -230,27 +242,67 @@ export function buildViewport3DTopologyRenderModel<
 ): Viewport3DTopologyRenderModel<TPart> | null {
   if (!topology) return null;
 
-  const fallbackSurfaceIndices = buildCachedTopologySurfaceIndices(topology);
-  const fallbackVolumeEdgeIndices = buildCachedTopologyVolumeEdgeIndices(topology);
-  const airboxVolumeEdgeFallback =
+  const fallbackSurfaceIndices = lazyValue(() =>
+    buildCachedTopologySurfaceIndices(topology),
+  );
+  const fallbackVolumeEdgeIndices = lazyValue(() =>
+    buildCachedTopologyVolumeEdgeIndices(topology),
+  );
+  const airboxVolumeEdgeFallback = lazyValue(() =>
     airboxParts.length > 0
       ? buildUnclaimedVolumeEdgeIndices(topology, magneticParts) ??
-        fallbackVolumeEdgeIndices
-      : null;
+        fallbackVolumeEdgeIndices()
+      : null,
+  );
 
   return {
-    airboxParts: airboxParts.map((part) => ({
-      part,
-      ...buildPartTopologyModel(part, topology, airboxVolumeEdgeFallback),
-    })),
-    fallbackSurfaceIndices,
-    fallbackVolumeEdgeIndices,
-    magneticParts: magneticParts.map((part) => ({
-      part,
-      ...buildPartTopologyModel(part, topology),
-    })),
+    airboxParts: airboxParts.map((part) =>
+      buildViewport3DTopologyPartRenderModel(
+        part,
+        topology,
+        airboxVolumeEdgeFallback,
+      ),
+    ),
+    get fallbackSurfaceIndices() {
+      return fallbackSurfaceIndices();
+    },
+    get fallbackVolumeEdgeIndices() {
+      return fallbackVolumeEdgeIndices();
+    },
+    magneticParts: magneticParts.map((part) =>
+      buildViewport3DTopologyPartRenderModel(part, topology),
+    ),
     nodeCount: topology.nodeCount,
     positions: buildTopologyPositions(topology),
+  };
+}
+
+function buildViewport3DTopologyPartRenderModel<
+  TPart extends Viewport3DRenderablePart,
+>(
+  part: TPart,
+  topology: DecodedTopology,
+  fallbackVolumeEdgeIndices: (() => Uint32Array | null) | null = null,
+): Viewport3DTopologyPartRenderModel<TPart> {
+  const topologyModel = buildPartTopologyModel(
+    part,
+    topology,
+    fallbackVolumeEdgeIndices,
+  );
+  return {
+    get edgeIndices() {
+      return topologyModel.edgeIndices;
+    },
+    part,
+    get surfaceIndices() {
+      return topologyModel.surfaceIndices;
+    },
+    get surfaceNodeSelection() {
+      return topologyModel.surfaceNodeSelection;
+    },
+    get volumeEdgeIndices() {
+      return topologyModel.volumeEdgeIndices;
+    },
   };
 }
 
@@ -777,8 +829,30 @@ export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
 
 export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
   const tetraCount = Math.floor(indices.length / 4);
-  const seen = new Set<string>();
   const edges: number[] = [];
+  const numericKeyBase = resolveNumericEdgeKeyBase(indices);
+
+  if (numericKeyBase !== null) {
+    const seen = new Set<number>();
+    for (let tetra = 0; tetra < tetraCount; tetra += 1) {
+      const source = tetra * 4;
+      const a = indices[source] ?? 0;
+      const b = indices[source + 1] ?? 0;
+      const c = indices[source + 2] ?? 0;
+      const d = indices[source + 3] ?? 0;
+
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, a, b);
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, a, c);
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, a, d);
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, b, c);
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, b, d);
+      appendTetraEdgeByNumericKey(edges, seen, numericKeyBase, c, d);
+    }
+
+    return new Uint32Array(edges);
+  }
+
+  const seen = new Set<string>();
 
   for (let tetra = 0; tetra < tetraCount; tetra += 1) {
     const source = tetra * 4;
@@ -787,18 +861,47 @@ export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
     const c = indices[source + 2] ?? 0;
     const d = indices[source + 3] ?? 0;
 
-    appendTetraEdge(edges, seen, a, b);
-    appendTetraEdge(edges, seen, a, c);
-    appendTetraEdge(edges, seen, a, d);
-    appendTetraEdge(edges, seen, b, c);
-    appendTetraEdge(edges, seen, b, d);
-    appendTetraEdge(edges, seen, c, d);
+    appendTetraEdgeByStringKey(edges, seen, a, b);
+    appendTetraEdgeByStringKey(edges, seen, a, c);
+    appendTetraEdgeByStringKey(edges, seen, a, d);
+    appendTetraEdgeByStringKey(edges, seen, b, c);
+    appendTetraEdgeByStringKey(edges, seen, b, d);
+    appendTetraEdgeByStringKey(edges, seen, c, d);
   }
 
   return new Uint32Array(edges);
 }
 
-function appendTetraEdge(
+function resolveNumericEdgeKeyBase(indices: Uint32Array): number | null {
+  let maxIndex = 0;
+  for (let index = 0; index < indices.length; index += 1) {
+    const nodeIndex = indices[index] ?? 0;
+    if (nodeIndex > maxIndex) {
+      maxIndex = nodeIndex;
+    }
+  }
+
+  const keyBase = maxIndex + 1;
+  return keyBase * keyBase <= Number.MAX_SAFE_INTEGER ? keyBase : null;
+}
+
+function appendTetraEdgeByNumericKey(
+  edges: number[],
+  seen: Set<number>,
+  keyBase: number,
+  first: number,
+  second: number,
+): void {
+  if (first === second) return;
+  const a = Math.min(first, second);
+  const b = Math.max(first, second);
+  const key = a * keyBase + b;
+  if (seen.has(key)) return;
+  seen.add(key);
+  edges.push(a, b);
+}
+
+function appendTetraEdgeByStringKey(
   edges: number[],
   seen: Set<string>,
   first: number,
@@ -807,14 +910,10 @@ function appendTetraEdge(
   if (first === second) return;
   const a = Math.min(first, second);
   const b = Math.max(first, second);
-  const key = edgeKey(a, b);
+  const key = `${a}:${b}`;
   if (seen.has(key)) return;
   seen.add(key);
   edges.push(a, b);
-}
-
-function edgeKey(first: number, second: number): string {
-  return `${first}:${second}`;
 }
 
 export function buildPartSurfaceIndices(
@@ -1035,7 +1134,7 @@ function buildPartNodeSet(
 function buildPartTopologyModel(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
-  fallbackVolumeEdgeIndices: Uint32Array | null = null,
+  fallbackVolumeEdgeIndices: (() => Uint32Array | null) | null = null,
 ): Pick<
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
@@ -1043,15 +1142,33 @@ function buildPartTopologyModel(
   | "surfaceNodeSelection"
   | "volumeEdgeIndices"
 > {
-  const surfaceIndices = buildPartSurfaceIndices(part, topology);
+  const surfaceIndices = lazyValue(() => buildPartSurfaceIndices(part, topology));
+  const edgeIndices = lazyValue(() =>
+    buildCachedSurfaceEdgeIndices(surfaceIndices()),
+  );
+  const surfaceNodeSelection = lazyValue(() => {
+    const indices = surfaceIndices();
+    return indices ? { nodeIndices: uniqueSortedIndices(indices) } : null;
+  });
+  const volumeEdgeIndices = lazyValue(
+    () =>
+      buildPartVolumeEdgeIndices(part, topology) ??
+      fallbackVolumeEdgeIndices?.() ??
+      null,
+  );
   return {
-    edgeIndices: buildCachedSurfaceEdgeIndices(surfaceIndices),
-    surfaceIndices,
-    surfaceNodeSelection: surfaceIndices
-      ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }
-      : null,
-    volumeEdgeIndices:
-      buildPartVolumeEdgeIndices(part, topology) ?? fallbackVolumeEdgeIndices,
+    get edgeIndices() {
+      return edgeIndices();
+    },
+    get surfaceIndices() {
+      return surfaceIndices();
+    },
+    get surfaceNodeSelection() {
+      return surfaceNodeSelection();
+    },
+    get volumeEdgeIndices() {
+      return volumeEdgeIndices();
+    },
   };
 }
 

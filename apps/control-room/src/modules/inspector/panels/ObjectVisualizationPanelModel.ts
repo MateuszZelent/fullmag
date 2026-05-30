@@ -232,7 +232,7 @@ export interface VisualizationPanelSection {
   title: string;
 }
 
-export type AirboxVisibilityDiagnosticStatus =
+type AirboxVisibilityDiagnosticStatus =
   | "backend-off"
   | "confirmed"
   | "display-suppressed"

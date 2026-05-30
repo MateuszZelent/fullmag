@@ -83,6 +83,7 @@ def _build_shared_domain_build_report(
         fallbacks_triggered=fallbacks_triggered,
         selector_resolution=selector_resolution,
         boundary_layer_result=boundary_layer_result,
+        mesh_workflow=mesh_workflow,
     )
     thin_film_diagnostics = _build_thin_film_diagnostics(
         geometries,
@@ -211,6 +212,85 @@ def _shared_domain_swept_actual_method(geometry: Geometry, build_mode: str, requ
     return requested
 
 
+def _airbox_shape_status(
+    airbox: AirboxOptions | None,
+    build_mode: str,
+) -> MeshOperationStatus | None:
+    if airbox is None:
+        return None
+    requested_shape = str(getattr(airbox, "shape", "bbox") or "bbox").strip().lower()
+    if requested_shape == "sphere" and build_mode in {
+        "component_aware",
+        "concatenated_stl_fallback",
+    }:
+        return MeshOperationStatus(
+            kind="airbox_shape",
+            scope="global",
+            requested=True,
+            status="degraded",
+            requested_method="sphere",
+            actual_method="bbox",
+            reason="GEO shared-domain airbox path approximates spherical airbox with bbox geometry",
+            details={"build_mode": build_mode},
+        )
+    return MeshOperationStatus(
+        kind="airbox_shape",
+        scope="global",
+        requested=True,
+        status="applied",
+        requested_method=requested_shape,
+        actual_method=requested_shape,
+        details={"build_mode": build_mode},
+    )
+
+
+def _component_field_degradation_statuses(
+    mesh_workflow: Mapping[str, object] | None,
+    build_mode: str,
+) -> list[MeshOperationStatus]:
+    if build_mode != "concatenated_stl_fallback":
+        return []
+    raw_per_geometry = (
+        mesh_workflow.get("per_geometry")
+        if isinstance(mesh_workflow, Mapping)
+        and isinstance(mesh_workflow.get("per_geometry"), list)
+        else []
+    )
+    if not isinstance(raw_per_geometry, list):
+        return []
+    statuses: list[MeshOperationStatus] = []
+    for entry in raw_per_geometry:
+        if not isinstance(entry, Mapping):
+            continue
+        geometry_name = entry.get("geometry")
+        if not isinstance(geometry_name, str) or not geometry_name.strip():
+            continue
+        has_edge_corner = any(
+            entry.get(key) is not None
+            for key in (
+                "edge_hmax",
+                "edge_maximum_element_size",
+                "corner_hmax",
+                "corner_maximum_element_size",
+            )
+        )
+        if not has_edge_corner:
+            continue
+        statuses.append(
+            MeshOperationStatus(
+                kind="size_field",
+                scope=geometry_name,
+                requested=True,
+                status="ignored",
+                requested_method="component_edge_corner_refinement",
+                actual_method=None,
+                reason="requires_component_tags_unavailable_in_concatenated_stl_fallback",
+                details={"build_mode": build_mode},
+            )
+        )
+    return statuses
+
+
 def _build_mesh_operation_statuses(
     geometries: list[Geometry],
     opts: MeshOptions,
@@ -220,6 +300,7 @@ def _build_mesh_operation_statuses(
     fallbacks_triggered: list[str],
     selector_resolution: list[dict[str, object]] | None = None,
     boundary_layer_result: Mapping[str, object] | None = None,
+    mesh_workflow: Mapping[str, object] | None = None,
 ) -> list[MeshOperationStatus]:
     statuses: list[MeshOperationStatus] = []
 
@@ -262,6 +343,11 @@ def _build_mesh_operation_statuses(
             details={"size_field_count": len(opts.size_fields)},
         )
     )
+
+    airbox_shape_status = _airbox_shape_status(airbox, build_mode)
+    if airbox_shape_status is not None:
+        statuses.append(airbox_shape_status)
+    statuses.extend(_component_field_degradation_statuses(mesh_workflow, build_mode))
 
     boundary_layer_requested = opts.boundary_layer_count is not None or opts.boundary_layer_thickness is not None
     if boundary_layer_requested:

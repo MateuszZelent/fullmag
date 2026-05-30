@@ -1,10 +1,10 @@
 import type { ResourceRevision } from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 
-export const VIEWPORT_3D_REFRESH_DEFAULT_INTERVAL_MS = 1_000;
-export const VIEWPORT_3D_REFRESH_MIN_INTERVAL_MS = 200;
-export const VIEWPORT_3D_REFRESH_MAX_INTERVAL_MS = 5_000;
-export const VIEWPORT_3D_REFRESH_FLASH_MS = 650;
+const VIEWPORT_3D_REFRESH_DEFAULT_INTERVAL_MS = 1_000;
+const VIEWPORT_3D_REFRESH_MIN_INTERVAL_MS = 200;
+const VIEWPORT_3D_REFRESH_MAX_INTERVAL_MS = 5_000;
+const VIEWPORT_3D_REFRESH_FLASH_MS = 650;
 
 export interface Viewport3DFieldRefreshState {
   enabled: boolean;
@@ -143,7 +143,7 @@ export function resolveViewport3DRefreshCountdownDisplay(input: {
   };
 }
 
-export function formatViewport3DRefreshRemaining(ms: number): string {
+function formatViewport3DRefreshRemaining(ms: number): string {
   const seconds = Math.max(0, ms) / 1_000;
   if (seconds >= 10) return `${Math.ceil(seconds)}s`;
   return `${seconds.toFixed(1)}s`;

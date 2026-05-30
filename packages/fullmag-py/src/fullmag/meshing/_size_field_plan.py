@@ -182,6 +182,11 @@ def _build_perimeter_refinement_fields(
 
         box = _unwrap_translated_box_geometry(geometry)
         if box is None:
+            transition_growth = (
+                _coerce_positive_float(entry.get("transition_growth"))
+                if entry is not None
+                else None
+            )
             if "edge_hmax" in refinement and "edge_thickness" in refinement:
                 edge_thickness = float(refinement["edge_thickness"])
                 edge_transition_distance = _coerce_positive_float(
@@ -201,8 +206,11 @@ def _build_perimeter_refinement_fields(
                     "DistMin": float(edge_dist_min),
                     "DistMax": float(edge_dist_max),
                     "Sampling": 40,
+                    "Grading": "geometric",
                     "Source": "per_geometry.edge_maximum_element_size",
                 }
+                if transition_growth is not None and transition_growth > 1.0:
+                    edge_params["GrowthRate"] = float(transition_growth)
                 fields.append(
                     {
                         "kind": "EdgeDistanceThreshold",
@@ -235,6 +243,8 @@ def _build_perimeter_refinement_fields(
                     "Grading": "geometric",
                     "Source": "per_geometry.corner_maximum_element_size",
                 }
+                if transition_growth is not None and transition_growth > 1.0:
+                    corner_params["GrowthRate"] = float(transition_growth)
                 fields.append(
                     {
                         "kind": "CornerDistanceThreshold",
@@ -245,6 +255,12 @@ def _build_perimeter_refinement_fields(
         size_by_axis = [float(component) for component in box.size]
         in_plane_axes = sorted(range(3), key=lambda axis: size_by_axis[axis], reverse=True)[:2]
         axis_a, axis_b = in_plane_axes
+        air_side_fields: list[dict[str, object]] = []
+        transition_growth = (
+            _coerce_positive_float(entry.get("transition_growth"))
+            if entry is not None
+            else None
+        )
 
         def add_component_sub_box(
             size_value: float | None,
@@ -309,6 +325,37 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]) - edge_thickness,
                 float(bounds_max[axis_b]),
             )
+            if edge_hmax < default_hmax:
+                edge_transition_distance = (
+                    _coerce_positive_float(entry.get("edge_transition_distance"))
+                    if entry is not None
+                    else None
+                )
+                edge_dist_min = edge_thickness if edge_transition_distance is not None else 0.0
+                edge_dist_max = (
+                    edge_thickness + edge_transition_distance
+                    if edge_transition_distance is not None
+                    else edge_thickness
+                )
+                edge_params = {
+                    "GeometryName": geometry.geometry_name,
+                    "Selector": {"mode": "all_boundary_curves"},
+                    "SizeMin": edge_hmax,
+                    "SizeMax": float(default_hmax),
+                    "DistMin": float(edge_dist_min),
+                    "DistMax": float(edge_dist_max),
+                    "Sampling": 40,
+                    "Grading": "geometric",
+                    "Source": "per_geometry.edge_maximum_element_size.air_side",
+                }
+                if transition_growth is not None and transition_growth > 1.0:
+                    edge_params["GrowthRate"] = float(transition_growth)
+                air_side_fields.append(
+                    {
+                        "kind": "EdgeDistanceThreshold",
+                        "params": edge_params,
+                    }
+                )
 
         if "corner_hmax" in refinement and "corner_extent" in refinement:
             corner_hmax = float(refinement["corner_hmax"])
@@ -341,6 +388,40 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]) - corner_extent,
                 float(bounds_max[axis_b]),
             )
+            if corner_hmax < default_hmax:
+                corner_transition_distance = (
+                    _coerce_positive_float(entry.get("corner_transition_distance"))
+                    if entry is not None
+                    else None
+                )
+                corner_dist_min = (
+                    corner_extent if corner_transition_distance is not None else 0.0
+                )
+                corner_dist_max = (
+                    corner_extent + corner_transition_distance
+                    if corner_transition_distance is not None
+                    else corner_extent
+                )
+                corner_params = {
+                    "GeometryName": geometry.geometry_name,
+                    "Selector": {"mode": "all_boundary_curve_endpoints"},
+                    "SizeMin": corner_hmax,
+                    "SizeMax": float(default_hmax),
+                    "DistMin": float(corner_dist_min),
+                    "DistMax": float(corner_dist_max),
+                    "Sampling": 20,
+                    "Grading": "geometric",
+                    "Source": "per_geometry.corner_maximum_element_size.air_side",
+                }
+                if transition_growth is not None and transition_growth > 1.0:
+                    corner_params["GrowthRate"] = float(transition_growth)
+                air_side_fields.append(
+                    {
+                        "kind": "CornerDistanceThreshold",
+                        "params": corner_params,
+                    }
+                )
+        fields.extend(air_side_fields)
     return fields
 
 

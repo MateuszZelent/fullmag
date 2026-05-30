@@ -16,11 +16,13 @@ import { Button } from "@/shared/ui/Button";
 import { viewport3dStore } from "../viewport3dStore";
 
 function EffectToggle({
+  id,
   label,
   description,
   enabled,
   onToggle,
 }: {
+  id: string;
   label: string;
   description: string;
   enabled: boolean;
@@ -37,8 +39,16 @@ function EffectToggle({
           {description}
         </span>
       </div>
-      <label className="fm-viewport-3d__settings-switch">
-        <input type="checkbox" role="switch" aria-checked={enabled} checked={enabled} onChange={() => onToggle(!enabled)} />
+      <label className="fm-viewport-3d__settings-switch" htmlFor={id}>
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          aria-label={label}
+          aria-checked={enabled}
+          checked={enabled}
+          onChange={() => onToggle(!enabled)}
+        />
         <span className="fm-viewport-3d__settings-switch-track" />
       </label>
     </div>
@@ -56,18 +66,22 @@ export function Viewport3DSettingsDialog() {
   const { effectAmbientOcclusion, effectAntialias, effectBloom } = state.widgets;
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => viewport3dStore.setSettingsDialogOpen(open)}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => viewport3dStore.setSettingsDialogOpen(open)}
+    >
       <DialogContent aria-describedby="fm-viewport-settings-dialog-description">
         <DialogHeader>
           <DialogTitle>3D Render Effects</DialogTitle>
           <DialogDescription id="fm-viewport-settings-dialog-description">
-            Adjust visual post-processing effects to make objects look more realistic (&quot;Full 3D&quot;). Note that these effects consume more GPU power.
+            Adjust visual post-processing effects to make objects look more realistic
+            (&quot;Full 3D&quot;). Note that these effects consume more GPU power.
           </DialogDescription>
         </DialogHeader>
 
         <div className="fm-viewport-3d__settings-body">
-
           <EffectToggle
+            id="fm-viewport-3d-effect-ambient-occlusion"
             label="Ambient Occlusion (Shadows)"
             description="Adds depth by shading crevices and corners. Heavily improves realism."
             enabled={effectAmbientOcclusion}
@@ -75,6 +89,7 @@ export function Viewport3DSettingsDialog() {
           />
 
           <EffectToggle
+            id="fm-viewport-3d-effect-bloom"
             label="Bloom (Glow)"
             description="Adds a light aura around highly saturated or bright magnetic fields."
             enabled={effectBloom}
@@ -82,6 +97,7 @@ export function Viewport3DSettingsDialog() {
           />
 
           <EffectToggle
+            id="fm-viewport-3d-effect-antialias"
             label="Anti-Aliasing"
             description="Smooths out jagged edges on polygon boundaries."
             enabled={effectAntialias}

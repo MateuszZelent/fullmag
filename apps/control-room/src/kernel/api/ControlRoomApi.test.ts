@@ -1257,6 +1257,37 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
   });
 
+  it("loads mesh histogram-bin element selections through the v2 facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          bin_index: 12,
+          element_indices: [44, 45],
+          mesh_id: "study_domain",
+          metric: "characteristic_size",
+          node_indices: [1, 2, 3, 4, 5],
+          part_id: "airbox",
+        });
+      },
+    });
+
+    const result = await api.meshing.histogramBinElements({
+      binIndex: 12,
+      meshId: "study_domain",
+      metric: "characteristic_size",
+      partId: "airbox",
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/study_domain/parts/airbox/histogram-bins/characteristic_size/12/elements",
+    );
+    expect(result.element_indices).toEqual([44, 45]);
+    expect(result.node_indices).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it("loads shared-domain cross-section geometry through the v2 binary facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({

@@ -46,6 +46,24 @@ describe("MeshPartLayer", () => {
     );
   });
 
+  it("does not touch edge buffers when magnetic-object wireframe is hidden", () => {
+    const partModel = {
+      get edgeIndices(): Uint32Array {
+        throw new Error("surface edges should not be read");
+      },
+      get volumeEdgeIndices(): Uint32Array {
+        throw new Error("volume edges should not be read");
+      },
+    };
+
+    expect(
+      resolveMeshPartWireframeEdgeIndices("full", partModel, false),
+    ).toBeNull();
+    expect(
+      resolveMeshPartWireframeEdgeIndices("surface", partModel, false),
+    ).toBeNull();
+  });
+
   it("does not silently downgrade full magnetic-object wireframe to surface edges when volume edges are unavailable", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const partModel = {

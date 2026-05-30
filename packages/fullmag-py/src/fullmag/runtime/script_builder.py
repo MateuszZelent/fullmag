@@ -1370,6 +1370,159 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     return kwargs
 
 
+def _mesh_value_is_set(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (list, tuple, dict)):
+        return bool(value)
+    return True
+
+
+def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] | None:
+    strategy = mesh_config.get("mesh_strategy")
+    if not isinstance(strategy, str) or strategy.strip() != "thin_film_tetrahedral":
+        return None
+
+    unsupported_keys = (
+        "source",
+        "calibrate_for",
+        "size_preset",
+        "algorithm_2d",
+        "algorithm_3d",
+        "size_factor",
+        "size_from_curvature",
+        "smoothing_steps",
+        "optimize_iterations",
+        "curvature_factor",
+        "growth_rate",
+        "maximum_element_growth_rate",
+        "narrow_regions",
+        "narrow_region_resolution",
+        "transition_growth",
+        "boundary_layer_count",
+        "boundary_layer_thickness",
+        "boundary_layer_stretching",
+        "boundary_layer_target_surface_tags",
+        "boundary_layer_target_curve_tags",
+        "boundary_layer_target_surface_selectors",
+        "boundary_layer_target_curve_selectors",
+        "optimize",
+        "compute_quality",
+        "per_element_quality",
+        "through_thickness_element_ratio",
+        "through_thickness_symmetric",
+    )
+    if any(_mesh_value_is_set(mesh_config.get(key)) for key in unsupported_keys):
+        return None
+
+    distribution = mesh_config.get("through_thickness_distribution")
+    if isinstance(distribution, str) and distribution.strip() not in {"", "fixed"}:
+        return None
+    face_meshing = mesh_config.get("sweep_face_meshing")
+    if isinstance(face_meshing, str) and face_meshing.strip() not in {"", "triangular"}:
+        return None
+
+    kwargs: list[str] = []
+    rendered_hmax = _render_mesh_size_literal(
+        mesh_config.get("maximum_element_size")
+        if mesh_config.get("maximum_element_size") is not None
+        else mesh_config.get("hmax")
+    )
+    if rendered_hmax is not None:
+        kwargs.append(f"maximum_element_size={rendered_hmax}")
+
+    hmin_value = _number_or_none(
+        mesh_config.get("minimum_element_size")
+        if mesh_config.get("minimum_element_size") is not None
+        else mesh_config.get("hmin")
+    )
+    if hmin_value is not None:
+        kwargs.append(f"minimum_element_size={_py_number(hmin_value)}")
+
+    order_value = mesh_config.get("order")
+    if isinstance(order_value, (int, float)):
+        kwargs.append(f"order={int(order_value)}")
+
+    interface_hmax_value = _number_or_none(mesh_config.get("interface_hmax"))
+    if interface_hmax_value is not None:
+        kwargs.append(
+            f"interface_maximum_element_size={_py_number(interface_hmax_value)}"
+        )
+
+    interface_thickness_value = _number_or_none(mesh_config.get("interface_thickness"))
+    if interface_thickness_value is not None:
+        kwargs.append(f"interface_thickness={_py_number(interface_thickness_value)}")
+
+    transition_distance_value = _number_or_none(mesh_config.get("transition_distance"))
+    if transition_distance_value is not None:
+        kwargs.append(f"transition_distance={_py_number(transition_distance_value)}")
+
+    edge_hmax_value = _number_or_none(
+        mesh_config.get("edge_maximum_element_size")
+        if mesh_config.get("edge_maximum_element_size") is not None
+        else mesh_config.get("edge_hmax")
+    )
+    if edge_hmax_value is not None:
+        kwargs.append(f"edge_maximum_element_size={_py_number(edge_hmax_value)}")
+
+    edge_thickness_value = _number_or_none(mesh_config.get("edge_thickness"))
+    if edge_thickness_value is not None:
+        kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
+
+    edge_transition_distance_value = _number_or_none(
+        mesh_config.get("edge_transition_distance")
+    )
+    if edge_transition_distance_value is not None:
+        kwargs.append(
+            f"edge_transition_distance={_py_number(edge_transition_distance_value)}"
+        )
+
+    corner_hmax_value = _number_or_none(
+        mesh_config.get("corner_maximum_element_size")
+        if mesh_config.get("corner_maximum_element_size") is not None
+        else mesh_config.get("corner_hmax")
+    )
+    if corner_hmax_value is not None:
+        kwargs.append(f"corner_maximum_element_size={_py_number(corner_hmax_value)}")
+
+    corner_extent_value = _number_or_none(mesh_config.get("corner_extent"))
+    if corner_extent_value is not None:
+        kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
+
+    corner_transition_distance_value = _number_or_none(
+        mesh_config.get("corner_transition_distance")
+    )
+    if corner_transition_distance_value is not None:
+        kwargs.append(
+            f"corner_transition_distance={_py_number(corner_transition_distance_value)}"
+        )
+
+    layers_value = mesh_config.get("through_thickness_elements")
+    if isinstance(layers_value, (int, float)):
+        kwargs.append(f"layers={int(layers_value)}")
+
+    return kwargs
+
+
+def _render_geometry_mesh_call(
+    target_var: str,
+    mesh_config: dict[str, object],
+    *,
+    source_root: Path,
+) -> str | None:
+    thin_film_kwargs = _render_thin_film_mesh_kwargs(mesh_config)
+    if thin_film_kwargs is not None:
+        return f"{target_var}.mesh.thin_film({', '.join(thin_film_kwargs)})"
+    kwargs = _render_mesh_kwargs(mesh_config, source_root=source_root)
+    if kwargs:
+        return f"{target_var}.mesh({', '.join(kwargs)})"
+    return None
+
+
 def _render_mesh_size_fields(target_var: str, mesh_config: dict[str, object]) -> list[str]:
     size_fields = mesh_config.get("size_fields")
     if not isinstance(size_fields, list):
@@ -1549,9 +1702,13 @@ def _render_study_mesh_workflow(
         target_var = magnet_vars.get(magnet_name)
         if target_var is None:
             continue
-        kwargs = _render_mesh_kwargs(mesh_config, source_root=source_root)
-        if kwargs:
-            lines.append(f"{target_var}.mesh({', '.join(kwargs)})")
+        mesh_call = _render_geometry_mesh_call(
+            target_var,
+            mesh_config,
+            source_root=source_root,
+        )
+        if mesh_call is not None:
+            lines.append(mesh_call)
         lines.extend(_render_mesh_size_fields(target_var, mesh_config))
         lines.extend(_render_mesh_operations(target_var, mesh_config))
         if _mesh_entry_requests_build(mesh_config):
@@ -1604,9 +1761,13 @@ def _render_mesh_workflow(
             target_var = magnet_vars.get(magnet_name)
             if target_var is None:
                 continue
-            kwargs = _render_mesh_kwargs(mesh_config, source_root=source_root)
-            if kwargs:
-                lines.append(f"{target_var}.mesh({', '.join(kwargs)})")
+            mesh_call = _render_geometry_mesh_call(
+                target_var,
+                mesh_config,
+                source_root=source_root,
+            )
+            if mesh_call is not None:
+                lines.append(mesh_call)
             lines.extend(_render_mesh_size_fields(target_var, mesh_config))
             lines.extend(_render_mesh_operations(target_var, mesh_config))
             build_requested = _mesh_entry_requests_build(mesh_config)

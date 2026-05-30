@@ -10,6 +10,7 @@ import {
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
+  resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
 } from "./viewport3dResources";
 
@@ -72,6 +73,52 @@ describe("viewport3dResources", () => {
         [
           "m",
           `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full`,
+        ],
+      ]),
+    );
+  });
+
+  it("builds target-specific field vector keys with scalar components", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceRequests(
+        new Map([
+          [
+            "h_eff",
+            {
+              component: "magnitude",
+              scope_kind: "full",
+            },
+          ],
+          [
+            "m",
+            {
+              component: "x",
+              scope_kind: "full",
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "h_eff",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=magnitude&scope_kind=full`,
+            query: {
+              component: "magnitude",
+              scope_kind: "full",
+            },
+          },
+        ],
+        [
+          "m",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=x&scope_kind=full`,
+            query: {
+              component: "x",
+              scope_kind: "full",
+            },
+          },
         ],
       ]),
     );

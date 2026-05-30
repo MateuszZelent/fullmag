@@ -154,6 +154,28 @@ pub(crate) fn cross_section_quality_from_fmmq(
     fmmq: &[u8],
     metric: CrossSectionQualityMetric,
 ) -> Result<Option<Vec<f32>>, ApiError> {
+    let Some(metric_values) = per_element_quality_metric_from_fmmq(fmmq, metric)? else {
+        return Ok(None);
+    };
+    let element_count = metric_values.len();
+    let mut values = Vec::with_capacity(overlay.polygons.len());
+    for polygon in &overlay.polygons {
+        let parent = polygon.parent_element_id as usize;
+        let value = metric_values.get(parent).ok_or_else(|| {
+            ApiError::internal(format!(
+                "cross-section parent element {parent} exceeds FMMQ element count {element_count}"
+            ))
+        })?;
+        values.push(*value as f32);
+    }
+
+    Ok(Some(values))
+}
+
+pub(crate) fn per_element_quality_metric_from_fmmq(
+    fmmq: &[u8],
+    metric: CrossSectionQualityMetric,
+) -> Result<Option<Vec<f64>>, ApiError> {
     if fmmq.len() < FMMQ_HEADER_LEN || &fmmq[0..4] != b"FMMQ" {
         return Err(ApiError::internal(
             "mesh quality data is not an FMMQ payload",
@@ -183,25 +205,19 @@ pub(crate) fn cross_section_quality_from_fmmq(
         ));
     }
 
-    let mut values = Vec::with_capacity(overlay.polygons.len());
-    for polygon in &overlay.polygons {
-        let parent = polygon.parent_element_id as usize;
-        if parent >= element_count {
-            return Err(ApiError::internal(format!(
-                "cross-section parent element {parent} exceeds FMMQ element count {element_count}"
-            )));
-        }
-        let offset = metric_offset + parent * 8;
+    let mut values = Vec::with_capacity(element_count);
+    for index in 0..element_count {
+        let offset = metric_offset + index * 8;
         let value =
             f64::from_le_bytes(fmmq[offset..offset + 8].try_into().map_err(|_| {
                 ApiError::internal("failed to read FMMQ per-element quality value")
             })?);
         if !value.is_finite() {
             return Err(ApiError::internal(format!(
-                "FMMQ contains non-finite quality value for element {parent}"
+                "FMMQ contains non-finite quality value for element {index}"
             )));
         }
-        values.push(value as f32);
+        values.push(value);
     }
 
     Ok(Some(values))

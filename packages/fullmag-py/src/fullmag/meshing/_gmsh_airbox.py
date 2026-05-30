@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+import math
 import warnings
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,21 @@ from ._gmsh_waveguides import add_arch_waveguide_to_occ
 from ._gmsh_types import AirboxOptions, MeshData, MeshOptions, MeshQualityReport
 from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads, _GmshProgressLogger
 from ._gmsh_extraction import _extract_quality_metrics
+
+
+def _radius_from_center_to_bbox_corner(
+    center: tuple[float, float, float],
+    bounds_min: tuple[float, float, float],
+    bounds_max: tuple[float, float, float],
+) -> float:
+    return max(
+        math.dist(center, corner)
+        for corner in itertools.product(
+            [float(bounds_min[0]), float(bounds_max[0])],
+            [float(bounds_min[1]), float(bounds_max[1])],
+            [float(bounds_min[2]), float(bounds_max[2])],
+        )
+    )
 
 
 def _add_airbox_geo(
@@ -75,6 +92,7 @@ def _add_airbox_geo(
             cx, cy, cz = explicit_center
     elif airbox.shape == "sphere":
         # Approximate sphere with bounding box for the GEO path
+        emit_progress("Gmsh: spherical airbox requested on GEO path; approximating with bbox airbox")
         R = max(dx, dy, dz) / 2 * pf
         ox = oy = oz = 2.0 * R
     else:  # bbox
@@ -195,6 +213,7 @@ def _add_airbox_geo(
             object_bounds_max=(xmax, ymax, zmax),
             airbox_bounds_min=(x0, y0, z0),
             airbox_bounds_max=(x1, y1, z1),
+            airbox_shape="bbox",
         )
     return None
 
@@ -231,6 +250,7 @@ def _add_airbox_and_fragment(
     # 2 — outer shell geometry
     explicit_size = airbox.size
     explicit_center = airbox.center
+    airbox_radius: float | None = None
     if explicit_size is not None:
         ox, oy, oz = explicit_size
         if min(ox, oy, oz) <= 0.0:
@@ -239,6 +259,7 @@ def _add_airbox_and_fragment(
             cx, cy, cz = explicit_center
         if airbox.shape == "sphere":
             radius = max(ox, oy, oz) / 2.0
+            airbox_radius = float(radius)
             outer_tag = gmsh.model.occ.addSphere(cx, cy, cz, radius)
         else:  # bbox
             outer_tag = gmsh.model.occ.addBox(
@@ -246,6 +267,7 @@ def _add_airbox_and_fragment(
             )
     elif airbox.shape == "sphere":
         R = max(dx, dy, dz) / 2 * pf
+        airbox_radius = float(R)
         outer_tag = gmsh.model.occ.addSphere(cx, cy, cz, R)
         ox = oy = oz = 2.0 * R
     else:  # bbox
@@ -344,6 +366,18 @@ def _add_airbox_and_fragment(
             object_bounds_max=(xmax, ymax, zmax),
             airbox_bounds_min=(cx - ox / 2, cy - oy / 2, cz - oz / 2),
             airbox_bounds_max=(cx + ox / 2, cy + oy / 2, cz + oz / 2),
+            airbox_shape=airbox.shape,
+            airbox_center=(cx, cy, cz),
+            object_radius=(
+                _radius_from_center_to_bbox_corner(
+                    (cx, cy, cz),
+                    (xmin, ymin, zmin),
+                    (xmax, ymax, zmax),
+                )
+                if airbox.shape == "sphere"
+                else None
+            ),
+            airbox_radius=airbox_radius,
         )
     return None
 

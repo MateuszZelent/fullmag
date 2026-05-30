@@ -13,6 +13,9 @@ The goal is to make the solver mesh:
 without changing physics, material parameters, regions, airbox semantics, or
 observable definitions.
 
+Production-readiness criteria for rectangular edge/corner refinement are
+defined in `docs/physics/0105-fem-meshing-production-acceptance.md`.
+
 This is not a new energy term or boundary condition. It is a controlled spatial
 mesh-size policy for geometries where edge-localized magnetization structure can
 matter more than the central bulk.

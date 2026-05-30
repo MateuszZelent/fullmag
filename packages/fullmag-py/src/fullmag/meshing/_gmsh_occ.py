@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import itertools
+import math
+
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
@@ -54,6 +57,21 @@ def _airbox_interface_dist_max(
     fallback_dist_max: float,
 ) -> float:
     return max(fallback_dist_max, default_h_inner, h_inner)
+
+
+def _radius_from_center_to_bbox_corner(
+    center: tuple[float, float, float],
+    bounds_min: tuple[float, float, float],
+    bounds_max: tuple[float, float, float],
+) -> float:
+    return max(
+        math.dist(center, corner)
+        for corner in itertools.product(
+            [float(bounds_min[0]), float(bounds_max[0])],
+            [float(bounds_min[1]), float(bounds_max[1])],
+            [float(bounds_min[2]), float(bounds_max[2])],
+        )
+    )
 
 
 def _entity_bounds(
@@ -178,6 +196,7 @@ def generate_shared_domain_mesh_via_occ(
         dx, dy, dz = xmax - xmin, ymax - ymin, zmax - zmin
         cx, cy, cz = (xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2
         pf = airbox_scaled.padding_factor
+        airbox_radius: float | None = None
 
         explicit_size = airbox_scaled.size
         explicit_center = airbox_scaled.center
@@ -189,6 +208,7 @@ def generate_shared_domain_mesh_via_occ(
                 cx, cy, cz = explicit_center
             if airbox_scaled.shape == "sphere":
                 radius = max(ox, oy, oz) / 2.0
+                airbox_radius = float(radius)
                 outer_tag = gmsh.model.occ.addSphere(cx, cy, cz, radius)
             else:
                 outer_tag = gmsh.model.occ.addBox(
@@ -196,6 +216,7 @@ def generate_shared_domain_mesh_via_occ(
                 )
         elif airbox_scaled.shape == "sphere":
             R = max(dx, dy, dz) / 2 * pf
+            airbox_radius = float(R)
             outer_tag = gmsh.model.occ.addSphere(cx, cy, cz, R)
             ox = oy = oz = 2.0 * R
         else:
@@ -352,6 +373,15 @@ def generate_shared_domain_mesh_via_occ(
                     geom.geometry_name,
                     ((xmin, ymin, zmin), (xmax, ymax, zmax)),
                 )
+                object_radius = (
+                    _radius_from_center_to_bbox_corner(
+                        (cx, cy, cz),
+                        object_bounds_min,
+                        object_bounds_max,
+                    )
+                    if airbox_scaled.shape == "sphere"
+                    else None
+                )
 
                 field_id = _add_airbox_grading_field(
                     gmsh,
@@ -369,12 +399,25 @@ def generate_shared_domain_mesh_via_occ(
                     object_bounds_max=object_bounds_max,
                     airbox_bounds_min=airbox_bounds_min,
                     airbox_bounds_max=airbox_bounds_max,
+                    airbox_shape=airbox_scaled.shape,
+                    airbox_center=(cx, cy, cz),
+                    object_radius=object_radius,
+                    airbox_radius=airbox_radius,
                 )
                 if field_id is not None:
                     airbox_field_ids.append(field_id)
 
             remaining_interface = sorted(set(interface_list) - covered_interface_tags)
             if remaining_interface:
+                object_radius = (
+                    _radius_from_center_to_bbox_corner(
+                        (cx, cy, cz),
+                        (xmin, ymin, zmin),
+                        (xmax, ymax, zmax),
+                    )
+                    if airbox_scaled.shape == "sphere"
+                    else None
+                )
                 field_id = _add_airbox_grading_field(
                     gmsh,
                     surface_tags=remaining_interface,
@@ -391,6 +434,10 @@ def generate_shared_domain_mesh_via_occ(
                     object_bounds_max=(xmax, ymax, zmax),
                     airbox_bounds_min=airbox_bounds_min,
                     airbox_bounds_max=airbox_bounds_max,
+                    airbox_shape=airbox_scaled.shape,
+                    airbox_center=(cx, cy, cz),
+                    object_radius=object_radius,
+                    airbox_radius=airbox_radius,
                 )
                 if field_id is not None:
                     airbox_field_ids.append(field_id)

@@ -1,8 +1,5 @@
-export { decodeCrossSection, FMCS_HEADER_LEN } from "./crossSectionCodec";
-export {
-  decodeCrossSectionQuality,
-  FMQS_HEADER_LEN,
-} from "./crossSectionQualityCodec";
+export { decodeCrossSection } from "./crossSectionCodec";
+export { decodeCrossSectionQuality } from "./crossSectionQualityCodec";
 export { decodeFieldVector } from "./fieldVectorCodec";
 export { decodeMeshQualityData } from "./meshQualityDataCodec";
 export {
@@ -12,7 +9,6 @@ export {
   expectedTopologyByteLength,
   FMMT_HEADER_LEN,
   topologyByteLayout,
-  type TopologyByteLayout,
   type TopologyHeader,
   type TopologySections,
 } from "./topologyCodec";

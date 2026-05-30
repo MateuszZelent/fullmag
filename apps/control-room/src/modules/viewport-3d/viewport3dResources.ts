@@ -48,6 +48,15 @@ const VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
 const VIEWPORT_3D_SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
 const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
+const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
+  component: "full",
+  scope_kind: "full",
+};
+
+export interface Viewport3DQuantityFieldVectorRequest {
+  key: string;
+  query: FieldVectorQuery;
+}
 
 function resolveDomainMetaRevision(meta: { generation_id: number }) {
   return meta.generation_id;
@@ -155,6 +164,7 @@ export function resolveViewport3DFieldVectorResourceKey(
 export function resolveViewport3DAirboxFieldVectorResourceKeys(
   quantityId: string,
   airboxParts: readonly { id: string }[],
+  fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ): Map<string, string> {
   if (isMagneticOnlyQuantityId(quantityId)) {
     return new Map();
@@ -163,7 +173,8 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
     airboxParts.map((part) => [
       part.id,
       resolveViewport3DFieldVectorResourceKey(quantityId, {
-        component: "full",
+        ...fieldQuery,
+        component: fieldQuery.component ?? "full",
         scope_id: part.id,
         scope_kind: "airbox",
       }),
@@ -184,6 +195,23 @@ export function resolveViewport3DQuantityFieldVectorResourceKeys(
           component: "full",
           scope_kind: "full",
         }),
+      ]),
+  );
+}
+
+export function resolveViewport3DQuantityFieldVectorResourceRequests(
+  quantityQueries: ReadonlyMap<string, FieldVectorQuery>,
+): Map<string, Viewport3DQuantityFieldVectorRequest> {
+  return new Map(
+    Array.from(quantityQueries)
+      .filter(([quantityId]) => quantityId.trim().length > 0)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([quantityId, query]) => [
+        quantityId,
+        {
+          key: resolveViewport3DFieldVectorResourceKey(quantityId, query),
+          query,
+        },
       ]),
   );
 }
@@ -285,11 +313,17 @@ export function useViewport3DAirboxFieldVectors(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   enabled = true,
+  fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ) {
   const { api, resources } = useKernel();
   const requestKeys = useMemo(
-    () => resolveViewport3DAirboxFieldVectorResourceKeys(quantityId, airboxParts),
-    [airboxParts, quantityId],
+    () =>
+      resolveViewport3DAirboxFieldVectorResourceKeys(
+        quantityId,
+        airboxParts,
+        fieldQuery,
+      ),
+    [airboxParts, fieldQuery, quantityId],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
@@ -308,7 +342,8 @@ export function useViewport3DAirboxFieldVectors(
               api.data.fields.vector(
                 quantityId,
                 {
-                  component: "full",
+                  ...fieldQuery,
+                  component: fieldQuery.component ?? "full",
                   scope_id: partId,
                   scope_kind: "airbox",
                 },
@@ -333,7 +368,7 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
     },
-    [api, quantityId, requestKeys, resources],
+    [api, fieldQuery, quantityId, requestKeys, resources],
   );
   const resolveRevision = useCallback(() => {
     const revisions = Array.from(requestKeys.values()).map(
@@ -351,41 +386,53 @@ export function useViewport3DAirboxFieldVectors(
 }
 
 export function useViewport3DQuantityFieldVectors(
-  quantityIds: readonly string[],
+  quantitySource: readonly string[] | ReadonlyMap<string, FieldVectorQuery>,
   enabled = true,
 ) {
   const { api, resources } = useKernel();
-  const requestKeys = useMemo(
-    () => resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds),
-    [quantityIds],
-  );
+  const requestKeys = useMemo(() => {
+    if (Array.isArray(quantitySource)) {
+      const quantityIds = quantitySource as readonly string[];
+      return new Map(
+        Array.from(resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds))
+          .map(([quantityId, key]) => [
+            quantityId,
+            {
+              key,
+              query: FULL_FIELD_VECTOR_QUERY,
+            },
+          ]),
+      );
+    }
+
+    return resolveViewport3DQuantityFieldVectorResourceRequests(
+      quantitySource as ReadonlyMap<string, FieldVectorQuery>,
+    );
+  }, [quantitySource]);
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "quantity",
-      requestKeys.values(),
+      Array.from(requestKeys.values(), (request) => request.key),
     );
   }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries = await Promise.all(
-        Array.from(requestKeys, async ([quantityId, key]) => {
+        Array.from(requestKeys, async ([quantityId, request]) => {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
-            key,
+            request.key,
             (etag) =>
               api.data.fields.vector(
                 quantityId,
-                {
-                  component: "full",
-                  scope_kind: "full",
-                },
+                request.query,
                 { etag, signal },
               ),
             {
               preferCached: cachedBinaryResourceMatchesRevision(
                 fieldVectorCache,
-                key,
-                resources.getRevision(key),
+                request.key,
+                resources.getRevision(request.key),
               ),
             },
           );
@@ -404,7 +451,7 @@ export function useViewport3DQuantityFieldVectors(
   );
   const resolveRevision = useCallback(() => {
     const revisions = Array.from(requestKeys.values()).map(
-      (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
+      (request) => fieldVectorCache.peek(request.key)?.etag ?? "missing",
     );
     return revisions.length > 0 ? revisions.join("|") : null;
   }, [requestKeys]);

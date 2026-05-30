@@ -213,12 +213,14 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     const edgeIndices = resolveAirboxWireframeEdgeIndices(
       renderSettings.geometryScope,
       partModel,
+      renderSettings.wireframeVisible,
     );
     const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
     return next ? tracker.track("geometry", next) : null;
   }, [
     partModel,
     renderSettings.geometryScope,
+    renderSettings.wireframeVisible,
     topologyModel.positions,
     tracker,
   ]);
@@ -608,7 +610,9 @@ export function resolveAirboxWireframeEdgeIndices(
     Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
     "edgeIndices" | "volumeEdgeIndices"
   >,
+  wireframeVisible = true,
 ): Uint32Array | null {
+  if (!wireframeVisible) return null;
   if (geometryScope === "full") {
     return partModel.volumeEdgeIndices;
   }

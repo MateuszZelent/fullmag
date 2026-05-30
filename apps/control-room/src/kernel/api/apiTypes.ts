@@ -38,11 +38,9 @@ export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =
   components["schemas"]["CrossSectionQualityMetric"];
-export type CrossSectionImageColorScale =
+type CrossSectionImageColorScale =
   components["schemas"]["CrossSectionImageColorScale"];
 export type SliceMeshColorScale = components["schemas"]["SliceMeshColorScale"];
-export type SliceMeshQualityMetric =
-  components["schemas"]["SliceMeshQualityMetric"];
 export interface CrossSectionQuery {
   includePolygons?: boolean;
   includeWireframe?: boolean;
@@ -99,6 +97,14 @@ export type MeshBuildHistoryResource =
   components["schemas"]["MeshBuildHistoryResource"];
 export type MeshCapabilitiesResource =
   components["schemas"]["MeshCapabilitiesResource"];
+export type MeshHistogramBinElementsResource =
+  components["schemas"]["MeshHistogramBinElementsResource"];
+export type MeshHistogramBinMetric =
+  | "characteristic_size"
+  | "edge_length"
+  | "gamma"
+  | "sicn"
+  | "volume";
 export type MeshLastSuccessfulBuildResource =
   components["schemas"]["MeshLastSuccessfulBuildResource"];
 export type MeshObjectQualityResource =

@@ -22,6 +22,10 @@ export interface Viewport3DMeshSizeHighlightModel {
   sampledElementCount: number;
 }
 
+export interface Viewport3DMeshHistogramSelection {
+  elementIndices: readonly number[];
+}
+
 interface ElementRange {
   end: number;
   start: number;
@@ -46,31 +50,18 @@ export function buildViewport3DMeshSizeHighlightModel(
     | undefined,
   femDomain: FemManifestRenderDomain,
   highlight: MeshSizeHistogramHighlight | null,
+  selection: Viewport3DMeshHistogramSelection | null = null,
 ): Viewport3DMeshSizeHighlightModel | null {
   if (!topology || !topologyModel || !highlight) return null;
   if (topology.indices.length !== topology.elementCount * 4) return null;
-  const range = normalizeHighlightRange(highlight.lo, highlight.hi);
-  if (!range) return null;
 
   const scope = resolveElementScope(topology, femDomain, highlight);
-  if (!scope) return null;
-
-  const matchingElements: number[] = [];
-  let eligibleElementCount = 0;
-  for (let element = 0; element < topology.elementCount; element += 1) {
-    if (!scope.includes(element)) continue;
-    eligibleElementCount += 1;
-    if (
-      elementMatchesDistribution(
-        topology,
-        element,
-        highlight.distributionId,
-        range,
-      )
-    ) {
-      matchingElements.push(element);
-    }
-  }
+  const matchingElements = selection
+    ? normalizeSelectedElements(selection.elementIndices, topology.elementCount)
+    : matchingElementsForHighlight(topology, highlight, scope);
+  const eligibleElementCount = selection
+    ? selection.elementIndices.length
+    : countEligibleElements(topology.elementCount, scope);
 
   if (matchingElements.length === 0) return null;
 
@@ -86,6 +77,58 @@ export function buildViewport3DMeshSizeHighlightModel(
     positions: topologyModel.positions,
     sampledElementCount: sampledElements.length,
   };
+}
+
+function matchingElementsForHighlight(
+  topology: DecodedTopology,
+  highlight: MeshSizeHistogramHighlight,
+  scope: { contains: (element: number) => boolean } | null,
+): number[] {
+  const range = normalizeHighlightRange(highlight.lo, highlight.hi);
+  if (!range || !scope) return [];
+
+  const matchingElements: number[] = [];
+  for (let element = 0; element < topology.elementCount; element += 1) {
+    if (!scope.contains(element)) continue;
+    if (
+      elementMatchesDistribution(
+        topology,
+        element,
+        highlight.distributionId,
+        range,
+      )
+    ) {
+      matchingElements.push(element);
+    }
+  }
+  return matchingElements;
+}
+
+function countEligibleElements(
+  elementCount: number,
+  scope: { contains: (element: number) => boolean } | null,
+): number {
+  if (!scope) return 0;
+  let count = 0;
+  for (let element = 0; element < elementCount; element += 1) {
+    if (scope.contains(element)) count += 1;
+  }
+  return count;
+}
+
+function normalizeSelectedElements(
+  elementIndices: readonly number[],
+  elementCount: number,
+): number[] {
+  const selected = new Set<number>();
+  for (const element of elementIndices) {
+    if (!Number.isFinite(element)) continue;
+    const index = Math.floor(element);
+    if (index >= 0 && index < elementCount) {
+      selected.add(index);
+    }
+  }
+  return Array.from(selected).sort((left, right) => left - right);
 }
 
 function normalizeHighlightRange(
@@ -109,20 +152,20 @@ function resolveElementScope(
   topology: DecodedTopology,
   femDomain: FemManifestRenderDomain,
   highlight: MeshSizeHistogramHighlight,
-): { includes: (element: number) => boolean } | null {
+): { contains: (element: number) => boolean } | null {
   const scope = highlight.scope;
   if (scope.kind === "all") {
-    return { includes: () => true };
+    return { contains: () => true };
   }
 
   if (scope.kind === "airbox") {
     const ranges = rangesForParts(femDomain.airboxParts, topology.elementCount);
     if (ranges.length > 0) {
-      return { includes: (element) => elementInRanges(element, ranges) };
+      return { contains: (element) => elementInRanges(element, ranges) };
     }
     if (topology.elementMarkers.length === topology.elementCount) {
       return {
-        includes: (element) => topology.elementMarkers[element] === 0,
+        contains: (element) => topology.elementMarkers[element] === 0,
       };
     }
     return null;
@@ -135,7 +178,7 @@ function resolveElementScope(
   });
   const ranges = rangesForParts(parts, topology.elementCount);
   if (ranges.length === 0) return null;
-  return { includes: (element) => elementInRanges(element, ranges) };
+  return { contains: (element) => elementInRanges(element, ranges) };
 }
 
 function rangesForParts(

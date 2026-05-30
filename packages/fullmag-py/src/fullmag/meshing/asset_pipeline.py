@@ -1168,6 +1168,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             airbox=airbox,
             build_mode=planned_build_mode,
             fallbacks_triggered=fallbacks_triggered,
+            mesh_workflow=mesh_workflow,
         )
         emit_progress_event(
             {
@@ -1416,6 +1417,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             airbox=airbox,
                             build_mode=build_mode,
                             fallbacks_triggered=fallbacks_triggered,
+                            mesh_workflow=mesh_workflow,
                         )
                     ],
                     "error": str(exc),

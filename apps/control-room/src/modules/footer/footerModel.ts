@@ -50,7 +50,7 @@ export function filterTransportEntries(
   });
 }
 
-export function isFooterLogEntry(entry: RequestDiagnosticEntry): boolean {
+function isFooterLogEntry(entry: RequestDiagnosticEntry): boolean {
   return !(
     entry.channel === "performance" &&
     entry.path.startsWith("fullmag.react.render.")

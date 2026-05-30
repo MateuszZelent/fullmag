@@ -135,6 +135,27 @@ def _rectangular_airbox_fraction_expression(
     return f"Min(Max(Max({axes[0]}, {axes[1]}), {axes[2]}), 1)"
 
 
+def _spherical_airbox_fraction_expression(
+    *,
+    center: Sequence[float],
+    object_radius: float,
+    airbox_radius: float,
+) -> str | None:
+    span = float(airbox_radius) - float(object_radius)
+    if span <= 0.0:
+        return None
+    cx, cy, cz = (_math_number(float(value)) for value in center)
+    radius_expr = (
+        f"Sqrt((x - {cx}) * (x - {cx}) + "
+        f"(y - {cy}) * (y - {cy}) + "
+        f"(z - {cz}) * (z - {cz}))"
+    )
+    return (
+        f"Min(Max(({radius_expr} - {_math_number(object_radius)}) / "
+        f"{_math_number(span)}, 0), 1)"
+    )
+
+
 def _add_rectangular_airbox_envelope_field(
     gmsh: Any,
     *,
@@ -169,6 +190,70 @@ def _add_rectangular_airbox_envelope_field(
     return field_id
 
 
+def _add_airbox_envelope_field(
+    gmsh: Any,
+    *,
+    h_inner: float,
+    h_outer: float,
+    grading_ratio: float,
+    airbox_shape: str,
+    object_bounds_min: Sequence[float] | None,
+    object_bounds_max: Sequence[float] | None,
+    airbox_bounds_min: Sequence[float] | None,
+    airbox_bounds_max: Sequence[float] | None,
+    airbox_center: Sequence[float] | None,
+    object_radius: float | None,
+    airbox_radius: float | None,
+) -> int | None:
+    shape = str(airbox_shape).strip().lower()
+    if shape == "sphere":
+        if (
+            airbox_center is not None
+            and object_radius is not None
+            and airbox_radius is not None
+        ):
+            fraction = _spherical_airbox_fraction_expression(
+                center=airbox_center,
+                object_radius=float(object_radius),
+                airbox_radius=float(airbox_radius),
+            )
+        else:
+            fraction = None
+    elif (
+        object_bounds_min is not None
+        and object_bounds_max is not None
+        and airbox_bounds_min is not None
+        and airbox_bounds_max is not None
+    ):
+        return _add_rectangular_airbox_envelope_field(
+            gmsh,
+            h_inner=h_inner,
+            h_outer=h_outer,
+            grading_ratio=grading_ratio,
+            object_bounds_min=object_bounds_min,
+            object_bounds_max=object_bounds_max,
+            airbox_bounds_min=airbox_bounds_min,
+            airbox_bounds_max=airbox_bounds_max,
+        )
+    else:
+        fraction = None
+    if fraction is None:
+        return None
+
+    field_id = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(
+        field_id,
+        "F",
+        _geometric_size_profile_expression(
+            size_min=float(h_inner),
+            size_max=float(h_outer),
+            ramp=fraction,
+            growth_rate=float(grading_ratio),
+        ),
+    )
+    return field_id
+
+
 def _add_airbox_grading_field(
     gmsh: Any,
     *,
@@ -183,6 +268,10 @@ def _add_airbox_grading_field(
     object_bounds_max: Sequence[float] | None = None,
     airbox_bounds_min: Sequence[float] | None = None,
     airbox_bounds_max: Sequence[float] | None = None,
+    airbox_shape: str = "bbox",
+    airbox_center: Sequence[float] | None = None,
+    object_radius: float | None = None,
+    airbox_radius: float | None = None,
 ) -> int | None:
     """Add a background size field grading from body interface to airbox target."""
     surfaces = [int(tag) for tag in surface_tags]
@@ -226,23 +315,20 @@ def _add_airbox_grading_field(
         )
         local_field = f_thresh
 
-    envelope_field = None
-    if (
-        object_bounds_min is not None
-        and object_bounds_max is not None
-        and airbox_bounds_min is not None
-        and airbox_bounds_max is not None
-    ):
-        envelope_field = _add_rectangular_airbox_envelope_field(
-            gmsh,
-            h_inner=float(h_inner),
-            h_outer=float(h_outer),
-            grading_ratio=float(grading_ratio),
-            object_bounds_min=object_bounds_min,
-            object_bounds_max=object_bounds_max,
-            airbox_bounds_min=airbox_bounds_min,
-            airbox_bounds_max=airbox_bounds_max,
-        )
+    envelope_field = _add_airbox_envelope_field(
+        gmsh,
+        h_inner=float(h_inner),
+        h_outer=float(h_outer),
+        grading_ratio=float(grading_ratio),
+        airbox_shape=airbox_shape,
+        object_bounds_min=object_bounds_min,
+        object_bounds_max=object_bounds_max,
+        airbox_bounds_min=airbox_bounds_min,
+        airbox_bounds_max=airbox_bounds_max,
+        airbox_center=airbox_center,
+        object_radius=object_radius,
+        airbox_radius=airbox_radius,
+    )
 
     if envelope_field is None:
         return local_field

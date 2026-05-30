@@ -663,11 +663,12 @@ def _compute_swept_quality(
         return MeshQualityReport(
             n_elements=0,
             sicn_min=0.0, sicn_max=0.0, sicn_mean=0.0, sicn_p5=0.0,
-            sicn_histogram=np.zeros(20, dtype=np.float64),
+            sicn_histogram=[],
             gamma_min=0.0, gamma_mean=0.0,
-            gamma_histogram=np.zeros(20, dtype=np.float64),
+            gamma_histogram=[0] * 20,
             volume_min=0.0, volume_max=0.0, volume_mean=0.0, volume_std=0.0,
             avg_quality=0.0,
+            quality_source="unavailable",
         )
 
     # Compute volumes of tetrahedra
@@ -703,19 +704,22 @@ def _compute_swept_quality(
 
     return MeshQualityReport(
         n_elements=n_elem,
-        sicn_min=float(gamma.min()),
-        sicn_max=float(gamma.max()),
-        sicn_mean=float(gamma.mean()),
-        sicn_p5=float(np.percentile(gamma, 5)),
-        sicn_histogram=gamma_hist.astype(np.float64),
+        sicn_min=0.0,
+        sicn_max=0.0,
+        sicn_mean=0.0,
+        sicn_p5=0.0,
+        sicn_histogram=[],
         gamma_min=float(gamma.min()),
         gamma_mean=float(gamma.mean()),
-        gamma_histogram=gamma_hist.astype(np.float64),
+        gamma_histogram=[int(value) for value in gamma_hist.tolist()],
         volume_min=float(volumes.min()),
         volume_max=float(volumes.max()),
         volume_mean=float(volumes.mean()),
         volume_std=float(volumes.std()),
         avg_quality=float(gamma.mean()),
+        element_gamma=[float(value) for value in gamma.tolist()],
+        element_volume=[float(value) for value in volumes.tolist()],
+        quality_source="swept_topology_proxy",
     )
 
 

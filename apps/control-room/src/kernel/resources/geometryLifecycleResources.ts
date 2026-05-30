@@ -7,6 +7,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_SEMANTICS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_POLICY_PATH,
@@ -42,6 +43,8 @@ import type {
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshCapabilitiesResource,
+  MeshHistogramBinElementsResource,
+  MeshHistogramBinMetric,
   MeshLastSuccessfulBuildResource,
   MeshObjectConfigResource,
   MeshObjectQualityResource,
@@ -115,6 +118,25 @@ export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
 export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
 export const MESH_BUILD_HISTORY_RESOURCE_KEY = MESHING_BUILDS_PATH;
+
+export interface MeshHistogramBinElementsQuery {
+  binIndex: number;
+  meshId: string;
+  metric: MeshHistogramBinMetric;
+  partId: string;
+}
+
+export function resolveMeshHistogramBinElementsResourceKey(
+  query: MeshHistogramBinElementsQuery,
+): string {
+  return MESHING_HISTOGRAM_BIN_ELEMENTS_PATH.replace(
+    "{mesh_id}",
+    encodeURIComponent(query.meshId),
+  )
+    .replace("{part_id}", encodeURIComponent(query.partId))
+    .replace("{metric}", encodeURIComponent(query.metric))
+    .replace("{bin_index}", encodeURIComponent(String(query.binIndex)));
+}
 
 export function resolveObjectTopologyResourceKey(objectId: string): string {
   return MESHING_OBJECT_TOPOLOGY_PATH.replace(
@@ -478,6 +500,31 @@ export function useMeshSharedDomainQualityDataResource(
     enabled: options.enabled,
     load,
     resourceKey: MESH_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
+  });
+}
+
+export function useMeshHistogramBinElementsResource(
+  query: MeshHistogramBinElementsQuery | null,
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const enabled = options.enabled !== false && query !== null;
+  const resourceKey = query
+    ? resolveMeshHistogramBinElementsResourceKey(query)
+    : `${MESHING_HISTOGRAM_BIN_ELEMENTS_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      query
+        ? api.meshing.histogramBinElements(query, { signal })
+        : Promise.resolve(null),
+    [api, query],
+  );
+
+  return useResource<MeshHistogramBinElementsResource | null>({
+    enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey,
   });
 }
 

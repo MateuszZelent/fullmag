@@ -6,6 +6,20 @@ export type MeshSizeHistogramDistributionId =
   | "tetra_size"
   | "volume";
 
+export type MeshHistogramMetric =
+  | "characteristic_size"
+  | "edge_length"
+  | "gamma"
+  | "sicn"
+  | "volume";
+
+export interface MeshHistogramHover {
+  binIndex: number;
+  meshId: string;
+  metric: MeshHistogramMetric;
+  partId: string;
+}
+
 export type MeshSizeHistogramHighlightScope =
   | { kind: "airbox" }
   | { kind: "all" }
@@ -18,6 +32,7 @@ export interface MeshSizeHistogramHighlight {
   distributionLabel: string;
   hi: number | null;
   lo: number | null;
+  resource: MeshHistogramHover | null;
   scope: MeshSizeHistogramHighlightScope;
 }
 

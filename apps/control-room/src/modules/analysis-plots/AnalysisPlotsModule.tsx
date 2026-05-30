@@ -140,13 +140,17 @@ function formatNumber(value: number): string {
 
 function resolveScalarValueColumn(columns: readonly string[]): number {
   const preferredColumns = ["e_total", "mx", "my", "mz"];
+  const excludedColumns = new Set(["step", "time", "solver_dt"]);
+  const columnIndexByName = new Map(
+    columns.map((column, index) => [column, index]),
+  );
   for (const preferred of preferredColumns) {
-    const index = columns.indexOf(preferred);
+    const index = columnIndexByName.get(preferred) ?? -1;
     if (index >= 0) return index;
   }
 
   return columns.findIndex(
-    (column) => !["step", "time", "solver_dt"].includes(column),
+    (column) => !excludedColumns.has(column),
   );
 }
 

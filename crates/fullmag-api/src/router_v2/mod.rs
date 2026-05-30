@@ -250,6 +250,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_part_topology),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/:mesh_id/parts/:part_id/histogram-bins/:metric/:bin_index/elements",
+            get(handlers::meshing::get_mesh_histogram_bin_elements),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/objects/:object_id/size-field",
             get(handlers::meshing::get_mesh_object_size_field),
         )

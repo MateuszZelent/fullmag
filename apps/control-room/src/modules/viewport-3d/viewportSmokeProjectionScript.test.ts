@@ -27,7 +27,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('const secondExpectedActive = initialActive === "true" ? "true" : "false"');
     expect(smokeScript).toContain('if (active === firstExpectedActive) return true');
     expect(smokeScript).toContain('if (active === secondExpectedActive) return true');
-    expect(smokeScript).toContain("const initialProjectionSample = await sampleCanvasComposite(page, canvas);");
+    expect(smokeScript).toContain("const initialProjectionSample = await sampleCanvasComposite(page);");
     expect(smokeScript).toContain("await waitForCanvasCompositeChange(");
     expect(smokeScript).toContain("projection canvas renders after first toggle");
     expect(smokeScript).toContain("projection canvas renders after second toggle");
@@ -37,6 +37,10 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("CANVAS_SCREENSHOT_TIMEOUT_MS");
     expect(smokeScript).toContain("page.screenshot({");
     expect(smokeScript).toContain("3D viewport canvas composite screenshot");
+    expect(smokeScript).toContain("readCanvasContextState(page)");
+    expect(smokeScript).toContain("await waitForCanvasClipBox(page)");
+    expect(smokeScript).toContain("readCanvasClipBox(page)");
+    expect(smokeScript).not.toContain("canvas.evaluate");
   });
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
@@ -97,6 +101,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("verifyDimensionFrameCage");
     expect(smokeScript).toContain("selectDimensionFrameMode(page, \"Off\")");
     expect(smokeScript).toContain("selectDimensionFrameMode(page, \"Floor + vertical\")");
+    expect(smokeScript).toContain("clickFreshAction");
     expect(smokeScript).toContain("minimumChangedPixels: 1");
     expect(smokeScript).toContain("waitForBrowserPaint");
     expect(smokeScript).toContain("viewport-3d.dimension-frame-cage");
@@ -113,6 +118,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain('name: "Floor + vertical"');
     expect(screenshotScript).toContain("viewport-3d.dimension-frame-cage");
     expect(screenshotScript).toContain("dimensionFrameChangedPixels=");
+    expect(screenshotScript).toContain("profileChangedPixels=");
+    expect(screenshotScript).not.toContain(
+      "interactive/figure screenshots are too similar",
+    );
+    expect(screenshotScript).toContain('fillDraftField(page, "Size X", "9e-7")');
+    expect(screenshotScript).toContain(
+      'fillDraftField(page, "Translation X", "-1.6e-6")',
+    );
+    expect(screenshotScript).toContain("await waitForCanvasClipBox(page)");
+    expect(screenshotScript).not.toContain("canvas.evaluate");
   });
 
   it("lets the screenshot gate use a controlled missing-session canvas", () => {
@@ -122,6 +137,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain(
       'const defaultRequiredScenes = allowMissingSession ? "fdm" : "fdm,fem,object";',
     );
+    expect(screenshotScript).toContain("useMainPageFdmFixture");
     expect(screenshotScript).toContain(
       "process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? defaultRequiredScenes",
     );
@@ -144,6 +160,16 @@ describe("viewport smoke projection round-trip", () => {
     const profileSwitchScript = readFileSync(profileSwitchScriptUrl, "utf8");
 
     expect(profileSwitchScript).toContain("openViewport3D(page)");
+    expect(profileSwitchScript).toContain(
+      'page.getByRole("tab", { exact: true, name: "View" })',
+    );
+    expect(profileSwitchScript).toContain("await page.waitForFunction(");
+    expect(profileSwitchScript).toContain("const value = await page.evaluate(");
+    expect(profileSwitchScript).toContain("waitForStableDiagnostics(page)");
+    expect(profileSwitchScript).toContain(
+      "current.cacheBytes === previous.cacheBytes",
+    );
+    expect(profileSwitchScript).toContain("Date.now() + 45_000");
     expect(profileSwitchScript).toContain(
       "spans.some((span) => span.textContent?.includes(\"geo:\"))",
     );

@@ -111,6 +111,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     const edgeIndices = resolveMeshPartWireframeEdgeIndices(
       renderSettings.geometryScope,
       partModel,
+      renderSettings.wireframeVisible,
     );
     if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
@@ -120,7 +121,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     );
     next.setIndex(new BufferAttribute(edgeIndices, 1));
     return tracker.track("geometry", next);
-  }, [partModel, renderSettings.geometryScope, topologyModel, tracker]);
+  }, [
+    partModel,
+    renderSettings.geometryScope,
+    renderSettings.wireframeVisible,
+    topologyModel,
+    tracker,
+  ]);
 
   useEffect(
     () => () => tracker.release("geometry", geometry),
@@ -370,7 +377,9 @@ export function resolveMeshPartWireframeEdgeIndices(
     Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
     "edgeIndices" | "volumeEdgeIndices"
   >,
+  wireframeVisible = true,
 ): Uint32Array | null {
+  if (!wireframeVisible) return null;
   if (geometryScope === "full") {
     return partModel.volumeEdgeIndices;
   }

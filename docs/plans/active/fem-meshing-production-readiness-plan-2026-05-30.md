@@ -174,7 +174,7 @@ Every row must have:
 - Modify: `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`
 - Modify: `docs/physics/0104-thin-film-shared-domain-meshing.md`
 
-- [ ] **Step A1: Create the production acceptance note**
+- [x] **Step A1: Create the production acceptance note**
 
 Add `docs/physics/0105-fem-meshing-production-acceptance.md` with these sections:
 
@@ -231,7 +231,7 @@ anisotropic size fields are not production-supported unless explicitly added to
 the support matrix.
 ```
 
-- [ ] **Step A2: Link existing notes to the acceptance note**
+- [x] **Step A2: Link existing notes to the acceptance note**
 
 In each related physics note, add one sentence:
 
@@ -240,7 +240,7 @@ Production-readiness criteria for this note are defined in
 `docs/physics/0105-fem-meshing-production-acceptance.md`.
 ```
 
-- [ ] **Step A3: Verify documentation has no stale production claims**
+- [x] **Step A3: Verify documentation has no stale production claims**
 
 Run:
 
@@ -254,6 +254,10 @@ Expected:
 - this plan and the new physics note define the future gate.
 
 - [ ] **Step A4: Commit**
+
+Deferred while implementing in the existing dirty worktree. Stage only the
+files listed below when the user asks for commits or when the full production
+readiness slice is ready to be committed.
 
 ```bash
 git add docs/physics/0105-fem-meshing-production-acceptance.md \
@@ -271,7 +275,7 @@ git commit -m "docs: define FEM meshing production acceptance"
 - Modify: `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 
-- [ ] **Step B1: Write a failing planner test for non-box edge grading**
+- [x] **Step B1: Write a failing planner test for non-box edge grading**
 
 Add to `FieldStackAcceptanceTests` in `packages/fullmag-py/tests/test_meshing.py`:
 
@@ -299,7 +303,7 @@ def test_edge_threshold_uses_geometric_grading_and_growth_rate(self) -> None:
     self.assertAlmostEqual(fields[0]["params"]["GrowthRate"], 1.35)
 ```
 
-- [ ] **Step B2: Run the test and verify it fails**
+- [x] **Step B2: Run the test and verify it fails**
 
 Run:
 
@@ -314,7 +318,7 @@ Expected failure:
 KeyError: 'Grading'
 ```
 
-- [ ] **Step B3: Implement geometric edge grading**
+- [x] **Step B3: Implement geometric edge grading**
 
 In `_build_perimeter_refinement_fields()` when building `edge_params`, add:
 
@@ -331,7 +335,7 @@ if transition_growth is not None and transition_growth > 1.0:
 
 Keep `edge_transition_distance` independent from `transition_distance`.
 
-- [ ] **Step B4: Add corner growth-rate parity test**
+- [x] **Step B4: Add corner growth-rate parity test**
 
 Add:
 
@@ -358,7 +362,7 @@ def test_corner_threshold_uses_transition_growth_rate(self) -> None:
     self.assertAlmostEqual(fields[0]["params"]["GrowthRate"], 1.4)
 ```
 
-- [ ] **Step B5: Run focused tests**
+- [x] **Step B5: Run focused tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -374,6 +378,16 @@ all selected tests passed
 
 - [ ] **Step B6: Commit**
 
+Deferred while implementing in the existing dirty worktree. The verification
+for B1-B5 passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "edge_threshold or corner_threshold or perimeter_refinement" -vv
+# 10 passed, 156 deselected
+```
+
 ```bash
 git add packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py \
   packages/fullmag-py/tests/test_meshing.py
@@ -388,7 +402,7 @@ git commit -m "fix: use geometric grading for edge and corner fields"
 - Modify: `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` if explicit box curve selectors need realization support
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 
-- [ ] **Step C1: Write failing planner test for Box air-side fields**
+- [x] **Step C1: Write failing planner test for Box air-side fields**
 
 Add:
 
@@ -418,7 +432,7 @@ def test_box_edge_corner_refinement_emits_air_side_distance_fields(self) -> None
     self.assertIn("CornerDistanceThreshold", kinds)
 ```
 
-- [ ] **Step C2: Run the test and verify it fails**
+- [x] **Step C2: Run the test and verify it fails**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -431,7 +445,7 @@ Expected failure:
 AssertionError: 'EdgeDistanceThreshold' not found
 ```
 
-- [ ] **Step C3: Keep current body-only strips and add air-side fields**
+- [x] **Step C3: Keep current body-only strips and add air-side fields**
 
 In the Box branch of `_build_perimeter_refinement_fields()`:
 
@@ -458,7 +472,7 @@ The field shape must be:
 }
 ```
 
-- [ ] **Step C4: Add realized small Box mesh test**
+- [x] **Step C4: Add realized small Box mesh test**
 
 Add a realized test that builds a small shared-domain box with bbox airbox and verifies that airbox elements near film edges are finer than far-field airbox elements:
 
@@ -500,7 +514,7 @@ def test_box_airbox_near_edges_is_finer_than_far_field(self) -> None:
 
 Use the current `realize_fem_domain_mesh_asset_from_components_with_report(...)` signature in `asset_pipeline.py`; the assertions are fixed: airbox scope exists and edge/corner fields are realized.
 
-- [ ] **Step C5: Run tests**
+- [x] **Step C5: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -509,6 +523,16 @@ PYTHONPATH=packages/fullmag-py/src pytest \
 ```
 
 - [ ] **Step C6: Commit**
+
+Deferred while implementing in the existing dirty worktree. The verification
+for C1-C5 passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "box_air_side_edge_corner_refinement_materializes or box_edge_corner_refinement_emits_air_side_distance_fields or perimeter_refinement" -vv
+# 6 passed, 162 deselected
+```
 
 ```bash
 git add packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py \
@@ -526,7 +550,7 @@ git commit -m "fix: refine airbox near box edges and corners"
 - Modify: `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 
-- [ ] **Step D1: Add helper for radial spherical envelope**
+- [x] **Step D1: Add helper for radial spherical envelope**
 
 In `_airbox_grading.py`, add:
 
@@ -545,7 +569,7 @@ def _spherical_airbox_fraction_expression(
     return f"Min(Max(({radius_expr} - {_math_number(object_radius)}) / {_math_number(span)}, 0), 1)"
 ```
 
-- [ ] **Step D2: Extend `_add_airbox_grading_field()` with shape-specific envelope args**
+- [x] **Step D2: Extend `_add_airbox_grading_field()` with shape-specific envelope args**
 
 Add optional parameters:
 
@@ -562,7 +586,7 @@ Rules:
 - `airbox_shape == "sphere"` uses spherical envelope when center/radii are present.
 - unsupported/missing sphere data returns `local_field` and lets caller mark degradation.
 
-- [ ] **Step D3: Add fake-Gmsh tests for bbox vs sphere**
+- [x] **Step D3: Add fake-Gmsh tests for bbox vs sphere**
 
 Add tests:
 
@@ -578,7 +602,7 @@ def test_airbox_grading_uses_radial_envelope_for_sphere(self) -> None:
     # Assert the envelope expression contains Sqrt((x - cx)...) and no rectangular axis Max chain.
 ```
 
-- [ ] **Step D4: Wire OCC sphere args**
+- [x] **Step D4: Wire OCC sphere args**
 
 In `_gmsh_occ.py`, when `airbox_scaled.shape == "sphere"`:
 
@@ -598,7 +622,7 @@ object_radius = max(
 )
 ```
 
-- [ ] **Step D5: Decide GEO sphere policy explicitly**
+- [x] **Step D5: Decide GEO sphere policy explicitly**
 
 In `_gmsh_airbox.py`, the GEO path currently approximates sphere with bbox. Replace silent behavior with one of these two implemented outcomes:
 
@@ -607,7 +631,7 @@ In `_gmsh_airbox.py`, the GEO path currently approximates sphere with bbox. Repl
 
 For production readiness, the selected behavior must be visible in `SharedDomainBuildReport`.
 
-- [ ] **Step D6: Run tests**
+- [x] **Step D6: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -616,6 +640,18 @@ PYTHONPATH=packages/fullmag-py/src pytest \
 ```
 
 - [ ] **Step D7: Commit**
+
+Deferred while implementing in the existing dirty worktree. The GEO path policy
+is explicit: spherical airboxes are approximated as bbox geometry and reported
+as degraded `airbox_shape` operation status. The verification for D1-D6 passed
+with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "airbox_grading or sphere or airbox_boundary_distance" -vv
+# 7 passed, 163 deselected
+```
 
 ```bash
 git add packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py \
@@ -633,7 +669,7 @@ git commit -m "fix: make airbox grading shape-aware"
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 - Modify: `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` if statistics need additional fields
 
-- [ ] **Step E1: Create distance-band helper**
+- [x] **Step E1: Create distance-band helper**
 
 Create `packages/fullmag-py/tests/meshing_production_fixtures.py`:
 
@@ -677,7 +713,7 @@ def assert_monotone_p95_growth(testcase, distances, sizes, bins, *, tolerance_ra
     testcase.assertGreaterEqual(populated, 4)
 ```
 
-- [ ] **Step E2: Add realized airbox growth test**
+- [x] **Step E2: Add realized airbox growth test**
 
 In `test_meshing.py`, add a small realized mesh test that:
 
@@ -697,7 +733,7 @@ def test_airbox_realized_growth_bands_are_populated_and_monotone(self) -> None:
     # Assert near/mid/far/corner bins are populated.
 ```
 
-- [ ] **Step E3: Add edge/corner plume realized test**
+- [x] **Step E3: Add edge/corner plume realized test**
 
 Add:
 
@@ -708,7 +744,7 @@ def test_airbox_edge_corner_plumes_refine_near_film_perimeter(self) -> None:
     # Assert near perimeter p95 <= 1.5 * requested edge_hmax.
 ```
 
-- [ ] **Step E4: Run realized tests repeatedly**
+- [x] **Step E4: Run realized tests repeatedly**
 
 ```bash
 for i in 1 2 3; do
@@ -726,6 +762,18 @@ Expected:
 
 - [ ] **Step E5: Commit**
 
+Deferred while implementing in the existing dirty worktree. The repeated
+realized Gmsh verification for E1-E4 passed with:
+
+```bash
+for i in 1 2 3; do
+  PYTHONPATH=packages/fullmag-py/src pytest \
+    packages/fullmag-py/tests/test_meshing.py \
+    -k "realized_growth_bands or edge_corner_plumes" -vv || exit 1
+done
+# each iteration: 2 passed, 170 deselected
+```
+
 ```bash
 git add packages/fullmag-py/tests/meshing_production_fixtures.py \
   packages/fullmag-py/tests/test_meshing.py \
@@ -742,7 +790,7 @@ git commit -m "test: add realized FEM airbox growth gates"
 - Modify: `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 
-- [ ] **Step F1: Add failing test for swept SICN labeling**
+- [x] **Step F1: Add failing test for swept SICN labeling**
 
 Add:
 
@@ -754,7 +802,7 @@ def test_swept_quality_does_not_label_gamma_proxy_as_sicn(self) -> None:
 
 If `MeshQualityReport` cannot represent unavailable SICN, first add explicit nullable metric support to `_gmsh_types.py`.
 
-- [ ] **Step F2: Convert histogram arrays to lists**
+- [x] **Step F2: Convert histogram arrays to lists**
 
 In `_compute_swept_quality()`, change:
 
@@ -772,7 +820,7 @@ gamma_histogram=[int(value) for value in gamma_hist.tolist()],
 
 when SICN is not computed. If the dataclass requires SICN values, extend it instead of stuffing proxy values into SICN fields.
 
-- [ ] **Step F3: Add quality provenance**
+- [x] **Step F3: Add quality provenance**
 
 Add a field in the serialized report such as:
 
@@ -782,7 +830,7 @@ Add a field in the serialized report such as:
 
 Wire it through `MeshQualityReport` or `MeshStatisticsReport` without breaking existing Gmsh quality.
 
-- [ ] **Step F4: Run tests**
+- [x] **Step F4: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -791,6 +839,17 @@ PYTHONPATH=packages/fullmag-py/src pytest \
 ```
 
 - [ ] **Step F5: Commit**
+
+Deferred while implementing in the existing dirty worktree. Swept quality now
+reports `quality_source="swept_topology_proxy"` and does not serialize proxy
+gamma as SICN. The verification for F1-F4 passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "swept or quality" -vv
+# 8 passed, 165 deselected
+```
 
 ```bash
 git add packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py \
@@ -809,7 +868,7 @@ git commit -m "fix: report swept mesh quality truthfully"
 - Modify: `crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs` if API naming changes
 - Modify: `apps/control-room/src/kernel/api/generated/openapi-v2.json` and `.ts` if schema changes
 
-- [ ] **Step G1: Add failing MeshData statistics test**
+- [x] **Step G1: Add failing MeshData statistics test**
 
 Add:
 
@@ -841,7 +900,7 @@ def test_mesh_statistics_reports_per_marker_boundary_faces(self) -> None:
     self.assertGreater(scopes[2]["boundary_face_count"], 0)
 ```
 
-- [ ] **Step G2: Implement per-marker boundary face association**
+- [x] **Step G2: Implement per-marker boundary face association**
 
 In `_build_mesh_statistics_report()`:
 
@@ -857,7 +916,7 @@ def _boundary_face_counts_by_marker(mesh: MeshData) -> dict[int, int]:
     # Return outer boundary count by adjacent element marker.
 ```
 
-- [ ] **Step G3: Add interface and outer boundary scopes**
+- [x] **Step G3: Add interface and outer boundary scopes**
 
 Add scopes:
 
@@ -867,7 +926,7 @@ Add scopes:
 
 Do not reuse volume element counts for surface face counts.
 
-- [ ] **Step G4: Run tests**
+- [x] **Step G4: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -876,6 +935,17 @@ PYTHONPATH=packages/fullmag-py/src pytest \
 ```
 
 - [ ] **Step G5: Commit**
+
+Deferred while implementing in the existing dirty worktree. Mesh statistics now
+compute boundary face counts by adjacent element marker and add `Gamma_out` and
+magnetic-air interface scopes. The verification for G1-G4 passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "mesh_statistics or boundary_faces or per_domain_quality" -vv
+# 5 passed, 169 deselected
+```
 
 ```bash
 git add packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py \
@@ -892,7 +962,7 @@ git commit -m "fix: compute scoped mesh boundary face counts"
 - Modify: `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 
-- [ ] **Step H1: Add forced OCC failure test**
+- [x] **Step H1: Add forced OCC failure test**
 
 Add:
 
@@ -930,7 +1000,7 @@ def test_occ_failure_with_edge_corner_reports_degraded_fallback_not_secondary_er
 
 Refine the expected assertion after inspecting the current helper behavior: the important property is that the error is not `edge/corner refinement currently requires component-aware`.
 
-- [ ] **Step H2: Preserve primary failure and degraded field statuses**
+- [x] **Step H2: Preserve primary failure and degraded field statuses**
 
 When component-aware fallback strips topological fields:
 
@@ -938,7 +1008,7 @@ When component-aware fallback strips topological fields:
 - reason: `requires_component_tags_unavailable_in_concatenated_stl_fallback`,
 - keep the primary OCC/STL exception in `fallbacks_triggered` or `operation_statuses`.
 
-- [ ] **Step H3: Add report serialization test**
+- [x] **Step H3: Add report serialization test**
 
 Assert:
 
@@ -951,7 +1021,7 @@ self.assertTrue(any(
 ))
 ```
 
-- [ ] **Step H4: Run tests**
+- [x] **Step H4: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -969,6 +1039,23 @@ git add packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py \
 git commit -m "fix: make mesh fallback degradation explicit"
 ```
 
+Step H1-H4 were implemented with
+`test_occ_failure_with_edge_corner_reports_degraded_fallback_not_secondary_error`
+and
+`test_shared_domain_report_marks_component_fields_ignored_on_concatenated_fallback`.
+The fallback report now marks stripped component edge/corner fields as
+`ignored` with reason
+`requires_component_tags_unavailable_in_concatenated_stl_fallback`, while
+preserving `conformal_occ_failed` and `component_aware_import_failed`.
+Verification passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_meshing.py \
+  -k "fallback or degraded or edge_corner" -vv
+# 13 passed, 163 deselected
+```
+
 ## 12. Task I - Add Production Fixture Verifier
 
 **Files:**
@@ -978,7 +1065,7 @@ git commit -m "fix: make mesh fallback degradation explicit"
 - Modify: `justfile`
 - Create: `docs/diagnostics/fem-meshing-production-readiness-report-template.md`
 
-- [ ] **Step I1: Create Python verifier**
+- [x] **Step I1: Create Python verifier**
 
 Create `scripts/verify_fem_meshing_production.py`:
 
@@ -1057,7 +1144,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step I2: Create shell orchestrator**
+- [x] **Step I2: Create shell orchestrator**
 
 Create `scripts/verify_fem_meshing_production.sh`:
 
@@ -1099,7 +1186,7 @@ git diff --check -- \
   docs/plans
 ```
 
-- [ ] **Step I3: Add just target**
+- [x] **Step I3: Add just target**
 
 In `justfile`, add:
 
@@ -1108,7 +1195,7 @@ verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 ```
 
-- [ ] **Step I4: Create report template**
+- [x] **Step I4: Create report template**
 
 Create `docs/diagnostics/fem-meshing-production-readiness-report-template.md`:
 
@@ -1147,7 +1234,7 @@ Paste exact command output summaries from `just verify-fem-meshing-production`.
 List unsupported cases explicitly. The production claim applies only to the support matrix.
 ```
 
-- [ ] **Step I5: Run verifier**
+- [x] **Step I5: Run verifier**
 
 ```bash
 just verify-fem-meshing-production
@@ -1170,6 +1257,26 @@ git add scripts/verify_fem_meshing_production.py \
 git commit -m "test: add FEM meshing production verifier"
 ```
 
+Step I1-I5 were implemented with
+`scripts/verify_fem_meshing_production.py`,
+`scripts/verify_fem_meshing_production.sh`, the
+`verify-fem-meshing-production` just target, and the diagnostics report
+template. The first sandboxed run reached Vitest but failed with
+`spawnSync ... EPERM` inside the tool sandbox; the same verifier was rerun
+outside the sandbox and passed:
+
+```bash
+just verify-fem-meshing-production
+# python_meshing_tests: passed
+# python_api_mesh_tests: passed
+# cargo test -p fullmag-api router_v2 --no-fail-fast: 249 passed
+# pnpm --dir apps/control-room generate:api: passed
+# pnpm --dir apps/control-room lint: passed
+# pnpm --dir apps/control-room typecheck: passed
+# pnpm --dir apps/control-room test: 173 files, 1004 tests passed
+# git diff --check: passed
+```
+
 ## 13. Task J - Prove Python DSL, ProblemIR, And Script Export Round-Trip
 
 **Files:**
@@ -1180,7 +1287,7 @@ git commit -m "test: add FEM meshing production verifier"
 - Modify: `packages/fullmag-py/src/fullmag/runtime/script_builder.py`
 - Modify: `packages/fullmag-py/tests/test_api.py`
 
-- [ ] **Step J1: Add round-trip test for full production mesh controls**
+- [x] **Step J1: Add round-trip test for full production mesh controls**
 
 Add to `test_api.py`:
 
@@ -1232,7 +1339,7 @@ def test_mesh_controls_round_trip_for_production_thin_film(self) -> None:
     self.assertEqual(per_geometry["corner_transition_distance"], 30e-9)
 ```
 
-- [ ] **Step J2: Add script export assertion**
+- [x] **Step J2: Add script export assertion**
 
 Extend the same test or add a second one that calls the script builder and asserts the exported script contains:
 
@@ -1242,7 +1349,7 @@ body.mesh.thin_film(
 
 and all explicit edge/corner transition names.
 
-- [ ] **Step J3: Run tests**
+- [x] **Step J3: Run tests**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest \
@@ -1259,6 +1366,20 @@ git add packages/fullmag-py/src/fullmag/world.py \
   packages/fullmag-py/src/fullmag/runtime/script_builder.py \
   packages/fullmag-py/tests/test_api.py
 git commit -m "test: prove mesh controls round trip through Python API"
+```
+
+Step J1-J3 were implemented by preserving `thin_film_tetrahedral`
+mesh controls through ProblemIR runtime metadata, builder draft export, and
+canonical script rewrite. The renderer now emits `body.mesh.thin_film(...)`
+for supported thin-film mesh entries instead of round-tripping only through a
+generic `body.mesh(..., mesh_strategy="thin_film_tetrahedral")` call.
+Verification passed with:
+
+```bash
+PYTHONPATH=packages/fullmag-py/src pytest \
+  packages/fullmag-py/tests/test_api.py \
+  -k "mesh_controls_round_trip or thin_film" -vv
+# 2 passed, 153 deselected
 ```
 
 ## 14. Task K - Expose Production Diagnostics Through API v2

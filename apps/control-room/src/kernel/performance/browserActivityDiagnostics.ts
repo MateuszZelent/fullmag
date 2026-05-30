@@ -222,25 +222,24 @@ function resolveLongTaskSource(entry: PerformanceEntryLike): string {
 function formatLongTaskAttribution(entry: PerformanceEntryLike): string {
   const attribution = entry.attribution ?? [];
   if (attribution.length === 0) return "none";
-  return attribution
-    .slice(0, 3)
-    .map((item) =>
-      [
-        item.name,
-        item.containerType,
-        item.containerName,
-        item.containerId,
-        item.containerSrc,
-      ]
-        .filter(Boolean)
-        .join("/"),
-    )
-    .filter(Boolean)
-    .join(",") || "unknown";
+  const formatted: string[] = [];
+  for (const item of attribution.slice(0, 3)) {
+    const parts = [
+      item.name,
+      item.containerType,
+      item.containerName,
+      item.containerId,
+      item.containerSrc,
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      formatted.push(parts.join("/"));
+    }
+  }
+  return formatted.join(",") || "unknown";
 }
 
 function formatLongAnimationFrameDetail(entry: PerformanceEntryLike): string {
-  const scripts = [...(entry.scripts ?? [])].sort(
+  const scripts = (entry.scripts ?? []).toSorted(
     (left, right) => (right.duration ?? 0) - (left.duration ?? 0),
   );
   const primaryScript = scripts[0];

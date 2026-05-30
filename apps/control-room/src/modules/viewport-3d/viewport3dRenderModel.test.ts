@@ -129,6 +129,18 @@ describe("viewport3dRenderModel", () => {
     ]);
   });
 
+  it("deduplicates tetrahedral volume edges without string churn on safe node ranges", () => {
+    expect(viewport3dRenderModelSource).toContain(
+      "function resolveNumericEdgeKeyBase",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "appendTetraEdgeByNumericKey",
+    );
+    expect(viewport3dRenderModelSource).toContain(
+      "appendTetraEdgeByStringKey",
+    );
+  });
+
   it("resolves center and radius from decoded topology positions", () => {
     const bounds = resolveTopologyBounds(topologyFixture());
 
@@ -200,6 +212,38 @@ describe("viewport3dRenderModel", () => {
     expect(first?.fallbackSurfaceIndices).toBe(second?.fallbackSurfaceIndices);
     expect(first?.fallbackVolumeEdgeIndices).toBe(
       second?.fallbackVolumeEdgeIndices,
+    );
+  });
+
+  it("does not require global tetra indices when building a surface-only part model", () => {
+    const topology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 1,
+      elementMarkers: new Uint32Array(),
+      get indices(): Uint32Array {
+        throw new Error("global tetra indices should not be read eagerly");
+      },
+      nodeCount: 3,
+      positions: new Float64Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    };
+    const part = {
+      boundary_face_count: 1,
+      boundary_face_start: 0,
+      id: "surface-part",
+      surface_faces: [[0, 1, 2]],
+    };
+
+    const model = buildViewport3DTopologyRenderModel(
+      topology as never,
+      [part],
+      [],
+    );
+
+    expect(model?.nodeCount).toBe(3);
+    expect(model?.magneticParts[0]?.surfaceIndices).toEqual(
+      new Uint32Array([0, 1, 2]),
     );
   });
 

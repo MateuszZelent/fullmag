@@ -33,6 +33,7 @@ class MeshQualityReport:
         element_gamma: Per-element gamma values (None if not requested).
         element_volume: Per-element volume values aligned to mesh elements.
         element_tags: Gmsh element tags aligned to per-element quality arrays.
+        quality_source: Source of the reported quality metrics.
     """
 
     n_elements: int
@@ -53,6 +54,7 @@ class MeshQualityReport:
     element_gamma: list[float] | None = None
     element_volume: list[float] | None = None
     element_tags: list[int] | None = None
+    quality_source: str = "gmsh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -764,6 +766,46 @@ def _tetra_signed_volumes(mesh: MeshData) -> NDArray[np.float64]:
     return np.linalg.det(np.stack([p1 - p0, p2 - p0, p3 - p0], axis=2)) / 6.0
 
 
+_TET_FACE_NODE_INDICES = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+
+
+def _face_key(face: NDArray[np.integer] | list[int] | tuple[int, int, int]) -> tuple[int, int, int]:
+    return tuple(sorted(int(node) for node in face))  # type: ignore[return-value]
+
+
+def _tetra_face_marker_sets(mesh: MeshData) -> dict[tuple[int, int, int], set[int]]:
+    face_markers: dict[tuple[int, int, int], set[int]] = {}
+    for element_index, element in enumerate(mesh.elements):
+        marker = int(mesh.element_markers[element_index])
+        for face_indices in _TET_FACE_NODE_INDICES:
+            key = _face_key([int(element[index]) for index in face_indices])
+            face_markers.setdefault(key, set()).add(marker)
+    return face_markers
+
+
+def _boundary_face_counts_by_marker(mesh: MeshData) -> dict[int, int]:
+    face_markers = _tetra_face_marker_sets(mesh)
+    counts: dict[int, int] = {}
+    for face in mesh.boundary_faces:
+        for marker in face_markers.get(_face_key(face), set()):
+            counts[marker] = counts.get(marker, 0) + 1
+    return counts
+
+
+def _interface_face_count_by_marker_pair(
+    face_markers: dict[tuple[int, int, int], set[int]],
+) -> dict[tuple[int, int], int]:
+    counts: dict[tuple[int, int], int] = {}
+    for markers in face_markers.values():
+        if len(markers) < 2:
+            continue
+        ordered = sorted(int(marker) for marker in markers)
+        for left, right in zip(ordered[:-1], ordered[1:], strict=False):
+            key = (left, right)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _quality_histogram_bins(counts: list[int], lo: float, hi: float) -> list[dict[str, object]]:
     if not counts:
         return []
@@ -824,6 +866,8 @@ def _quality_metric_from_report(
     if report is None:
         return None
     if metric == "sicn":
+        if report.quality_source != "gmsh":
+            return None
         below_threshold_count, below_threshold_fraction = _quality_below_threshold(
             report.element_sicn,
             SICN_P05_QUALITY_THRESHOLD,
@@ -915,7 +959,11 @@ def _mesh_scope_statistics(
         warnings.append(f"{degenerate_count} degenerate tetrahedra")
     if volume_ratio is not None and volume_ratio > 1.0e5:
         warnings.append("extreme element volume ratio")
-    if quality is not None and quality.sicn_p5 < 0.1:
+    if (
+        quality is not None
+        and quality.quality_source == "gmsh"
+        and quality.sicn_p5 < 0.1
+    ):
         warnings.append("worst 5% SICN below quality target")
     if quality is not None and quality.gamma_min < 0.08:
         warnings.append("minimum gamma below quality target")
@@ -955,6 +1003,9 @@ def _mesh_scope_statistics(
 def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatisticsReport:
     signed_volumes = _tetra_signed_volumes(mesh)
     all_mask = np.ones(mesh.n_elements, dtype=np.bool_)
+    boundary_face_counts = _boundary_face_counts_by_marker(mesh)
+    face_markers = _tetra_face_marker_sets(mesh)
+    interface_counts = _interface_face_count_by_marker_pair(face_markers)
     global_scope = _mesh_scope_statistics(
         mesh,
         scope_id="global",
@@ -984,7 +1035,39 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                 element_mask=marker_mask,
                 signed_volumes=signed_volumes,
                 quality=quality,
-                boundary_face_count=0,
+                boundary_face_count=boundary_face_counts.get(marker, 0),
+            )
+        )
+    empty_mask = np.zeros(mesh.n_elements, dtype=np.bool_)
+    if mesh.n_boundary_faces:
+        scopes.append(
+            _mesh_scope_statistics(
+                mesh,
+                scope_id="boundary:gamma_out",
+                kind="boundary",
+                label="Gamma_out",
+                role="boundary",
+                marker=None,
+                element_mask=empty_mask,
+                signed_volumes=signed_volumes,
+                quality=None,
+                boundary_face_count=mesh.n_boundary_faces,
+            )
+        )
+    interface_count = int(sum(interface_counts.values()))
+    if interface_count:
+        scopes.append(
+            _mesh_scope_statistics(
+                mesh,
+                scope_id="boundary:mag_air_interface",
+                kind="interface",
+                label="Magnetic-air interface",
+                role="boundary",
+                marker=None,
+                element_mask=empty_mask,
+                signed_volumes=signed_volumes,
+                quality=None,
+                boundary_face_count=interface_count,
             )
         )
     scope_label_by_marker = {
@@ -1013,7 +1096,7 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
     worst_elements = worst_elements_by_metric.get("gamma", [])
     return MeshStatisticsReport(
         mesh_name=mesh_name,
-        quality_source="gmsh" if mesh.quality is not None else "topology",
+        quality_source=mesh.quality.quality_source if mesh.quality is not None else "topology",
         global_scope=global_scope,
         scopes=scopes,
         worst_elements=worst_elements,
@@ -1086,9 +1169,18 @@ def _tetra_edge_lengths(mesh: MeshData, element_mask: NDArray[np.bool_]) -> NDAr
     return np.concatenate(lengths).astype(np.float64, copy=False)
 
 
+def _mesh_statistics_public_scope_id(scope: MeshStatisticsScope) -> str:
+    if scope.marker == 0:
+        return "part:airbox"
+    if scope.marker is not None:
+        return f"part:marker:{scope.marker}"
+    return scope.id
+
+
 def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object]:
     return {
         "id": scope.id,
+        "scope_id": _mesh_statistics_public_scope_id(scope),
         "kind": scope.kind,
         "label": scope.label,
         "role": scope.role,

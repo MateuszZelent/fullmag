@@ -19,6 +19,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   selectionSnapshotEquals,
   useSelectionActions,
@@ -175,10 +176,16 @@ export default function Viewport3DModule({
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
+  const meshHistogramBinElements = useMeshHistogramBinElementsResource(
+    meshSizeHighlight?.resource ?? null,
+  );
   const { domainId, ...sceneModel } = useViewport3DSceneModel({
     commandState,
     colors,
     meshSizeHighlight,
+    meshSizeHighlightSelection: meshSizeHighlight
+      ? meshHistogramBinElements.data
+      : null,
     resourceCounts,
     selection,
   });
