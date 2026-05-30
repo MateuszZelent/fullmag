@@ -3,6 +3,7 @@
   inset: 0;
   z-index: 90;
   background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
+  animation: fm-overlay-in 100ms ease-out;
 }
 
 .fm-dialog {
@@ -21,6 +22,7 @@
   box-shadow: var(--fm-shadow-panel);
   color: var(--fm-text-primary);
   transform: translateX(-50%);
+  animation: fm-dialog-in 150ms ease-out;
 }
 
 .fm-dialog__header {
@@ -156,21 +158,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.fm-dialog__mesh-log {
-  margin: 0;
-  max-height: 240px;
-  overflow: auto;
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
-  color: var(--fm-text-secondary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
-  line-height: 1.45;
-  padding: var(--fm-space-3);
-  white-space: pre-wrap;
 }
 
 .fm-dialog__mesh-pipeline {
@@ -381,4 +368,20 @@
   justify-content: flex-end;
   gap: var(--fm-space-2);
   padding: 0 var(--fm-space-5) var(--fm-space-5);
+}
+
+@keyframes fm-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fm-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }

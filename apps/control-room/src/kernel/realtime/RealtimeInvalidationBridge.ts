@@ -12,6 +12,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
+  SESSION_CURRENT_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -25,6 +26,8 @@ const SESSION_STATUS_RESOURCE_KEY = "session:status";
 interface RealtimeResourceEvent {
   resource_key?: string;
   revision?: ResourceRevision;
+  seq?: ResourceRevision;
+  session_id?: string;
   type: string;
 }
 
@@ -37,6 +40,8 @@ interface RealtimeBatchChangedEvent {
   payload?: {
     changes?: unknown[];
   };
+  seq?: ResourceRevision;
+  session_id?: string;
   type: string;
 }
 
@@ -44,6 +49,8 @@ interface RealtimeResyncRequiredEvent {
   payload?: {
     replay_available_after_seq?: unknown;
   };
+  seq?: ResourceRevision;
+  session_id?: string;
   type: string;
 }
 
@@ -146,6 +153,7 @@ function defaultScheduleFlush(callback: () => void): () => void {
 }
 
 export class RealtimeInvalidationBridge {
+  private currentSessionId: string | null = null;
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
   private pendingStatusRevision: ResourceRevision | null = null;
@@ -156,12 +164,16 @@ export class RealtimeInvalidationBridge {
   ) {}
 
   handleEvent(event: unknown): boolean {
+    const sessionHandled = this.handleSessionEnvelope(event);
+
     if (isRealtimeResyncRequiredEvent(event)) {
       const replayAfter = event.payload?.replay_available_after_seq;
-      this.resources.invalidate(
-        SESSION_STATUS_RESOURCE_KEY,
-        typeof replayAfter === "number" ? replayAfter : Date.now(),
-      );
+      if (!sessionHandled) {
+        this.resources.invalidate(
+          SESSION_STATUS_RESOURCE_KEY,
+          typeof replayAfter === "number" ? replayAfter : Date.now(),
+        );
+      }
       return true;
     }
 
@@ -198,23 +210,55 @@ export class RealtimeInvalidationBridge {
       if (handled) {
         this.scheduleFlush();
       }
-      return handled;
+      return handled || sessionHandled;
     }
 
     if (!isRealtimeResourceEvent(event)) {
-      return false;
+      return sessionHandled;
     }
 
     if (event.type !== "resource.updated") {
-      return false;
+      return sessionHandled;
     }
 
     if (!event.resource_key || event.revision === undefined) {
-      return false;
+      return sessionHandled;
     }
 
     this.invalidateResource(event.resource_key, event.revision);
     return true;
+  }
+
+  private handleSessionEnvelope(event: unknown): boolean {
+    if (!event || typeof event !== "object") return false;
+
+    const record = event as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    const sessionId =
+      typeof record.session_id === "string" && record.session_id.length > 0
+        ? record.session_id
+        : null;
+    if (!sessionId) return false;
+
+    const shouldResync =
+      type === "hello" ||
+      type === "resync.required" ||
+      (this.currentSessionId !== null && this.currentSessionId !== sessionId);
+    this.currentSessionId = sessionId;
+    if (!shouldResync) return false;
+
+    const seq = record.seq;
+    const revision =
+      typeof seq === "number" || typeof seq === "string"
+        ? `session:${sessionId}:${seq}`
+        : `session:${sessionId}:${Date.now()}`;
+    this.invalidateSessionScope(revision);
+    return true;
+  }
+
+  private invalidateSessionScope(revision: ResourceRevision): void {
+    this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+    this.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
   }
 
   private queueResourceInvalidation(

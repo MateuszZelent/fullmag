@@ -23,6 +23,9 @@ export interface KernelEventMap {
     reason?: string;
     tab: "engine" | "logs" | "telemetry";
   };
+  "viewport-2d:fit-requested": {
+    source: "command" | "viewport";
+  };
   "command:submitted": {
     commandId: string;
   };

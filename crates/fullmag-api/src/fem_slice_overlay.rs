@@ -17,6 +17,28 @@ pub(crate) struct SliceOverlaySegment {
     pub b: [f64; 2],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SliceOverlayPointKind {
+    EdgeIntersection,
+    MeshNode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SliceOverlayPoint {
+    pub uv: [f64; 2],
+    pub world: [f64; 3],
+    pub edge_node_ids: [u32; 2],
+    pub edge_t: f64,
+    pub kind: SliceOverlayPointKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SliceOverlayPolygon {
+    pub vertices: Vec<[f64; 2]>,
+    pub points: Vec<SliceOverlayPoint>,
+    pub parent_element_id: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FemSliceOverlay {
     pub plane: SlicePlane,
@@ -27,6 +49,7 @@ pub(crate) struct FemSliceOverlay {
     pub normal_axis: &'static str,
     pub bounds: SliceOverlayBounds,
     pub segments: Vec<SliceOverlaySegment>,
+    pub polygons: Vec<SliceOverlayPolygon>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -101,6 +124,7 @@ pub(crate) fn collect_fem_slice_overlay(
     let epsilon = slice_epsilon(&frame);
     let mut seen = HashSet::new();
     let mut segments = Vec::new();
+    let mut polygons = Vec::new();
     let edges = [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
 
     for (element_index, element) in input.elements.iter().enumerate() {
@@ -114,8 +138,10 @@ pub(crate) fn collect_fem_slice_overlay(
             continue;
         }
 
-        let mut points: Vec<[f64; 2]> = Vec::new();
+        let mut points: Vec<SliceOverlayPoint> = Vec::new();
         for (a, b) in edges {
+            let node_a = element[a];
+            let node_b = element[b];
             let Some(pa) = input.nodes.get(element[a] as usize).copied() else {
                 continue;
             };
@@ -125,25 +151,27 @@ pub(crate) fn collect_fem_slice_overlay(
             let da = pa[frame.normal_axis] - frame.cut_world;
             let db = pb[frame.normal_axis] - frame.cut_world;
             if da.abs() <= epsilon && db.abs() <= epsilon {
-                push_unique_uv(&mut points, [pa[frame.u_axis], pa[frame.v_axis]], epsilon);
-                push_unique_uv(&mut points, [pb[frame.u_axis], pb[frame.v_axis]], epsilon);
+                push_unique_point(&mut points, mesh_node_point(node_a, pa, &frame), epsilon);
+                push_unique_point(&mut points, mesh_node_point(node_b, pb, &frame), epsilon);
                 continue;
             }
             if da.abs() <= epsilon {
-                push_unique_uv(&mut points, [pa[frame.u_axis], pa[frame.v_axis]], epsilon);
+                push_unique_point(&mut points, mesh_node_point(node_a, pa, &frame), epsilon);
                 continue;
             }
             if db.abs() <= epsilon {
-                push_unique_uv(&mut points, [pb[frame.u_axis], pb[frame.v_axis]], epsilon);
+                push_unique_point(&mut points, mesh_node_point(node_b, pb, &frame), epsilon);
                 continue;
             }
             if da.signum() == db.signum() {
                 continue;
             }
             let t = da / (da - db);
-            let u = pa[frame.u_axis] + (pb[frame.u_axis] - pa[frame.u_axis]) * t;
-            let v = pa[frame.v_axis] + (pb[frame.v_axis] - pa[frame.v_axis]) * t;
-            push_unique_uv(&mut points, [u, v], epsilon);
+            push_unique_point(
+                &mut points,
+                edge_intersection_point(node_a, node_b, pa, pb, t, &frame),
+                epsilon,
+            );
         }
 
         if points.len() < 2 {
@@ -151,21 +179,33 @@ pub(crate) fn collect_fem_slice_overlay(
         }
 
         let center = points.iter().fold([0.0, 0.0], |acc, point| {
-            [acc[0] + point[0], acc[1] + point[1]]
+            [acc[0] + point.uv[0], acc[1] + point.uv[1]]
         });
         let center = [
             center[0] / points.len() as f64,
             center[1] / points.len() as f64,
         ];
         points.sort_by(|a, b| {
-            let aa = (a[1] - center[1]).atan2(a[0] - center[0]);
-            let bb = (b[1] - center[1]).atan2(b[0] - center[0]);
+            let aa = (a.uv[1] - center[1]).atan2(a.uv[0] - center[0]);
+            let bb = (b.uv[1] - center[1]).atan2(b.uv[0] - center[0]);
             aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let vertices = points.iter().map(|point| point.uv).collect::<Vec<_>>();
+
+        if points.len() >= 3 {
+            let parent_element_id = u32::try_from(element_index).map_err(|_| {
+                ApiError::internal("cross-section parent element index exceeds u32 range")
+            })?;
+            polygons.push(SliceOverlayPolygon {
+                vertices,
+                points: points.clone(),
+                parent_element_id,
+            });
+        }
 
         for index in 0..points.len() {
-            let a = points[index];
-            let b = points[(index + 1) % points.len()];
+            let a = points[index].uv;
+            let b = points[(index + 1) % points.len()].uv;
             if segment_length_sq(a, b) <= epsilon * epsilon {
                 continue;
             }
@@ -195,6 +235,7 @@ pub(crate) fn collect_fem_slice_overlay(
             v_max: frame.v_max,
         },
         segments,
+        polygons,
     })
 }
 
@@ -302,10 +343,48 @@ fn slice_epsilon(frame: &SliceFrame) -> f64 {
     (frame.normal_max - frame.normal_min).abs().max(1.0) * 1.0e-12
 }
 
-fn push_unique_uv(points: &mut Vec<[f64; 2]>, point: [f64; 2], epsilon: f64) {
-    if points.iter().any(|existing| {
-        (existing[0] - point[0]).abs() <= epsilon && (existing[1] - point[1]).abs() <= epsilon
+fn mesh_node_point(node_id: u32, point: [f64; 3], frame: &SliceFrame) -> SliceOverlayPoint {
+    SliceOverlayPoint {
+        uv: [point[frame.u_axis], point[frame.v_axis]],
+        world: point,
+        edge_node_ids: [node_id, node_id],
+        edge_t: 0.0,
+        kind: SliceOverlayPointKind::MeshNode,
+    }
+}
+
+fn edge_intersection_point(
+    node_a: u32,
+    node_b: u32,
+    pa: [f64; 3],
+    pb: [f64; 3],
+    t: f64,
+    frame: &SliceFrame,
+) -> SliceOverlayPoint {
+    let world = [
+        pa[0] + (pb[0] - pa[0]) * t,
+        pa[1] + (pb[1] - pa[1]) * t,
+        pa[2] + (pb[2] - pa[2]) * t,
+    ];
+    SliceOverlayPoint {
+        uv: [world[frame.u_axis], world[frame.v_axis]],
+        world,
+        edge_node_ids: [node_a, node_b],
+        edge_t: t,
+        kind: SliceOverlayPointKind::EdgeIntersection,
+    }
+}
+
+fn push_unique_point(points: &mut Vec<SliceOverlayPoint>, point: SliceOverlayPoint, epsilon: f64) {
+    if let Some(existing) = points.iter_mut().find(|existing| {
+        (existing.uv[0] - point.uv[0]).abs() <= epsilon
+            && (existing.uv[1] - point.uv[1]).abs() <= epsilon
     }) {
+        if existing.kind == SliceOverlayPointKind::EdgeIntersection
+            && point.kind == SliceOverlayPointKind::MeshNode
+        {
+            *existing = point;
+        }
         return;
     }
     points.push(point);
@@ -328,5 +407,134 @@ fn segment_key(a: [f64; 2], b: [f64; 2], epsilon: f64) -> ((i64, i64), (i64, i64
         (qa, qb)
     } else {
         (qb, qa)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::field_slice::{resolve_slice_query, FieldSliceQuery};
+
+    #[test]
+    fn collect_overlay_emits_cross_section_polygon_with_parent_element_id() {
+        let nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let elements = vec![[0, 1, 2, 3]];
+        let element_markers = vec![1];
+        let query = resolve_slice_query(
+            &FieldSliceQuery {
+                plane: SlicePlane::Xy,
+                component: None,
+                cut_world: Some(0.5),
+                cut_norm: None,
+                x_size: None,
+                y_size: None,
+                max_points: None,
+                include_arrows: None,
+                arrow_every: None,
+                max_arrows: None,
+            },
+            1,
+        )
+        .expect("slice query should resolve");
+
+        let overlay = collect_fem_slice_overlay(
+            FemSliceOverlayInput {
+                nodes: &nodes,
+                elements: &elements,
+                element_markers: &element_markers,
+            },
+            &query,
+        )
+        .expect("tetrahedron should intersect the cut plane");
+
+        assert_eq!(overlay.segments.len(), 3);
+        assert_eq!(overlay.polygons.len(), 1);
+        assert_eq!(overlay.polygons[0].parent_element_id, 0);
+        assert_eq!(overlay.polygons[0].vertices.len(), 3);
+        assert!(contains_point(&overlay.polygons[0].vertices, [0.0, 0.0]));
+        assert!(contains_point(&overlay.polygons[0].vertices, [0.5, 0.0]));
+        assert!(contains_point(&overlay.polygons[0].vertices, [0.0, 0.5]));
+        let cut_edge_point = overlay.polygons[0]
+            .points
+            .iter()
+            .find(|point| point.uv == [0.0, 0.0])
+            .expect("cut should include the interpolated edge point");
+        assert_eq!(cut_edge_point.kind, SliceOverlayPointKind::EdgeIntersection);
+        assert_eq!(cut_edge_point.edge_node_ids, [0, 3]);
+        assert_eq!(cut_edge_point.edge_t, 0.5);
+        assert_eq!(cut_edge_point.world, [0.0, 0.0, 0.5]);
+        let second_cut_edge_point = overlay.polygons[0]
+            .points
+            .iter()
+            .find(|point| point.uv == [0.5, 0.0])
+            .expect("cut should include the interpolated edge point");
+        assert_eq!(
+            second_cut_edge_point.kind,
+            SliceOverlayPointKind::EdgeIntersection
+        );
+        assert_eq!(second_cut_edge_point.edge_node_ids, [1, 3]);
+        assert_eq!(second_cut_edge_point.edge_t, 0.5);
+        assert_eq!(second_cut_edge_point.world, [0.5, 0.0, 0.5]);
+    }
+
+    #[test]
+    fn collect_overlay_marks_nodes_that_lie_on_the_cut_plane() {
+        let nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let elements = vec![[0, 1, 2, 3]];
+        let element_markers = vec![1];
+        let query = resolve_slice_query(
+            &FieldSliceQuery {
+                plane: SlicePlane::Xy,
+                component: None,
+                cut_world: Some(0.0),
+                cut_norm: None,
+                x_size: None,
+                y_size: None,
+                max_points: None,
+                include_arrows: None,
+                arrow_every: None,
+                max_arrows: None,
+            },
+            1,
+        )
+        .expect("slice query should resolve");
+
+        let overlay = collect_fem_slice_overlay(
+            FemSliceOverlayInput {
+                nodes: &nodes,
+                elements: &elements,
+                element_markers: &element_markers,
+            },
+            &query,
+        )
+        .expect("tetrahedron face should lie on the cut plane");
+
+        let mesh_node_count = overlay.polygons[0]
+            .points
+            .iter()
+            .filter(|point| point.kind == SliceOverlayPointKind::MeshNode)
+            .count();
+        assert_eq!(mesh_node_count, 3);
+        assert!(overlay.polygons[0].points.iter().any(|point| {
+            point.uv == [1.0, 0.0]
+                && point.edge_node_ids == [1, 1]
+                && point.world == [1.0, 0.0, 0.0]
+        }));
+    }
+
+    fn contains_point(points: &[[f64; 2]], expected: [f64; 2]) -> bool {
+        points.iter().any(|point| {
+            (point[0] - expected[0]).abs() < 1.0e-12 && (point[1] - expected[1]).abs() < 1.0e-12
+        })
     }
 }

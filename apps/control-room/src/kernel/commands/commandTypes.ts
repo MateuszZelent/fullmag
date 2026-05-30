@@ -7,6 +7,8 @@ import type { SelectionController } from "../selection/SelectionController";
 import type { CameraRegistryController } from "../visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+import type { EventBus } from "../events/EventBus";
+import type { KernelEventMap } from "../events/eventTypes";
 
 export type CommandId = string;
 type CommandGroupId = string;
@@ -22,6 +24,7 @@ export interface CommandContext {
     | "shortcut"
     | "test";
   api?: ControlRoomApi;
+  bus?: EventBus<KernelEventMap>;
   cameraRegistry?: CameraRegistryController;
   input?: unknown;
   layout?: LayoutController;

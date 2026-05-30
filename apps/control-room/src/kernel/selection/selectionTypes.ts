@@ -1,4 +1,5 @@
 import type { ModuleId } from "../types";
+import type { CrossSectionQualityMetric } from "../api/apiTypes";
 
 type ObjectSelectionKind =
   | "object.root"
@@ -12,7 +13,7 @@ type ObjectSelectionKind =
   | "object.mesh"
   | "object.visualization";
 
-type MeshQualitySelectionMetric = "gamma" | "sicn" | "volume";
+type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 
 export type SelectionRef =
   | {
@@ -44,6 +45,20 @@ export type SelectionRef =
       nodeId: string;
       type: "mesh-quality-metric";
       visualizationTargetId: `mesh:quality:metric:${MeshQualitySelectionMetric}`;
+    }
+  | {
+      draftId: "draft";
+      kind: "mesh.cross-section.draft";
+      nodeId: string;
+      type: "cross-section-draft";
+      visualizationTargetId: "cross-section:draft";
+    }
+  | {
+      kind: "mesh.cross-section.plot";
+      nodeId: string;
+      plotId: string;
+      type: "cross-section-plot";
+      visualizationTargetId: `cross-section:plot:${string}`;
     }
   | {
       kind:
@@ -138,6 +153,22 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.metric === right.metric &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "cross-section-draft":
+      return (
+        right.type === "cross-section-draft" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.draftId === right.draftId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "cross-section-plot":
+      return (
+        right.type === "cross-section-plot" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.plotId === right.plotId &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "study-stage":

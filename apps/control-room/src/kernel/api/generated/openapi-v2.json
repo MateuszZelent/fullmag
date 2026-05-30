@@ -1578,6 +1578,18 @@
         ],
         "type": "object"
       },
+      "CrossSectionQualityMetric": {
+        "enum": [
+          "gamma",
+          "sicn",
+          "volume",
+          "skewness",
+          "aspect_ratio",
+          "max_angle",
+          "min_edge"
+        ],
+        "type": "string"
+      },
       "CurrentRunResource": {
         "properties": {
           "active_stage_index": {
@@ -7981,6 +7993,27 @@
         ],
         "type": "string"
       },
+      "SliceMeshColorScale": {
+        "enum": [
+          "jet",
+          "viridis",
+          "hot",
+          "coolwarm"
+        ],
+        "type": "string"
+      },
+      "SliceMeshQualityMetric": {
+        "enum": [
+          "gamma",
+          "sicn",
+          "volume",
+          "skewness",
+          "aspect_ratio",
+          "max_angle",
+          "min_edge"
+        ],
+        "type": "string"
+      },
       "SlicePlane": {
         "enum": [
           "xy",
@@ -8055,6 +8088,39 @@
             "format": "int32",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "mesh_color_scale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceMeshColorScale"
+              }
+            ]
+          },
+          "mesh_filter_expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_quality_metric": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceMeshQualityMetric"
+              }
+            ]
+          },
+          "mesh_shrink_factor": {
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -8195,6 +8261,19 @@
               "null"
             ]
           },
+          "mesh_color_scale": {
+            "$ref": "#/components/schemas/SliceMeshColorScale"
+          },
+          "mesh_filter_expression": {
+            "type": "string"
+          },
+          "mesh_quality_metric": {
+            "$ref": "#/components/schemas/SliceMeshQualityMetric"
+          },
+          "mesh_shrink_factor": {
+            "format": "double",
+            "type": "number"
+          },
           "mode": {
             "$ref": "#/components/schemas/SliceVisualizationMode"
           },
@@ -8273,7 +8352,11 @@
           "projection_reduction",
           "projection_include_air_as_zero",
           "projection_samples",
-          "projection_resolution"
+          "projection_resolution",
+          "mesh_quality_metric",
+          "mesh_color_scale",
+          "mesh_filter_expression",
+          "mesh_shrink_factor"
         ],
         "type": "object"
       },
@@ -14632,6 +14715,124 @@
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_polygons",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_wireframe",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary shared-domain FEM cross-section geometry (FMCS)"
+          },
+          "204": {
+            "description": "Not applicable (FDM)"
+          },
+          "304": {
+            "description": "Cross-section geometry not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionQualityMetric"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary shared-domain FEM cross-section quality values (FMQS)"
+          },
+          "204": {
+            "description": "No per-element quality data artifact or requested metric available"
+          },
+          "304": {
+            "description": "Cross-section quality not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
           }
         },
         "tags": [

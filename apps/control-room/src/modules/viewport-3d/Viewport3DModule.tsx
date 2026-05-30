@@ -4,6 +4,7 @@ import { Canvas } from "@react-three/fiber";
 import {
   useCallback,
   useEffect,
+  useReducer,
   useRef,
   useState,
   memo,
@@ -219,17 +220,8 @@ export default function Viewport3DModule({
       } else {
         viewport3dStore.setCamera(nextCamera);
       }
-      kernel.cameraRegistry.patchCamera({
-        ...nextCamera,
-        ...(camera.projection === undefined
-          ? {}
-          : { projection: camera.projection }),
-        ...(camera.orthographicScale === undefined
-          ? {}
-          : { orthographic_scale: camera.orthographicScale }),
-      });
     },
-    [kernel.cameraRegistry],
+    [],
   );
   const beginCameraInteraction = useCallback(() => {
     kernel.cameraRegistry.beginInteraction();
@@ -552,39 +544,56 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
 
 const VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS = 100;
 
+interface Viewport3DRefreshCountdownState {
+  nowMs: number;
+  sample: typeof EMPTY_VIEWPORT_3D_REFRESH_SAMPLE;
+}
+
+interface Viewport3DRefreshCountdownTick {
+  nowMs: number;
+  revision: Viewport3DFieldRefreshState["revision"];
+  status: Viewport3DFieldRefreshState["status"];
+}
+
+const INITIAL_VIEWPORT_3D_REFRESH_COUNTDOWN: Viewport3DRefreshCountdownState = {
+  nowMs: 0,
+  sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
+};
+
+function reduceViewport3DRefreshCountdown(
+  current: Viewport3DRefreshCountdownState,
+  tick: Viewport3DRefreshCountdownTick,
+): Viewport3DRefreshCountdownState {
+  return {
+    nowMs: tick.nowMs,
+    sample: updateViewport3DRefreshSample(current.sample, tick),
+  };
+}
+
 const Viewport3DFieldRefreshCountdown = memo(
   function Viewport3DFieldRefreshCountdown({
     refresh,
   }: {
     refresh: Viewport3DFieldRefreshState;
   }) {
-    const [countdown, setCountdown] = useState(() => ({
-      nowMs: 0,
-      sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
-    }));
+    const [countdown, dispatchCountdownTick] = useReducer(
+      reduceViewport3DRefreshCountdown,
+      INITIAL_VIEWPORT_3D_REFRESH_COUNTDOWN,
+    );
 
     useEffect(() => {
       if (!refresh.enabled) {
-        const timeoutId = window.setTimeout(() => {
-          setCountdown({
-            nowMs: 0,
-            sample: EMPTY_VIEWPORT_3D_REFRESH_SAMPLE,
-          });
-        }, 0);
-        return () => window.clearTimeout(timeoutId);
+        return;
       }
 
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const tick = () => {
         const nowMs = Date.now();
-        setCountdown((current) => ({
+        dispatchCountdownTick({
           nowMs,
-          sample: updateViewport3DRefreshSample(current.sample, {
-            nowMs,
-            revision: refresh.revision,
-            status: refresh.status,
-          }),
-        }));
+          revision: refresh.revision,
+          status: refresh.status,
+        });
         timeoutId = setTimeout(tick, VIEWPORT_3D_REFRESH_COUNTDOWN_TICK_MS);
       };
       const initialTimeoutId = setTimeout(tick, 0);

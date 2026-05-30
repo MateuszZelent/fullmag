@@ -908,7 +908,22 @@ GPU_RK_DMI_FIELDS_HPP_PATH = (
     / "rk"
     / "rk_dmi_fields.hpp"
 )
+FEM_DMI_DOC_PATH = REPO_ROOT / "docs" / "physics" / "fem_dmi.md"
+FEM_DMI_INTERFACIAL_SOURCE = (
+    REPO_ROOT
+    / "native"
+    / "backends"
+    / "fem"
+    / "cpu"
+    / "mfem"
+    / "interactions"
+    / "dmi_interfacial.cpp"
+)
+FEM_DMI_WEAK_RESIDUAL_TEST = (
+    REPO_ROOT / "native" / "backends" / "fem" / "tests" / "dmi_weak_residual.cpp"
+)
 VERIFY_FEM_GPU_ENABLEMENT_SCRIPT = REPO_ROOT / "scripts" / "verify_fem_gpu_enablement.sh"
+FEM_GPU_DOCKERFILE_PATH = REPO_ROOT / "docker" / "fem-gpu" / "Dockerfile"
 GPU_RK_STEP_STATS_CU_PATH = (
     REPO_ROOT
     / "native"
@@ -8613,6 +8628,31 @@ def test_fem_gpu_enablement_script_runs_native_dmi_runtime_smoke():
     )
     assert "cargo test -p fullmag-runner" in script
     assert "--features fem-gpu" in script
+
+
+def test_fem_gpu_dockerfile_builds_libceed_cuda_backend():
+    dockerfile = FEM_GPU_DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    assert "FULLMAG_FEM_MFEM_DEVICE=ceed-cuda:/gpu/cuda/shared" in dockerfile
+    assert "make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME}" in dockerfile
+    assert "make -C /tmp/build/libCEED -j\"$(nproc)\"" not in dockerfile
+
+
+def test_fem_dmi_docs_pin_public_surface_unit_policy():
+    doc = FEM_DMI_DOC_PATH.read_text(encoding="utf-8")
+    interfacial_source = FEM_DMI_INTERFACIAL_SOURCE.read_text(encoding="utf-8")
+
+    assert "Public API: `Dind` / `InterfacialDMI(D=...)` is a surface DMI coefficient in `J/m^2`." in doc
+    assert "The native FEM path passes this coefficient through unchanged; it does not divide by film thickness" in doc
+    assert "thickness" not in interfacial_source.lower()
+
+
+def test_fem_dmi_weak_residual_covers_production_physics_fixtures():
+    source = FEM_DMI_WEAK_RESIDUAL_TEST.read_text(encoding="utf-8")
+
+    assert "run_interfacial_domain_wall_handedness_fixture" in source
+    assert "run_bulk_spiral_pitch_fixture" in source
+    assert "run_interfacial_boundary_tilt_fixture" in source
 
 
 def test_gpu_rk_final_refresh_is_owned_by_rk_module():

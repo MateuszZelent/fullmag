@@ -1,5 +1,6 @@
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 
 import type { ExplorerNode } from "./explorerTypes";
 
@@ -37,6 +38,33 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   if (
+    node.kind === "visualizations-2d.draft" ||
+    (node.kind === "visualizations-2d.parameter" && node.crossSectionDraftId)
+  ) {
+    return {
+      draftId: node.crossSectionDraftId ?? "draft",
+      kind: "mesh.cross-section.draft",
+      nodeId: node.id,
+      type: "cross-section-draft",
+      visualizationTargetId: "cross-section:draft",
+    };
+  }
+
+  if (
+    (node.kind === "visualizations-2d.plot" ||
+      node.kind === "visualizations-2d.parameter") &&
+    node.crossSectionPlotId
+  ) {
+    return {
+      kind: "mesh.cross-section.plot",
+      nodeId: node.id,
+      plotId: node.crossSectionPlotId,
+      type: "cross-section-plot",
+      visualizationTargetId: `cross-section:plot:${node.crossSectionPlotId}`,
+    };
+  }
+
+  if (
     node.stageId &&
     node.stageIndex !== undefined &&
     (node.kind === "study.stage.action" ||
@@ -61,13 +89,21 @@ export function selectExplorerNode(
   node: ExplorerNode,
   source: ModuleId,
 ): void {
+  if (node.crossSectionPlotId) {
+    selectCrossSectionPlot(node.crossSectionPlotId);
+  }
+  const ref = selectionRefFromNode(node);
   kernel.selection.set(
     {
-      kind: node.kind,
+      kind:
+        ref?.type === "cross-section-draft" ||
+        ref?.type === "cross-section-plot"
+          ? ref.kind
+          : node.kind,
       label: node.label,
       nodeId: node.id,
       objectId: node.objectId ?? null,
-      ref: selectionRefFromNode(node),
+      ref,
     },
     source,
   );

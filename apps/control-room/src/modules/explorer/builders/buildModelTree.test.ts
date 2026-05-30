@@ -400,6 +400,95 @@ describe("buildModelTree", () => {
     ).toEqual(expect.arrayContaining(["study.skip"]));
   });
 
+  it("shows editable 2D visualization drafts and committed plots", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree({
+        crossSections: {
+          activePlotId: "plot-1",
+          draft: {
+            colorScale: "jet",
+            filterExpression: "",
+            frameExtent: "universe",
+            id: "draft",
+            includeWireframe: true,
+            metric: "skewness",
+            name: "Draft Cross-Section",
+            plane: "xy",
+            positionPercent: 50,
+            rotationDegrees: 0,
+            shrinkFactor: 1,
+          },
+          plots: [
+            {
+              colorScale: "viridis",
+              filterExpression: "quality < 0.3",
+              frameExtent: "universe",
+              id: "plot-1",
+              metric: "aspect_ratio",
+              name: "Plot 1",
+              plane: "xz",
+              positionPercent: 25,
+              rotationDegrees: 0,
+              shrinkFactor: 0.8,
+              wireframeVisible: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      flattened.find((node) => node.id === "model:visualizations-2d"),
+    ).toMatchObject({
+      badge: "1 plot",
+      kind: "visualizations-2d.root",
+      label: "Visualizations 2D",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:visualizations-2d:draft"),
+    ).toMatchObject({
+      badge: "XY 50% / skewness",
+      kind: "visualizations-2d.draft",
+      label: "Draft Cross-Section",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:visualizations-2d:plot-1"),
+    ).toMatchObject({
+      badge: "XZ 25% / aspect_ratio",
+      kind: "visualizations-2d.plot",
+      label: "Plot 1",
+      status: "ready",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:visualizations-2d:plot-1:frame",
+      ),
+    ).toMatchObject({
+      badge: "Universe / 0 deg",
+      kind: "visualizations-2d.parameter",
+      label: "Frame",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:visualizations-2d:plot-1:quality",
+      ),
+    ).toMatchObject({
+      badge: "aspect_ratio / viridis",
+      kind: "visualizations-2d.parameter",
+      label: "Quality",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:visualizations-2d:plot-1:render",
+      ),
+    ).toMatchObject({
+      badge: "wireframe on / shrink 0.8 / quality < 0.3",
+      kind: "visualizations-2d.parameter",
+      label: "Render",
+      status: "warning",
+    });
+  });
+
   it("merges stage execution by stage id before falling back to index", () => {
     const sceneSnapshot = modelTreeSnapshotFromScene({
       objects: [],

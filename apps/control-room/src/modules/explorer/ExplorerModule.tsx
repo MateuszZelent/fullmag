@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Search } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
@@ -23,6 +23,7 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -40,6 +41,11 @@ import {
 } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
 import {
+  explorerCrossSectionsEqual,
+  selectExplorerCrossSections,
+} from "./explorerCrossSections";
+import {
+  expandExplorerNodes,
   setExplorerActiveTab,
   setExplorerFilterText,
   useExplorerStoreSelector,
@@ -123,6 +129,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     (explorer) => explorer.expandedIds[activeTab],
   );
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const crossSections = useCrossSectionWorkspaceSelector(
+    selectExplorerCrossSections,
+    { isEqual: explorerCrossSectionsEqual },
+  );
+  const crossSectionExpansionIds = useMemo(() => {
+    const ids: string[] = [];
+    if (crossSections.draft || crossSections.plots.length > 0) {
+      ids.push("model:visualizations-2d");
+    }
+    if (crossSections.draft) {
+      ids.push("model:visualizations-2d:draft");
+    }
+    for (const plot of crossSections.plots) {
+      ids.push(`model:visualizations-2d:${plot.id}`);
+    }
+    return ids;
+  }, [crossSections]);
   const modelTabActive = activeTab === "model";
   const sessionStatusData = useSessionStatusSelector(
     selectExplorerModelRuntimeStatus,
@@ -179,13 +202,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     };
     const baseNodes =
       activeTab === "model"
-        ? buildModelTree({ ...modelSnapshot, mesh })
+        ? buildModelTree({ ...modelSnapshot, crossSections, mesh })
         : buildExplorerTree(activeTab);
     return filterExplorerNodes(baseNodes, filterText);
   }, [
     activeBuild.data,
     activeTab,
     filterText,
+    crossSections,
     manifest.data,
     meshSummary.data,
     modelResource.data,
@@ -193,6 +217,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     qualityGates.data,
     realizedSizeFields.data,
   ]);
+
+  useEffect(() => {
+    if (crossSectionExpansionIds.length === 0) return;
+    expandExplorerNodes("model", crossSectionExpansionIds);
+  }, [crossSectionExpansionIds]);
 
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">

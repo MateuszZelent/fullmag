@@ -425,6 +425,10 @@ pub struct SliceVisualizationState {
     pub projection_include_air_as_zero: bool,
     pub projection_samples: u32,
     pub projection_resolution: u32,
+    pub mesh_quality_metric: SliceMeshQualityMetric,
+    pub mesh_color_scale: SliceMeshColorScale,
+    pub mesh_filter_expression: String,
+    pub mesh_shrink_factor: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -473,6 +477,35 @@ pub struct SliceVisualizationPatch {
     pub projection_samples: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projection_resolution: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_quality_metric: Option<SliceMeshQualityMetric>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_color_scale: Option<SliceMeshColorScale>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_filter_expression: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_shrink_factor: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceMeshQualityMetric {
+    Gamma,
+    Sicn,
+    Volume,
+    Skewness,
+    AspectRatio,
+    MaxAngle,
+    MinEdge,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceMeshColorScale {
+    Jet,
+    Viridis,
+    Hot,
+    Coolwarm,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]

@@ -149,6 +149,9 @@ function renderNode(
 
     case "color":
       return <ColorMenuItem key={node.id} node={node} onCommand={onCommand} />;
+
+    case "text":
+      return <TextMenuItem key={node.id} node={node} onCommand={onCommand} />;
   }
 }
 
@@ -387,4 +390,62 @@ function colorInputValue(red: number, green: number, blue: number): string {
   return `#${[red, green, blue]
     .map((channel) => channel.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+// ── Text input ────────────────────────────────────────────────────────────────
+type TextNode = Extract<RibbonMenuNode, { type: "text" }>;
+
+function TextMenuItem({
+  node,
+  onCommand,
+}: {
+  node: TextNode;
+  onCommand?: (commandId: string, input?: unknown) => void;
+}) {
+  const [draftState, setDraftState] = useState<{
+    sourceValue: string;
+    value: string;
+  } | null>(null);
+  const draft =
+    draftState?.sourceValue === node.value ? draftState.value : node.value;
+
+  const commit = useCallback(() => {
+    const value = draft.trim();
+    if (value === node.value) return;
+    if (node.commandId) {
+      onCommand?.(node.commandId, resolveCommandInput(node.commandInput, value));
+      return;
+    }
+    onCommand?.(node.id, resolveCommandInput(node.commandInput, value));
+  }, [draft, node, onCommand]);
+
+  return (
+    <label
+      className={`fm-dropdown-text${node.disabled ? " fm-dropdown-text--disabled" : ""}`}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="fm-dropdown-text__label">{node.label}</span>
+      <input
+        className="fm-dropdown-text__input"
+        disabled={node.disabled}
+        placeholder={node.placeholder}
+        value={draft}
+        onBlur={commit}
+        onChange={(event) =>
+          setDraftState({
+            sourceValue: node.value,
+            value: event.target.value,
+          })
+        }
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          }
+        }}
+      />
+    </label>
+  );
 }

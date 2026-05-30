@@ -15,6 +15,7 @@ As of 2026-05-22, `apps/control-room` registers these manifests through `src/mod
 | `ribbon` | `src/modules/ribbon` | `ribbon` | implemented |
 | `explorer` | `src/modules/explorer` | `panel-left` | implemented |
 | `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
+| `viewport-aux` slot | `src/kernel/layout` | `viewport-aux` | implemented as an empty auxiliary dock slot, rendered only when a registered module targets it |
 | `inspector` | `src/modules/inspector` | `panel-right` | implemented |
 | `transport-footer` | `src/modules/footer` | `panel-bottom` | implemented as the current footer/log dock |
 | `command-palette` | `src/modules/overlay` | `overlay` | implemented as the current overlay module |
@@ -67,7 +68,7 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 | Module | Slot | Responsibility | Data source |
 |---|---|---|---|
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
-| `viewport-2d` | `viewport-main`, `viewport-aux` | Slices, projections, probes, line profiles. | Slice/profile resources and field catalog. |
+| `viewport-2d` | `viewport-main`, `viewport-aux` | Slices, projections, probes, line profiles, and mesh cross-sections. | Slice/profile/cross-section resources and field or mesh catalog. |
 | `charts` | `panel-bottom`, `viewport-aux` | Scalar histories, energies, convergence, analysis series. | Scalar and analysis resources. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
 | `view-controls` | `ribbon`, `viewport-main` overlay | Camera, layer, quantity, clip, selection, display controls. | Command registry and visualization resource. |

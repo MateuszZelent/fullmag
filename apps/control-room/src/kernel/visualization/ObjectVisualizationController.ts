@@ -540,7 +540,7 @@ export function visualizationStateOverrideFromTargetPatch(
       : { vector_alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
     ...(normalized.vectorBudget === undefined
       ? {}
-      : { vector_budget: Math.max(1, Math.floor(normalized.vectorBudget)) }),
+      : { vector_budget: Math.max(0, Math.floor(normalized.vectorBudget)) }),
     ...(normalized.vectorLengthScale === undefined
       ? {}
       : {
@@ -622,7 +622,7 @@ export function visualizationStatePatchFromDefaultTargetPatch(
       : { visible: normalized.vectorsVisible }),
     ...(normalized.vectorBudget === undefined
       ? {}
-      : { density: Math.max(1, Math.floor(normalized.vectorBudget)) }),
+      : { density: Math.max(0, Math.floor(normalized.vectorBudget)) }),
   };
   const vectorColorMode =
     normalized.surfaceColorSource === undefined
@@ -853,7 +853,7 @@ function visualizationSettingsFromResolvedTarget(
     surfaceColorSource: settings.surface_color_source,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
-      1,
+      0,
       Math.floor(
         settings.vector_budget ?? DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
       ),
@@ -891,7 +891,7 @@ export function airboxVisualizationStatePatchFromTargetPatch(
             domain: "airbox_only" as const,
             ...(patch.vectorBudget === undefined
               ? {}
-              : { density: Math.max(1, Math.floor(patch.vectorBudget)) }),
+              : { density: Math.max(0, Math.floor(patch.vectorBudget)) }),
             ...(patch.vectorsVisible === undefined
               ? {}
               : { visible: patch.vectorsVisible }),
@@ -1090,7 +1090,7 @@ function normalizePatch(
     normalized.vectorThickness = clampScale(normalized.vectorThickness);
   }
   if (normalized.vectorBudget !== undefined) {
-    normalized.vectorBudget = Math.max(1, Math.floor(normalized.vectorBudget));
+    normalized.vectorBudget = Math.max(0, Math.floor(normalized.vectorBudget));
   }
   if (normalized.vectorLengthScale !== undefined) {
     normalized.vectorLengthScale = Math.max(0.1, Math.min(5, normalized.vectorLengthScale));

@@ -1,39 +1,5 @@
-/* Catppuccin Mocha — default token values */
+/* Non-color design tokens — color tokens live in theme.css */
 :root {
-  /* Surfaces — Mocha: Crust → Mantle → Base → Surface0 */
-  --fm-bg-app: #1e1e2e;
-  --fm-bg-chrome: #181825;
-  --fm-bg-panel: #1e1e2e;
-  --fm-bg-panel-raised: #313244;
-  --fm-bg-viewport: #11111b;
-  --fm-bg-overlay: #313244;
-  --fm-bg-selected: #264069;
-  --fm-bg-canvas: #11111b;
-
-  /* Borders — Mocha: Surface0 → Surface1 → Surface2 */
-  --fm-border-subtle: #313244;
-  --fm-border-default: #45475a;
-  --fm-border-strong: #585b70;
-
-  /* Text — Mocha: Text, Subtext1, Overlay0, Crust */
-  --fm-text-primary: #cdd6f4;
-  --fm-text-secondary: #bac2de;
-  --fm-text-muted: #6c7086;
-  --fm-text-inverse: #11111b;
-
-  /* Accent — Mocha Blue, Lavender */
-  --fm-accent: #89b4fa;
-  --fm-accent-strong: #b4befe;
-  --fm-accent-soft: #2a2d52;
-
-  /* Semantic — Mocha palette */
-  --fm-success: #a6e3a1;
-  --fm-info: #89dceb;
-  --fm-warning: #f9e2af;
-  --fm-danger: #f38ba8;
-  --fm-stale: #cba6f7;
-  --fm-degraded: #fab387;
-
   /* Radii */
   --fm-radius-xs: 3px;
   --fm-radius-sm: 4px;
@@ -46,6 +12,7 @@
   --fm-space-3: 12px;
   --fm-space-4: 16px;
   --fm-space-5: 20px;
+  --fm-space-6: 24px;
 
   /* Geometry */
   --fm-menu-height: 38px;
@@ -53,10 +20,6 @@
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 32px;
-
-  /* Syntax/3D-viewport helper tokens */
-  --fm-syntax-string: #a6e3a1;
-  --fm-surface-3: #313244;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -67,7 +30,6 @@
   --fm-font-size-lg: 15px;
 
   /* Effects */
-  --fm-shadow-panel: 0 12px 34px rgb(0 0 0 / 40%);
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);
   --fm-transition-fast: 120ms ease-out;
   --fm-transition-normal: 180ms ease-out;

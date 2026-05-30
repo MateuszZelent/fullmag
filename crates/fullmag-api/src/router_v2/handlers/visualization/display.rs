@@ -404,24 +404,11 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
         validate_camera_patch(camera)?;
     }
     if let Some(layers) = &update.layers {
-        if matches!(
-            layers.vectors.as_ref().and_then(|vectors| vectors.density),
-            Some(0)
-        ) {
-            return Err(ApiError::bad_request(
-                "layers.vectors.density must be greater than zero",
-            ));
-        }
         if let Some(airbox_vectors) = layers
             .airbox
             .as_ref()
             .and_then(|airbox| airbox.vectors.as_ref())
         {
-            if matches!(airbox_vectors.density, Some(0)) {
-                return Err(ApiError::bad_request(
-                    "layers.airbox.vectors.density must be greater than zero",
-                ));
-            }
             if let Some(domain) = airbox_vectors.domain {
                 if domain != VectorLayerDomain::AirboxOnly {
                     return Err(ApiError::bad_request(
@@ -475,24 +462,11 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
                         )));
                     }
                 }
-                if matches!(
-                    display.vectors.as_ref().and_then(|vectors| vectors.density),
-                    Some(0)
-                ) {
-                    return Err(ApiError::bad_request(format!(
-                        "overrides[{index}].display.vectors.density must be greater than zero"
-                    )));
-                }
             }
             if let Some(style) = &target_override.style {
                 if matches!(style.vector_alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
                     return Err(ApiError::bad_request(format!(
                         "overrides[{index}].style.vector_alpha must be between 0 and 1"
-                    )));
-                }
-                if matches!(style.vector_budget, Some(0)) {
-                    return Err(ApiError::bad_request(format!(
-                        "overrides[{index}].style.vector_budget must be greater than zero"
                     )));
                 }
                 if matches!(
@@ -704,13 +678,17 @@ fn default_slice_visualization_for_presentation(
         projection_include_air_as_zero: false,
         projection_samples: 32,
         projection_resolution: 128,
+        mesh_quality_metric: crate::schemas::visualization_state::SliceMeshQualityMetric::Skewness,
+        mesh_color_scale: crate::schemas::visualization_state::SliceMeshColorScale::Jet,
+        mesh_filter_expression: String::new(),
+        mesh_shrink_factor: 1.0,
     }
 }
 
 fn default_clip_visualization() -> ClipVisualizationState {
     ClipVisualizationState {
         enabled: false,
-        axis: ClipAxis::X,
+        axis: ClipAxis::Z,
         position_percent: 50.0,
         flipped: false,
     }
@@ -1080,6 +1058,18 @@ fn apply_visualization_presentation_patch(
         if let Some(projection_resolution) = slice_patch.projection_resolution {
             slice.projection_resolution = projection_resolution.clamp(1, 512);
         }
+        if let Some(mesh_quality_metric) = slice_patch.mesh_quality_metric {
+            slice.mesh_quality_metric = mesh_quality_metric;
+        }
+        if let Some(mesh_color_scale) = slice_patch.mesh_color_scale {
+            slice.mesh_color_scale = mesh_color_scale;
+        }
+        if let Some(mesh_filter_expression) = &slice_patch.mesh_filter_expression {
+            slice.mesh_filter_expression = mesh_filter_expression.clone();
+        }
+        if let Some(mesh_shrink_factor) = slice_patch.mesh_shrink_factor {
+            slice.mesh_shrink_factor = mesh_shrink_factor.clamp(0.5, 1.0);
+        }
         presentation.visualization_slice = Some(slice);
     }
     if let Some(trim_patch) = &update.trim {
@@ -1293,9 +1283,6 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
     let slice = update.slice.as_ref();
 
     let nested_vectors = layers.and_then(|layers| layers.vectors.as_ref());
-    let nested_airbox_vectors = layers
-        .and_then(|layers| layers.airbox.as_ref())
-        .and_then(|airbox| airbox.vectors.as_ref());
 
     DisplayPatch {
         active_quantity_id: update.active_quantity_id.clone().or_else(|| {
@@ -1326,14 +1313,10 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
             .contrast_max
             .or_else(|| quantity.as_ref().and_then(|quantity| quantity.contrast_max)),
         vector_glyphs: update.vector_glyphs.or_else(|| {
-            nested_vectors
-                .and_then(|vectors| vectors.visible)
-                .or_else(|| nested_airbox_vectors.and_then(|vectors| vectors.visible))
+            nested_vectors.and_then(|vectors| vectors.visible)
         }),
         vector_density: update.vector_density.or_else(|| {
-            nested_vectors
-                .and_then(|vectors| vectors.density)
-                .or_else(|| nested_airbox_vectors.and_then(|vectors| vectors.density))
+            nested_vectors.and_then(|vectors| vectors.density)
         }),
         slice_mode: update.slice_mode.clone().or_else(|| {
             slice.and_then(|slice| slice.mode).map(|mode| match mode {

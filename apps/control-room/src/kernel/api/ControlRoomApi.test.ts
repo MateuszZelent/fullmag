@@ -236,6 +236,79 @@ function makeMeshQualityDataBuffer(): ArrayBuffer {
   return buffer;
 }
 
+function makeCrossSectionBuffer(): ArrayBuffer {
+  const polygonCount = 1;
+  const vertexCount = 3;
+  const segmentCount = 1;
+  const buffer = new ArrayBuffer(
+    64 +
+      vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT +
+      (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT +
+      polygonCount * Uint32Array.BYTES_PER_ELEMENT +
+      segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT +
+      vertexCount * 3 * Float32Array.BYTES_PER_ELEMENT +
+      vertexCount * 2 * Uint32Array.BYTES_PER_ELEMENT +
+      vertexCount * Float32Array.BYTES_PER_ELEMENT +
+      vertexCount * Uint32Array.BYTES_PER_ELEMENT,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMCS"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint32(4, 2, true);
+  view.setUint32(8, polygonCount, true);
+  view.setUint32(12, vertexCount, true);
+  view.setUint32(16, segmentCount, true);
+  view.setUint32(20, polygonCount, true);
+  view.setUint32(24, vertexCount, true);
+  view.setUint32(28, 1, true);
+  view.setFloat64(32, 0, true);
+  view.setFloat64(40, 1, true);
+  view.setFloat64(48, 0, true);
+  view.setFloat64(56, 1, true);
+
+  let offset = 64;
+  new Float32Array(buffer, offset, vertexCount * 2).set([
+    0, 0,
+    0.5, 0,
+    0, 0.5,
+  ]);
+  offset += vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, polygonCount + 1).set([0, 3]);
+  offset += (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, polygonCount).set([7]);
+  offset += polygonCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Float32Array(buffer, offset, segmentCount * 4).set([0, 0, 0.5, 0]);
+  offset += segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT;
+  new Float32Array(buffer, offset, vertexCount * 3).set([
+    0, 0, 0.5,
+    0.5, 0, 0.5,
+    0, 0.5, 0.5,
+  ]);
+  offset += vertexCount * 3 * Float32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, vertexCount * 2).set([0, 0, 0, 3, 1, 3]);
+  offset += vertexCount * 2 * Uint32Array.BYTES_PER_ELEMENT;
+  new Float32Array(buffer, offset, vertexCount).set([0, 0.5, 0.5]);
+  offset += vertexCount * Float32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, vertexCount).set([1, 0, 0]);
+
+  return buffer;
+}
+
+function makeCrossSectionQualityBuffer(): ArrayBuffer {
+  const buffer = new ArrayBuffer(20 + Float32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMQS"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint32(4, 1, true);
+  view.setUint32(8, 1, true);
+  view.setFloat32(12, 0.25, true);
+  view.setFloat32(16, 0.25, true);
+  new Float32Array(buffer, 20, 1).set([0.25]);
+  return buffer;
+}
+
 function parseRequestBody(body: BodyInit | null | undefined): unknown {
   if (body instanceof ArrayBuffer) {
     return JSON.parse(new TextDecoder().decode(body));
@@ -967,7 +1040,7 @@ describe("ControlRoomApi", () => {
     expect(observedRanges.length).toBeGreaterThan(2);
   });
 
-  it("schedules topology, mesh-quality, and field-vector decoding through the configured binary decode scheduler", async () => {
+  it("schedules binary decoders through the configured binary decode scheduler", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const decodeKinds: string[] = [];
     const api = new ControlRoomApi({
@@ -990,6 +1063,19 @@ describe("ControlRoomApi", () => {
             headers: { etag: '"quality-scheduled"', ...contractHeaders },
           });
         }
+        if (path === "/v2/sessions/current/meshing/meshes/shared-domain/cross-section") {
+          return binaryResponse(makeCrossSectionBuffer(), {
+            headers: { etag: '"cross-section-scheduled"', ...contractHeaders },
+          });
+        }
+        if (path === "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality") {
+          return binaryResponse(makeCrossSectionQualityBuffer(), {
+            headers: {
+              etag: '"cross-section-quality-scheduled"',
+              ...contractHeaders,
+            },
+          });
+        }
         if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
           return binaryResponse(makeFieldVectorBuffer(), {
             headers: { etag: '"field-vector-scheduled"', ...contractHeaders },
@@ -1002,10 +1088,22 @@ describe("ControlRoomApi", () => {
 
     const topology = await api.data.domain.topology();
     const quality = await api.meshing.sharedDomain.qualityData();
+    const crossSection = await api.meshing.sharedDomain.crossSection({
+      plane: "xy",
+      positionPercent: 50,
+    });
+    const crossSectionQuality =
+      await api.meshing.sharedDomain.crossSectionQuality({
+        metric: "gamma",
+        plane: "xy",
+        positionPercent: 50,
+      });
     const fieldVector = await api.data.fields.vector("m");
 
     expect(topology.status).toBe("ready");
     expect(quality.status).toBe("ready");
+    expect(crossSection.status).toBe("ready");
+    expect(crossSectionQuality.status).toBe("ready");
     expect(fieldVector.status).toBe("ready");
     if (topology.status !== "ready") {
       throw new Error(`Expected ready topology, received ${topology.status}`);
@@ -1013,20 +1111,34 @@ describe("ControlRoomApi", () => {
     if (quality.status !== "ready") {
       throw new Error(`Expected ready quality data, received ${quality.status}`);
     }
+    if (crossSection.status !== "ready") {
+      throw new Error(`Expected ready cross-section, received ${crossSection.status}`);
+    }
+    if (crossSectionQuality.status !== "ready") {
+      throw new Error(
+        `Expected ready cross-section quality, received ${crossSectionQuality.status}`,
+      );
+    }
     if (fieldVector.status !== "ready") {
       throw new Error(`Expected ready field vector, received ${fieldVector.status}`);
     }
     expect(topology.data.nodeCount).toBe(4);
     expect(quality.data.elementCount).toBe(1);
+    expect(crossSection.data.polygonCount).toBe(1);
+    expect(crossSectionQuality.data.perElementQuality.length).toBe(1);
     expect(fieldVector.data.quantityId).toBe("m");
     expect(decodeKinds).toEqual([
       "topology",
       "mesh-quality-data",
+      "cross-section",
+      "cross-section-quality",
       "field-vector",
     ]);
     for (const path of [
       "/v2/sessions/current/data/domain/topology",
       "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
       "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
     ]) {
       expect(diagnostics.list()).toContainEqual(
@@ -1145,6 +1257,67 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
   });
 
+  it("loads shared-domain cross-section geometry through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeCrossSectionBuffer(), {
+          headers: { etag: '"cross-section-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.meshing.sharedDomain.crossSection({
+      includePolygons: true,
+      includeWireframe: false,
+      plane: "xz",
+      positionPercent: 25,
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready cross-section, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/cross-section?include_polygons=true&include_wireframe=false&plane=xz&position_percent=25",
+    );
+    expect(result.etag).toBe('"cross-section-1"');
+    expect(result.data.polygonCount).toBe(1);
+    expect(Array.from(result.data.parentElementIds)).toEqual([7]);
+  });
+
+  it("loads shared-domain cross-section quality through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeCrossSectionQualityBuffer(), {
+          headers: { etag: '"cross-section-quality-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.meshing.sharedDomain.crossSectionQuality({
+      metric: "gamma",
+      plane: "xy",
+      positionPercent: 50,
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready cross-section quality, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?metric=gamma&plane=xy&position_percent=50",
+    );
+    expect(result.etag).toBe('"cross-section-quality-1"');
+    expect([...result.data.perElementQuality]).toEqual([0.25]);
+    expect(result.data.range).toEqual({ min: 0.25, max: 0.25 });
+  });
+
   it("returns not-modified for fresh binary topology resources", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>
@@ -1260,6 +1433,30 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.values)).toEqual([1, 0, -1]);
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=part-1&scope_kind=part",
+    );
+  });
+
+  it("canonicalizes field vector quantity aliases at the v2 data facade boundary", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeFieldVectorBuffer(), {
+          headers: { etag: '"field-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.data.fields.vector("h_demag", {
+      component: "full",
+      scope_id: "part:__air__",
+      scope_kind: "airbox",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&scope_id=part%3A__air__&scope_kind=airbox",
     );
   });
 

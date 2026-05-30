@@ -20,6 +20,10 @@ import { VisualizationRegistrySyncController } from "../visualization/Visualizat
 import { LayoutController } from "./LayoutController";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 
+function TestModule() {
+  return <div>Auxiliary viewport</div>;
+}
+
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
@@ -54,7 +58,29 @@ describe("WorkspaceDockLayout", () => {
 
     expect(html).toContain("data-dock-hydration-pending=\"true\"");
     expect(html).toContain("data-slot-id=\"panel-left\"");
+    expect(html).not.toContain("data-slot-id=\"viewport-aux\"");
     expect(html).not.toContain("data-panel=\"true\"");
     expect(html).not.toContain("DndDescribedBy");
+  });
+
+  it("renders the auxiliary viewport fallback when a module is registered for viewport-aux", () => {
+    const kernel = makeKernel();
+    kernel.modules.register({
+      id: "viewport-2d-test",
+      title: "2D Test",
+      version: "0.1.0",
+      slots: ["viewport-aux"],
+      component: async () => ({ default: TestModule }),
+    });
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <WorkspaceDockLayout />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("data-dock-hydration-pending=\"true\"");
+    expect(html).toContain("data-slot-id=\"viewport-main\"");
+    expect(html).toContain("data-slot-id=\"viewport-aux\"");
   });
 });

@@ -7,6 +7,7 @@ export interface RealtimeWebSocketLike {
 }
 
 const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
+const REALTIME_RECONNECT_DELAY_MS = 1_000;
 
 interface MessageEventLike {
   data: string;
@@ -20,11 +21,25 @@ interface RealtimeClientOptions {
   bridge: RealtimeBridge;
   createSocket?: (url: string, protocol: string) => RealtimeWebSocketLike;
   diagnostics?: RequestDiagnosticsController;
+  scheduleReconnect?: (callback: () => void, delayMs: number) => () => void;
   url: string;
 }
 
 export class RealtimeClient {
+  private closedByClient = false;
+  private reconnectCancel: (() => void) | null = null;
   private socket: RealtimeWebSocketLike | null = null;
+  private readonly handleClose = () => {
+    const socket = this.socket;
+    if (socket) {
+      socket.removeEventListener("message", this.handleMessage);
+      socket.removeEventListener("close", this.handleClose);
+    }
+    this.socket = null;
+    if (!this.closedByClient) {
+      this.scheduleReconnect();
+    }
+  };
   private readonly handleMessage = (event: MessageEventLike) => {
     const byteLength = byteLengthFromText(event.data);
     try {
@@ -72,6 +87,9 @@ export class RealtimeClient {
     if (this.socket) {
       return;
     }
+    this.closedByClient = false;
+    this.reconnectCancel?.();
+    this.reconnectCancel = null;
 
     const socket = this.options.createSocket?.(
       this.options.url,
@@ -91,17 +109,38 @@ export class RealtimeClient {
       status: null,
     });
     socket.addEventListener("message", this.handleMessage);
+    socket.addEventListener("close", this.handleClose);
     this.socket = socket;
   }
 
   close(): void {
+    this.closedByClient = true;
+    this.reconnectCancel?.();
+    this.reconnectCancel = null;
     if (!this.socket) {
       return;
     }
 
     this.socket.removeEventListener("message", this.handleMessage);
+    this.socket.removeEventListener("close", this.handleClose);
     this.socket.close();
     this.socket = null;
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectCancel) return;
+    const schedule =
+      this.options.scheduleReconnect ??
+      ((callback: () => void, delayMs: number) => {
+        const timeoutId = setTimeout(callback, delayMs);
+        return () => clearTimeout(timeoutId);
+      });
+    this.reconnectCancel = schedule(() => {
+      this.reconnectCancel = null;
+      if (!this.closedByClient) {
+        this.connect();
+      }
+    }, REALTIME_RECONNECT_DELAY_MS);
   }
 }
 

@@ -27,10 +27,13 @@ AIRBOX_HMIN = 10e-9
 WAVEGUIDE_BULK_HMAX = 20e-9
 WAVEGUIDE_LOCAL_HMAX = 12e-9
 WAVEGUIDE_HMIN = HEIGHT
-AIRBOX_NEAR_INTERFACE_HMAX = 2e-9
-AIRBOX_NEAR_INTERFACE_THICKNESS = 2e-9
-AIRBOX_TRANSITION_DISTANCE = 220e-9
-WAVEGUIDE_EDGE_THICKNESS = AIRBOX_NEAR_INTERFACE_THICKNESS
+AIRBOX_NEAR_INTERFACE_HMAX = WAVEGUIDE_BULK_HMAX
+AIRBOX_NEAR_INTERFACE_THICKNESS = 20e-9
+AIRBOX_TRANSITION_DISTANCE = 120e-9
+AIRBOX_EDGE_HMAX = WAVEGUIDE_HMIN
+AIRBOX_EDGE_THICKNESS = WAVEGUIDE_HMIN
+AIRBOX_EDGE_TRANSITION_DISTANCE = 60e-9
+AIRBOX_CORNER_TRANSITION_DISTANCE = 40e-9
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -116,14 +119,19 @@ waveguide.visualization(show=True, mode="surface")
 # The interface/transition controls are COMSOL-style automatic sizing fields:
 # keep air moderately resolved near the magnetic surface, then grade smoothly
 # to the coarse far-field airbox target without hand-drawing airbox boxes.
-waveguide.mesh(
+waveguide.mesh.thin_film(
     maximum_element_size=WAVEGUIDE_BULK_HMAX,
     minimum_element_size=WAVEGUIDE_HMIN,
     interface_maximum_element_size=AIRBOX_NEAR_INTERFACE_HMAX,
     interface_thickness=AIRBOX_NEAR_INTERFACE_THICKNESS,
     transition_distance=AIRBOX_TRANSITION_DISTANCE,
-    edge_maximum_element_size=AIRBOX_NEAR_INTERFACE_HMAX,
-    edge_thickness=WAVEGUIDE_EDGE_THICKNESS,
+    edge_maximum_element_size=AIRBOX_EDGE_HMAX,
+    edge_thickness=AIRBOX_EDGE_THICKNESS,
+    edge_transition_distance=AIRBOX_EDGE_TRANSITION_DISTANCE,
+    corner_maximum_element_size=AIRBOX_EDGE_HMAX,
+    corner_extent=AIRBOX_EDGE_THICKNESS,
+    corner_transition_distance=AIRBOX_CORNER_TRANSITION_DISTANCE,
+    layers=1,
     order=1,
 )
 waveguide.mesh.size_field(

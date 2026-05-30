@@ -431,3 +431,103 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ── Settings dialog ── */
+.fm-viewport-3d__settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-viewport-3d__settings-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--fm-space-3);
+  padding: var(--fm-space-3);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: transparent;
+  transition:
+    border-color var(--fm-transition-fast),
+    background-color var(--fm-transition-fast);
+}
+
+.fm-viewport-3d__settings-toggle[data-enabled="true"] {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent-soft);
+}
+
+.fm-viewport-3d__settings-toggle-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fm-viewport-3d__settings-toggle-label {
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+}
+
+.fm-viewport-3d__settings-toggle[data-enabled="false"] .fm-viewport-3d__settings-toggle-label {
+  color: var(--fm-text-muted);
+}
+
+.fm-viewport-3d__settings-toggle-desc {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-viewport-3d__settings-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.fm-viewport-3d__settings-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.fm-viewport-3d__settings-switch-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--fm-border-default);
+  transition: background-color var(--fm-transition-fast);
+  position: relative;
+}
+
+.fm-viewport-3d__settings-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fm-text-primary);
+  transition: transform var(--fm-transition-fast);
+}
+
+.fm-viewport-3d__settings-switch input:checked + .fm-viewport-3d__settings-switch-track {
+  background: var(--fm-accent);
+}
+
+.fm-viewport-3d__settings-switch input:checked + .fm-viewport-3d__settings-switch-track::after {
+  transform: translateX(16px);
+}
+
+.fm-viewport-3d__settings-switch input:focus-visible + .fm-viewport-3d__settings-switch-track {
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-viewport-3d__settings-footer {
+  margin-top: var(--fm-space-3);
+}

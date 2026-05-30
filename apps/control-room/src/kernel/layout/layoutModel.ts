@@ -2,7 +2,7 @@ import type { SlotId } from "../types";
 
 type WorkspaceColumnId = Extract<
   SlotId,
-  "panel-left" | "viewport-main" | "panel-right"
+  "panel-left" | "viewport-main" | "viewport-aux" | "panel-right"
 >;
 
 export interface WorkspaceColumnLayout {
@@ -18,7 +18,7 @@ export interface WorkspaceLayout {
   bottomDockMinSize: number;
 }
 
-export const WORKSPACE_LAYOUT_STORAGE_KEY = "fullmag.workspace.layout.v1";
+export const WORKSPACE_LAYOUT_STORAGE_KEY = "fullmag.workspace.layout.v2";
 export const WORKSPACE_LAYOUT_RESTORED_EVENT = "fullmag:workspace-layout-restored";
 
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
@@ -26,19 +26,25 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
     {
       slotId: "panel-left",
       label: "Explorer",
-      defaultSize: 24,
+      defaultSize: 20,
       minSize: 16,
     },
     {
       slotId: "viewport-main",
       label: "Viewport",
-      defaultSize: 52,
+      defaultSize: 40,
       minSize: 32,
+    },
+    {
+      slotId: "viewport-aux",
+      label: "Section",
+      defaultSize: 22,
+      minSize: 20,
     },
     {
       slotId: "panel-right",
       label: "Inspector",
-      defaultSize: 24,
+      defaultSize: 18,
       minSize: 18,
     },
   ],

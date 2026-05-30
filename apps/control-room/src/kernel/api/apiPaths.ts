@@ -7,6 +7,10 @@ export const SESSION_EVENTS_WS_PATH = openApiV2Path(
   "/v2/sessions/current/events/ws",
 );
 
+export const SESSION_CURRENT_PATH = openApiV2Path(
+  "/v2/sessions/current",
+);
+
 export const SESSION_STATUS_PATH = openApiV2Path(
   "/v2/sessions/current/status",
 );
@@ -57,6 +61,14 @@ export const MESHING_SHARED_DOMAIN_MANIFEST_PATH = openApiV2Path(
 
 export const MESHING_SHARED_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+);
+
+export const MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+);
+
+export const MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
 );
 
 export const MESHING_SUMMARY_PATH = openApiV2Path(

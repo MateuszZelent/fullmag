@@ -66,6 +66,18 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves cross-section selections to the cross-section inspector", () => {
+    expect(resolveInspectorPanel({ kind: "mesh.cross-section" })?.id).toBe(
+      "cross-section",
+    );
+    expect(resolveInspectorPanel({ kind: "mesh.cross-section.draft" })?.id).toBe(
+      "cross-section",
+    );
+    expect(resolveInspectorPanel({ kind: "mesh.cross-section.plot" })?.id).toBe(
+      "cross-section",
+    );
+  });
+
   it("returns null when there is no selection kind", () => {
     expect(resolveInspectorPanel({ kind: null })).toBeNull();
   });

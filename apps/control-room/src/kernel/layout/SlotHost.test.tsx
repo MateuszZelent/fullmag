@@ -97,4 +97,25 @@ describe("SlotHost", () => {
     expect(html).toContain("Loading");
     expect(html).not.toContain("No module mounted");
   });
+
+  it("auto-discovers a module registered only for viewport-aux", () => {
+    const kernel = makeKernel();
+    kernel.modules.register({
+      id: "viewport-2d-test",
+      title: "2D Test",
+      version: "0.1.0",
+      slots: ["viewport-aux"],
+      component: async () => ({ default: TestModule }),
+    });
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SlotHost slotId="viewport-aux" />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("data-slot-id=\"viewport-aux\"");
+    expect(html).toContain("Loading");
+    expect(html).not.toContain("No module mounted");
+  });
 });

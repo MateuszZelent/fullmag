@@ -2,9 +2,8 @@
 
 ## 1. Physical / numerical statement
 
-This note defines a **discretization-only** refinement mode for rectangular
-ferromagnetic waveguides represented as `Box` geometries in the FEM shared-domain
-mesh pipeline.
+This note defines a **discretization-only** refinement mode for ferromagnetic
+waveguides in the FEM shared-domain mesh pipeline.
 
 The goal is to make the solver mesh:
 - denser near the **in-plane edges** of the rectangular ferromagnet,
@@ -20,12 +19,13 @@ matter more than the central bulk.
 
 ## 2. Public semantics
 
-V1 introduces four per-object mesh controls:
+The per-object mesh controls are:
 
 - `edge_hmax`
 - `edge_thickness`
 - `corner_hmax`
 - `corner_extent`
+- `corner_transition_distance`
 
 All values are in SI metres.
 
@@ -34,20 +34,29 @@ Interpretation:
 - `edge_thickness`: inward width of each edge band from the rectangular boundary.
 - `corner_hmax`: target element size inside four in-plane corner zones.
 - `corner_extent`: in-plane extent of each corner zone along both lateral axes.
+- `corner_transition_distance`: optional air-side transition distance from
+  component boundary endpoints back toward the far-field airbox target.
 
-The two largest `Box` dimensions define the in-plane axes. The smallest `Box`
-dimension is treated as thickness. Refinement spans the full thickness; it does
-not create separate top/bottom surface shells.
+For `Box` and `Translate(Box)`, the two largest dimensions define the in-plane
+axes. The smallest dimension is treated as thickness. Refinement spans the full
+thickness; it does not create separate top/bottom surface shells.
+
+For non-box component-aware geometries, edge and corner controls lower to
+distance fields from recovered component boundary curves and curve endpoints.
+Those fields intentionally cross the conformal object-air interface, so they
+can refine the neighboring airbox around sharp magnetic edges.
 
 ## 3. Scope and limits
 
-V1 supports only:
+V1 supports:
 - `Box`
 - `Translate(Box)`
 - FEM shared-domain meshing with component-aware volume identity
 
-V1 does not support:
-- cylinders, ellipses, STL imports, boolean CSG, or curved waveguides
+V2 additionally supports component-aware edge/corner distance fields for
+non-box geometries when Gmsh recovers boundary curves and endpoints.
+
+This note does not define:
 - automatic projection to arbitrary polygonal perimeter refinement
 - independent default/global study-object edge/corner policies
 
@@ -56,19 +65,24 @@ V1 does not support:
 - `edge_hmax` requires `edge_thickness`
 - `corner_hmax` requires `corner_extent`
 - `corner_hmax <= edge_hmax` when both are present
+- `corner_transition_distance` requires `corner_hmax` and `corner_extent`
 - `edge_thickness < 0.5 * min(in_plane_dimensions)`
 - `corner_extent < 0.5 * min(in_plane_dimensions)`
-- edge/corner refinement cannot be combined with `interface_hmax` or `interface_thickness`
 
-`transition_distance` remains a separate object-to-air grading control and is
-not part of the edge/corner contract.
+`transition_distance` remains a separate surface object-to-air grading control.
+It is not inherited by corner endpoint fields. Use
+`corner_transition_distance` when a corner-specific air plume is intended.
 
 ## 5. FEM interpretation
 
-The refinement is lowered into local background mesh-size fields restricted to
-the ferromagnet volume:
+For rectangular boxes, refinement is lowered into local background mesh-size
+fields restricted to the ferromagnet volume:
 - four edge-aligned sub-boxes
 - four corner sub-boxes
+
+For non-box component-aware geometries, refinement is lowered into unrestricted
+distance fields from component boundary curves and curve endpoints. These fields
+are allowed to refine the airbox side of the conformal interface.
 
 The active element size is the minimum of:
 - the bulk object target,
@@ -85,9 +99,10 @@ None. This feature is FEM-only and has no FDM discretization meaning.
 
 ## 7. UI / script / provenance impact
 
-- Python DSL exposes the new kwargs directly on `body.mesh(...)`
-- script export and builder round-trip preserve the four fields verbatim
-- UI object-mesh authoring exposes the controls only for `Box` objects
+- Python DSL exposes the kwargs directly on `body.mesh(...)`
+- script export and builder round-trip preserve the fields verbatim
+- UI object-mesh authoring may expose box-local controls separately from
+  component-boundary controls
 - mesh build reports may expose resolved edge/corner targets per object
 
 ## 8. Validation plan
@@ -100,6 +115,7 @@ None. This feature is FEM-only and has no FDM discretization meaning.
 ## 9. Deferred work
 
 - support for curved or swept waveguides
-- support for imported CAD/STL objects with robust perimeter extraction
-- separate edge/corner transition-distance semantics
+- support for imported CAD/STL objects with robust perimeter extraction when
+  component boundary identity is unavailable
+- separate edge transition-distance semantics
 - study-level defaults for perimeter refinement

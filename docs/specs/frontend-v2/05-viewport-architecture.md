@@ -21,7 +21,7 @@ These modules share the same kernel slot and command model. They do not duplicat
 3. Topology rebuilds are separate from field-buffer swaps.
 4. Render loops are dirty-driven, not always-on.
 5. Every GPU resource has explicit ownership and disposal.
-6. 2D viewports do not keep WebGL objects alive.
+6. 2D viewports do not keep WebGL objects alive unless the active mode explicitly owns a WebGL-backed renderer, such as a large mesh cross-section; those resources follow the same dirty-driven rendering and teardown rules as `viewport-3d`.
 7. Warm quantity switching reads published data resources; it does not enqueue preview-control commands unless the data truly does not exist.
 8. Viewport modules can be disabled without breaking explorer, inspector, charts, or runtime commands.
 

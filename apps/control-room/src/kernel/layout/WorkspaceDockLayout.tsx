@@ -13,6 +13,7 @@ import {
   type WorkspaceColumnLayout,
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
+import { useKernel } from "../KernelContext";
 import { useLayoutSelector } from "./useLayout";
 import {
   ResizableHandle,
@@ -54,7 +55,9 @@ function SortableWorkspaceColumn({
 }
 
 export function WorkspaceDockLayout() {
+  const kernel = useKernel();
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
+  const hasAuxViewportModule = kernel.modules.forSlot("viewport-aux").length > 0;
   const [dockState, setDockState] = useState<WorkspaceDockState>({
     layout: DEFAULT_WORKSPACE_LAYOUT,
     restored: false,
@@ -114,6 +117,7 @@ export function WorkspaceDockLayout() {
   const { layout, restored } = dockState;
   const visibleColumns = layout.columns.filter((column) => {
     if (column.slotId === "panel-left") return panelVisible.left;
+    if (column.slotId === "viewport-aux") return hasAuxViewportModule;
     if (column.slotId === "panel-right") return panelVisible.right;
     return true;
   });
@@ -142,6 +146,15 @@ export function WorkspaceDockLayout() {
           </div>
           <SlotHost slotId="viewport-main" />
         </div>
+        {hasAuxViewportModule ? (
+          <div className="fm-dock-column">
+            <div className="fm-dock-column__handle">
+              <span>Section</span>
+              <GripVertical size={12} aria-hidden="true" />
+            </div>
+            <SlotHost slotId="viewport-aux" />
+          </div>
+        ) : null}
         {panelVisible.right ? (
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">

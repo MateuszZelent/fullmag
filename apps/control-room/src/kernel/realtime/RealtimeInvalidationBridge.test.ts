@@ -47,6 +47,57 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
   });
 
+  it("invalidates session-scoped resources when realtime switches sessions", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const invalidated: Array<{ resourceKey: string; revision: string | number }> = [];
+
+    resources.subscribe(SIMULATION_COMMANDS_PATH, () => {});
+    resources.subscribe(SIMULATION_SOLVER_STATUS_PATH, () => {});
+    resources.subscribe(SIMULATION_STAGES_EXECUTION_PATH, () => {});
+    bus.on("resource:invalidated", (event) => invalidated.push(event));
+
+    expect(
+      bridge.handleEvent({
+        payload: { resource_revisions: {} },
+        seq: 1,
+        session_id: "session-old",
+        type: "hello",
+      }),
+    ).toBe(true);
+    resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, 99);
+
+    expect(
+      bridge.handleEvent({
+        payload: { resource_revisions: {} },
+        seq: 2,
+        session_id: "session-new",
+        type: "hello",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision("session:status")).toBe("session:session-new:2");
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
+      "session:session-new:2",
+    );
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "session:session-new:2",
+    );
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      "session:session-new:2",
+    );
+    expect(invalidated).toEqual(
+      expect.arrayContaining([
+        { resourceKey: "session:status", revision: "session:session-new:2" },
+        {
+          resourceKey: SIMULATION_SOLVER_STATUS_PATH,
+          revision: "session:session-new:2",
+        },
+      ]),
+    );
+  });
+
   it("batches backend invalidations until the scheduled frame and keeps the latest revision", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

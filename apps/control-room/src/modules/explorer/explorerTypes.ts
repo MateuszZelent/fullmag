@@ -1,4 +1,8 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
+import type {
+  CrossSectionFrameExtent,
+  CrossSectionPlot,
+} from "@/kernel/workspace/crossSectionWorkspace";
 
 export type ExplorerTabId =
   | "model"
@@ -29,6 +33,10 @@ type ExplorerNodeKind =
   | "mesh.quality"
   | "mesh.size-fields"
   | "mesh.regions"
+  | "visualizations-2d.root"
+  | "visualizations-2d.draft"
+  | "visualizations-2d.parameter"
+  | "visualizations-2d.plot"
   | "study.root"
   | "study.stage.action"
   | "study.stage.eigenmodes"
@@ -91,6 +99,8 @@ export interface ExplorerNode {
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
+  crossSectionDraftId?: "draft";
+  crossSectionPlotId?: string;
   icon?: ExplorerIconToken;
   objectId?: string;
   regionId?: string;
@@ -134,6 +144,7 @@ export interface ModelTreePhysicsInteractionSnapshot {
 }
 
 export interface ModelTreeSnapshot {
+  crossSections?: ModelTreeCrossSectionSnapshot | null;
   materials?: readonly ModelTreeMaterialSnapshot[];
   mesh?: ModelTreeMeshSnapshot | null;
   universe?: {
@@ -144,6 +155,36 @@ export interface ModelTreeSnapshot {
   objects?: readonly ModelTreeObjectSnapshot[];
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   study?: ModelTreeStudySnapshot | null;
+}
+
+export interface ModelTreeCrossSectionSnapshot {
+  activePlotId: string | null;
+  draft: {
+    colorScale: CrossSectionPlot["renderOptions"]["colorScale"];
+    filterExpression: string;
+    frameExtent: CrossSectionFrameExtent;
+    id: "draft";
+    includeWireframe: boolean;
+    metric: CrossSectionPlot["metric"];
+    name: string;
+    plane: CrossSectionPlot["plane"];
+    positionPercent: number;
+    rotationDegrees: number;
+    shrinkFactor: number;
+  } | null;
+  plots: readonly {
+    colorScale: CrossSectionPlot["renderOptions"]["colorScale"];
+    filterExpression: string;
+    frameExtent: CrossSectionFrameExtent;
+    id: string;
+    metric: CrossSectionPlot["metric"];
+    name: string;
+    plane: CrossSectionPlot["plane"];
+    positionPercent: number;
+    rotationDegrees: number;
+    shrinkFactor: number;
+    wireframeVisible: boolean;
+  }[];
 }
 
 interface ModelTreeStudySnapshot {

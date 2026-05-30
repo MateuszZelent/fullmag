@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
 import { buildRibbonTabContent } from "./ribbonContributions";
 import {
+  RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -35,6 +36,10 @@ import {
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
+import {
+  crossSectionWorkspaceStore,
+  resetCrossSectionWorkspaceForTests,
+} from "@/kernel/workspace/crossSectionWorkspace";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
@@ -162,6 +167,111 @@ describe("ribbon structure", () => {
     );
 
     expect(unresolved).toEqual([]);
+  });
+
+  it("starts an editable 2D cross-section draft from the View ribbon", async () => {
+    resetCrossSectionWorkspaceForTests();
+    const content = buildRibbonTabContent("view", {
+      commands: createRibbonCommandRegistry(),
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+      visualizationState: {
+        clip: {
+          axis: "z",
+          enabled: true,
+          flipped: false,
+          position_percent: 62.5,
+        },
+        revision: 3,
+        slice: {
+          axis: "z",
+          mesh_color_scale: "viridis",
+          mesh_filter_expression: "quality < 0.3",
+          mesh_quality_metric: "skewness",
+          mesh_shrink_factor: 0.8,
+          position_percent: 62.5,
+          show_mesh: true,
+        },
+      } as VisualizationStateResource,
+    });
+
+    expect(
+      content?.groups
+        .find((group) => group.id === "view-slice-2d")
+        ?.actions.map((action) => action.id),
+    ).toContain(RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND);
+
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      clip: {
+        axis: "z",
+        enabled: true,
+        flipped: false,
+        position_percent: 62.5,
+      },
+      revision: 3,
+      slice: {
+        axis: "z",
+        mesh_color_scale: "viridis",
+        mesh_filter_expression: "quality < 0.3",
+        mesh_quality_metric: "skewness",
+        mesh_shrink_factor: 0.8,
+        position_percent: 62.5,
+        show_mesh: true,
+      },
+    });
+    const selectionSet = vi.fn();
+    const setPanelVisible = vi.fn();
+    const setFocusedSlot = vi.fn();
+    const result = await context.commands.execute(
+      RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
+      {
+        ...context.commandContext,
+        layout: {
+          setFocusedSlot,
+          setPanelVisible,
+        } as never,
+        selection: {
+          set: selectionSet,
+        } as never,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(crossSectionWorkspaceStore.getSnapshot().draft).toMatchObject({
+      frameExtent: "universe",
+      metric: "skewness",
+      plane: "xy",
+      positionPercent: 62.5,
+    });
+    expect(selectionSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mesh.cross-section.draft",
+        nodeId: "model:visualizations-2d:draft",
+      }),
+      "test",
+    );
+    expect(setPanelVisible).toHaveBeenCalledWith("left", true);
+    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+    expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
+    expect(patches).toEqual([
+      expect.objectContaining({
+        clip: expect.objectContaining({
+          axis: "z",
+          enabled: true,
+          position_percent: 62.5,
+        }),
+      }),
+    ]);
+    expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
+    resetCrossSectionWorkspaceForTests();
   });
 
   it("keeps ribbon labels bounded inside fixed action geometry", () => {
@@ -1642,6 +1752,224 @@ describe("ribbon structure", () => {
           wireframe: { opacity: 0.45 },
         },
       },
+    ]);
+  });
+
+  it("patches canonical visualization clip state from the Clip ribbon controls", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      clip: {
+        axis: "z",
+        enabled: false,
+        flipped: false,
+        position_percent: 50,
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const clipAction = content?.groups
+      .find((group) => group.id === "view-selected-display")
+      ?.actions.find((action) => action.id === "view-selected-clip");
+    const enabledNode = clipAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected-clip:enabled",
+    );
+    const axisNode = clipAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "selected-clip:axis",
+    );
+    const positionNode = clipAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "selected-clip:position",
+    );
+    const flippedNode = clipAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected-clip:flipped",
+    );
+
+    expect(clipAction).toMatchObject({ active: false, disabled: false });
+    expect(enabledNode).toMatchObject({ checked: false });
+    expect(axisNode).toMatchObject({ value: "z" });
+    expect(positionNode).toMatchObject({ value: 50 });
+    if (
+      enabledNode?.type !== "checkbox" ||
+      axisNode?.type !== "radio-group" ||
+      positionNode?.type !== "slider" ||
+      flippedNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected active clip ribbon controls");
+    }
+
+    await runRibbonNode(enabledNode, true, context);
+    await runRibbonNode(axisNode, "x", context);
+    await runRibbonNode(positionNode, 62.5, context);
+    await runRibbonNode(flippedNode, true, context);
+
+    expect(patches).toEqual([
+      { clip: { enabled: true } },
+      { clip: { axis: "x", enabled: true } },
+      { clip: { enabled: true, position_percent: 62.5 } },
+      { clip: { enabled: true, flipped: true } },
+    ]);
+  });
+
+  it("patches canonical visualization slice state from 2D Slice controls", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      slice: {
+        axis: "z",
+        auto_contrast: true,
+        colormap: "viridis",
+        component: "magnitude",
+        position_percent: 50,
+        projection_include_air_as_zero: false,
+        projection_reduction: "mean",
+        projection_resolution: 128,
+        projection_samples: 32,
+        quantity_id: "m",
+        render_mode: "heatmap",
+        show_airbox: false,
+        show_airbox_vectors: false,
+        show_magnetic_texture: true,
+        show_mesh: false,
+        show_primitives: true,
+        show_quantity: true,
+        show_vectors: false,
+        airbox_render_mode: "wireframe",
+        layer_index: null,
+        mode: "single",
+        thickness_percent: null,
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const sliceGroup = content?.groups.find((group) => group.id === "view-slice-2d");
+    const planeAction = sliceGroup?.actions.find(
+      (action) => action.id === "view-slice-plane",
+    );
+    const layersAction = sliceGroup?.actions.find(
+      (action) => action.id === "view-slice-layers",
+    );
+    const axisNode = planeAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "slice:plane:axis",
+    );
+    const positionNode = planeAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "slice:plane:position",
+    );
+    const meshNode = layersAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "slice:mesh:wireframe",
+    );
+    const quantityNode = layersAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "slice:layers:quantity",
+    );
+    const contrastNode = layersAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "slice:layers:auto-contrast",
+    );
+
+    expect(axisNode).toMatchObject({ value: "z" });
+    expect(positionNode).toMatchObject({ value: 50 });
+    expect(meshNode).toMatchObject({ checked: false });
+    if (
+      axisNode?.type !== "radio-group" ||
+      positionNode?.type !== "slider" ||
+      meshNode?.type !== "checkbox" ||
+      quantityNode?.type !== "checkbox" ||
+      contrastNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected active 2D slice controls");
+    }
+
+    await runRibbonNode(axisNode, "x", context);
+    await runRibbonNode(positionNode, 12.5, context);
+    await runRibbonNode(meshNode, true, context);
+    await runRibbonNode(quantityNode, false, context);
+    await runRibbonNode(contrastNode, false, context);
+
+    expect(patches).toEqual([
+      { slice: { axis: "x" } },
+      { slice: { position_percent: 12.5 } },
+      { slice: { show_mesh: true } },
+      { slice: { show_quantity: false } },
+      { slice: { auto_contrast: false } },
+    ]);
+  });
+
+  it("patches 2D cross-section quality controls through visualization slice state", async () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      slice: {
+        axis: "z",
+        auto_contrast: true,
+        colormap: "viridis",
+        component: "magnitude",
+        position_percent: 50,
+        projection_include_air_as_zero: false,
+        projection_reduction: "mean",
+        projection_resolution: 128,
+        projection_samples: 32,
+        quantity_id: "m",
+        render_mode: "heatmap",
+        show_airbox: false,
+        show_airbox_vectors: false,
+        show_magnetic_texture: true,
+        show_mesh: true,
+        show_primitives: true,
+        show_quantity: true,
+        show_vectors: false,
+        airbox_render_mode: "wireframe",
+        layer_index: null,
+        mesh_color_scale: "jet",
+        mesh_filter_expression: "",
+        mesh_quality_metric: "gamma",
+        mesh_shrink_factor: 1,
+        mode: "single",
+        thickness_percent: null,
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const qualityAction = content?.groups
+      .find((group) => group.id === "view-slice-2d")
+      ?.actions.find((action) => action.id === "view-slice-quality");
+    const metricNode = qualityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "slice:quality:metric",
+    );
+    const colorScaleNode = qualityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "slice:quality:color-scale",
+    );
+    const filterNode = qualityAction?.menu?.find(
+      (node) => node.type === "text" && node.id === "slice:quality:filter",
+    );
+    const shrinkNode = qualityAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "slice:quality:shrink",
+    );
+
+    expect(metricNode).toMatchObject({ value: "gamma" });
+    expect(
+      metricNode?.type === "radio-group"
+        ? metricNode.items.map((item) => item.value)
+        : [],
+    ).toEqual([
+      "skewness",
+      "gamma",
+      "sicn",
+      "volume",
+      "aspect_ratio",
+      "max_angle",
+      "min_edge",
+    ]);
+    expect(colorScaleNode).toMatchObject({ value: "jet" });
+    expect(filterNode).toMatchObject({ value: "" });
+    expect(shrinkNode).toMatchObject({ value: 1 });
+    if (
+      metricNode?.type !== "radio-group" ||
+      colorScaleNode?.type !== "radio-group" ||
+      filterNode?.type !== "text" ||
+      shrinkNode?.type !== "slider"
+    ) {
+      throw new Error("Expected active 2D cross-section quality controls");
+    }
+
+    await runRibbonNode(metricNode, "sicn", context);
+    await runRibbonNode(colorScaleNode, "hot", context);
+    await runRibbonNode(filterNode, "quality < 0.3", context);
+    await runRibbonNode(shrinkNode, 0.75, context);
+
+    expect(patches).toEqual([
+      { slice: { mesh_quality_metric: "sicn" } },
+      { slice: { mesh_color_scale: "hot" } },
+      { slice: { mesh_filter_expression: "quality < 0.3" } },
+      { slice: { mesh_shrink_factor: 0.75 } },
     ]);
   });
 

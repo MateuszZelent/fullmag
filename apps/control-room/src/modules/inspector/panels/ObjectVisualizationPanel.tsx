@@ -62,11 +62,13 @@ import {
   buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  resolveVisualizationVectorBudgetRange,
   resolveVisualizationRenderResolution,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
+  type VisualizationVectorBudgetRange,
   visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
 
@@ -479,19 +481,35 @@ function VisualizationVectorsSection({
   pending,
   sectionDisabled,
   settings,
+  vectorBudgetRange,
 }: {
-  meshParts?: ReadonlyArray<{ id: string; label: string; vectorsVisible: boolean }>;
+  meshParts?: ReadonlyArray<{
+    id: string;
+    label: string;
+    vectorsVisible: boolean;
+  }>;
   onTogglePartVectors?: (partId: string, visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
-    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorSurfaceOffsetScale" | "vectorThickness",
+    field:
+      | "vectorAlphaPercent"
+      | "vectorBudget"
+      | "vectorLengthScale"
+      | "vectorSurfaceOffsetScale"
+      | "vectorThickness",
     value: number,
   ) => void;
   pending: boolean;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
+  vectorBudgetRange: VisualizationVectorBudgetRange;
 }) {
+  const vectorBudgetValue = Math.max(
+    vectorBudgetRange.min,
+    Math.min(vectorBudgetRange.max, settings.vectorBudget),
+  );
+
   return (
     <InspectorSection title="Vectors">
       <div className="fm-visualization-segments" role="group" aria-label="Vector coloring">
@@ -512,7 +530,15 @@ function VisualizationVectorsSection({
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
-      <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow budget" max={4096} min={8} step={8} value={settings.vectorBudget} onChange={(value) => patchNumber("vectorBudget", value)} />
+      <NumberField
+        disabled={pending || sectionDisabled("vectors")}
+        label="Arrow budget"
+        max={vectorBudgetRange.max}
+        min={vectorBudgetRange.min}
+        step={vectorBudgetRange.step}
+        value={vectorBudgetValue}
+        onChange={(value) => patchNumber("vectorBudget", value)}
+      />
       <div className="fm-visualization-toggle-grid">
         <ToggleButton
           active={settings.vectorCenteringEnabled}
@@ -674,7 +700,7 @@ function useObjectVisualizationPanelState(
     }
 
     for (const part of manifest.data?.mesh_parts ?? []) {
-      if (part.role === "airbox") continue;
+      if (part.role === "air" || part.role === "airbox") continue;
       targets.push(
         part.object_id
           ? { id: part.object_id, kind: "object", label: part.label }
@@ -857,7 +883,9 @@ function useObjectVisualizationPanelState(
     const parts = manifest.data?.mesh_parts;
     if (!parts || parts.length === 0) return undefined;
     // Filter to magnetic parts only (exclude airbox).
-    const magneticParts = parts.filter((p) => p.role !== "airbox");
+    const magneticParts = parts.filter(
+      (p) => p.role !== "air" && p.role !== "airbox",
+    );
     if (magneticParts.length <= 1) return undefined;
     return magneticParts.map((p) => {
       const partTarget = p.object_id
@@ -881,6 +909,10 @@ function useObjectVisualizationPanelState(
     ? renderResolution?.finalSettings ?? effectiveSettings ?? settings
     : null;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
+  const vectorBudgetRange = resolveVisualizationVectorBudgetRange({
+    meshParts: manifest.data?.mesh_parts,
+    target,
+  });
 
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
@@ -915,6 +947,7 @@ function useObjectVisualizationPanelState(
     sectionDisabled,
     settings,
     target,
+    vectorBudgetRange,
     vectorMeshParts,
   } as const;
 }
@@ -974,6 +1007,7 @@ function ObjectVisualizationPanelView({
     sectionDisabled,
     settings,
     target,
+    vectorBudgetRange,
     vectorMeshParts,
   } = panel;
 
@@ -1037,6 +1071,7 @@ function ObjectVisualizationPanelView({
         pending={pending}
         sectionDisabled={sectionDisabled}
         settings={settings}
+        vectorBudgetRange={vectorBudgetRange}
       />
       <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
@@ -1154,10 +1189,11 @@ function NumberField({
     [clearTimer, flushDraft],
   );
 
-  const pct = Math.max(
-    0,
-    Math.min(100, ((displayValue - min) / (max - min)) * 100),
-  );
+  const valueRange = max - min;
+  const pct =
+    valueRange > 0
+      ? Math.max(0, Math.min(100, ((displayValue - min) / valueRange) * 100))
+      : 0;
 
   return (
     <label className="fm-visualization-range">

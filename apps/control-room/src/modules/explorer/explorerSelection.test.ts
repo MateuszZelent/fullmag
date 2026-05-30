@@ -162,4 +162,31 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects saved cross-section parameter rows as the owning 2D plot", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      crossSectionPlotId: "plot-1",
+      id: "model:visualizations-2d:plot-1:quality",
+      kind: "visualizations-2d.parameter",
+      label: "Quality",
+      parentId: "model:visualizations-2d:plot-1",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "mesh.cross-section.plot",
+      label: "Quality",
+      nodeId: "model:visualizations-2d:plot-1:quality",
+      objectId: null,
+      ref: {
+        kind: "mesh.cross-section.plot",
+        nodeId: "model:visualizations-2d:plot-1:quality",
+        plotId: "plot-1",
+        type: "cross-section-plot",
+        visualizationTargetId: "cross-section:plot:plot-1",
+      },
+    });
+  });
 });

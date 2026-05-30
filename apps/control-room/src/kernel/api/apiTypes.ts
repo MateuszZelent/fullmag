@@ -35,6 +35,23 @@ export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+export type CrossSectionPlane = "xy" | "xz" | "yz";
+export type CrossSectionQualityMetric =
+  components["schemas"]["CrossSectionQualityMetric"];
+export type SliceMeshColorScale = components["schemas"]["SliceMeshColorScale"];
+export type SliceMeshQualityMetric =
+  components["schemas"]["SliceMeshQualityMetric"];
+export interface CrossSectionQuery {
+  includePolygons?: boolean;
+  includeWireframe?: boolean;
+  plane: CrossSectionPlane;
+  positionPercent: number;
+}
+export interface CrossSectionQualityQuery {
+  metric: CrossSectionQualityMetric;
+  plane: CrossSectionPlane;
+  positionPercent: number;
+}
 export type GeometryCapabilitiesResource =
   components["schemas"]["GeometryCapabilitiesResource"];
 export type GeometryDiagnosticsResource =

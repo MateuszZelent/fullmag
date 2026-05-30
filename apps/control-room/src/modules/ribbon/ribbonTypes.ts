@@ -127,6 +127,16 @@ export type RibbonMenuNode =
       disabled?: boolean;
       commandId?: string;
       commandInput?: RibbonStaticOrMappedInput<string>;
+    }
+  | {
+      type: "text";
+      id: string;
+      label: string;
+      value: string;
+      placeholder?: string;
+      disabled?: boolean;
+      commandId?: string;
+      commandInput?: RibbonStaticOrMappedInput<string>;
     };
 
 export const RIBBON_TABS: RibbonTabDef[] = [

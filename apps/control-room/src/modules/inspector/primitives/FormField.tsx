@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 interface BaseFieldProps {
   /** Displayed above (stacked) or beside (inline) the control. */
@@ -45,6 +45,7 @@ export type FormFieldProps =
  */
 export function FormField(props: FormFieldProps) {
   const { label, unit, hint, inline = true, disabled } = props;
+  const fieldId = useId();
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
     : "fm-inspector-form-field";
@@ -53,10 +54,11 @@ export function FormField(props: FormFieldProps) {
     const { checked, onChange } = props;
     return (
       <div className={wrapClass}>
-        <span className="fm-inspector-form-field__label">{label}</span>
+        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
         <div className="fm-inspector-form-field__control">
           <label className="fm-inspector-checkbox-wrap">
             <input
+              id={fieldId}
               aria-label={label}
               checked={checked}
               className="fm-inspector-checkbox"
@@ -77,10 +79,11 @@ export function FormField(props: FormFieldProps) {
     };
     return (
       <div className={wrapClass}>
-        <span className="fm-inspector-form-field__label">{label}</span>
+        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
         <div className="fm-inspector-form-field__control">
           <select
             {...(rest as object)}
+            id={fieldId}
             aria-label={label}
             className="fm-inspector-select"
             disabled={disabled}
@@ -104,10 +107,11 @@ export function FormField(props: FormFieldProps) {
     };
     return (
       <div className="fm-inspector-form-field">
-        <span className="fm-inspector-form-field__label">{label}</span>
+        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
         <div className="fm-inspector-form-field__control">
           <textarea
             {...(rest as object)}
+            id={fieldId}
             aria-label={label}
             className="fm-inspector-textarea"
             disabled={disabled}
@@ -136,10 +140,11 @@ export function FormField(props: FormFieldProps) {
     .join(" ");
   return (
     <div className={wrapClass}>
-      <span className="fm-inspector-form-field__label">{label}</span>
+      <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
       <div className="fm-inspector-form-field__control">
         <input
           {...(rest as object)}
+          id={fieldId}
           aria-label={label}
           className={inputClass}
           disabled={disabled}

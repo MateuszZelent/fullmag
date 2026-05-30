@@ -25,3 +25,31 @@ export interface DecodedMeshQualityData {
   sicn: Float64Array | null;
   volume: Float64Array | null;
 }
+
+export interface DecodedCrossSection {
+  bounds: {
+    uMax: number;
+    uMin: number;
+    vMax: number;
+    vMin: number;
+  };
+  intersectionEdgeNodeIds: Uint32Array;
+  intersectionEdgeT: Float32Array;
+  intersectionKinds: Uint32Array;
+  intersectionWorld: Float32Array;
+  parentElementIds: Uint32Array;
+  polygonCount: number;
+  polygonOffsets: Uint32Array;
+  segmentCount: number;
+  segments: Float32Array;
+  vertexCount: number;
+  vertices: Float32Array;
+}
+
+export interface DecodedCrossSectionQuality {
+  perElementQuality: Float32Array;
+  range: {
+    max: number;
+    min: number;
+  };
+}

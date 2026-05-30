@@ -28,29 +28,19 @@ function EffectToggle({
 }) {
   return (
     <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "0.75rem",
-        border: enabled ? "1px solid var(--fm-color-primary)" : "1px solid var(--fm-color-border)",
-        borderRadius: "var(--fm-radius-md)",
-        backgroundColor: enabled ? "var(--fm-color-primary-dim)" : "transparent"
-      }}
+      className="fm-viewport-3d__settings-toggle"
+      data-enabled={String(enabled)}
     >
-      <div>
-        <strong style={{ display: "block", color: enabled ? "var(--fm-color-foreground)" : "var(--fm-color-muted)" }}>{label}</strong>
-        <span style={{ fontSize: "12px", color: "var(--fm-color-muted)" }}>
+      <div className="fm-viewport-3d__settings-toggle-info">
+        <span className="fm-viewport-3d__settings-toggle-label">{label}</span>
+        <span className="fm-viewport-3d__settings-toggle-desc">
           {description}
         </span>
       </div>
-      <Button
-        variant={enabled ? "primary" : "secondary"}
-        onClick={() => onToggle(!enabled)}
-        style={{ minWidth: "80px" }}
-      >
-        {enabled ? "ON" : "OFF"}
-      </Button>
+      <label className="fm-viewport-3d__settings-switch">
+        <input type="checkbox" role="switch" aria-checked={enabled} checked={enabled} onChange={() => onToggle(!enabled)} />
+        <span className="fm-viewport-3d__settings-switch-track" />
+      </label>
     </div>
   );
 }
@@ -75,7 +65,7 @@ export function Viewport3DSettingsDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="fm-dialog__body" style={{ display: "flex", flexDirection: "column", gap: "1rem", marginTop: "1rem" }}>
+        <div className="fm-viewport-3d__settings-body">
 
           <EffectToggle
             label="Ambient Occlusion (Shadows)"
@@ -100,7 +90,7 @@ export function Viewport3DSettingsDialog() {
 
         </div>
 
-        <DialogFooter style={{ marginTop: "1rem" }}>
+        <DialogFooter className="fm-viewport-3d__settings-footer">
           <DialogClose asChild>
             <Button variant="secondary" onClick={() => viewport3dStore.setSettingsDialogOpen(false)}>
               Close

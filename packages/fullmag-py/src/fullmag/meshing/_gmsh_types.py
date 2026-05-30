@@ -198,7 +198,7 @@ class MeshOptions:
     boundary_layer_target_curve_selectors: list[dict[str, Any]] | None = None
 
     # ── Swept mesh / through-thickness control ──
-    mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex"
+    mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex" | "thin_film_tetrahedral"
     through_thickness_elements: int | None = None   # explicit layer count for swept extrusion
     through_thickness_distribution: str | None = None  # "fixed" | "linear" | "exponential"
     through_thickness_element_ratio: float | None = None  # grading ratio for non-uniform distribution

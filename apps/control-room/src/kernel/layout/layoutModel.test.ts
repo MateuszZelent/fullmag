@@ -19,19 +19,29 @@ describe("workspace layout model", () => {
     expect(layout.columns.map((column) => column.slotId)).toEqual([
       "viewport-main",
       "panel-left",
+      "viewport-aux",
       "panel-right",
     ]);
-    expect(new Set(layout.columns.map((column) => column.slotId)).size).toBe(3);
+    expect(new Set(layout.columns.map((column) => column.slotId)).size).toBe(4);
   });
 
   it("returns the same layout when drag source or target is missing", () => {
     const layout = moveWorkspaceColumn(
       DEFAULT_WORKSPACE_LAYOUT,
-      "viewport-aux",
+      "unknown-slot",
       "panel-left",
     );
 
     expect(layout).toBe(DEFAULT_WORKSPACE_LAYOUT);
+  });
+
+  it("includes the auxiliary viewport in the default workspace layout", () => {
+    expect(DEFAULT_WORKSPACE_LAYOUT.columns.map((column) => column.slotId)).toEqual([
+      "panel-left",
+      "viewport-main",
+      "viewport-aux",
+      "panel-right",
+    ]);
   });
 
   it("resets to the default workspace column order", () => {
@@ -56,7 +66,7 @@ describe("workspace layout model", () => {
       restoreWorkspaceLayout(serializeWorkspaceLayout(moved)).columns.map(
         (column) => column.slotId,
       ),
-    ).toEqual(["panel-right", "panel-left", "viewport-main"]);
+    ).toEqual(["panel-right", "panel-left", "viewport-main", "viewport-aux"]);
   });
 
   it("falls back to the default layout for invalid stored layouts", () => {

@@ -1,0 +1,146 @@
+import type { DecodedCrossSection } from "./types";
+
+export const FMCS_HEADER_LEN = 64;
+
+const MAGIC = "FMCS";
+const SUPPORTED_VERSION = 2;
+const FMCS_FLAG_INTERSECTION_METADATA = 1;
+
+function readMagic(view: DataView): string {
+  return String.fromCharCode(
+    view.getUint8(0),
+    view.getUint8(1),
+    view.getUint8(2),
+    view.getUint8(3),
+  );
+}
+
+export function decodeCrossSection(buffer: ArrayBuffer): DecodedCrossSection {
+  if (buffer.byteLength < FMCS_HEADER_LEN) {
+    throw new Error(
+      `FMCS buffer too short: ${buffer.byteLength} bytes, need at least ${FMCS_HEADER_LEN}`,
+    );
+  }
+
+  const view = new DataView(buffer);
+  const magic = readMagic(view);
+  if (magic !== MAGIC) {
+    throw new Error(`Invalid FMCS magic: expected "${MAGIC}", got "${magic}"`);
+  }
+
+  const version = view.getUint32(4, true);
+  if (version !== SUPPORTED_VERSION) {
+    throw new Error(
+      `Unsupported FMCS version: expected ${SUPPORTED_VERSION}, got ${version}`,
+    );
+  }
+
+  const polygonCount = view.getUint32(8, true);
+  const vertexCount = view.getUint32(12, true);
+  const segmentCount = view.getUint32(16, true);
+  const parentElementCount = view.getUint32(20, true);
+  const metadataVertexCount = view.getUint32(24, true);
+  const flags = view.getUint32(28, true);
+  if (parentElementCount !== polygonCount) {
+    throw new Error(
+      `FMCS parent element count mismatch: expected ${polygonCount}, got ${parentElementCount}`,
+    );
+  }
+  if (metadataVertexCount !== vertexCount) {
+    throw new Error(
+      `FMCS metadata vertex count mismatch: expected ${vertexCount}, got ${metadataVertexCount}`,
+    );
+  }
+  if ((flags & FMCS_FLAG_INTERSECTION_METADATA) === 0) {
+    throw new Error("FMCS v2 payload is missing intersection metadata");
+  }
+
+  const bounds = {
+    uMin: view.getFloat64(32, true),
+    uMax: view.getFloat64(40, true),
+    vMin: view.getFloat64(48, true),
+    vMax: view.getFloat64(56, true),
+  };
+  for (const [key, value] of Object.entries(bounds)) {
+    if (!Number.isFinite(value)) {
+      throw new Error(`FMCS: non-finite bound ${key}`);
+    }
+  }
+
+  const verticesByteLength = vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT;
+  const offsetsByteLength = (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT;
+  const parentIdsByteLength = parentElementCount * Uint32Array.BYTES_PER_ELEMENT;
+  const segmentsByteLength = segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT;
+  const intersectionWorldByteLength =
+    metadataVertexCount * 3 * Float32Array.BYTES_PER_ELEMENT;
+  const intersectionEdgeNodeIdsByteLength =
+    metadataVertexCount * 2 * Uint32Array.BYTES_PER_ELEMENT;
+  const intersectionEdgeTByteLength =
+    metadataVertexCount * Float32Array.BYTES_PER_ELEMENT;
+  const intersectionKindsByteLength =
+    metadataVertexCount * Uint32Array.BYTES_PER_ELEMENT;
+  const expectedByteLength =
+    FMCS_HEADER_LEN +
+    verticesByteLength +
+    offsetsByteLength +
+    parentIdsByteLength +
+    segmentsByteLength +
+    intersectionWorldByteLength +
+    intersectionEdgeNodeIdsByteLength +
+    intersectionEdgeTByteLength +
+    intersectionKindsByteLength;
+  if (buffer.byteLength !== expectedByteLength) {
+    throw new Error(
+      `FMCS buffer size mismatch: expected ${expectedByteLength}, got ${buffer.byteLength}`,
+    );
+  }
+
+  let offset = FMCS_HEADER_LEN;
+  const vertices = new Float32Array(buffer, offset, vertexCount * 2);
+  offset += verticesByteLength;
+  const polygonOffsets = new Uint32Array(buffer, offset, polygonCount + 1);
+  offset += offsetsByteLength;
+  const parentElementIds = new Uint32Array(buffer, offset, parentElementCount);
+  offset += parentIdsByteLength;
+  const segments = new Float32Array(buffer, offset, segmentCount * 4);
+  offset += segmentsByteLength;
+  const intersectionWorld = new Float32Array(
+    buffer,
+    offset,
+    metadataVertexCount * 3,
+  );
+  offset += intersectionWorldByteLength;
+  const intersectionEdgeNodeIds = new Uint32Array(
+    buffer,
+    offset,
+    metadataVertexCount * 2,
+  );
+  offset += intersectionEdgeNodeIdsByteLength;
+  const intersectionEdgeT = new Float32Array(buffer, offset, metadataVertexCount);
+  offset += intersectionEdgeTByteLength;
+  const intersectionKinds = new Uint32Array(buffer, offset, metadataVertexCount);
+
+  if (polygonOffsets[0] !== 0 || polygonOffsets[polygonCount] !== vertexCount) {
+    throw new Error("FMCS polygon offsets do not match vertex count");
+  }
+  for (let index = 1; index < polygonOffsets.length; index++) {
+    if (polygonOffsets[index] < polygonOffsets[index - 1]) {
+      throw new Error(`FMCS polygon offsets are not monotonic at ${index}`);
+    }
+  }
+
+  return {
+    bounds,
+    intersectionEdgeNodeIds,
+    intersectionEdgeT,
+    intersectionKinds,
+    intersectionWorld,
+    parentElementIds,
+    polygonCount,
+    polygonOffsets,
+    segmentCount,
+    segments,
+    vertexCount,
+    vertices,
+  };
+}

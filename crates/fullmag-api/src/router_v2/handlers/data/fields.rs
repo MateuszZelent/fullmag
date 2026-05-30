@@ -43,7 +43,7 @@ use crate::quantity_data_plane::{
 use crate::schemas::fields::*;
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
-use fullmag_quantities::quantity_spec;
+use fullmag_quantities::{normalize_quantity_id, quantity_spec};
 use fullmag_runner::{FemMeshPayload, RuntimeEngineId};
 
 // ── Response header constants ────────────────────────────────────────────────
@@ -57,6 +57,12 @@ static HDR_POINT_COUNT: &str = "x-fullmag-point-count";
 static HDR_VALUE_COUNT: &str = "x-fullmag-value-count";
 static HDR_SCOPE_KIND: &str = "x-fullmag-scope-kind";
 static HDR_SCOPE_ID: &str = "x-fullmag-scope-id";
+
+fn canonical_quantity_id(requested: &str) -> Cow<'_, str> {
+    normalize_quantity_id(requested)
+        .map(|id| Cow::Borrowed(id.as_str()))
+        .unwrap_or_else(|_| Cow::Borrowed(requested))
+}
 
 fn insert_field_headers(
     resp: &mut axum::response::Response,
@@ -241,21 +247,23 @@ pub async fn get_field_meta(
     State(state): State<Arc<AppState>>,
     AxumPath(quantity_id): AxumPath<String>,
 ) -> Result<Json<FieldMeta>, ApiError> {
+    let quantity_id = canonical_quantity_id(&quantity_id);
+    let quantity_id = quantity_id.as_ref();
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    let spec = quantity_spec(&quantity_id);
+    let spec = quantity_spec(quantity_id);
     let n_comp = spec.map(|s| s.n_comp).unwrap_or(3);
     let label = spec
         .map(|s| s.label.to_string())
-        .unwrap_or_else(|| quantity_id.clone());
+        .unwrap_or_else(|| quantity_id.to_string());
     let kind = spec
         .map(|s| s.shape.as_api_kind().to_string())
         .unwrap_or_else(|| "vector_field".into());
-    let unit = quantity_unit(&quantity_id).to_string();
-    let location = quantity_spatial_domain(&quantity_id).to_string();
+    let unit = quantity_unit(quantity_id).to_string();
+    let location = quantity_spatial_domain(quantity_id).to_string();
 
     let gen_id = snapshot
         .fem_mesh
@@ -266,14 +274,14 @@ pub async fn get_field_meta(
 
     if snapshot
         .latest_fields
-        .get(&quantity_id)
+        .get(quantity_id)
         .map(|raw| flatten_json_field_values(raw))
         .is_some_and(|values| {
-            field_values_match_current_domain(snapshot, &quantity_id, n_comp as usize, &values)
+            field_values_match_current_domain(snapshot, quantity_id, n_comp as usize, &values)
         })
     {
         return Ok(Json(FieldMeta {
-            quantity_id,
+            quantity_id: quantity_id.to_string(),
             label,
             kind,
             components: n_comp,
@@ -287,11 +295,11 @@ pub async fn get_field_meta(
 
     if snapshot
         .preview_cache
-        .get(&quantity_id)
+        .get(quantity_id)
         .is_some_and(|field| {
             field_values_match_current_domain(
                 snapshot,
-                &quantity_id,
+                quantity_id,
                 n_comp as usize,
                 &field.vector_field_values,
             )
@@ -299,7 +307,7 @@ pub async fn get_field_meta(
         || (quantity_id == "m" && live_magnetization_available(snapshot))
     {
         return Ok(Json(FieldMeta {
-            quantity_id,
+            quantity_id: quantity_id.to_string(),
             label,
             kind,
             components: n_comp,
@@ -643,6 +651,8 @@ pub async fn get_field_vector(
     AxumPath(quantity_id): AxumPath<String>,
     Query(query): Query<FieldVectorQuery>,
 ) -> Result<axum::response::Response, ApiError> {
+    let quantity_id = canonical_quantity_id(&quantity_id);
+    let quantity_id = quantity_id.as_ref();
     let workspace_selection = if query.scope_kind.as_deref() == Some("selection") {
         Some(state.current_workspace_selection.read().await.clone())
     } else {
@@ -653,7 +663,7 @@ pub async fn get_field_vector(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
-    let spec = quantity_spec(&quantity_id);
+    let spec = quantity_spec(quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
@@ -668,9 +678,9 @@ pub async fn get_field_vector(
 
     // Collect raw values under the lock, then drop the lock before any heavy work
     let latest_field_values = || {
-        if let Some(raw) = snapshot.latest_fields.get(&quantity_id) {
+        if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
             let values = flatten_json_field_values(raw);
-            if !field_values_match_current_domain(snapshot, &quantity_id, n_comp, &values) {
+            if !field_values_match_current_domain(snapshot, quantity_id, n_comp, &values) {
                 return None;
             }
             let element_count = if n_comp > 0 {
@@ -685,10 +695,10 @@ pub async fn get_field_vector(
         }
     };
     let preview_field_values = || {
-        if let Some(field) = snapshot.preview_cache.get(&quantity_id) {
+        if let Some(field) = snapshot.preview_cache.get(quantity_id) {
             if !field_values_match_current_domain(
                 snapshot,
-                &quantity_id,
+                quantity_id,
                 n_comp,
                 &field.vector_field_values,
             ) {
@@ -730,7 +740,7 @@ pub async fn get_field_vector(
         .unwrap_or_else(|| "full-domain".to_string());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{}:{scope_token}",
-        component_etag_token(&quantity_id, field_revision, gen_id, &component)
+        component_etag_token(quantity_id, field_revision, gen_id, &component)
     ));
     let scoped_grid = resolved_scope
         .as_ref()
@@ -747,7 +757,7 @@ pub async fn get_field_vector(
         ComponentSelection::Index(i) => format!("c{}", i),
     };
     let cache_key = crate::quantity_data_plane::projection_cache_key(
-        &quantity_id,
+        quantity_id,
         field_revision,
         gen_id,
         &format!("{comp_key}:{scope_token}"),
@@ -774,7 +784,7 @@ pub async fn get_field_vector(
             );
             insert_field_headers(
                 &mut resp,
-                &quantity_id,
+                quantity_id,
                 &component,
                 field_revision,
                 gen_id,
@@ -802,7 +812,7 @@ pub async fn get_field_vector(
         scoped_grid
     };
 
-    let binary = serialize_field_vector_binary_v2(&quantity_id, out_n_comp, out_grid, &projected)
+    let binary = serialize_field_vector_binary_v2(quantity_id, out_n_comp, out_grid, &projected)
         .map_err(ApiError::internal)?;
 
     // P4: populate projection cache
@@ -817,7 +827,7 @@ pub async fn get_field_vector(
     // Add informational headers (present on both 200 and 304)
     insert_field_headers(
         &mut resp,
-        &quantity_id,
+        quantity_id,
         &component,
         field_revision,
         gen_id,

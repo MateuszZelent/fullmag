@@ -1,9 +1,14 @@
 # Airbox mesh grading: geometric vs linear
 
 - Status: draft
-- Last updated: 2026-05-27
+- Last updated: 2026-05-29
 - Related specs: `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
-- Related code: `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
+- Related code:
+  - `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py`
+  - `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
+  - `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`
+  - `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`
+  - `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`
 
 ## 1. Problem statement
 
@@ -67,7 +72,28 @@ where:
 
 This gives logarithmic element count scaling with domain size, rather than linear.
 
-## 3. Current implementation (problematic)
+## 3. Current implementation status
+
+Geometric grading is partially implemented. The older GEO/OCC-fragment helpers
+in `_gmsh_airbox.py` can build a `MathEval` exponential growth field, but the
+production conformal OCC shared-domain path historically used only a linear
+`Distance -> Threshold` field despite `AirboxOptions.grading_mode` defaulting to
+`"geometric"`.
+
+The corrected implementation must keep all airbox paths on the same grading
+contract:
+
+- `geometric`: exponential growth capped at `airbox_hmax`
+- `linear`: legacy `Threshold` interpolation
+- `airbox_hmin`: near-object size target, not gradient distance
+- `DistMax`: distance to the relevant outer airbox boundary/corner or explicit
+  transition span
+- `edge_transition_distance`: optional boundary-curve grading span, distinct from
+  the surface `transition_distance`
+- `corner_transition_distance`: optional endpoint/corner grading span, distinct
+  from both the surface and edge transition spans
+
+## 3.1 Legacy implementation (problematic)
 
 File: `_gmsh_airbox.py`, lines 178-187:
 
@@ -139,7 +165,47 @@ interface surfaces alone require O(area / h^2) triangles. A very thin airbox in
 z also leaves little distance for grading to relax from the interface scale to
 `airbox_hmax`.
 
-### 4.4 Comparison
+### 4.4 Boundary-aware gradient length
+
+The grading length must cover the full airbox region that the field is expected
+to control. For rectangular airboxes, using only the largest axis gap can leave
+far corners outside the intended transition span. The fallback `DistMax` should
+therefore be conservative with respect to the farthest outer-boundary point from
+the magnetic-object bounds.
+
+For explicit rectangular airboxes, the implementation combines the local
+surface-distance grading with a rectangular bbox envelope. The local field owns
+the fine interface halo; the rectangular envelope keeps the remaining airbox
+constrained until the outer boundary is reached, including diagonal directions
+from object corners to airbox corners. This prevents a visually plausible halo
+from degrading into a flat far-field plateau through most of the diagonal air
+volume.
+
+### 4.5 Air-side edge and corner constraints
+
+For sharp or thin magnetic bodies, surface distance alone is not enough to
+guarantee air refinement around high-curvature perimeter features. The airbox
+field stack may therefore add unrestricted distance thresholds from component
+boundary curves and their endpoints. These fields intentionally cross the
+conformal component-air interface: restricting them to the magnetic volume would
+leave the neighboring air coarse at exactly the edge/corner locations where the
+demag potential changes fastest.
+
+Boundary-curve and endpoint fields may use transition spans that differ from the
+surface `transition_distance`. A long surface transition is useful for smooth
+object-to-air grading, but applying that same span to all perimeter fields can
+over-refine a large airbox volume. Authors that need a wider edge plume should
+set `edge_transition_distance` explicitly; authors that need a wider corner
+plume should set `corner_transition_distance` explicitly.
+
+For axis-aligned rectangular bodies represented through a flat `ArchWaveguide`
+(`arch_height = 0`), the production shared-domain path uses the same box OCC
+lowering as `Box`. The air-side shell and transition fields must therefore use
+an analytic distance-to-box field. This keeps the near-object air layer
+continuous around the full object perimeter, including diagonal directions from
+corners, and avoids asymmetric refinement from sampled OCC curve endpoints.
+
+### 4.6 Comparison
 
 For a 100 nm object with 5 nm interface mesh and 500 nm airbox radius:
 
@@ -179,12 +245,17 @@ study.universe(
 
 ## 7. Implementation checklist
 
-- [ ] Add `airbox_growth_rate` parameter to `AirboxOptions`
-- [ ] Add `airbox_grading` parameter (geometric/linear/auto)
-- [ ] Implement `MathEval` field for geometric growth in `_gmsh_airbox.py`
+- [x] Add `airbox_growth_rate` parameter to `AirboxOptions` lowering
+- [x] Add `airbox_grading` parameter (geometric/linear/auto)
+- [x] Implement `MathEval` field for geometric growth in `_gmsh_airbox.py`
+- [x] Share geometric/linear airbox grading helper with production OCC path
+- [x] Treat `airbox_hmin` as a size target instead of a gradient-length clamp
+- [x] Use boundary-aware fallback distance instead of max-axis gap only
+- [x] Add unrestricted air-side corner endpoint refinement field
+- [x] Split edge and endpoint/corner transition distances from surface transition distance
+- [ ] Add realized distance-band regression tests for corners
 - [ ] Update `_size_field_plan.py` transition fields to use geometric growth
-- [ ] Add unit tests for growth rate calculation
-- [ ] Update documentation
+- [ ] Add full solver-quality validation for Poisson-airbox demag
 - [ ] Deprecation warning for linear grading
 
 ## 8. References

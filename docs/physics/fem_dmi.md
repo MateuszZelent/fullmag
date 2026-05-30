@@ -1,8 +1,8 @@
 # FEM Dzyaloshinskii-Moriya Interaction
 
 - Status: native FEM CPU runtime validated; native FEM GPU source/enablement
-  contract wired with runtime smoke gate, pending live CUDA host proof
-- Last updated: 2026-05-25
+  contract wired and live CUDA runtime smoke verified on 2026-05-29
+- Last updated: 2026-05-29
 - Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp/.cpp`,
   `native/backends/fem/cpu/mfem/interactions/dmi_bulk.hpp/.cpp`,
@@ -59,16 +59,19 @@ where `Ms` can be the scalar material fallback or a per-node `Ms_field`.
 | DMI field | `H_DMI` | `A/m` |
 | DMI energy | `E_DMI` | `J` |
 
-The audit reports still flag the public-unit boundary as unresolved:
-interfacial `J/m^2` must not be silently mixed with an effective volumetric
-operator unless the thickness/surface policy is explicit.
+Public API: `Dind` / `InterfacialDMI(D=...)` is a surface DMI coefficient in `J/m^2`.
+The native FEM path passes this coefficient through unchanged; it does not divide by film thickness
+or reinterpret the value as a volumetric `J/m^3` coefficient. Users who want an
+effective volumetric model must perform that conversion explicitly before
+building the Fullmag material or energy term.
 
 ## Warunki brzegowe
 
 The executable path is a weak-residual formulation. Natural boundary terms are
 part of the variational residual rather than a post-hoc strong-form nodal
-average. Production qualification still needs explicit edge and boundary
-fixtures, especially for interfacial DMI boundary tilt.
+average. `fem_dmi_weak_residual` includes an explicit interfacial boundary-tilt
+fixture: a uniform out-of-plane state has zero baseline energy but a non-zero
+natural-boundary derivative for tangential tilt.
 
 ## Dyskretyzacja FEM
 
@@ -91,8 +94,9 @@ scratch lifetime and per-element MFEM buffers are isolated in
 - Interfacial and bulk DMI are separate entry points. Interfacial DMI is
   isolated in `dmi_interfacial.*`, bulk DMI is isolated in `dmi_bulk.*`, and
   both paths share `dmi_workspace.*` for private element-loop scratch.
-- Public unit semantics for interfacial thin-film DMI remain release-blocking
-  before a production label.
+- Public unit semantics for interfacial thin-film DMI are pinned by a repo
+  contract: the public `Dind` / `InterfacialDMI(D=...)` value is a surface
+  `J/m^2` coefficient passed unchanged to native FEM.
 - Native CPU runtime smoke covers a non-uniform tetrahedron with active
   interfacial and bulk DMI, checking finite non-zero `e_dmi` and non-zero
   `H_dmi` / `H_dmi_bulk` readback.
@@ -116,20 +120,17 @@ Current gates:
   source contracts for `dmi.cpp`, `dmi_interfacial.cpp`, `dmi_bulk.cpp`, and
   `dmi_workspace.cpp` so source files keep their ownership boundaries visible.
 - `fem_dmi_weak_residual` checks the interfacial and bulk weak-residual
-  directional-derivative fixtures.
+  directional-derivative fixtures, including a tilted interfacial `dmi_n_hat`
+  fixture that proves non-default normal vectors are used in the residual. It
+  also covers interfacial domain-wall handedness, interfacial boundary tilt,
+  and bulk spiral-pitch handedness/sign.
 - `cargo test -p fullmag-runner --features fem-gpu dmi -- --test-threads=1`
   covers runner DMI quantity activation, field snapshot readback, CPU native DMI
   runtime, GPU DMI runtime smoke wiring, and FEM eigen bulk-DMI non-reciprocity.
 - `scripts/verify_fem_gpu_enablement.sh` runs the native GPU DMI runtime smoke
   in the `fem-gpu` Docker environment after NVIDIA visibility and existing
-  exchange-only GPU smoke checks.
-
-Required before production qualification:
-
-- domain-wall handedness for interfacial DMI;
-- spiral-pitch fixture for bulk DMI;
-- boundary-tilt fixture;
-- normal-rotation symmetry for `dmi_n_hat`;
-- explicit public-unit/thickness policy test;
-- live CUDA runtime evidence from a GPU-enabled host running the DMI smoke in
-  `scripts/verify_fem_gpu_enablement.sh`.
+  exchange-only GPU smoke checks. This full script passed on a CUDA-visible
+  `fem-gpu` Docker run on 2026-05-29.
+- `test_fem_dmi_docs_pin_public_surface_unit_policy` pins the public unit
+  policy: `Dind` / `InterfacialDMI(D=...)` is passed as a surface `J/m^2`
+  coefficient with no implicit film-thickness division.

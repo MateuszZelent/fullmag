@@ -13,6 +13,9 @@ Component-aware path (when Gmsh has volume-tag identity):
   - ``ComponentVolumeConstant`` — set size inside a named component volume
   - ``InterfaceShellThreshold`` — refine near component surface (shell)
   - ``TransitionShellThreshold`` — smooth transition from shell to airbox
+  - ``AxisAlignedBoxDistanceThreshold`` — analytic air shell around a box-like body
+  - ``EdgeDistanceThreshold`` — refine near component boundary curves
+  - ``CornerDistanceThreshold`` — refine near component boundary curve endpoints
   - ``ComponentRestrictedBox`` — refine inside a named component sub-box
   - ``ComponentRestrictedCylinder`` — refine inside a named component radial disk
 
@@ -22,12 +25,13 @@ Bounds-based fallback (concatenated-STL or unknown topology):
 """
 from __future__ import annotations
 
+import math
 from typing import Mapping
 
 from fullmag._progress import emit_progress
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.model.domain_frame import geometry_bounds
-from fullmag.model.geometry import Box, Geometry, Translate
+from fullmag.model.geometry import ArchWaveguide, Box, Geometry, Translate
 
 from .gmsh_bridge import MeshOptions
 
@@ -40,11 +44,28 @@ from ._mesh_targets import (
 _NO_OP_FIELD_SIZE = 1.0e22
 
 
-def _unwrap_translated_box_geometry(geometry: Geometry) -> Box | None:
+def _unwrap_translated_geometry(geometry: Geometry) -> Geometry | object:
     current: Geometry | object = geometry
     while isinstance(current, Translate):
         current = current.geometry
+    return current
+
+
+def _unwrap_translated_box_geometry(geometry: Geometry) -> Box | None:
+    current = _unwrap_translated_geometry(geometry)
     return current if isinstance(current, Box) else None
+
+
+def _unwrap_translated_flat_arch_waveguide_geometry(geometry: Geometry) -> ArchWaveguide | None:
+    current = _unwrap_translated_geometry(geometry)
+    if not isinstance(current, ArchWaveguide):
+        return None
+    tolerance = max(abs(current.height), abs(current.length), 1.0) * 1.0e-15
+    return current if math.isclose(current.arch_height, 0.0, abs_tol=tolerance) else None
+
+
+def _uses_analytic_box_air_shell(geometry: Geometry) -> bool:
+    return _unwrap_translated_flat_arch_waveguide_geometry(geometry) is not None
 
 
 def _perimeter_refinement_config(
@@ -79,15 +100,13 @@ def _perimeter_refinement_config(
         )
     box = _unwrap_translated_box_geometry(geometry)
     if box is None:
-        if corner_hmax is not None or corner_extent is not None:
-            raise ValueError(
-                f"{geometry.geometry_name}: corner refinement requires Box geometry or explicit named corner selectors"
-            )
         return {
             key: value
             for key, value in {
                 "edge_hmax": edge_hmax,
                 "edge_thickness": edge_thickness,
+                "corner_hmax": corner_hmax,
+                "corner_extent": corner_extent,
             }.items()
             if value is not None
         }
@@ -134,7 +153,7 @@ def _build_perimeter_refinement_fields(
     bounds_by_name: dict[str, tuple] | None = None,
     component_aware: bool = False,
 ) -> list[dict[str, object]]:
-    """Build box-local edge and corner refinement fields for rectangular boxes."""
+    """Build box-local or component-boundary edge and corner refinement fields."""
     fields: list[dict[str, object]] = []
     for geometry in geometries:
         entry = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
@@ -172,19 +191,52 @@ def _build_perimeter_refinement_fields(
                     if edge_transition_distance is not None
                     else edge_thickness
                 )
+                edge_params = {
+                    "GeometryName": geometry.geometry_name,
+                    "Selector": {"mode": "all_boundary_curves"},
+                    "SizeMin": float(refinement["edge_hmax"]),
+                    "SizeMax": float(default_hmax),
+                    "DistMin": float(edge_dist_min),
+                    "DistMax": float(edge_dist_max),
+                    "Sampling": 40,
+                    "Source": "per_geometry.edge_maximum_element_size",
+                }
                 fields.append(
                     {
                         "kind": "EdgeDistanceThreshold",
-                        "params": {
-                            "GeometryName": geometry.geometry_name,
-                            "Selector": {"mode": "all_boundary_curves"},
-                            "SizeMin": float(refinement["edge_hmax"]),
-                            "SizeMax": float(default_hmax),
-                            "DistMin": float(edge_dist_min),
-                            "DistMax": float(edge_dist_max),
-                            "Sampling": 40,
-                            "Source": "per_geometry.edge_maximum_element_size",
-                        },
+                        "params": edge_params,
+                    }
+                )
+            if "corner_hmax" in refinement and "corner_extent" in refinement:
+                corner_extent = float(refinement["corner_extent"])
+                corner_transition_distance = (
+                    _coerce_positive_float(entry.get("corner_transition_distance"))
+                    if entry is not None
+                    else None
+                )
+                corner_dist_min = (
+                    corner_extent if corner_transition_distance is not None else 0.0
+                )
+                corner_dist_max = (
+                    corner_extent + corner_transition_distance
+                    if corner_transition_distance is not None
+                    else corner_extent
+                )
+                corner_params = {
+                    "GeometryName": geometry.geometry_name,
+                    "Selector": {"mode": "all_boundary_curve_endpoints"},
+                    "SizeMin": float(refinement["corner_hmax"]),
+                    "SizeMax": float(default_hmax),
+                    "DistMin": float(corner_dist_min),
+                    "DistMax": float(corner_dist_max),
+                    "Sampling": 20,
+                    "Grading": "geometric",
+                    "Source": "per_geometry.corner_maximum_element_size",
+                }
+                fields.append(
+                    {
+                        "kind": "CornerDistanceThreshold",
+                        "params": corner_params,
                     }
                 )
             continue
@@ -454,6 +506,31 @@ def _build_interface_fields(
         interface_ramp = max(interface_hmax, interface_thickness * 0.05, 1.0e-18)
 
         if component_aware:
+            if _uses_analytic_box_air_shell(geometry):
+                if bounds_by_name is not None:
+                    bounds_pair = bounds_by_name.get(geometry.geometry_name)
+                    if bounds_pair is None:
+                        continue
+                    bounds_min, bounds_max = bounds_pair
+                else:
+                    bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+                if bounds_min is None or bounds_max is None:
+                    continue
+                fields.append(
+                    {
+                        "kind": "AxisAlignedBoxDistanceThreshold",
+                        "params": {
+                            "BoundsMin": [float(value) for value in bounds_min],
+                            "BoundsMax": [float(value) for value in bounds_max],
+                            "SizeMin": float(interface_hmax),
+                            "SizeMax": float(_NO_OP_FIELD_SIZE),
+                            "DistMin": float(interface_thickness),
+                            "DistMax": float(interface_thickness + interface_ramp),
+                            "Source": "interface_hmax",
+                        },
+                    }
+                )
+                continue
             fields.append(
                 {
                     "kind": "InterfaceShellThreshold",
@@ -550,18 +627,45 @@ def _build_transition_fields(
         transition_dist_max = transition_dist_min + transition_distance
 
         if component_aware:
+            if _uses_analytic_box_air_shell(geometry):
+                if bounds_by_name is not None:
+                    bounds_pair = bounds_by_name.get(geometry.geometry_name)
+                    if bounds_pair is None:
+                        continue
+                    bounds_min, bounds_max = bounds_pair
+                else:
+                    bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+                if bounds_min is None or bounds_max is None:
+                    continue
+                fields.append(
+                    {
+                        "kind": "AxisAlignedBoxDistanceThreshold",
+                        "params": {
+                            "BoundsMin": [float(value) for value in bounds_min],
+                            "BoundsMax": [float(value) for value in bounds_max],
+                            "SizeMin": float(transition_size_min),
+                            "SizeMax": float(transition_size_max),
+                            "DistMin": float(transition_dist_min),
+                            "DistMax": float(transition_dist_max),
+                            "Grading": "geometric",
+                            "Source": "transition_distance",
+                        },
+                    }
+                )
+                continue
+            params = {
+                "GeometryName": geometry.geometry_name,
+                "SizeMin": float(transition_size_min),
+                "SizeMax": float(transition_size_max),
+                "DistMin": float(transition_dist_min),
+                "DistMax": float(transition_dist_max),
+                "Sampling": 20,
+                "Source": "explicit" if transition_distance_requested is not None else "auto",
+            }
             fields.append(
                 {
                     "kind": "TransitionShellThreshold",
-                    "params": {
-                        "GeometryName": geometry.geometry_name,
-                        "SizeMin": float(transition_size_min),
-                        "SizeMax": float(transition_size_max),
-                        "DistMin": float(transition_dist_min),
-                        "DistMax": float(transition_dist_max),
-                        "Sampling": 20,
-                        "Source": "explicit" if transition_distance_requested is not None else "auto",
-                    },
+                    "params": params,
                 }
             )
             continue
@@ -576,20 +680,21 @@ def _build_transition_fields(
         if bounds_min is None or bounds_max is None:
             continue
 
+        params = {
+            "BoundsMin": list(bounds_min),
+            "BoundsMax": list(bounds_max),
+            "SizeMin": float(transition_size_min),
+            "SizeMax": float(transition_size_max),
+            "DistMin": float(transition_dist_min),
+            "DistMax": float(transition_dist_max),
+            "Sampling": 20,
+            "MatchPadding": float(bulk_hmax),
+            "Source": "explicit" if transition_distance_requested is not None else "auto",
+        }
         fields.append(
             {
                 "kind": "BoundsSurfaceThreshold",
-                "params": {
-                    "BoundsMin": list(bounds_min),
-                    "BoundsMax": list(bounds_max),
-                    "SizeMin": float(transition_size_min),
-                    "SizeMax": float(transition_size_max),
-                    "DistMin": float(transition_dist_min),
-                    "DistMax": float(transition_dist_max),
-                    "Sampling": 20,
-                    "MatchPadding": float(bulk_hmax),
-                    "Source": "explicit" if transition_distance_requested is not None else "auto",
-                },
+                "params": params,
             }
         )
     return fields

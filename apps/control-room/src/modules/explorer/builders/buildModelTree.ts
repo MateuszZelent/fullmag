@@ -8,6 +8,8 @@ import type {
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
+import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
+
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   formatTorqueT,
@@ -503,6 +505,13 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
       children: objects.map(objectNodes),
     },
   ];
+
+  const crossSectionBranch = buildCrossSectionNodes(
+    snapshot?.crossSections ?? null,
+  );
+  if (crossSectionBranch) {
+    sessionChildren.push(crossSectionBranch);
+  }
 
   sessionChildren.push(
     meshPolicyNodes(snapshot?.mesh ?? null),

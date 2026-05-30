@@ -884,6 +884,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest": {
         parameters: {
             query?: never;
@@ -2231,6 +2263,8 @@ export interface components {
             /** Format: double */
             utilization_cpu_percent: number;
         };
+        /** @enum {string} */
+        CrossSectionQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
         CurrentRunResource: {
             /** Format: int32 */
             active_stage_index?: number | null;
@@ -3896,6 +3930,10 @@ export interface components {
         /** @enum {string} */
         SliceAirboxRenderMode: "surface" | "wireframe" | "surface+edges" | "points";
         /** @enum {string} */
+        SliceMeshColorScale: "jet" | "viridis" | "hot" | "coolwarm";
+        /** @enum {string} */
+        SliceMeshQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
+        /** @enum {string} */
         SlicePlane: "xy" | "xz" | "yz";
         /** @enum {string} */
         SliceRenderMode: "heatmap" | "contour" | "heatmap+contour" | "vectors" | "mesh-overlay";
@@ -3909,6 +3947,11 @@ export interface components {
             component?: null | components["schemas"]["FieldComponent"];
             /** Format: int32 */
             layer_index?: number | null;
+            mesh_color_scale?: null | components["schemas"]["SliceMeshColorScale"];
+            mesh_filter_expression?: string | null;
+            mesh_quality_metric?: null | components["schemas"]["SliceMeshQualityMetric"];
+            /** Format: double */
+            mesh_shrink_factor?: number | null;
             mode?: null | components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent?: number | null;
@@ -3938,6 +3981,11 @@ export interface components {
             component: components["schemas"]["FieldComponent"];
             /** Format: int32 */
             layer_index?: number | null;
+            mesh_color_scale: components["schemas"]["SliceMeshColorScale"];
+            mesh_filter_expression: string;
+            mesh_quality_metric: components["schemas"]["SliceMeshQualityMetric"];
+            /** Format: double */
+            mesh_shrink_factor: number;
             mode: components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent: number;
@@ -6870,6 +6918,111 @@ export interface operations {
             };
             /** @description Requested topology byte range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                include_polygons?: boolean;
+                include_wireframe?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary shared-domain FEM cross-section geometry (FMCS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Not applicable (FDM) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section geometry not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                metric: components["schemas"]["CrossSectionQualityMetric"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary shared-domain FEM cross-section quality values (FMQS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No per-element quality data artifact or requested metric available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section quality not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

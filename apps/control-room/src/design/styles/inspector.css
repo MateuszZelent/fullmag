@@ -156,7 +156,7 @@
 }
 
 .fm-inspector-field-row:hover {
-  background: color-mix(in srgb, var(--fm-accent) 6%, transparent);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 50%, transparent);
 }
 
 .fm-inspector-field-row__label {
@@ -1393,4 +1393,83 @@ button.fm-mesh-detail-list__item:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Axis segmented tabs ── */
+.fm-inspector-axis-tabs {
+  min-width: 0;
+}
+
+.fm-inspector-axis-tabs .fm-tabs-list {
+  gap: 2px;
+}
+
+.fm-inspector-axis-tab {
+  position: relative;
+  min-width: 36px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.fm-inspector-axis-tab[data-axis="x"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-danger);
+}
+
+.fm-inspector-axis-tab[data-axis="y"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-success);
+}
+
+.fm-inspector-axis-tab[data-axis="z"][data-state="active"] {
+  box-shadow: inset 0 -2px 0 var(--fm-accent);
+}
+
+/* ── Compound range slider ── */
+.fm-inspector-range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  margin: var(--fm-space-1) 0;
+  background: linear-gradient(
+    to right,
+    var(--fm-accent) 0%,
+    var(--fm-accent) var(--pct, 50%),
+    var(--fm-border-default) var(--pct, 50%),
+    var(--fm-border-default) 100%
+  );
+}
+
+.fm-inspector-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-panel-raised),
+    0 1px 3px rgb(0 0 0 / 40%);
+  transition: transform var(--fm-transition-fast);
+}
+
+.fm-inspector-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.fm-inspector-range-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-panel-raised),
+    0 1px 3px rgb(0 0 0 / 40%);
 }

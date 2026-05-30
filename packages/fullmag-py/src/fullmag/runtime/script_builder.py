@@ -1273,6 +1273,14 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if edge_thickness_value is not None:
         kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
 
+    edge_transition_distance_value = _number_or_none(
+        mesh_config.get("edge_transition_distance")
+    )
+    if edge_transition_distance_value is not None:
+        kwargs.append(
+            f"edge_transition_distance={_py_number(edge_transition_distance_value)}"
+        )
+
     corner_hmax_value = _number_or_none(
         mesh_config.get("corner_maximum_element_size")
         if mesh_config.get("corner_maximum_element_size") is not None
@@ -1284,6 +1292,14 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     corner_extent_value = _number_or_none(mesh_config.get("corner_extent"))
     if corner_extent_value is not None:
         kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
+
+    corner_transition_distance_value = _number_or_none(
+        mesh_config.get("corner_transition_distance")
+    )
+    if corner_transition_distance_value is not None:
+        kwargs.append(
+            f"corner_transition_distance={_py_number(corner_transition_distance_value)}"
+        )
 
     boundary_layer_count_value = mesh_config.get("boundary_layer_count")
     if isinstance(boundary_layer_count_value, (int, float)):
@@ -2538,8 +2554,14 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         ),
         "edge_maximum_element_size": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
         "edge_thickness": _text_number(_number_or_none(mesh_options.get("edge_thickness"))),
+        "edge_transition_distance": _text_number(
+            _number_or_none(mesh_options.get("edge_transition_distance"))
+        ),
         "corner_maximum_element_size": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
         "corner_extent": _text_number(_number_or_none(mesh_options.get("corner_extent"))),
+        "corner_transition_distance": _text_number(
+            _number_or_none(mesh_options.get("corner_transition_distance"))
+        ),
         "boundary_layer_count": (
             int(mesh_options.get("boundary_layer_count"))
             if isinstance(mesh_options.get("boundary_layer_count"), (int, float))
@@ -2673,8 +2695,14 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
             "edge_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
             "edge_thickness": _text_number(_number_or_none(mesh_entry.get("edge_thickness"))),
+            "edge_transition_distance": _text_number(
+                _number_or_none(mesh_entry.get("edge_transition_distance"))
+            ),
             "corner_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
             "corner_extent": _text_number(_number_or_none(mesh_entry.get("corner_extent"))),
+            "corner_transition_distance": _text_number(
+                _number_or_none(mesh_entry.get("corner_transition_distance"))
+            ),
             "boundary_layer_count": (
                 int(mesh_entry["boundary_layer_count"])
                 if isinstance(mesh_entry.get("boundary_layer_count"), (int, float))
@@ -2759,8 +2787,10 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "transition_growth": None,
             "edge_maximum_element_size": "",
             "edge_thickness": "",
+            "edge_transition_distance": "",
             "corner_maximum_element_size": "",
             "corner_extent": "",
+            "corner_transition_distance": "",
             "boundary_layer_count": None,
             "boundary_layer_thickness": "",
             "boundary_layer_stretching": None,

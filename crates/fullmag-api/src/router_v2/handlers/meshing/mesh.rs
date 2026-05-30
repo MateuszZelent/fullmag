@@ -4,13 +4,20 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
+use crate::fem_cross_section::{
+    cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
+    serialize_cross_section_fmcs, serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
+};
+use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
+use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::mesh::{
     MeshActiveBuildResource, MeshBuildDiagnosticsResource, MeshBuildHistoryResource,
@@ -35,6 +42,23 @@ use fullmag_authoring::{
     ScriptBuilderPerGeometryMeshState, ScriptBuilderUniverseState,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MeshSharedDomainCrossSectionQuery {
+    pub plane: SlicePlane,
+    pub position_percent: f64,
+    pub include_polygons: Option<bool>,
+    pub include_wireframe: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct MeshSharedDomainCrossSectionQualityQuery {
+    pub plane: SlicePlane,
+    pub position_percent: f64,
+    pub metric: CrossSectionQualityMetric,
+}
 
 #[utoipa::path(
     get,
@@ -511,6 +535,178 @@ pub async fn get_mesh_shared_domain_quality(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+    params(MeshSharedDomainCrossSectionQuery),
+    responses(
+        (status = 200, description = "Binary shared-domain FEM cross-section geometry (FMCS)", content_type = "application/octet-stream"),
+        (status = 304, description = "Cross-section geometry not modified for the supplied ETag"),
+        (status = 204, description = "Not applicable (FDM)"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "FEM topology unavailable for cross-section"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_shared_domain_cross_section(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MeshSharedDomainCrossSectionQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    if !query.position_percent.is_finite()
+        || query.position_percent < 0.0
+        || query.position_percent > 100.0
+    {
+        return Err(ApiError::bad_request(
+            "invalid_query: position_percent must be finite and in [0, 100]",
+        ));
+    }
+
+    let snapshot = current_snapshot(&state).await?;
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let cut_norm = query.position_percent / 100.0;
+    let resolved = resolve_slice_query(
+        &FieldSliceQuery {
+            plane: query.plane,
+            component: None,
+            cut_world: None,
+            cut_norm: Some(cut_norm),
+            x_size: None,
+            y_size: None,
+            max_points: None,
+            include_arrows: None,
+            arrow_every: None,
+            max_arrows: None,
+        },
+        1,
+    )?;
+    let overlay = collect_fem_slice_overlay(
+        FemSliceOverlayInput {
+            nodes: &mesh.nodes,
+            elements: &mesh.elements,
+            element_markers: &mesh.element_markers,
+        },
+        &resolved,
+    )?;
+    let include_polygons = query.include_polygons.unwrap_or(true);
+    let include_wireframe = query.include_wireframe.unwrap_or(true);
+    let binary = serialize_cross_section_fmcs(&overlay, include_polygons, include_wireframe);
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-shared-domain-cross-section:{}:{generation_id}:{}:{:.17e}:{}:{}:fmcs-v2",
+        snapshot.mesh_revision,
+        overlay.plane.as_str(),
+        overlay.cut_norm,
+        include_polygons,
+        include_wireframe,
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
+    params(MeshSharedDomainCrossSectionQualityQuery),
+    responses(
+        (status = 200, description = "Binary shared-domain FEM cross-section quality values (FMQS)", content_type = "application/octet-stream"),
+        (status = 304, description = "Cross-section quality not modified for the supplied ETag"),
+        (status = 204, description = "No per-element quality data artifact or requested metric available"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "FEM topology unavailable for cross-section"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_shared_domain_cross_section_quality(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MeshSharedDomainCrossSectionQualityQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    if !query.position_percent.is_finite()
+        || query.position_percent < 0.0
+        || query.position_percent > 100.0
+    {
+        return Err(ApiError::bad_request(
+            "invalid_query: position_percent must be finite and in [0, 100]",
+        ));
+    }
+
+    let snapshot = current_snapshot(&state).await?;
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let artifact = snapshot
+        .mesh_workspace
+        .as_ref()
+        .map(read_mesh_quality_data_artifact)
+        .transpose()?
+        .flatten();
+    let cut_norm = query.position_percent / 100.0;
+    let resolved = resolve_slice_query(
+        &FieldSliceQuery {
+            plane: query.plane,
+            component: None,
+            cut_world: None,
+            cut_norm: Some(cut_norm),
+            x_size: None,
+            y_size: None,
+            max_points: None,
+            include_arrows: None,
+            arrow_every: None,
+            max_arrows: None,
+        },
+        1,
+    )?;
+    let overlay = collect_fem_slice_overlay(
+        FemSliceOverlayInput {
+            nodes: &mesh.nodes,
+            elements: &mesh.elements,
+            element_markers: &mesh.element_markers,
+        },
+        &resolved,
+    )?;
+    let (values, quality_source) = if let Some(artifact) = artifact.as_ref() {
+        if let Some(values) =
+            cross_section_quality_from_fmmq(&overlay, &artifact.bytes, query.metric)?
+        {
+            (
+                values,
+                format!(
+                    "fmmq:{}:{}:{}",
+                    artifact.path, artifact.byte_size, artifact.element_count
+                ),
+            )
+        } else if let Some(values) = cross_section_quality_from_parent_tets(
+            &overlay,
+            &mesh.nodes,
+            &mesh.elements,
+            query.metric,
+        )? {
+            (values, "parent-tet-geometry-v1".to_string())
+        } else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        }
+    } else if let Some(values) =
+        cross_section_quality_from_parent_tets(&overlay, &mesh.nodes, &mesh.elements, query.metric)?
+    {
+        (values, "parent-tet-geometry-v1".to_string())
+    } else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let binary = serialize_cross_section_quality_fmqs(&values);
+    let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-shared-domain-cross-section-quality:{}:{generation_id}:{}:{:.17e}:{:?}:{}:fmqs-v1",
+        snapshot.mesh_revision,
+        overlay.plane.as_str(),
+        overlay.cut_norm,
+        query.metric,
+        quality_source,
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
     params(
         ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous per-element quality response")
@@ -529,6 +725,32 @@ pub async fn get_mesh_shared_domain_quality_data(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-shared-domain-quality-data:{}:{}:{}:{}",
+        snapshot.mesh_revision, artifact.path, artifact.byte_size, artifact.element_count,
+    ));
+    Ok(
+        crate::router_v2::handlers::shared::conditional_binary_response(
+            &headers,
+            &etag,
+            artifact.bytes,
+        ),
+    )
+}
+
+struct MeshQualityDataArtifact {
+    bytes: Vec<u8>,
+    byte_size: u64,
+    element_count: u64,
+    path: String,
+}
+
+fn read_mesh_quality_data_artifact(
+    mesh_workspace: &Value,
+) -> Result<Option<MeshQualityDataArtifact>, ApiError> {
     let Some(artifact) = first_workspace_value(
         mesh_workspace,
         &[
@@ -537,10 +759,10 @@ pub async fn get_mesh_shared_domain_quality_data(
             &["last_build_summary", "quality_data_artifact"],
         ],
     ) else {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+        return Ok(None);
     };
     let Some(path) = artifact.get("path").and_then(Value::as_str) else {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+        return Ok(None);
     };
     let bytes = fs::read(path).map_err(|error| {
         ApiError::internal(format!(
@@ -560,11 +782,12 @@ pub async fn get_mesh_shared_domain_quality_data(
         .get("element_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "mesh-shared-domain-quality-data:{}:{path}:{byte_size}:{element_count}",
-        snapshot.mesh_revision
-    ));
-    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, bytes))
+    Ok(Some(MeshQualityDataArtifact {
+        bytes,
+        byte_size,
+        element_count,
+        path: path.to_string(),
+    }))
 }
 
 #[utoipa::path(

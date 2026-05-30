@@ -1,13 +1,19 @@
 import {
+  decodeCrossSection,
+  decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
   decodeTopology,
+  type DecodedCrossSection,
+  type DecodedCrossSectionQuality,
   type DecodedFieldVector,
   type DecodedMeshQualityData,
   type DecodedTopology,
 } from "./codecs";
 
 export type BinaryDecoderKind =
+  | "cross-section"
+  | "cross-section-quality"
   | "field-vector"
   | "mesh-quality-data"
   | "raw-bytes"
@@ -15,6 +21,8 @@ export type BinaryDecoderKind =
 
 export type BinaryDecodedPayload =
   | ArrayBuffer
+  | DecodedCrossSection
+  | DecodedCrossSectionQuality
   | DecodedFieldVector
   | DecodedMeshQualityData
   | DecodedTopology;
@@ -24,6 +32,10 @@ export function decodeBinaryPayload(
   buffer: ArrayBuffer,
 ): BinaryDecodedPayload {
   switch (kind) {
+    case "cross-section":
+      return decodeCrossSection(buffer);
+    case "cross-section-quality":
+      return decodeCrossSectionQuality(buffer);
     case "field-vector":
       return decodeFieldVector(buffer);
     case "mesh-quality-data":

@@ -22,6 +22,12 @@ void check(bool condition, const char *msg)
     }
 }
 
+void check_relative_close(double actual, double expected, double tolerance, const char *msg)
+{
+    const double denom = std::fmax(std::fmax(std::fabs(actual), std::fabs(expected)), 1e-30);
+    check(std::fabs(actual - expected) / denom <= tolerance, msg);
+}
+
 double dot3(const double a[3], const double b[3])
 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -83,6 +89,7 @@ double interfacial_weak_action(
     const double magnetization[4][3],
     const double perturbation[4][3],
     const double grad_phi[4][3],
+    const double n_hat[3],
     double d)
 {
     double grad_m[3][3];
@@ -94,16 +101,23 @@ double interfacial_weak_action(
     compute_centroid(magnetization, m_q);
     compute_centroid(perturbation, v_q);
 
-    const double dw_dm[3] = {
-        -d * grad_m[2][0],
-        -d * grad_m[2][1],
-        d * (grad_m[0][0] + grad_m[1][1]),
-    };
-    const double value_action = dot3(dw_dm, v_q);
-    const double gradient_action =
-        d * (m_q[2] * (grad_v[0][0] + grad_v[1][1]) -
-             m_q[0] * grad_v[2][0] -
-             m_q[1] * grad_v[2][1]);
+    const double div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
+    const double m_dot_n = dot3(m_q, n_hat);
+    double value_action = 0.0;
+    double gradient_action = 0.0;
+    for (int comp = 0; comp < 3; ++comp) {
+        const double grad_m_dot_n =
+            n_hat[0] * grad_m[0][comp] +
+            n_hat[1] * grad_m[1][comp] +
+            n_hat[2] * grad_m[2][comp];
+        const double dw_dm = d * (n_hat[comp] * div_m - grad_m_dot_n);
+        value_action += dw_dm * v_q[comp];
+        for (int dir = 0; dir < 3; ++dir) {
+            const double delta = comp == dir ? 1.0 : 0.0;
+            const double dw_dg = d * (m_dot_n * delta - n_hat[comp] * m_q[dir]);
+            gradient_action += dw_dg * grad_v[comp][dir];
+        }
+    }
     return kVolume * (value_action + gradient_action);
 }
 
@@ -123,6 +137,7 @@ void add_scaled_field(
 double interfacial_energy(
     const double magnetization[4][3],
     const double grad_phi[4][3],
+    const double n_hat[3],
     double d)
 {
     double grad_m[3][3];
@@ -130,16 +145,25 @@ double interfacial_energy(
     compute_grad(magnetization, grad_phi, grad_m);
     compute_centroid(magnetization, m_q);
 
-    return d * kVolume *
-        (m_q[2] * (grad_m[0][0] + grad_m[1][1]) -
-         m_q[0] * grad_m[2][0] -
-         m_q[1] * grad_m[2][1]);
+    const double div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
+    const double m_dot_n = dot3(m_q, n_hat);
+    double advective_normal_derivative = 0.0;
+    for (int dir = 0; dir < 3; ++dir) {
+        const double grad_m_dot_n =
+            n_hat[0] * grad_m[0][dir] +
+            n_hat[1] * grad_m[1][dir] +
+            n_hat[2] * grad_m[2][dir];
+        advective_normal_derivative += m_q[dir] * grad_m_dot_n;
+    }
+
+    return d * kVolume * (m_dot_n * div_m - advective_normal_derivative);
 }
 
 double interfacial_energy_directional_derivative(
     const double magnetization[4][3],
     const double perturbation[4][3],
     const double grad_phi[4][3],
+    const double n_hat[3],
     double d)
 {
     constexpr double eps = 1e-4;
@@ -148,8 +172,8 @@ double interfacial_energy_directional_derivative(
     add_scaled_field(magnetization, perturbation, eps, plus);
     add_scaled_field(magnetization, perturbation, -eps, minus);
 
-    return (interfacial_energy(plus, grad_phi, d) -
-            interfacial_energy(minus, grad_phi, d)) / (2.0 * eps);
+    return (interfacial_energy(plus, grad_phi, n_hat, d) -
+            interfacial_energy(minus, grad_phi, n_hat, d)) / (2.0 * eps);
 }
 
 double bulk_weak_action(
@@ -283,7 +307,7 @@ void run_interfacial_fixture()
         "interfacial DMI lumped projection failed");
 
     const double projected = projected_action(h_xyz, perturbation);
-    const double weak = interfacial_weak_action(magnetization, perturbation, grad_phi, d);
+    const double weak = interfacial_weak_action(magnetization, perturbation, grad_phi, n_hat, d);
     const double denom = std::fmax(std::fmax(std::fabs(projected), std::fabs(weak)), 1e-30);
     const double rel = std::fabs(projected - weak) / denom;
     check(rel <= 1e-12, "interfacial DMI projected field action must match weak residual");
@@ -359,10 +383,219 @@ void run_interfacial_directional_derivative_fixture()
 
     const double projected = projected_action(h_xyz, perturbation);
     const double derivative =
-        interfacial_energy_directional_derivative(magnetization, perturbation, grad_phi, d);
+        interfacial_energy_directional_derivative(magnetization, perturbation, grad_phi, n_hat, d);
     const double denom = std::fmax(std::fmax(std::fabs(projected), std::fabs(derivative)), 1e-30);
     const double rel = std::fabs(projected - derivative) / denom;
     check(rel <= 1e-9, "interfacial DMI field action must match dE/deps");
+}
+
+void run_interfacial_tilted_normal_directional_derivative_fixture()
+{
+    double magnetization[4][3] = {
+        {0.95, 0.15, 0.25},
+        {0.65, 0.55, 0.25},
+        {0.10, 0.92, 0.38},
+        {0.22, 0.28, 0.94},
+    };
+    for (auto &m : magnetization) {
+        normalize(m);
+    }
+    const double perturbation[4][3] = {
+        {0.04, -0.08, 0.05},
+        {-0.03, 0.07, 0.04},
+        {0.08, 0.01, -0.06},
+        {-0.05, -0.02, 0.07},
+    };
+    const double grad_phi[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double d = 3.0e-3;
+    double n_hat[3] = {1.0, 2.0, 3.0};
+    normalize(n_hat);
+    const double z_hat[3] = {0.0, 0.0, 1.0};
+
+    double grad_m[3][3];
+    double m_q[3];
+    compute_grad(magnetization, grad_phi, grad_m);
+    compute_centroid(magnetization, m_q);
+
+    double residual[12] = {};
+    for (int node = 0; node < 4; ++node) {
+        fullmag::fem::DmiElementData data{};
+        data.m_q[0] = m_q[0];
+        data.m_q[1] = m_q[1];
+        data.m_q[2] = m_q[2];
+        data.shape = kShape;
+        data.weight = kVolume;
+        for (int comp = 0; comp < 3; ++comp) {
+            for (int dir = 0; dir < 3; ++dir) {
+                data.grad_m[comp][dir] = grad_m[comp][dir];
+            }
+        }
+        for (int dir = 0; dir < 3; ++dir) {
+            data.grad_shape[dir] = grad_phi[node][dir];
+        }
+        fullmag::fem::dmi_accumulate_interfacial_residual(
+            data,
+            n_hat,
+            d,
+            &residual[node * 3]);
+    }
+
+    double lumped[4] = {kLumpedMass, kLumpedMass, kLumpedMass, kLumpedMass};
+    double h_xyz[12] = {};
+    std::string error;
+    check(
+        fullmag::fem::dmi_project_lumped_field(
+            residual,
+            lumped,
+            nullptr,
+            4,
+            kMs,
+            h_xyz,
+            error),
+        "tilted-normal interfacial DMI lumped projection failed");
+
+    const double projected = projected_action(h_xyz, perturbation);
+    const double derivative =
+        interfacial_energy_directional_derivative(magnetization, perturbation, grad_phi, n_hat, d);
+    const double z_derivative =
+        interfacial_energy_directional_derivative(magnetization, perturbation, grad_phi, z_hat, d);
+    const double denom = std::fmax(std::fmax(std::fabs(projected), std::fabs(derivative)), 1e-30);
+    const double rel = std::fabs(projected - derivative) / denom;
+    check(rel <= 1e-9, "tilted-normal interfacial DMI field action must match dE/deps");
+    check(
+        std::fabs(derivative - z_derivative) > 1e-9 * std::fmax(std::fabs(derivative), 1e-30),
+        "tilted-normal interfacial DMI fixture must exercise non-default n_hat");
+}
+
+void run_interfacial_domain_wall_handedness_fixture()
+{
+    const double alpha = 0.35;
+    const double s = std::sin(alpha);
+    const double c = std::cos(alpha);
+    const double d = 3.0e-3;
+    const double n_hat[3] = {0.0, 0.0, 1.0};
+    const double grad_phi[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double right_handed_wall[4][3] = {
+        {0.0, 0.0, 1.0},
+        {s, 0.0, c},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double left_handed_wall[4][3] = {
+        {0.0, 0.0, 1.0},
+        {-s, 0.0, c},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+
+    const double right_energy =
+        interfacial_energy(right_handed_wall, grad_phi, n_hat, d);
+    const double left_energy =
+        interfacial_energy(left_handed_wall, grad_phi, n_hat, d);
+    const double expected = d * kVolume * s;
+    check_relative_close(
+        right_energy,
+        expected,
+        1e-12,
+        "interfacial DMI domain-wall handedness energy has wrong sign/magnitude");
+    check_relative_close(
+        left_energy,
+        -expected,
+        1e-12,
+        "mirrored interfacial DMI domain wall must flip energy sign");
+}
+
+void run_interfacial_boundary_tilt_fixture()
+{
+    const double magnetization[4][3] = {
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double tangential_tilt[4][3] = {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0},
+    };
+    const double grad_phi[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double n_hat[3] = {0.0, 0.0, 1.0};
+    const double d = 3.0e-3;
+
+    double grad_m[3][3];
+    double m_q[3];
+    compute_grad(magnetization, grad_phi, grad_m);
+    compute_centroid(magnetization, m_q);
+
+    double residual[12] = {};
+    for (int node = 0; node < 4; ++node) {
+        fullmag::fem::DmiElementData data{};
+        data.m_q[0] = m_q[0];
+        data.m_q[1] = m_q[1];
+        data.m_q[2] = m_q[2];
+        data.shape = kShape;
+        data.weight = kVolume;
+        for (int comp = 0; comp < 3; ++comp) {
+            for (int dir = 0; dir < 3; ++dir) {
+                data.grad_m[comp][dir] = grad_m[comp][dir];
+            }
+        }
+        for (int dir = 0; dir < 3; ++dir) {
+            data.grad_shape[dir] = grad_phi[node][dir];
+        }
+        fullmag::fem::dmi_accumulate_interfacial_residual(
+            data,
+            n_hat,
+            d,
+            &residual[node * 3]);
+    }
+
+    double lumped[4] = {kLumpedMass, kLumpedMass, kLumpedMass, kLumpedMass};
+    double h_xyz[12] = {};
+    std::string error;
+    check(
+        fullmag::fem::dmi_project_lumped_field(
+            residual,
+            lumped,
+            nullptr,
+            4,
+            kMs,
+            h_xyz,
+            error),
+        "interfacial DMI boundary-tilt projection failed");
+
+    const double baseline_energy = interfacial_energy(magnetization, grad_phi, n_hat, d);
+    const double derivative =
+        interfacial_energy_directional_derivative(magnetization, tangential_tilt, grad_phi, n_hat, d);
+    const double projected = projected_action(h_xyz, tangential_tilt);
+    const double expected = d * kVolume;
+    check(std::fabs(baseline_energy) <= 1e-30, "uniform interfacial DMI baseline energy must vanish");
+    check_relative_close(
+        derivative,
+        expected,
+        1e-12,
+        "interfacial DMI boundary tilt must produce the natural boundary derivative");
+    check_relative_close(
+        projected,
+        derivative,
+        1e-12,
+        "interfacial DMI boundary-tilt field action must match dE/deps");
 }
 
 void run_bulk_fixture()
@@ -506,14 +739,68 @@ void run_bulk_directional_derivative_fixture()
     check(rel <= 1e-9, "bulk DMI field action must match dE/deps");
 }
 
+void run_bulk_spiral_pitch_fixture()
+{
+    const double alpha = 0.22;
+    const double wider_alpha = 2.0 * alpha;
+    const double d = 2.0e-3;
+    const double grad_phi[4][3] = {
+        {-1.0, -1.0, -1.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double positive_spiral[4][3] = {
+        {0.0, 0.0, 1.0},
+        {0.0, std::sin(alpha), std::cos(alpha)},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double negative_spiral[4][3] = {
+        {0.0, 0.0, 1.0},
+        {0.0, -std::sin(alpha), std::cos(alpha)},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+    const double wider_pitch_spiral[4][3] = {
+        {0.0, 0.0, 1.0},
+        {0.0, std::sin(wider_alpha), std::cos(wider_alpha)},
+        {0.0, 0.0, 1.0},
+        {0.0, 0.0, 1.0},
+    };
+
+    const double positive_energy = bulk_energy(positive_spiral, grad_phi, d);
+    const double negative_energy = bulk_energy(negative_spiral, grad_phi, d);
+    const double wider_energy = bulk_energy(wider_pitch_spiral, grad_phi, d);
+    check_relative_close(
+        positive_energy,
+        d * kVolume * std::sin(alpha),
+        1e-12,
+        "bulk DMI spiral-pitch energy has wrong sign/magnitude");
+    check_relative_close(
+        negative_energy,
+        -d * kVolume * std::sin(alpha),
+        1e-12,
+        "mirrored bulk DMI spiral must flip energy sign");
+    check_relative_close(
+        wider_energy / positive_energy,
+        std::sin(wider_alpha) / std::sin(alpha),
+        1e-12,
+        "bulk DMI spiral energy must track discrete spiral pitch");
+}
+
 } // namespace
 
 int main()
 {
     run_interfacial_fixture();
     run_interfacial_directional_derivative_fixture();
+    run_interfacial_tilted_normal_directional_derivative_fixture();
+    run_interfacial_domain_wall_handedness_fixture();
+    run_interfacial_boundary_tilt_fixture();
     run_bulk_fixture();
     run_bulk_directional_derivative_fixture();
+    run_bulk_spiral_pitch_fixture();
     std::printf("FEM dmi_weak_residual smoke PASS\n");
     return 0;
 }

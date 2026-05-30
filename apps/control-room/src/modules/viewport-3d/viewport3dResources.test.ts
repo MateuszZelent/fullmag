@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
@@ -9,6 +11,11 @@ import {
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DQuantityFieldVectorResourceKeys,
 } from "./viewport3dResources";
+
+const viewport3dResourcesSourceUrl = new URL(
+  "./viewport3dResources.ts",
+  import.meta.url,
+);
 
 describe("viewport3dResources", () => {
   it("builds stable resource keys for scoped field vectors", () => {
@@ -25,7 +32,7 @@ describe("viewport3dResources", () => {
 
   it("builds scoped airbox field vector resource keys per mesh part", () => {
     expect(
-      resolveViewport3DAirboxFieldVectorResourceKeys("H_demag", [
+      resolveViewport3DAirboxFieldVectorResourceKeys("h_demag", [
         { id: "airbox" },
         { id: "airbox-shell" },
       ]),
@@ -50,7 +57,7 @@ describe("viewport3dResources", () => {
       new Map([
         [
           "h_eff",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "h_eff")}?component=full&scope_kind=full`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full`,
         ],
         [
           "m",
@@ -58,6 +65,13 @@ describe("viewport3dResources", () => {
         ],
       ]),
     );
+  });
+
+  it("keeps field vector runtime keys stable across field revisions", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+
+    expect(source).not.toContain("#fields=");
+    expect(source).not.toContain("resolveRevisionedFieldVectorCacheKey");
   });
 
   it("uses cached binary data when the API reports not modified", async () => {

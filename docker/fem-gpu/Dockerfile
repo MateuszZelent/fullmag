@@ -44,8 +44,8 @@ WORKDIR /tmp/build
 RUN git clone --depth 1 --branch ${MFEM_REF} https://github.com/mfem/mfem.git
 RUN git clone --depth 1 --branch ${LIBCEED_REF} https://github.com/CEED/libCEED.git /tmp/build/libCEED
 
-RUN make -C /tmp/build/libCEED -j"$(nproc)" && \
-    make -C /tmp/build/libCEED install prefix=${INSTALL_PREFIX}
+RUN make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} -j"$(nproc)" && \
+    make -C /tmp/build/libCEED CUDA_DIR=${CUDA_HOME} install prefix=${INSTALL_PREFIX}
 
 # S10: Build hypre (serial + CUDA) — required for CG+AMG Poisson solver
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git /tmp/build/hypre && \

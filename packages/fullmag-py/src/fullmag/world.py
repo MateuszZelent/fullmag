@@ -156,6 +156,24 @@ def _coalesce_mesh_size_controls(
     return resolved_hmax, resolved_hmin, resolved_growth_rate
 
 
+def _positive_float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        candidate = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped == "auto":
+            return None
+        try:
+            candidate = float(stripped)
+        except ValueError:
+            return None
+    else:
+        return None
+    return candidate if math.isfinite(candidate) and candidate > 0.0 else None
+
+
 def _mesh_api_migration_error(old: str, new: str) -> ValueError:
     return ValueError(
         f"{old} is no longer part of the canonical mesh DSL. Use {new}."
@@ -443,8 +461,10 @@ class _MeshSpecState:
     transition_growth: float | None = None
     edge_hmax: float | None = None
     edge_thickness: float | None = None
+    edge_transition_distance: float | None = None
     corner_hmax: float | None = None
     corner_extent: float | None = None
+    corner_transition_distance: float | None = None
     boundary_layer_count: int | None = None
     boundary_layer_thickness: float | None = None
     boundary_layer_stretching: float | None = None
@@ -491,8 +511,10 @@ class _MeshSpecState:
             or self.transition_growth is not None
             or self.edge_hmax is not None
             or self.edge_thickness is not None
+            or self.edge_transition_distance is not None
             or self.corner_hmax is not None
             or self.corner_extent is not None
+            or self.corner_transition_distance is not None
             or self.boundary_layer_count is not None
             or self.boundary_layer_thickness is not None
             or self.boundary_layer_stretching is not None
@@ -506,6 +528,12 @@ class _MeshSpecState:
             or self.per_element_quality
             or bool(self.size_fields)
             or bool(self.operations)
+            or self.mesh_strategy is not None
+            or self.through_thickness_elements is not None
+            or self.through_thickness_distribution is not None
+            or self.through_thickness_element_ratio is not None
+            or self.through_thickness_symmetric
+            or self.sweep_face_meshing is not None
         )
 
 
@@ -533,16 +561,29 @@ def _validate_perimeter_refinement_spec(
         raise ValueError(
             f"{context}: corner_maximum_element_size and corner_extent must be set together"
         )
+    if spec.edge_transition_distance is not None and not edge_pair_active:
+        raise ValueError(
+            f"{context}: edge_transition_distance requires edge_maximum_element_size and edge_thickness"
+        )
+    if spec.corner_transition_distance is not None and not corner_pair_active:
+        raise ValueError(
+            f"{context}: corner_transition_distance requires corner_maximum_element_size and corner_extent"
+        )
 
     if not edge_pair_active and not corner_pair_active:
         return
 
+    if (
+        spec.corner_hmax is not None
+        and spec.edge_hmax is not None
+        and spec.corner_hmax > spec.edge_hmax
+    ):
+        raise ValueError(
+            f"{context}: corner_maximum_element_size must be less than or equal to edge_maximum_element_size"
+        )
+
     box = _unwrap_translated_box(geometry)
     if box is None:
-        if corner_pair_active:
-            raise ValueError(
-                f"{context}: corner refinement is currently supported only for Box geometries"
-            )
         return
 
     sx, sy, sz = (float(value) for value in box.size)
@@ -557,14 +598,6 @@ def _validate_perimeter_refinement_spec(
     if spec.corner_extent is not None and spec.corner_extent >= half_min_in_plane_dim:
         raise ValueError(
             f"{context}: corner_extent must be smaller than half of the smaller in-plane dimension"
-        )
-    if (
-        spec.corner_hmax is not None
-        and spec.edge_hmax is not None
-        and spec.corner_hmax > spec.edge_hmax
-    ):
-        raise ValueError(
-            f"{context}: corner_maximum_element_size must be less than or equal to edge_maximum_element_size"
         )
 
 
@@ -638,9 +671,11 @@ class GeometryMeshHandle:
         edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
+        edge_transition_distance: float | None = None,
         corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
+        corner_transition_distance: float | None = None,
         boundary_layer_count: int | None = None,
         boundary_layer_thickness: float | None = None,
         boundary_layer_stretching: float | None = None,
@@ -680,9 +715,11 @@ class GeometryMeshHandle:
             edge_maximum_element_size=edge_maximum_element_size,
             edge_hmax=edge_hmax,
             edge_thickness=edge_thickness,
+            edge_transition_distance=edge_transition_distance,
             corner_maximum_element_size=corner_maximum_element_size,
             corner_hmax=corner_hmax,
             corner_extent=corner_extent,
+            corner_transition_distance=corner_transition_distance,
             boundary_layer_count=boundary_layer_count,
             boundary_layer_thickness=boundary_layer_thickness,
             boundary_layer_stretching=boundary_layer_stretching,
@@ -731,9 +768,11 @@ class GeometryMeshHandle:
         edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
+        edge_transition_distance: float | None = None,
         corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
+        corner_transition_distance: float | None = None,
         boundary_layer_count: int | None = None,
         boundary_layer_thickness: float | None = None,
         boundary_layer_stretching: float | None = None,
@@ -890,6 +929,12 @@ class GeometryMeshHandle:
         if edge_thickness is not None:
             require_positive(float(edge_thickness), f"{self._owner._name}.mesh.edge_thickness")
             spec.edge_thickness = float(edge_thickness)
+        if edge_transition_distance is not None:
+            require_positive(
+                float(edge_transition_distance),
+                f"{self._owner._name}.mesh.edge_transition_distance",
+            )
+            spec.edge_transition_distance = float(edge_transition_distance)
         if resolved_corner_maximum_element_size is not None:
             require_positive(
                 float(resolved_corner_maximum_element_size),
@@ -899,6 +944,12 @@ class GeometryMeshHandle:
         if corner_extent is not None:
             require_positive(float(corner_extent), f"{self._owner._name}.mesh.corner_extent")
             spec.corner_extent = float(corner_extent)
+        if corner_transition_distance is not None:
+            require_positive(
+                float(corner_transition_distance),
+                f"{self._owner._name}.mesh.corner_transition_distance",
+            )
+            spec.corner_transition_distance = float(corner_transition_distance)
         if boundary_layer_count is not None:
             count = int(boundary_layer_count)
             if count < 1:
@@ -1053,6 +1104,122 @@ class GeometryMeshHandle:
         spec.through_thickness_symmetric = symmetric
         spec.sweep_face_meshing = face_meshing
         return self
+
+    def thin_film(
+        self,
+        *,
+        hmax: float | str | None = None,
+        hmin: float | None = None,
+        maximum_element_size: float | str | None = None,
+        minimum_element_size: float | None = None,
+        order: int | None = None,
+        layers: int = 1,
+        interface_maximum_element_size: float | None = None,
+        surface_maximum_element_size: float | None = None,
+        interface_thickness: float | None = None,
+        surface_thickness: float | None = None,
+        transition_distance: float | None = None,
+        surface_transition_distance: float | None = None,
+        edge_maximum_element_size: float | None = None,
+        edge_thickness: float | None = None,
+        edge_transition_distance: float | None = None,
+        corner_maximum_element_size: float | None = None,
+        corner_extent: float | None = None,
+        corner_transition_distance: float | None = None,
+    ) -> "GeometryMeshHandle":
+        """Configure a feature-aware tetrahedral preset for thin-film FEM meshes.
+
+        The final shared-domain mesh remains conforming and tetrahedral.  This
+        helper records thin-film intent and fills the canonical surface, edge,
+        corner, and through-thickness mesh controls.
+        """
+        layer_count = int(layers)
+        if layer_count < 1:
+            raise ValueError(f"{self._owner._name}.mesh.thin_film.layers must be >= 1")
+
+        spec = self._owner._mesh_spec
+        resolved_hmax, resolved_hmin, _ = _coalesce_mesh_size_controls(
+            hmax=hmax,
+            hmin=hmin,
+            maximum_element_size=maximum_element_size,
+            minimum_element_size=minimum_element_size,
+            growth_rate=None,
+            maximum_element_growth_rate=None,
+        )
+        body_hmax = _positive_float_or_none(resolved_hmax) or _positive_float_or_none(spec.hmax)
+
+        thickness = None
+        try:
+            from fullmag.meshing._gmsh_swept import classify_sweepability
+
+            thickness = classify_sweepability(self._owner._shape).thickness
+        except Exception:
+            thickness = None
+
+        body_hmin = resolved_hmin if resolved_hmin is not None else spec.hmin
+        if body_hmin is None and thickness is not None:
+            body_hmin = float(thickness) / float(layer_count)
+
+        surface_hmax = (
+            surface_maximum_element_size
+            if surface_maximum_element_size is not None
+            else interface_maximum_element_size
+        )
+        if surface_hmax is None:
+            surface_hmax = body_hmax
+        surface_shell = surface_thickness if surface_thickness is not None else interface_thickness
+        if surface_shell is None:
+            surface_shell = _positive_float_or_none(surface_hmax) or body_hmin or thickness
+        surface_transition = (
+            surface_transition_distance
+            if surface_transition_distance is not None
+            else transition_distance
+        )
+        if surface_transition is None and _positive_float_or_none(surface_hmax) is not None:
+            surface_transition = float(_positive_float_or_none(surface_hmax)) * 8.0
+
+        edge_hmax = edge_maximum_element_size if edge_maximum_element_size is not None else body_hmin
+        edge_shell = edge_thickness if edge_thickness is not None else surface_shell
+        edge_transition = edge_transition_distance
+        if edge_transition is None and surface_transition is not None:
+            edge_transition = float(surface_transition) * 0.5
+        if edge_hmax is None:
+            edge_shell = None
+            edge_transition = None
+
+        corner_hmax = (
+            corner_maximum_element_size
+            if corner_maximum_element_size is not None
+            else edge_hmax
+        )
+        resolved_corner_extent = corner_extent if corner_extent is not None else edge_shell
+        resolved_corner_transition = (
+            corner_transition_distance
+            if corner_transition_distance is not None
+            else edge_transition
+        )
+        if corner_hmax is None:
+            resolved_corner_extent = None
+            resolved_corner_transition = None
+
+        return self.configure(
+            maximum_element_size=resolved_hmax,
+            minimum_element_size=body_hmin,
+            order=order,
+            interface_maximum_element_size=surface_hmax,
+            interface_thickness=surface_shell,
+            transition_distance=surface_transition,
+            edge_maximum_element_size=edge_hmax,
+            edge_thickness=edge_shell,
+            edge_transition_distance=edge_transition,
+            corner_maximum_element_size=corner_hmax,
+            corner_extent=resolved_corner_extent,
+            corner_transition_distance=resolved_corner_transition,
+            mesh_strategy="thin_film_tetrahedral",
+            through_thickness_elements=layer_count,
+            through_thickness_distribution="fixed",
+            sweep_face_meshing="triangular",
+        )
 
     def quality(self) -> object | None:
         """Return the last quality report if ``compute_quality`` was enabled.
@@ -3640,10 +3807,13 @@ def _resolve_flat_fem_hint() -> FEM | None:
         return None
 
     resolved_hmax = shared_hmax
+    resolved_fem_hint_hmax: float | str | None = None
     if generated_shared_domain:
         strict_domain_requirements = build_requested
         airbox_hmax = s._study_universe.airbox_hmax
         resolved_hmax = _resolve_object_base_hmax()
+        if default_spec.hmax is not None and airbox_hmax is not None:
+            resolved_fem_hint_hmax = float(airbox_hmax)
         if airbox_hmax is None:
             has_shared_base_hmax = isinstance(shared_hmax, (int, float)) or shared_hmax == "auto"
             if strict_domain_requirements and not has_shared_base_hmax:
@@ -3712,10 +3882,12 @@ def _resolve_flat_fem_hint() -> FEM | None:
     # Resolve "auto" sentinel → exchange-length-based float
     if resolved_hmax == "auto":
         resolved_hmax = _estimate_auto_hmax()
+    if resolved_fem_hint_hmax == "auto":
+        resolved_fem_hint_hmax = _estimate_auto_hmax()
 
     return FEM(
         order=shared_order or 1,
-        hmax=resolved_hmax,
+        hmax=resolved_fem_hint_hmax if resolved_fem_hint_hmax is not None else resolved_hmax,
         mesh=shared_source,
         demag_solver_policy=s._fem_demag_solver_policy,
     )
@@ -3778,10 +3950,14 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["edge_hmax"] = spec.edge_hmax
     if spec.edge_thickness is not None:
         payload["edge_thickness"] = spec.edge_thickness
+    if spec.edge_transition_distance is not None:
+        payload["edge_transition_distance"] = spec.edge_transition_distance
     if spec.corner_hmax is not None:
         payload["corner_hmax"] = spec.corner_hmax
     if spec.corner_extent is not None:
         payload["corner_extent"] = spec.corner_extent
+    if spec.corner_transition_distance is not None:
+        payload["corner_transition_distance"] = spec.corner_transition_distance
     if spec.boundary_layer_count is not None:
         payload["boundary_layer_count"] = spec.boundary_layer_count
     if spec.boundary_layer_thickness is not None:

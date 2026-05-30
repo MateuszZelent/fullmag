@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+import math
 from typing import Any
 
 import numpy as np
@@ -37,8 +38,10 @@ FIELD_SCHEMAS: dict[str, set[str]] = {
     "SurfaceDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "InterfaceShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "TransitionShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "AxisAlignedBoxDistanceThreshold": {"BoundsMin", "BoundsMax", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "BoundsSurfaceThreshold": {"BoundsMin", "BoundsMax", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "EdgeDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "CornerDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
 }
 
 
@@ -512,20 +515,68 @@ def _add_surface_threshold_field(
     dist_max: float,
     sampling: int = 20,
     hscale: float = 1.0,
+    grading: str | None = None,
 ) -> int | None:
     normalized_surface_tags = [int(tag) for tag in surface_tags]
     if not normalized_surface_tags:
         return None
 
+    return _add_entity_distance_threshold_field(
+        gmsh,
+        distance_list_key="SurfacesList",
+        entity_tags=normalized_surface_tags,
+        size_min=size_min,
+        size_max=size_max,
+        dist_min=dist_min,
+        dist_max=dist_max,
+        sampling=sampling,
+        hscale=hscale,
+        grading=grading,
+    )
+
+
+def _add_entity_distance_threshold_field(
+    gmsh: Any,
+    *,
+    distance_list_key: str,
+    entity_tags: Sequence[int],
+    size_min: float,
+    size_max: float,
+    dist_min: float,
+    dist_max: float,
+    sampling: int = 20,
+    hscale: float = 1.0,
+    grading: str | None = None,
+) -> int:
     f_dist = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", normalized_surface_tags)
+    gmsh.model.mesh.field.setNumbers(f_dist, distance_list_key, [int(tag) for tag in entity_tags])
     gmsh.model.mesh.field.setNumber(f_dist, "Sampling", int(max(2, sampling)))
+
+    size_min_scaled = float(size_min) * hscale
+    size_max_scaled = float(size_max) * hscale
+    dist_min_scaled = float(dist_min) * hscale
+    grading_mode = str(grading or "").strip().lower()
+    if (
+        grading_mode == "geometric"
+        and size_min_scaled > 0.0
+        and size_max_scaled > size_min_scaled
+        and float(dist_max) * hscale > dist_min_scaled
+    ):
+        span = float(dist_max) * hscale - dist_min_scaled
+        log_growth = math.log(size_max_scaled / size_min_scaled)
+        f_math = gmsh.model.mesh.field.add("MathEval")
+        expr = (
+            f"{size_min_scaled} * exp({log_growth} * "
+            f"Min(Max((F{f_dist} - {dist_min_scaled}) / {span}, 0), 1))"
+        )
+        gmsh.model.mesh.field.setString(f_math, "F", expr)
+        return f_math
 
     f_thresh = gmsh.model.mesh.field.add("Threshold")
     gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
-    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", float(size_min) * hscale)
-    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", float(size_max) * hscale)
-    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", float(dist_min) * hscale)
+    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", size_min_scaled)
+    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", size_max_scaled)
+    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", dist_min_scaled)
     gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", float(dist_max) * hscale)
     return f_thresh
 
@@ -541,6 +592,7 @@ def _add_component_surface_threshold_field(
     component_surface_tags: dict[str, list[int]] | None,
     sampling: int = 20,
     hscale: float = 1.0,
+    grading: str | None = None,
 ) -> int | None:
     surf_tags = _component_surface_tags_for_geometry(geometry_name, component_surface_tags)
     if not surf_tags:
@@ -557,6 +609,7 @@ def _add_component_surface_threshold_field(
         dist_max=dist_max,
         sampling=sampling,
         hscale=hscale,
+        grading=grading,
     )
 
 
@@ -606,10 +659,12 @@ def _add_edge_distance_threshold_field(
     sampling: int = 40,
     hscale: float = 1.0,
 ) -> int | None:
+    curve_params = dict(params)
+    curve_params["Selector"] = {"mode": "all_boundary_curves"}
     curve_tags = _curve_tags_for_geometry(
         gmsh,
         geometry_name,
-        params,
+        curve_params,
         component_surface_tags,
     )
     if not curve_tags:
@@ -618,20 +673,101 @@ def _add_edge_distance_threshold_field(
         )
         return None
 
-    f_dist = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(f_dist, "CurvesList", curve_tags)
-    gmsh.model.mesh.field.setNumber(f_dist, "Sampling", int(max(2, sampling)))
-
-    f_thresh = gmsh.model.mesh.field.add("Threshold")
-    gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
-    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", float(size_min) * hscale)
-    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", float(size_max) * hscale)
-    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", float(dist_min) * hscale)
-    gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", float(dist_max) * hscale)
     # Edge fields intentionally cross the conformal component/air interface:
     # restricting them to the magnetic volume leaves the neighboring air coarse
     # exactly where demag needs near-edge resolution.
-    return f_thresh
+    return _add_entity_distance_threshold_field(
+        gmsh,
+        distance_list_key="CurvesList",
+        entity_tags=curve_tags,
+        size_min=size_min,
+        size_max=size_max,
+        dist_min=dist_min,
+        dist_max=dist_max,
+        sampling=sampling,
+        hscale=hscale,
+        grading=params.get("Grading"),
+    )
+
+
+def _point_tags_for_geometry(
+    gmsh: Any,
+    geometry_name: str,
+    params: dict[str, Any],
+    component_surface_tags: dict[str, list[int]] | None,
+) -> list[int]:
+    explicit_point_tags = params.get("PointTags")
+    if isinstance(explicit_point_tags, list) and explicit_point_tags:
+        return [int(tag) for tag in explicit_point_tags]
+
+    selector = params.get("Selector")
+    if isinstance(selector, dict):
+        mode = selector.get("mode")
+        if mode not in {None, "all_boundary_curve_endpoints"}:
+            emit_progress(
+                f"Gmsh: warning - unsupported corner selector {mode!r}; using all boundary curve endpoints"
+            )
+
+    curve_params = dict(params)
+    curve_params["Selector"] = {"mode": "all_boundary_curves"}
+    curve_tags = _curve_tags_for_geometry(
+        gmsh,
+        geometry_name,
+        curve_params,
+        component_surface_tags,
+    )
+    if not curve_tags:
+        return []
+
+    point_tags: set[int] = set()
+    for curve_tag in curve_tags:
+        try:
+            boundary = gmsh.model.getBoundary([(1, int(curve_tag))], oriented=False)
+        except Exception:
+            continue
+        for dim, tag in boundary:
+            if int(dim) == 0:
+                point_tags.add(abs(int(tag)))
+    return sorted(point_tags)
+
+
+def _add_corner_distance_threshold_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    size_min: float,
+    size_max: float,
+    dist_min: float,
+    dist_max: float,
+    params: dict[str, Any],
+    component_surface_tags: dict[str, list[int]] | None,
+    sampling: int = 20,
+    hscale: float = 1.0,
+) -> int | None:
+    point_tags = _point_tags_for_geometry(
+        gmsh,
+        geometry_name,
+        params,
+        component_surface_tags,
+    )
+    if not point_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered corner points for '{geometry_name}', skipping corner distance field"
+        )
+        return None
+
+    return _add_entity_distance_threshold_field(
+        gmsh,
+        distance_list_key="PointsList",
+        entity_tags=point_tags,
+        size_min=size_min,
+        size_max=size_max,
+        dist_min=dist_min,
+        dist_max=dist_max,
+        sampling=sampling,
+        hscale=hscale,
+        grading=params.get("Grading"),
+    )
 
 
 def _add_component_volume_constant_field(
@@ -746,6 +882,7 @@ def _add_bounds_surface_threshold_field(
     sampling: int = 20,
     match_padding: float = 0.0,
     hscale: float = 1.0,
+    grading: str | None = None,
 ) -> int | None:
     scaled_bounds_min = [float(v) * hscale for v in bounds_min]
     scaled_bounds_max = [float(v) * hscale for v in bounds_max]
@@ -771,7 +908,70 @@ def _add_bounds_surface_threshold_field(
         dist_max=dist_max,
         sampling=sampling,
         hscale=hscale,
+        grading=grading,
     )
+
+
+def _math_number(value: float) -> str:
+    return f"{float(value):.17g}"
+
+
+def _box_outside_distance_expression(bounds_min: Sequence[float], bounds_max: Sequence[float]) -> str:
+    xmin, ymin, zmin = (_math_number(value) for value in bounds_min)
+    xmax, ymax, zmax = (_math_number(value) for value in bounds_max)
+    dx = f"Max(Max({xmin} - x, 0), x - {xmax})"
+    dy = f"Max(Max({ymin} - y, 0), y - {ymax})"
+    dz = f"Max(Max({zmin} - z, 0), z - {zmax})"
+    return f"Sqrt(({dx}) * ({dx}) + ({dy}) * ({dy}) + ({dz}) * ({dz}))"
+
+
+def _add_axis_aligned_box_distance_threshold_field(
+    gmsh: Any,
+    *,
+    bounds_min: Sequence[float],
+    bounds_max: Sequence[float],
+    size_min: float,
+    size_max: float,
+    dist_min: float,
+    dist_max: float,
+    hscale: float = 1.0,
+    grading: str | None = None,
+) -> int | None:
+    scaled_bounds_min = [float(value) * hscale for value in bounds_min]
+    scaled_bounds_max = [float(value) * hscale for value in bounds_max]
+    size_min_scaled = float(size_min) * hscale
+    size_max_scaled = float(size_max) * hscale
+    dist_min_scaled = float(dist_min) * hscale
+    dist_max_scaled = float(dist_max) * hscale
+    if dist_max_scaled <= dist_min_scaled:
+        emit_progress(
+            "Gmsh: warning - analytic box distance threshold has non-positive distance span; skipping"
+        )
+        return None
+
+    distance = _box_outside_distance_expression(scaled_bounds_min, scaled_bounds_max)
+    span = dist_max_scaled - dist_min_scaled
+    ramp = (
+        f"Min(Max(({distance} - {_math_number(dist_min_scaled)}) / "
+        f"{_math_number(span)}, 0), 1)"
+    )
+    grading_mode = str(grading or "").strip().lower()
+    if (
+        grading_mode == "geometric"
+        and size_min_scaled > 0.0
+        and size_max_scaled > size_min_scaled
+    ):
+        log_growth = math.log(size_max_scaled / size_min_scaled)
+        expr = f"{_math_number(size_min_scaled)} * exp({_math_number(log_growth)} * {ramp})"
+    else:
+        expr = (
+            f"{_math_number(size_min_scaled)} + "
+            f"({_math_number(size_max_scaled)} - {_math_number(size_min_scaled)}) * {ramp}"
+        )
+
+    field_id = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(field_id, "F", expr)
+    return field_id
 
 
 def _configure_mesh_size_fields(
@@ -894,6 +1094,24 @@ def _configure_mesh_size_fields(
             else:
                 _mark_field(config, status="ignored", reason="no recovered component volumes")
             continue
+        if kind == "AxisAlignedBoxDistanceThreshold":
+            fid = _add_axis_aligned_box_distance_threshold_field(
+                gmsh,
+                bounds_min=params.get("BoundsMin"),
+                bounds_max=params.get("BoundsMax"),
+                size_min=float(params.get("SizeMin")),
+                size_max=float(params.get("SizeMax")),
+                dist_min=float(params.get("DistMin")),
+                dist_max=float(params.get("DistMax")),
+                hscale=hscale,
+                grading=params.get("Grading"),
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="invalid analytic box distance span")
+            continue
         if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold", "TransitionShellThreshold"}:
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
@@ -910,6 +1128,7 @@ def _configure_mesh_size_fields(
                 component_surface_tags=component_surface_tags,
                 sampling=int(params.get("Sampling", 20)),
                 hscale=hscale,
+                grading=params.get("Grading"),
             )
             if fid is not None:
                 field_ids.append(fid)
@@ -941,6 +1160,30 @@ def _configure_mesh_size_fields(
             else:
                 _mark_field(config, status="ignored", reason="no recovered edge curves")
             continue
+        if kind == "CornerDistanceThreshold":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - CornerDistanceThreshold is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            fid = _add_corner_distance_threshold_field(
+                gmsh,
+                geometry_name=geometry_name,
+                size_min=float(params.get("SizeMin")),
+                size_max=float(params.get("SizeMax")),
+                dist_min=float(params.get("DistMin", 0.0)),
+                dist_max=float(params.get("DistMax")),
+                params=params,
+                component_surface_tags=component_surface_tags,
+                sampling=int(params.get("Sampling", 20)),
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered corner points")
+            continue
         if kind == "BoundsSurfaceThreshold":
             bounds_min = params.get("BoundsMin")
             bounds_max = params.get("BoundsMax")
@@ -958,6 +1201,7 @@ def _configure_mesh_size_fields(
                 sampling=int(params.get("Sampling", 20)),
                 match_padding=float(params.get("MatchPadding", 0.0)),
                 hscale=hscale,
+                grading=params.get("Grading"),
             )
             if fid is not None:
                 field_ids.append(fid)

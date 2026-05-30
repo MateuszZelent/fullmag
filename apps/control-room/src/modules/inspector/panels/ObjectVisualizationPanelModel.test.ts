@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -12,6 +13,7 @@ import {
   buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  resolveVisualizationVectorBudgetRange,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
@@ -19,6 +21,8 @@ import {
   VISUALIZATION_QUANTITY_ITEMS,
   visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
+
+type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
   it("exposes the surface color source options used by Surface Coloring", () => {
@@ -204,6 +208,73 @@ describe("ObjectVisualizationPanelModel", () => {
     ]));
   });
 
+  it("scales the airbox arrow budget to the airbox node count", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: 34668,
+        role: "air",
+      }),
+      meshPart({
+        id: "arch_waveguide",
+        label: "Arch",
+        node_count: 34229,
+        role: "object",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toEqual({
+      exact: true,
+      max: 34668,
+      min: 0,
+      step: 1,
+    });
+  });
+
+  it("scales object and part arrow budgets to their mesh node counts", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        geometry_id: "arch_waveguide_geom",
+        id: "part:arch_waveguide_geom",
+        label: "Arch",
+        node_count: 34229,
+        object_id: "arch_waveguide_geom",
+        role: "object",
+      }),
+      meshPart({
+        id: "cap",
+        label: "Cap",
+        node_count: 912,
+        role: "object",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "arch_waveguide", kind: "object" },
+      }),
+    ).toMatchObject({
+      exact: true,
+      max: 34229,
+    });
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "cap", kind: "part" },
+      }),
+    ).toMatchObject({
+      exact: true,
+      max: 912,
+    });
+  });
+
   it("explains an airbox Visible request that is still off in backend state", () => {
     const diagnostic = buildAirboxVisibilityDiagnostic({
       displaySettings: {
@@ -253,3 +324,17 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 });
+
+function meshPart(
+  part: Partial<MeshPart> &
+    Pick<MeshPart, "id" | "label" | "node_count" | "role">,
+): MeshPart {
+  return {
+    boundary_face_count: 0,
+    boundary_face_start: 0,
+    element_count: 0,
+    element_start: 0,
+    node_start: 0,
+    ...part,
+  };
+}

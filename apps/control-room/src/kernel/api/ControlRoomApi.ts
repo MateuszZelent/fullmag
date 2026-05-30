@@ -15,6 +15,8 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
+  MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
   MESHING_SEMANTICS_PATH,
   MESHING_SHARED_DOMAIN_POLICY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -72,6 +74,7 @@ import {
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
+import { resolveCanonicalQuantityId } from "./quantityIds";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -87,6 +90,8 @@ import type {
   CommandQueueStatusResource,
   CommandResponse,
   CpuTelemetryResource,
+  CrossSectionQuery,
+  CrossSectionQualityQuery,
   CurrentRunResource,
   DomainMetaResource,
   EngineLogResource,
@@ -164,6 +169,8 @@ import type {
   VisualizationStateResource,
 } from "./apiTypes";
 import {
+  decodeCrossSection,
+  decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
   decodeTopology,
@@ -172,6 +179,8 @@ import {
   expectedTopologyByteLength,
   FMMT_HEADER_LEN,
   topologyByteLayout,
+  type DecodedCrossSection,
+  type DecodedCrossSectionQuality,
   type DecodedFieldVector,
   type DecodedMeshQualityData,
   type DecodedTopology,
@@ -288,7 +297,7 @@ export class ControlRoomApi {
       ) =>
         this.requestFieldVector(
           DATA_FIELD_VECTOR_PATH,
-          { quantity_id: quantityId },
+          { quantity_id: resolveCanonicalQuantityId(quantityId) },
           query,
           options,
         ),
@@ -418,6 +427,24 @@ export class ControlRoomApi {
       quality: (options?: RequestOptions) =>
         this.requestJson<MeshSharedDomainQualityResource>(
           MESHING_SHARED_DOMAIN_QUALITY_PATH,
+          options,
+        ),
+      crossSection: (
+        query: CrossSectionQuery,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestCrossSection(
+          MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
+          query,
+          options,
+        ),
+      crossSectionQuality: (
+        query: CrossSectionQualityQuery,
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestCrossSectionQuality(
+          MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
+          query,
           options,
         ),
       qualityData: (options?: BinaryRequestOptions) =>
@@ -1088,6 +1115,45 @@ export class ControlRoomApi {
       "mesh-quality-data",
       decodeMeshQualityData,
       options,
+    );
+  }
+
+  private requestCrossSection(
+    path: OpenApiV2Path,
+    query: CrossSectionQuery,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedCrossSection>> {
+    return this.requestBinaryResource(
+      path,
+      "cross-section",
+      decodeCrossSection,
+      options,
+      undefined,
+      {
+        include_polygons: query.includePolygons,
+        include_wireframe: query.includeWireframe,
+        plane: query.plane,
+        position_percent: query.positionPercent,
+      },
+    );
+  }
+
+  private requestCrossSectionQuality(
+    path: OpenApiV2Path,
+    query: CrossSectionQualityQuery,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedCrossSectionQuality>> {
+    return this.requestBinaryResource(
+      path,
+      "cross-section-quality",
+      decodeCrossSectionQuality,
+      options,
+      undefined,
+      {
+        metric: query.metric,
+        plane: query.plane,
+        position_percent: query.positionPercent,
+      },
     );
   }
 

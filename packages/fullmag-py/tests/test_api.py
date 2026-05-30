@@ -908,42 +908,51 @@ class ProblemApiTests(unittest.TestCase):
         )
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
         study_universe = loaded.problem.runtime_metadata["study_universe"]
-        self.assertEqual(study_universe["airbox_hmax"], 100e-9)
-        self.assertEqual(study_universe["airbox_hmin"], 20e-9)
-        self.assertEqual(mesh_workflow["fem"]["hmax"], 5e-9)
+        self.assertEqual(study_universe["airbox_hmax"], 500e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 10e-9)
+        self.assertEqual(study_universe["airbox_growth_rate"], 1.5)
+        self.assertEqual(mesh_workflow["fem"]["hmax"], 20e-9)
         mesh_options = mesh_workflow["mesh_options"]
         self.assertEqual(mesh_options["algorithm_2d"], 6)
-        self.assertEqual(mesh_options["algorithm_3d"], 10)
+        self.assertEqual(mesh_options["algorithm_3d"], 1)
         self.assertEqual(mesh_options["maximum_element_growth_rate"], 1.3)
-        self.assertEqual(mesh_options["optimize"], "Netgen")
-        self.assertEqual(mesh_options["optimize_iterations"], 4)
-        self.assertEqual(mesh_options["smoothing_steps"], 4)
         self.assertTrue(mesh_options["compute_quality"])
         per_geometry = mesh_workflow["per_geometry"]
         self.assertEqual(len(per_geometry), 1)
         arch_mesh = per_geometry[0]
         self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
-        self.assertEqual(arch_mesh["maximum_element_size"], 5e-9)
+        self.assertEqual(arch_mesh["maximum_element_size"], 20e-9)
         self.assertEqual(arch_mesh["minimum_element_size"], 2e-9)
-        self.assertEqual(arch_mesh["interface_hmax"], 2e-9)
-        self.assertEqual(arch_mesh["interface_thickness"], 4e-9)
-        self.assertEqual(arch_mesh["transition_distance"], 80e-9)
+        self.assertEqual(arch_mesh["interface_hmax"], 20e-9)
+        self.assertEqual(arch_mesh["interface_thickness"], 20e-9)
+        self.assertEqual(arch_mesh["transition_distance"], 120e-9)
+        self.assertEqual(arch_mesh["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(arch_mesh["through_thickness_elements"], 1)
         self.assertEqual(arch_mesh["edge_hmax"], 2e-9)
-        self.assertEqual(arch_mesh["edge_thickness"], 25e-9)
+        self.assertEqual(arch_mesh["edge_thickness"], 2e-9)
+        self.assertEqual(arch_mesh["edge_transition_distance"], 60e-9)
+        self.assertEqual(arch_mesh["corner_hmax"], 2e-9)
+        self.assertEqual(arch_mesh["corner_extent"], 2e-9)
+        self.assertEqual(arch_mesh["corner_transition_distance"], 40e-9)
         self.assertNotIn("algorithm_3d", arch_mesh)
         self.assertNotIn("optimize", arch_mesh)
-        self.assertNotIn("size_fields", arch_mesh)
+        self.assertEqual(arch_mesh["size_fields"][0]["kind"], "ComponentRestrictedCylinder")
         demag_solver = loaded.problem.discretization.fem.demag_solver_policy
         self.assertIsNotNone(demag_solver)
         self.assertEqual(demag_solver.print_level, 0)
         draft = export_builder_draft(loaded)
         scene = build_scene_document_from_builder(draft)
         object_mesh = scene["objects"][0]["object_mesh"]
-        self.assertEqual(object_mesh["mesh_strategy"], None)
+        self.assertEqual(object_mesh["mesh_strategy"], "thin_film_tetrahedral")
         self.assertIsNone(object_mesh["algorithm_3d"])
         self.assertEqual(object_mesh["hmin"], "2e-09")
         self.assertEqual(object_mesh["edge_maximum_element_size"], "2e-09")
-        self.assertEqual(object_mesh["interface_maximum_element_size"], "2e-09")
+        self.assertEqual(object_mesh["edge_thickness"], "2e-09")
+        self.assertEqual(object_mesh["edge_transition_distance"], "6e-08")
+        self.assertEqual(object_mesh["corner_maximum_element_size"], "2e-09")
+        self.assertEqual(object_mesh["corner_extent"], "2e-09")
+        self.assertEqual(object_mesh["corner_transition_distance"], "4e-08")
+        self.assertEqual(object_mesh["interface_maximum_element_size"], "2e-08")
 
     def test_arch_skyrmion_example_uses_skyrmion_texture_and_gpu_ready_relax(self) -> None:
         example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_skyrmion_relax_50nm.py"
@@ -3847,8 +3856,10 @@ class ProblemApiTests(unittest.TestCase):
             maximum_element_size=20e-9,
             edge_maximum_element_size=5e-9,
             edge_thickness=9e-9,
+            edge_transition_distance=11e-9,
             corner_maximum_element_size=3e-9,
             corner_extent=8e-9,
+            corner_transition_distance=7e-9,
         )
 
         study.run(1e-12)
@@ -3863,14 +3874,93 @@ class ProblemApiTests(unittest.TestCase):
         mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
         self.assertEqual(mesh_entry["edge_maximum_element_size"], "5e-09")
         self.assertEqual(mesh_entry["edge_thickness"], "9e-09")
+        self.assertEqual(mesh_entry["edge_transition_distance"], "1.1e-08")
         self.assertEqual(mesh_entry["corner_maximum_element_size"], "3e-09")
         self.assertEqual(mesh_entry["corner_extent"], "8e-09")
+        self.assertEqual(mesh_entry["corner_transition_distance"], "7e-09")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("edge_maximum_element_size=5e-09", rewritten)
         self.assertIn("edge_thickness=9e-09", rewritten)
+        self.assertIn("edge_transition_distance=1.1e-08", rewritten)
         self.assertIn("corner_maximum_element_size=3e-09", rewritten)
         self.assertIn("corner_extent=8e-09", rewritten)
+        self.assertIn("corner_transition_distance=7e-09", rewritten)
+
+    def test_study_mesh_builder_exports_thin_film_method_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("thin_film_mesh_method")
+        study.engine("fem")
+        study.objects.mesh.defaults(maximum_element_size=80e-9)
+
+        body = study.geometry(fm.Box(100e-9, 40e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh.thin_film(
+            maximum_element_size=20e-9,
+            minimum_element_size=2e-9,
+            interface_maximum_element_size=16e-9,
+            interface_thickness=10e-9,
+            transition_distance=80e-9,
+            edge_maximum_element_size=2e-9,
+            edge_thickness=2e-9,
+            edge_transition_distance=30e-9,
+            corner_maximum_element_size=2e-9,
+            corner_extent=2e-9,
+            corner_transition_distance=20e-9,
+            layers=1,
+        )
+
+        study.run(1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_thin_film_mesh.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        self.assertEqual(mesh_entry["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(mesh_entry["through_thickness_elements"], 1)
+        self.assertEqual(mesh_entry["interface_maximum_element_size"], "1.6e-08")
+        self.assertEqual(mesh_entry["edge_maximum_element_size"], "2e-09")
+        self.assertEqual(mesh_entry["corner_transition_distance"], "2e-08")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn('mesh_strategy="thin_film_tetrahedral"', rewritten)
+        self.assertIn("through_thickness_elements=1", rewritten)
+        self.assertIn("edge_transition_distance=3e-08", rewritten)
+
+    def test_edge_transition_distance_requires_edge_refinement(self) -> None:
+        fm.reset()
+        try:
+            body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "edge_transition_distance requires edge_maximum_element_size and edge_thickness",
+            ):
+                body.mesh(edge_transition_distance=7e-9)
+        finally:
+            fm.reset()
+
+    def test_corner_transition_distance_requires_corner_refinement(self) -> None:
+        fm.reset()
+        try:
+            body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "corner_transition_distance requires corner_maximum_element_size and corner_extent",
+            ):
+                body.mesh(corner_transition_distance=7e-9)
+        finally:
+            fm.reset()
 
     def test_box_perimeter_refinement_allows_interface_shell_coexistence(self) -> None:
         script = """

@@ -109,6 +109,7 @@ type StudyRuntimeCommandSessionStatus = {
     | "stages_revision"
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
+  session: Pick<LiveStatusResource["session"], "session_id">;
 };
 
 export function selectStudyRuntimeCommandSessionStatus(status: {
@@ -131,6 +132,9 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       stages_revision: status.data.resources.stages_revision,
     },
     run: status.data.run ? { run_id: status.data.run.run_id } : null,
+    session: {
+      session_id: status.data.session.session_id,
+    },
   };
 }
 
@@ -151,7 +155,8 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.resources.mesh_revision === next.resources.mesh_revision &&
     previous.resources.scene_revision === next.resources.scene_revision &&
     previous.resources.stages_revision === next.resources.stages_revision &&
-    previous.run?.run_id === next.run?.run_id
+    previous.run?.run_id === next.run?.run_id &&
+    previous.session.session_id === next.session.session_id
   );
 }
 
@@ -177,6 +182,9 @@ export function runtimeCommandControlSessionStatusEquals(
     return false;
   }
   if (previous.domain.discretization !== next.domain.discretization) {
+    return false;
+  }
+  if (previous.session.session_id !== next.session.session_id) {
     return false;
   }
 

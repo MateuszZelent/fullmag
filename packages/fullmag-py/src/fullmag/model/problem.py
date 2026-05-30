@@ -188,7 +188,9 @@ def _materialize_preset_texture_initial_conditions(
         geometry_name = magnet.geometry.geometry_name
         sampled_values: list[list[float]] | None = None
 
-        if domain_mesh_ir is not None and geometry_name in region_markers:
+        if domain_asset is not None and (
+            geometry_name in region_markers or magnet.name in region_markers
+        ):
             # Shared-domain FEM meshes are reordered by the Rust planner before
             # execution. Keep analytic preset_texture descriptors intact so they
             # are sampled on the final node ordering instead of pre-sampling a

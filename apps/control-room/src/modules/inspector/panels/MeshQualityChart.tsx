@@ -58,19 +58,16 @@ function cssVarOrToken(name: string, fallback: string): string {
 }
 
 function useChartColors() {
-  return useMemo(
-    () => ({
-      accent: cssVarOrToken("--fm-accent", CHART_COLOR_TOKENS.accent),
-      accentMuted: CHART_COLOR_TOKENS.accentMuted,
-      borderSubtle: cssVarOrToken(
-        "--fm-border-subtle",
-        CHART_COLOR_TOKENS.borderSubtle,
-      ),
-      textMuted: cssVarOrToken("--fm-text-muted", CHART_COLOR_TOKENS.textMuted),
-      warning: cssVarOrToken("--fm-warning", CHART_COLOR_TOKENS.warning),
-    }),
-    [],
-  );
+  return {
+    accent: cssVarOrToken("--fm-accent", CHART_COLOR_TOKENS.accent),
+    accentMuted: CHART_COLOR_TOKENS.accentMuted,
+    borderSubtle: cssVarOrToken(
+      "--fm-border-subtle",
+      CHART_COLOR_TOKENS.borderSubtle,
+    ),
+    textMuted: cssVarOrToken("--fm-text-muted", CHART_COLOR_TOKENS.textMuted),
+    warning: cssVarOrToken("--fm-warning", CHART_COLOR_TOKENS.warning),
+  };
 }
 
 /* ── Tooltip ── */

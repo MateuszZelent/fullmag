@@ -15,6 +15,7 @@ import type { LiveStatusResource } from "../api/apiTypes";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  runtimeCommandControlSessionStatusEquals,
   shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeMeshBuild,
@@ -54,14 +55,16 @@ function statusWith({
   explicitTopology = false,
   resources = {},
   run = null,
+  sessionId = "session-1",
 }: {
   discretization?: string;
   explicitTopology?: boolean;
   resources?: Partial<LiveStatusResource["resources"]>;
   run?: LiveStatusResource["run"];
+  sessionId?: string;
 } = {}): Pick<
   LiveStatusResource,
-  "capabilities" | "domain" | "resources" | "run"
+  "capabilities" | "domain" | "resources" | "run" | "session"
 > {
   return {
     capabilities: {
@@ -84,6 +87,12 @@ function statusWith({
     },
     resources: { ...baseResources, ...resources },
     run,
+    session: {
+      created_at: "2026-05-29T00:00:00.000Z",
+      name: "Test session",
+      session_id: sessionId,
+      workspace_root: "/tmp/fullmag-test",
+    },
   };
 }
 
@@ -101,6 +110,19 @@ describe("study runtime command resource bundles", () => {
       "useSessionStatusSelector(selectRuntimeCommandControlSessionStatus",
     );
     expect(controlHook).not.toContain("useSessionStatus()");
+  });
+
+  it("treats session identity changes as runtime command control changes", () => {
+    const previous = statusWith({
+      resources: { commands_revision: 2, scene_revision: 8 },
+      sessionId: "session-old",
+    }) as LiveStatusResource;
+    const next = statusWith({
+      resources: { commands_revision: 2, scene_revision: 8 },
+      sessionId: "session-new",
+    }) as LiveStatusResource;
+
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
   });
 
   it("selects only command-palette session status fields for the full runtime command bundle", () => {

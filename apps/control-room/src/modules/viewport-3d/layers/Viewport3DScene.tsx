@@ -1,6 +1,7 @@
 "use client";
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
@@ -62,6 +63,8 @@ import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
+import { ClipPlaneLayer } from "./ClipPlaneLayer";
+import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
   getViewport3DVisualProfile,
   type Viewport3DVisualProfileId,
@@ -75,6 +78,9 @@ interface Viewport3DSceneProps {
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   colors: Viewport3DColors;
+  clip: VisualizationStateResource["clip"] | null;
+  clipFrameRotationDegrees: number;
+  clipIntersectionMarkers: ClipPlaneIntersectionMarkerBuffers | null;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
@@ -353,6 +359,9 @@ export function Viewport3DScene({
   cameraProjection,
   cameraState,
   colors,
+  clip,
+  clipFrameRotationDegrees,
+  clipIntersectionMarkers,
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
@@ -493,6 +502,16 @@ export function Viewport3DScene({
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
+      {clip?.enabled ? (
+        <ClipPlaneLayer
+          bounds={bounds}
+          clip={clip}
+          frameRotationDegrees={clipFrameRotationDegrees}
+          intersectionMarkers={clipIntersectionMarkers}
+          colors={colors}
+          tracker={tracker}
+        />
+      ) : null}
       <DomainBoxLayer
         bounds={bounds}
         boundsVisible={fdmSettings.boundsVisible}

@@ -1,6 +1,7 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
+import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
@@ -80,6 +81,16 @@ const PANELS: InspectorPanelContribution[] = [
       "resources.mesh",
     ],
     component: MeshDetailsPanel,
+  },
+  {
+    id: "cross-section",
+    title: "Cross-Section",
+    selectionKinds: [
+      "mesh.cross-section",
+      "mesh.cross-section.draft",
+      "mesh.cross-section.plot",
+    ],
+    component: CrossSectionInspectorPanel,
   },
   {
     id: "study-runtime",

@@ -13,9 +13,12 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { activeCrossSectionFrameRotationDegrees } from "@/kernel/workspace/crossSectionWorkspace";
+import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import type { CameraRegistrySnapshot } from "@/kernel/visualization/CameraRegistryController";
 import {
   AIRBOX_VISUALIZATION_TARGET,
@@ -33,6 +36,7 @@ import { useObjectVisualizationSelector } from "@/kernel/visualization/useObject
 import { useCameraRegistrySnapshot } from "@/kernel/visualization/useCameraRegistry";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
+import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
 
 import {
   mergeViewport3DFieldScalarColors,
@@ -52,6 +56,7 @@ import {
   type FdmCuboidInstanceModel,
 } from "../layers/FdmCuboidLayer";
 import { Viewport3DScene } from "../layers/Viewport3DScene";
+import { buildClipPlaneIntersectionMarkerBuffers } from "../layers/clipPlaneModel";
 import {
   adaptFdmDomainMeta,
   adaptFemSharedDomainManifest,
@@ -248,28 +253,12 @@ export function resolveViewport3DSceneCameraView({
   cameraState: Viewport3DCameraState;
   interactionActive: boolean;
 } {
-  if (cameraRegistrySnapshot.interactionActive) {
-    return {
-      cameraOrthographicScale: commandState.widgets.cameraOrthographicScale,
-      cameraProjection: commandState.widgets.cameraProjection,
-      cameraResource: cameraRegistrySnapshot.camera,
-      cameraState: commandState.camera,
-      interactionActive: true,
-    };
-  }
-
   return {
-    cameraOrthographicScale: resolveViewport3DCameraOrthographicScale({
-      camera: cameraRegistrySnapshot.camera,
-    }),
-    cameraProjection: resolveViewport3DCameraProjection({
-      camera: cameraRegistrySnapshot.camera,
-    }),
+    cameraOrthographicScale: commandState.widgets.cameraOrthographicScale,
+    cameraProjection: commandState.widgets.cameraProjection,
     cameraResource: cameraRegistrySnapshot.camera,
-    cameraState: resolveViewport3DCameraState({
-      camera: cameraRegistrySnapshot.camera,
-    }),
-    interactionActive: false,
+    cameraState: commandState.camera,
+    interactionActive: cameraRegistrySnapshot.interactionActive,
   };
 }
 
@@ -285,6 +274,9 @@ export function useViewport3DSceneModel({
   selection: Selection;
 }) {
   const visualizationState = useVisualizationStateResource();
+  const clipFrameRotationDegrees = useCrossSectionWorkspaceSelector(
+    activeCrossSectionFrameRotationDegrees,
+  );
   const cameraRegistrySnapshot = useCameraRegistrySnapshot();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
@@ -382,6 +374,21 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const currentTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
+  const clipCrossSectionQuery = useMemo(() => {
+    const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
+    return {
+      ...query,
+      includePolygons: true,
+      includeWireframe: false,
+    };
+  }, [renderingState]);
+  const clipCrossSection = useCrossSectionResource(clipCrossSectionQuery, {
+    enabled: Boolean(renderingState?.clip?.enabled && topologyCurrent),
+  });
+  const clipIntersectionMarkers = useMemo(
+    () => buildClipPlaneIntersectionMarkerBuffers(clipCrossSection.data),
+    [clipCrossSection.data],
+  );
   const meshQualityOverlayVisible =
     selection.kind === "mesh.quality" ||
     selection.ref?.type === "mesh-quality-element";
@@ -583,6 +590,13 @@ export function useViewport3DSceneModel({
     airboxSettings.vectorsVisible,
     vectorDomain,
   );
+  const airboxSurfaceColorMode =
+    airboxSettings.visible && airboxSettings.shaderVisible
+      ? surfaceColorSourceToColorMode(airboxSettings.surfaceColorSource)
+      : null;
+  const airboxFieldVectorEnabled = Boolean(
+    airboxVectorsVisible || airboxSurfaceColorMode,
+  );
   const airboxFieldVectorParts = useMemo(
     () =>
       currentTopologyRenderModel?.airboxParts.map((partModel) => partModel.part) ??
@@ -603,13 +617,6 @@ export function useViewport3DSceneModel({
       }
     }
     if (
-      airboxSettings.activeQuantityId !== quantityId &&
-      airboxSettings.visible &&
-      (airboxSettings.shaderVisible || airboxSettings.vectorsVisible)
-    ) {
-      ids.add(airboxSettings.activeQuantityId);
-    }
-    if (
       fdmSettings.activeQuantityId !== quantityId &&
       fdmSettings.visible &&
       (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
@@ -618,10 +625,6 @@ export function useViewport3DSceneModel({
     }
     return Array.from(ids).toSorted();
   }, [
-    airboxSettings.activeQuantityId,
-    airboxSettings.shaderVisible,
-    airboxSettings.vectorsVisible,
-    airboxSettings.visible,
     currentTopologyRenderModel,
     fdmSettings.activeQuantityId,
     fdmSettings.shaderVisible,
@@ -637,7 +640,7 @@ export function useViewport3DSceneModel({
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
-    airboxVectorsVisible && airboxFieldVectorParts.length > 0,
+    airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
@@ -852,6 +855,7 @@ export function useViewport3DSceneModel({
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
+    (renderingState?.clip?.enabled ? clipCrossSection.error?.message : null) ??
     (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
     targetQuantityFieldVectors.error?.message ??
@@ -913,6 +917,14 @@ export function useViewport3DSceneModel({
       status: meshQualityOverlayVisible ? meshQualityData.status : "idle",
     },
     {
+      error: renderingState?.clip?.enabled
+        ? clipCrossSection.error?.message
+        : undefined,
+      id: "clip-cross-section",
+      revision: renderingState?.clip?.enabled ? clipCrossSection.revision : null,
+      status: renderingState?.clip?.enabled ? clipCrossSection.status : "idle",
+    },
+    {
       error: scene.error?.message,
       id: "scene",
       revision: scene.revision,
@@ -951,6 +963,9 @@ export function useViewport3DSceneModel({
     cameraProjection: cameraView.cameraProjection,
     cameraResource,
     cameraState: cameraView.cameraState,
+    clip: renderingState?.clip ?? null,
+    clipFrameRotationDegrees,
+    clipIntersectionMarkers,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,

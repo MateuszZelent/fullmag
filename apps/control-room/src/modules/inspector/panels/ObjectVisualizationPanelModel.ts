@@ -1,8 +1,10 @@
+import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import {
   renderModePatch,
   type SurfaceColorSource,
   type VisualizationColorMode,
   type VisualizationTargetPatch,
+  type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 export {
@@ -51,6 +53,45 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "eden_dmi", label: "DMI energy density / eden_dmi" },
 ];
 
+const FALLBACK_VECTOR_BUDGET_MAX = 4096;
+
+type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+
+export interface VisualizationVectorBudgetRange {
+  exact: boolean;
+  max: number;
+  min: 0;
+  step: 1;
+}
+
+export function resolveVisualizationVectorBudgetRange({
+  meshParts,
+  target,
+}: {
+  meshParts: readonly MeshPart[] | null | undefined;
+  target: VisualizationTargetRef | null | undefined;
+}): VisualizationVectorBudgetRange {
+  if (!target || !meshParts || meshParts.length === 0) {
+    return fallbackVisualizationVectorBudgetRange();
+  }
+
+  const matchingParts = meshParts.filter((part) =>
+    meshPartMatchesVisualizationTarget(part, target),
+  );
+  const max = matchingParts.reduce((total, part) => total + part.node_count, 0);
+
+  if (max <= 0) {
+    return fallbackVisualizationVectorBudgetRange();
+  }
+
+  return {
+    exact: true,
+    max,
+    min: 0,
+    step: 1,
+  };
+}
+
 export function visualizationQuantityItems(
   activeQuantityId: string,
 ): Array<{ label: string; value: string }> {
@@ -96,6 +137,59 @@ function rgbToHex(red: number, green: number, blue: number): string {
   return `#${[red, green, blue]
     .map((channel) => channel.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+function fallbackVisualizationVectorBudgetRange(): VisualizationVectorBudgetRange {
+  return {
+    exact: false,
+    max: FALLBACK_VECTOR_BUDGET_MAX,
+    min: 0,
+    step: 1,
+  };
+}
+
+function meshPartMatchesVisualizationTarget(
+  part: MeshPart,
+  target: VisualizationTargetRef,
+): boolean {
+  if (target.kind === "airbox") {
+    return part.role === "air" || part.role === "airbox";
+  }
+
+  const targetAliases = meshIdAliases(target.id);
+  const partValues =
+    target.kind === "part"
+      ? [part.id]
+      : [part.object_id, part.geometry_id, part.id];
+
+  return partValues.some((value) => {
+    for (const alias of meshIdAliases(value)) {
+      if (targetAliases.has(alias)) return true;
+    }
+    return false;
+  });
+}
+
+function meshIdAliases(value: string | null | undefined): Set<string> {
+  const aliases = new Set<string>();
+  if (!value) return aliases;
+
+  const trimmed = value.trim();
+  if (!trimmed) return aliases;
+  aliases.add(trimmed);
+
+  const withoutPartPrefix = trimmed.startsWith("part:")
+    ? trimmed.slice("part:".length)
+    : trimmed;
+  aliases.add(withoutPartPrefix);
+
+  const withoutGeometrySuffix = withoutPartPrefix.endsWith("_geom")
+    ? withoutPartPrefix.slice(0, -"_geom".length)
+    : withoutPartPrefix;
+  aliases.add(withoutGeometrySuffix);
+  aliases.add(`${withoutGeometrySuffix}_geom`);
+
+  return aliases;
 }
 
 interface VisualizationPanelField {

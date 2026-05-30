@@ -53,8 +53,10 @@ class ResolvedSharedObjectTarget:
     transition_growth: float | None = None
     edge_hmax: float | None = None
     edge_thickness: float | None = None
+    edge_transition_distance: float | None = None
     corner_hmax: float | None = None
     corner_extent: float | None = None
+    corner_transition_distance: float | None = None
     source: str = "study_default"
     marker: int | None = None
 
@@ -349,6 +351,11 @@ def resolve_shared_domain_targets(
             if isinstance(workflow_entry, Mapping)
             else None
         )
+        edge_transition_distance = (
+            _coerce_positive_float(workflow_entry.get("edge_transition_distance"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
         corner_hmax = (
             _coerce_positive_float(workflow_entry.get("corner_hmax"))
             if isinstance(workflow_entry, Mapping)
@@ -356,6 +363,11 @@ def resolve_shared_domain_targets(
         )
         corner_extent = (
             _coerce_positive_float(workflow_entry.get("corner_extent"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        corner_transition_distance = (
+            _coerce_positive_float(workflow_entry.get("corner_transition_distance"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
@@ -382,8 +394,10 @@ def resolve_shared_domain_targets(
             transition_growth=transition_growth,
             edge_hmax=edge_hmax,
             edge_thickness=edge_thickness,
+            edge_transition_distance=edge_transition_distance,
             corner_hmax=corner_hmax,
             corner_extent=corner_extent,
+            corner_transition_distance=corner_transition_distance,
             source=source,
         )
 
@@ -451,8 +465,10 @@ class SharedDomainBuildReport:
                     "transition_growth": target.transition_growth,
                     "edge_hmax": target.edge_hmax,
                     "edge_thickness": target.edge_thickness,
+                    "edge_transition_distance": target.edge_transition_distance,
                     "corner_hmax": target.corner_hmax,
                     "corner_extent": target.corner_extent,
+                    "corner_transition_distance": target.corner_transition_distance,
                     "source": target.source,
                 }
                 for name, target in self.effective_per_object_targets.items()

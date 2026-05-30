@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   DATA_FIELDS_PATH,
@@ -12,10 +12,10 @@ import {
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
 } from "@/kernel/api/apiPaths";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
-  ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
@@ -122,37 +122,13 @@ export async function loadCachedBinaryResource<TData>(
   return result.data;
 }
 
-function resolveRevisionedFieldVectorCacheKey(
-  resourceKey: string,
-  fieldsRevision: ResourceRevision | null,
-): string {
-  return fieldsRevision === null
-    ? resourceKey
-    : `${resourceKey}#fields=${encodeURIComponent(String(fieldsRevision))}`;
-}
-
-function useResourceRevision(resourceKey: string): ResourceRevision | null {
-  const { resources } = useKernel();
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      resources.subscribe(resourceKey, onStoreChange),
-    [resourceKey, resources],
-  );
-  const getSnapshot = useCallback(
-    () => resources.getRevision(resourceKey),
-    [resourceKey, resources],
-  );
-
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
 export function resolveViewport3DFieldVectorResourceKey(
   quantityId: string,
   query: FieldVectorQuery = {},
 ): string {
   const path = DATA_FIELD_VECTOR_PATH.replace(
     "{quantity_id}",
-    encodeURIComponent(quantityId),
+    encodeURIComponent(resolveCanonicalQuantityId(quantityId)),
   );
   const params = new URLSearchParams();
   if (query.component) params.set("component", query.component);
@@ -195,6 +171,16 @@ export function resolveViewport3DQuantityFieldVectorResourceKeys(
   );
 }
 
+function resolveViewport3DFieldVectorCollectionResourceKey(
+  kind: "airbox" | "quantity",
+  resourceKeys: Iterable<string>,
+): string {
+  const suffix = Array.from(resourceKeys).join("|");
+  return suffix
+    ? `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:${suffix}`
+    : `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:none`;
+}
+
 export function useViewport3DDomainMeta() {
   const { api } = useKernel();
   const load = useCallback(
@@ -234,7 +220,6 @@ export function useViewport3DFieldVector(
   enabled = true,
 ) {
   const { api } = useKernel();
-  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
   const component = fieldQuery.component ?? "full";
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
@@ -250,30 +235,25 @@ export function useViewport3DFieldVector(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, query),
     [quantityId, query],
   );
-  const resourceKey = useMemo(
-    () => resolveRevisionedFieldVectorCacheKey(requestKey, fieldsRevision),
-    [fieldsRevision, requestKey],
-  );
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       loadCachedBinaryResource(
         fieldVectorCache,
-        resourceKey,
+        requestKey,
         (etag) => api.data.fields.vector(quantityId, query, { etag, signal }),
-        { preferCached: true },
       ),
-    [api, quantityId, query, resourceKey],
+    [api, quantityId, query, requestKey],
   );
   const resolveRevision = useCallback(
-    () => fieldVectorCache.peek(resourceKey)?.etag ?? null,
-    [resourceKey],
+    () => fieldVectorCache.peek(requestKey)?.etag ?? null,
+    [requestKey],
   );
 
   return useResource({
     enabled,
     load,
     resolveRevision,
-    resourceKey,
+    resourceKey: requestKey,
   });
 }
 
@@ -283,31 +263,20 @@ export function useViewport3DAirboxFieldVectors(
   enabled = true,
 ) {
   const { api } = useKernel();
-  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
   const requestKeys = useMemo(
     () => resolveViewport3DAirboxFieldVectorResourceKeys(quantityId, airboxParts),
     [airboxParts, quantityId],
   );
-  const resourceKeys = useMemo(
-    () =>
-      new Map(
-        Array.from(requestKeys, ([partId, key]) => [
-          partId,
-          resolveRevisionedFieldVectorCacheKey(key, fieldsRevision),
-        ]),
-      ),
-    [fieldsRevision, requestKeys],
-  );
   const resourceKey = useMemo(() => {
-    const suffix = Array.from(resourceKeys.values()).join("|");
-    return suffix
-      ? `viewport-3d:airbox-field-vectors:${suffix}`
-      : "viewport-3d:airbox-field-vectors:none";
-  }, [resourceKeys]);
+    return resolveViewport3DFieldVectorCollectionResourceKey(
+      "airbox",
+      requestKeys.values(),
+    );
+  }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries = await Promise.all(
-        Array.from(resourceKeys, async ([partId, key]) => {
+        Array.from(requestKeys, async ([partId, key]) => {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             key,
@@ -321,7 +290,6 @@ export function useViewport3DAirboxFieldVectors(
                 },
                 { etag, signal },
               ),
-            { preferCached: true },
           );
           return [partId, data] as const;
         }),
@@ -334,17 +302,17 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
     },
-    [api, quantityId, resourceKeys],
+    [api, quantityId, requestKeys],
   );
   const resolveRevision = useCallback(() => {
-    const revisions = Array.from(resourceKeys.values()).map(
+    const revisions = Array.from(requestKeys.values()).map(
       (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
     );
     return revisions.length > 0 ? revisions.join("|") : null;
-  }, [resourceKeys]);
+  }, [requestKeys]);
 
   return useResource({
-    enabled: enabled && resourceKeys.size > 0,
+    enabled: enabled && requestKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,
@@ -356,31 +324,20 @@ export function useViewport3DQuantityFieldVectors(
   enabled = true,
 ) {
   const { api } = useKernel();
-  const fieldsRevision = useResourceRevision(DATA_FIELDS_PATH);
   const requestKeys = useMemo(
     () => resolveViewport3DQuantityFieldVectorResourceKeys(quantityIds),
     [quantityIds],
   );
-  const resourceKeys = useMemo(
-    () =>
-      new Map(
-        Array.from(requestKeys, ([quantityId, key]) => [
-          quantityId,
-          resolveRevisionedFieldVectorCacheKey(key, fieldsRevision),
-        ]),
-      ),
-    [fieldsRevision, requestKeys],
-  );
   const resourceKey = useMemo(() => {
-    const suffix = Array.from(resourceKeys.values()).join("|");
-    return suffix
-      ? `viewport-3d:quantity-field-vectors:${suffix}`
-      : "viewport-3d:quantity-field-vectors:none";
-  }, [resourceKeys]);
+    return resolveViewport3DFieldVectorCollectionResourceKey(
+      "quantity",
+      requestKeys.values(),
+    );
+  }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries = await Promise.all(
-        Array.from(resourceKeys, async ([quantityId, key]) => {
+        Array.from(requestKeys, async ([quantityId, key]) => {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             key,
@@ -393,7 +350,6 @@ export function useViewport3DQuantityFieldVectors(
                 },
                 { etag, signal },
               ),
-            { preferCached: true },
           );
           return [quantityId, data] as const;
         }),
@@ -406,17 +362,17 @@ export function useViewport3DQuantityFieldVectors(
         ),
       );
     },
-    [api, resourceKeys],
+    [api, requestKeys],
   );
   const resolveRevision = useCallback(() => {
-    const revisions = Array.from(resourceKeys.values()).map(
+    const revisions = Array.from(requestKeys.values()).map(
       (key) => fieldVectorCache.peek(key)?.etag ?? "missing",
     );
     return revisions.length > 0 ? revisions.join("|") : null;
-  }, [resourceKeys]);
+  }, [requestKeys]);
 
   return useResource({
-    enabled: enabled && resourceKeys.size > 0,
+    enabled: enabled && requestKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,

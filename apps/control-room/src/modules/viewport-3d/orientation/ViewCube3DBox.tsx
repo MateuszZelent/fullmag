@@ -3,7 +3,7 @@
 import { Line, Text } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { CanvasTexture, Matrix4, Vector3, type Group } from "three";
+import { CanvasTexture, Color, Matrix4, Vector3, type Group } from "three";
 
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Direction3 } from "./cameraOrientation";
@@ -165,13 +165,14 @@ export function ViewCube3DBox({
       ))}
       <group position={[0, 0, -VIEW_CUBE_HALF]}>
         <OrbitRing3D
+          colors={colors}
           controls={controls}
           onOrbit={onOrbit}
           onOrbitEnd={onOrbitEnd}
         />
       </group>
       <AxisLabelSprite
-        color={String(colors.textPrimary ?? "rgb(228, 228, 231)")}
+        color={String(colors.textPrimary ?? colors.textSecondary ?? colors.wire)}
         label={trimPositiveAxisLabel(axisLabels.x)}
         outlineColor={String(colors.background)}
         position={[VIEW_CUBE_LABEL_DISTANCE, 0, 0]}
@@ -199,10 +200,12 @@ export function ViewCube3DBox({
 }
 
 function OrbitRing3D({
+  colors,
   controls,
   onOrbit,
   onOrbitEnd,
 }: {
+  colors: Viewport3DColors;
   controls?: OrbitControlsHandle;
   onOrbit: (dx: number) => void;
   onOrbitEnd: () => void;
@@ -288,7 +291,7 @@ function OrbitRing3D({
       >
         <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 20, 80]} />
         <meshBasicMaterial
-          color={hovered ? "rgb(251, 146, 60)" : "rgb(107, 114, 128)"}
+          color={hovered ? String(colors.accent) : String(colors.wire)}
           depthTest={false}
           depthWrite={false}
           opacity={hovered ? 0.92 : 0.42}
@@ -302,7 +305,7 @@ function OrbitRing3D({
             args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE + 2.5, 20, 80]}
           />
           <meshBasicMaterial
-            color="rgb(249, 115, 22)"
+            color={String(colors.accentStrong ?? colors.accent)}
             depthTest={false}
             depthWrite={false}
             opacity={0.22}
@@ -469,14 +472,14 @@ function viewCubeCellMaterial(
 ): { color: string; opacity: number } {
   if (kind === "face") {
     return {
-      color: "white",
+      color: String(colors.textPrimary ?? "white"),
       opacity: hovered ? 1 : faceHovered ? 0.97 : 0.88,
     };
   }
 
   if (hovered) {
     return {
-      color: "rgb(251, 146, 60)",
+      color: String(colors.accent),
       opacity: kind === "edge" ? 0.85 : 0.95,
     };
   }
@@ -497,6 +500,8 @@ function buildViewCubeFaceTexture(
   canvas.height = size;
   const ctx = canvas.getContext("2d");
   if (ctx) {
+    const accentRgb = colorToRgba(colors.accent);
+    const accentStrongRgb = colorToRgba(colors.accentStrong ?? colors.accent);
     ctx.clearRect(0, 0, size, size);
 
     if (hovered) {
@@ -509,24 +514,25 @@ function buildViewCubeFaceTexture(
         size * 0.5,
         size * 0.72,
       );
-      fireGrad.addColorStop(0.0, "rgba(253, 186, 116, 0.55)");
-      fireGrad.addColorStop(0.45, "rgba(234, 88, 12, 0.45)");
-      fireGrad.addColorStop(1.0, "rgba(124, 45, 18, 0.72)");
+      // Lighter accent at center → accent strong mid → darkened accent at edges
+      fireGrad.addColorStop(0.0, rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.55, 1.25));
+      fireGrad.addColorStop(0.45, rgbaString(accentStrongRgb.r, accentStrongRgb.g, accentStrongRgb.b, 0.45));
+      fireGrad.addColorStop(1.0, rgbaString(accentStrongRgb.r, accentStrongRgb.g, accentStrongRgb.b, 0.72, 0.5));
       ctx.fillStyle = fireGrad;
       ctx.fillRect(0, 0, size, size);
 
       ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = "rgba(251, 146, 60, 0.95)";
+      ctx.strokeStyle = rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.95);
       ctx.lineWidth = 10;
       ctx.strokeRect(5, 5, size - 10, size - 10);
 
       ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = "rgba(253, 224, 167, 0.9)";
+      ctx.strokeStyle = rgbaString(accentRgb.r, accentRgb.g, accentRgb.b, 0.9, 1.5);
       ctx.lineWidth = 3;
       ctx.strokeRect(12, 12, size - 24, size - 24);
     } else {
       ctx.globalAlpha = 1.0;
-      ctx.fillStyle = String(colors.panelRaised ?? colors.panel ?? "rgb(82, 82, 91)");
+      ctx.fillStyle = String(colors.panelRaised ?? colors.panel ?? colors.wire);
       ctx.fillRect(0, 0, size, size);
 
       const vignette = ctx.createRadialGradient(
@@ -640,4 +646,24 @@ function viewCubeSegmentKey(
 
 function trimPositiveAxisLabel(label: string): string {
   return label.startsWith("+") ? label.slice(1) : label;
+}
+
+/** Convert any Three.js ColorRepresentation to { r, g, b } in 0-255 range. */
+function colorToRgba(c: import("three").ColorRepresentation): { r: number; g: number; b: number } {
+  const col = new Color(c);
+  return { r: Math.round(col.r * 255), g: Math.round(col.g * 255), b: Math.round(col.b * 255) };
+}
+
+/**
+ * Build an `rgba(…)` CSS string from 0-255 channel values.
+ * Optional `brightness` multiplier (1 = identity) shifts channels for
+ * lighter / darker variants without a separate color token.
+ */
+function rgbaString(
+  r: number, g: number, b: number,
+  a: number,
+  brightness = 1,
+): string {
+  const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
+  return `rgba(${clamp(r * brightness)}, ${clamp(g * brightness)}, ${clamp(b * brightness)}, ${a})`;
 }

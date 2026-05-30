@@ -14,6 +14,10 @@ from fullmag.model.geometry import (
     Union,
 )
 from ._gmsh_types import MeshData, SharedDomainMeshResult
+from ._airbox_grading import (
+    _add_airbox_grading_field,
+    _airbox_boundary_distance_from_bbox,
+)
 from .gmsh_bridge import AirboxOptions, MeshOptions, _import_gmsh
 
 
@@ -48,11 +52,37 @@ def _airbox_interface_dist_max(
     default_h_inner: float,
     h_inner: float,
     fallback_dist_max: float,
-    has_explicit_hmin: bool,
 ) -> float:
-    if not has_explicit_hmin:
-        return fallback_dist_max
-    return min(fallback_dist_max, max(default_h_inner, h_inner))
+    return max(fallback_dist_max, default_h_inner, h_inner)
+
+
+def _entity_bounds(
+    gmsh: object,
+    dimtags: list[tuple[int, int]],
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    bounds: list[tuple[float, float, float, float, float, float]] = []
+    for dim, tag in dimtags:
+        try:
+            raw = gmsh.model.getBoundingBox(int(dim), int(tag))  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        if len(raw) == 6:
+            bounds.append(tuple(float(value) for value in raw))  # type: ignore[arg-type]
+    if not bounds:
+        return None
+
+    return (
+        (
+            min(bound[0] for bound in bounds),
+            min(bound[1] for bound in bounds),
+            min(bound[2] for bound in bounds),
+        ),
+        (
+            max(bound[3] for bound in bounds),
+            max(bound[4] for bound in bounds),
+            max(bound[5] for bound in bounds),
+        ),
+    )
 
 
 def is_occ_compatible(geometries: list[Geometry]) -> bool:
@@ -255,6 +285,10 @@ def generate_shared_domain_mesh_via_occ(
         interface_list = sorted(interface_tags)
 
         component_surface_tags: dict[str, list[int]] = {}
+        component_bounds: dict[
+            str,
+            tuple[tuple[float, float, float], tuple[float, float, float]],
+        ] = {}
         for geom in geometries:
             comp_vols = component_volume_tags[geom.geometry_name]
             comp_boundary = gmsh.model.getBoundary(
@@ -264,6 +298,9 @@ def generate_shared_domain_mesh_via_occ(
             component_surface_tags[geom.geometry_name] = sorted(
                 {abs(tag) for _, tag in comp_boundary}
             )
+            bounds = _entity_bounds(gmsh, [(3, tag) for tag in comp_vols])
+            if bounds is not None:
+                component_bounds[geom.geometry_name] = bounds
 
         if gamma_out:
             gmsh.model.addPhysicalGroup(2, gamma_out, tag=airbox_scaled.boundary_marker)
@@ -285,19 +322,18 @@ def generate_shared_domain_mesh_via_occ(
                 if airbox_scaled.minimum_element_size is not None
                 else hmax * SCALE
             )
-            if explicit_size is not None:
-                d_outer = max(
-                    max(ox - dx, 0.0),
-                    max(oy - dy, 0.0),
-                    max(oz - dz, 0.0)
-                ) / 2.0
-            else:
-                d_outer = max(dx, dy, dz) * (pf - 1) / 2
+            d_outer = _airbox_boundary_distance_from_bbox(
+                object_bounds_min=(xmin, ymin, zmin),
+                object_bounds_max=(xmax, ymax, zmax),
+                airbox_bounds_min=(cx - ox / 2, cy - oy / 2, cz - oz / 2),
+                airbox_bounds_max=(cx + ox / 2, cy + oy / 2, cz + oz / 2),
+            )
+            airbox_bounds_min = (cx - ox / 2, cy - oy / 2, cz - oz / 2)
+            airbox_bounds_max = (cx + ox / 2, cy + oy / 2, cz + oz / 2)
 
             component_size_targets = _component_interface_size_targets(opts)
             covered_interface_tags: set[int] = set()
             fallback_dist_max = max(d_outer, hmax * SCALE)
-            has_explicit_airbox_hmin = airbox_scaled.minimum_element_size is not None
             for geom in geometries:
                 geom_interface = sorted(
                     set(component_surface_tags.get(geom.geometry_name, []))
@@ -307,55 +343,57 @@ def generate_shared_domain_mesh_via_occ(
                     continue
                 covered_interface_tags.update(geom_interface)
                 target = component_size_targets.get(geom.geometry_name)
-                h_inner = default_h_inner if target is None else min(default_h_inner, target * SCALE)
+                h_inner = (
+                    default_h_inner
+                    if target is None
+                    else min(default_h_inner, target * SCALE)
+                )
+                object_bounds_min, object_bounds_max = component_bounds.get(
+                    geom.geometry_name,
+                    ((xmin, ymin, zmin), (xmax, ymax, zmax)),
+                )
 
-                f_dist = gmsh.model.mesh.field.add("Distance")
-                gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", geom_interface)
-                gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
-
-                f_thresh = gmsh.model.mesh.field.add("Threshold")
-                gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
-                gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", h_inner)
-                gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", h_outer)
-                gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0.0)
-                gmsh.model.mesh.field.setNumber(
-                    f_thresh,
-                    "DistMax",
-                    _airbox_interface_dist_max(
+                field_id = _add_airbox_grading_field(
+                    gmsh,
+                    surface_tags=geom_interface,
+                    h_inner=h_inner,
+                    h_outer=h_outer,
+                    grading_ratio=airbox_scaled.grading_ratio,
+                    grading_mode=airbox_scaled.grading_mode,
+                    dist_max=_airbox_interface_dist_max(
                         default_h_inner=default_h_inner,
                         h_inner=h_inner,
                         fallback_dist_max=fallback_dist_max,
-                        has_explicit_hmin=has_explicit_airbox_hmin,
                     ),
+                    object_bounds_min=object_bounds_min,
+                    object_bounds_max=object_bounds_max,
+                    airbox_bounds_min=airbox_bounds_min,
+                    airbox_bounds_max=airbox_bounds_max,
                 )
-                airbox_field_ids.append(f_thresh)
+                if field_id is not None:
+                    airbox_field_ids.append(field_id)
 
             remaining_interface = sorted(set(interface_list) - covered_interface_tags)
             if remaining_interface:
-                f_dist = gmsh.model.mesh.field.add("Distance")
-                gmsh.model.mesh.field.setNumbers(
-                    f_dist,
-                    "SurfacesList",
-                    remaining_interface,
-                )
-                gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
-
-                f_thresh = gmsh.model.mesh.field.add("Threshold")
-                gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
-                gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", default_h_inner)
-                gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", h_outer)
-                gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0.0)
-                gmsh.model.mesh.field.setNumber(
-                    f_thresh,
-                    "DistMax",
-                    _airbox_interface_dist_max(
+                field_id = _add_airbox_grading_field(
+                    gmsh,
+                    surface_tags=remaining_interface,
+                    h_inner=default_h_inner,
+                    h_outer=h_outer,
+                    grading_ratio=airbox_scaled.grading_ratio,
+                    grading_mode=airbox_scaled.grading_mode,
+                    dist_max=_airbox_interface_dist_max(
                         default_h_inner=default_h_inner,
                         h_inner=default_h_inner,
                         fallback_dist_max=fallback_dist_max,
-                        has_explicit_hmin=has_explicit_airbox_hmin,
                     ),
+                    object_bounds_min=(xmin, ymin, zmin),
+                    object_bounds_max=(xmax, ymax, zmax),
+                    airbox_bounds_min=airbox_bounds_min,
+                    airbox_bounds_max=airbox_bounds_max,
                 )
-                airbox_field_ids.append(f_thresh)
+                if field_id is not None:
+                    airbox_field_ids.append(field_id)
 
         # 7 - Apply Sizing Options & Local Fields
         preexisting = list(airbox_field_ids)

@@ -171,6 +171,41 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
     }
 }
 
+fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
+    let h = (2.0_f64 / 3.0).sqrt();
+    FemMeshPayload {
+        mesh_name: "regular-tetra".to_string(),
+        mesh_id: "regular-tetra:1".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 3.0_f64.sqrt() / 2.0, 0.0],
+            [0.5, 3.0_f64.sqrt() / 6.0, h],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![7],
+        boundary_faces: vec![[0, 1, 2]],
+        boundary_markers: vec![3],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        object_segments: vec![FemMeshObjectSegment {
+            object_id: "body".to_string(),
+            geometry_id: Some("body".to_string()),
+            node_start: 0,
+            node_count: 4,
+            element_start: 0,
+            element_count: 1,
+            boundary_face_start: 0,
+            boundary_face_count: 1,
+        }],
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: Some("shared_domain".to_string()),
+        domain_frame: None,
+        generation_id: Some("regular-tetra-gen".to_string()),
+        per_domain_quality: Default::default(),
+    }
+}
+
 fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
     let mut mesh = sample_fem_mesh_payload();
     mesh.mesh_parts = vec![
@@ -2480,35 +2515,76 @@ async fn visualization_target_overrides_resolve_vector_budget_and_length_scale()
 async fn visualization_state_rejects_invalid_target_vector_style_controls() {
     let app = build_v2_router().with_state(test_app_state_with_live_session().await);
 
-    for style in [
-        serde_json::json!({ "vector_budget": 0 }),
-        serde_json::json!({ "vector_length_scale": 5.5 }),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("PATCH")
-                    .uri("/v2/sessions/current/visualization/state")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "overrides": [
-                                {
-                                    "scope": "object",
-                                    "scope_id": "free-layer",
-                                    "style": style
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "free-layer",
+                                "style": { "vector_length_scale": 5.5 }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn visualization_state_accepts_zero_vector_budgets() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "layers": {
+                            "airbox": {
+                                "vectors": {
+                                    "density": 0,
+                                    "domain": "airbox_only"
                                 }
-                            ]
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
+                            }
+                        },
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "free-layer",
+                                "display": {
+                                    "vectors": { "density": 0 }
+                                },
+                                "style": {
+                                    "vector_budget": 0
+                                }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["layers"]["airbox"]["vectors"]["density"], 0);
+    assert_eq!(json["overrides"][0]["display"]["vectors"]["density"], 0);
+    assert_eq!(json["overrides"][0]["style"]["vector_budget"], 0);
 }
 
 #[tokio::test]
@@ -3078,6 +3154,12 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                             "position_percent": 37.5,
                             "flipped": true
                         },
+                        "slice": {
+                            "mesh_quality_metric": "skewness",
+                            "mesh_color_scale": "hot",
+                            "mesh_filter_expression": "quality < 0.2",
+                            "mesh_shrink_factor": 0.75
+                        },
                         "vector_style": {
                             "color_mode": "magnitude",
                             "mono_color": "#ff3366",
@@ -3110,6 +3192,13 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert_eq!(patched_json["trim"]["axes"]["z"]["max_percent"], 37.5);
     assert_eq!(patched_json["clip"]["enabled"], true);
     assert_eq!(patched_json["clip"]["axis"], "z");
+    assert_eq!(patched_json["slice"]["mesh_quality_metric"], "skewness");
+    assert_eq!(patched_json["slice"]["mesh_color_scale"], "hot");
+    assert_eq!(
+        patched_json["slice"]["mesh_filter_expression"],
+        "quality < 0.2"
+    );
+    assert_eq!(patched_json["slice"]["mesh_shrink_factor"], 0.75);
     assert_eq!(patched_json["vector_style"]["color_mode"], "magnitude");
 
     let fetched = app
@@ -3139,6 +3228,13 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert_eq!(fetched_json["trim"]["axes"]["x"]["max_percent"], 85.0);
     assert_eq!(fetched_json["clip"]["position_percent"], 37.5);
     assert_eq!(fetched_json["clip"]["flipped"], true);
+    assert_eq!(fetched_json["slice"]["mesh_quality_metric"], "skewness");
+    assert_eq!(fetched_json["slice"]["mesh_color_scale"], "hot");
+    assert_eq!(
+        fetched_json["slice"]["mesh_filter_expression"],
+        "quality < 0.2"
+    );
+    assert_eq!(fetched_json["slice"]["mesh_shrink_factor"], 0.75);
     assert_eq!(fetched_json["vector_style"]["mono_color"], "#ff3366");
     assert_eq!(
         fetched_json["vector_style"]["ferromagnet_visibility"],
@@ -3151,6 +3247,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert!(presentation.visualization_fem.is_some());
     assert!(presentation.visualization_trim.is_some());
     assert!(presentation.visualization_clip.is_some());
+    assert!(presentation.visualization_slice.is_some());
     assert!(presentation.visualization_vector_style.is_some());
 }
 
@@ -4637,6 +4734,152 @@ async fn mesh_shared_domain_topology_returns_binary_fmmt_payload() {
     );
     let body = body_bytes(response).await;
     assert!(body.starts_with(b"FMMT"));
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_returns_binary_fmcs_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section?plane=xy&position_percent=50&include_polygons=true&include_wireframe=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/octet-stream"),
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..4], b"FMCS");
+    assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(body[8..12].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(body[12..16].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(body[16..20].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(body[20..24].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(body[24..28].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(body[28..32].try_into().unwrap()), 1);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_quality_returns_parent_element_fmqs_payload() {
+    let artifact_path = std::env::temp_dir().join(format!(
+        "fullmag-cross-section-quality-{}-{}.fmmq",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut artifact = Vec::new();
+    artifact.extend_from_slice(b"FMMQ");
+    artifact.push(1);
+    artifact.push(1);
+    artifact.extend_from_slice(&0u16.to_le_bytes());
+    artifact.extend_from_slice(&1u32.to_le_bytes());
+    artifact.extend_from_slice(&0b111u32.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0.5f64.to_le_bytes());
+    artifact.extend_from_slice(&0.25f64.to_le_bytes());
+    artifact.extend_from_slice(&(1.0f64 / 6.0).to_le_bytes());
+    fs::write(&artifact_path, &artifact).unwrap();
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "quality_data_artifact": {
+                "kind": "fmmq.v1",
+                "schema_version": 1,
+                "path": artifact_path,
+                "byte_size": artifact.len(),
+                "element_count": 1,
+                "metrics": ["sicn", "gamma", "volume"]
+            }
+        }));
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?plane=xy&position_percent=50&metric=gamma")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/octet-stream"),
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..4], b"FMQS");
+    assert_eq!(u32::from_le_bytes(body[4..8].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(body[8..12].try_into().unwrap()), 1);
+    assert_eq!(f32::from_le_bytes(body[12..16].try_into().unwrap()), 0.25);
+    assert_eq!(f32::from_le_bytes(body[16..20].try_into().unwrap()), 0.25);
+    assert_eq!(f32::from_le_bytes(body[20..24].try_into().unwrap()), 0.25);
+    let _ = fs::remove_file(artifact_path);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_cross_section_quality_computes_parent_tet_metrics_without_artifact() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(regular_tetra_fem_mesh_payload());
+        snapshot.mesh_workspace = None;
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (metric, expected) in [
+        ("volume", 2.0_f32.sqrt() / 12.0),
+        ("aspect_ratio", 1.0_f32),
+        ("max_angle", 70.528_78_f32),
+        ("min_edge", 1.0_f32),
+        ("skewness", 1.0_f32),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?plane=xy&position_percent=50&metric={metric}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "metric {metric}");
+        let body = body_bytes(response).await;
+        assert_eq!(&body[..4], b"FMQS");
+        assert_eq!(u32::from_le_bytes(body[8..12].try_into().unwrap()), 1);
+        assert!(
+            (f32::from_le_bytes(body[20..24].try_into().unwrap()) - expected).abs() < 1.0e-4,
+            "metric {metric}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -9896,6 +10139,67 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
 }
 
 #[tokio::test]
+async fn v2_field_vector_accepts_quantity_alias_for_scoped_airbox_samples() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.mesh_parts[1].id = "part:__air__".to_string();
+        snapshot.state_version = 30;
+        snapshot.mesh_revision = 32;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped H_demag latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?component=full&scope_kind=airbox&scope_id=part%3A__air__")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-quantity-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("H_demag")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-scope-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("part:__air__")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let first_value = f64::from_le_bytes(bytes[48..56].try_into().unwrap());
+    assert_eq!(first_value, 4.0);
+}
+
+#[tokio::test]
 async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -11627,6 +11931,8 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
 
     for path in [
         "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+        "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
     ] {

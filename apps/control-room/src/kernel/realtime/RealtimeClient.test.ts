@@ -90,4 +90,37 @@ describe("RealtimeClient", () => {
     client.close();
     expect(sockets[0].close).toHaveBeenCalledTimes(1);
   });
+
+  it("reconnects after the websocket closes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const sockets: FakeWebSocket[] = [];
+    const reconnectCallbacks: Array<() => void> = [];
+    const eventsUrl = `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`;
+    const client = new RealtimeClient({
+      bridge: new RealtimeInvalidationBridge(resources),
+      createSocket: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      scheduleReconnect: (callback) => {
+        reconnectCallbacks.push(callback);
+        return () => {};
+      },
+      url: eventsUrl,
+    });
+
+    client.connect();
+    sockets[0].emit("close", "");
+
+    expect(reconnectCallbacks).toHaveLength(1);
+    reconnectCallbacks[0]();
+
+    expect(sockets).toHaveLength(2);
+
+    client.close();
+    sockets[1].emit("close", "");
+    expect(reconnectCallbacks).toHaveLength(1);
+  });
 });

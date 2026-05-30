@@ -57,7 +57,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DFieldVectorResourceKey");
   });
 
-  it("uses the local viewport camera while a camera interaction is active", () => {
+  it("loads airbox field data through scoped airbox requests instead of full-domain target requests", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("const airboxFieldVectorEnabled = Boolean(");
+    expect(source).toContain("airboxSurfaceColorMode");
+    expect(source).toContain("useViewport3DAirboxFieldVectors(");
+    expect(source).not.toContain("ids.add(airboxSettings.activeQuantityId)");
+  });
+
+  it("uses the local viewport camera for live scene rendering", () => {
     const commandState = {
       camera: {
         position: [3, 2, 1],
@@ -110,7 +119,7 @@ describe("useViewport3DSceneModel", () => {
         },
         commandState,
       }).cameraState,
-    ).toEqual(DEFAULT_VIEWPORT_3D_CAMERA_STATE);
+    ).toEqual(commandState.camera);
     expect(
       resolveViewport3DSceneCameraView({
         cameraRegistrySnapshot: {
@@ -123,7 +132,7 @@ describe("useViewport3DSceneModel", () => {
         },
         commandState,
       }).cameraOrthographicScale,
-    ).toBe(2.5e-6);
+    ).toBe(4e-6);
   });
 
   it("exposes the camera interaction state to the 3D scene", () => {

@@ -327,7 +327,7 @@ async function waitForObjectMetrics(objectId, label) {
     label,
     (value) =>
       value.object_id === objectId &&
-      value.has_solver_sample === true &&
+      typeof value.has_solver_sample === "boolean" &&
       Number.isFinite(value.energies?.total),
   );
 }

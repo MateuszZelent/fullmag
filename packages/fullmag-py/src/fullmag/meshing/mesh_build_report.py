@@ -164,9 +164,19 @@ def _requested_swept_method(opts: MeshOptions) -> str | None:
     strategy = opts.mesh_strategy
     if strategy in {"swept_prism", "swept_hex"}:
         return strategy
+    if strategy in {"free_tetrahedral", "thin_film_tetrahedral"}:
+        return None
     if opts.through_thickness_elements is not None and opts.through_thickness_elements > 0:
         return "swept_prism"
     return None
+
+
+def _requested_thin_film_method(opts: MeshOptions) -> str | None:
+    return (
+        "thin_film_tetrahedral"
+        if opts.mesh_strategy == "thin_film_tetrahedral"
+        else None
+    )
 
 
 def _shared_domain_swept_fallback_reason(
@@ -329,6 +339,29 @@ def _build_mesh_operation_statuses(
         )
 
     requested_swept = _requested_swept_method(opts)
+    requested_thin_film = _requested_thin_film_method(opts)
+    if requested_thin_film is not None:
+        for geometry in geometries:
+            sweepability = classify_sweepability(geometry)
+            scope = getattr(geometry, "geometry_name", type(geometry).__name__)
+            statuses.append(
+                MeshOperationStatus(
+                    kind="thin_film",
+                    scope=str(scope),
+                    requested=True,
+                    status="applied" if sweepability.sweepable else "skipped",
+                    requested_method=requested_thin_film,
+                    actual_method=(
+                        "feature_aware_tetrahedral" if sweepability.sweepable else "free_tetrahedral"
+                    ),
+                    reason=None if sweepability.sweepable else sweepability.reason,
+                    details={
+                        "build_mode": build_mode,
+                        "through_thickness_elements": opts.through_thickness_elements,
+                        "airbox_present": airbox is not None,
+                    },
+                )
+            )
     if requested_swept is not None:
         fallback_reason = _shared_domain_swept_fallback_reason(
             geometries, airbox, build_mode
@@ -392,8 +425,14 @@ def _actual_mesh_method_for_geometry(
     geometry_name: str,
     *,
     requested_swept: str | None,
+    requested_thin_film: str | None = None,
     operation_statuses: list[MeshOperationStatus],
 ) -> str:
+    if requested_thin_film is not None:
+        for status in operation_statuses:
+            if status.kind == "thin_film" and status.scope == geometry_name:
+                return status.actual_method or "feature_aware_tetrahedral"
+        return "feature_aware_tetrahedral"
     if requested_swept is None:
         return "free_tetrahedral"
     for status in operation_statuses:
@@ -414,6 +453,7 @@ def _build_thin_film_diagnostics(
 ) -> list[ThinFilmDiagnostic]:
     diagnostics: list[ThinFilmDiagnostic] = []
     requested_swept = _requested_swept_method(opts)
+    requested_thin_film = _requested_thin_film_method(opts)
     swept_fallback_scopes = {
         status.scope
         for status in operation_statuses
@@ -443,6 +483,7 @@ def _build_thin_film_diagnostics(
         actual_method = _actual_mesh_method_for_geometry(
             str(name),
             requested_swept=requested_swept,
+            requested_thin_film=requested_thin_film,
             operation_statuses=operation_statuses,
         )
         warnings: list[str] = []
@@ -454,7 +495,11 @@ def _build_thin_film_diagnostics(
             warnings.append("maximum element size is too large relative to thin-film thickness")
         if opts.smoothing_steps == 0:
             warnings.append("smoothing is disabled for a thin-film mesh")
-        if sweepability.sweepable and actual_method == "free_tetrahedral":
+        if (
+            sweepability.sweepable
+            and actual_method == "free_tetrahedral"
+            and requested_thin_film is None
+        ):
             warnings.append("thin-film object is using free tetrahedral meshing")
         if str(name) in swept_fallback_scopes:
             warnings.append("requested swept/prism meshing fell back to free tetrahedral")
@@ -471,7 +516,7 @@ def _build_thin_film_diagnostics(
                 requested_layers=opts.through_thickness_elements,
                 estimated_layers_from_hmax=estimated_layers,
                 hmax_to_thickness_ratio=hmax_ratio,
-                requested_method=requested_swept,
+                requested_method=requested_thin_film or requested_swept,
                 actual_method=actual_method,
                 warnings=warnings,
             )

@@ -813,8 +813,10 @@ def _resolve_effective_shared_domain_targets(
             "transition_growth": target.transition_growth,
             "edge_hmax": target.edge_hmax,
             "edge_thickness": target.edge_thickness,
+            "edge_transition_distance": target.edge_transition_distance,
             "corner_hmax": target.corner_hmax,
             "corner_extent": target.corner_extent,
+            "corner_transition_distance": target.corner_transition_distance,
             "source": target.source,
         }
     return effective_airbox_target, effective_per_object_targets

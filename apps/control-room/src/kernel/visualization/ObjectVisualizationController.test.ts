@@ -508,6 +508,36 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("serializes zero as an explicit vector budget", () => {
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        { id: "free-layer", kind: "object" },
+        { vectorBudget: 0 },
+      ),
+    ).toMatchObject({
+      scope: "object",
+      scope_id: "free-layer",
+      style: {
+        vector_budget: 0,
+      },
+    });
+
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        vectorBudget: 0,
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          vectors: {
+            density: 0,
+            domain: "airbox_only",
+          },
+        },
+      },
+    });
+  });
+
   it("applies global object display defaults before per-target overrides", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };

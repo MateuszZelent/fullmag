@@ -10,6 +10,10 @@ import type {
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import {
+  beginCrossSectionDraft,
+  crossSectionVisualizationPatchFromDraft,
+} from "@/kernel/workspace/crossSectionWorkspace";
+import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
   type PhysicsInteractionId,
@@ -45,6 +49,8 @@ export const RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND =
   "ribbon.selection.focus-airbox";
 export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
   "ribbon.physics.select-interaction";
+export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
+  "ribbon.cross-section.begin-draft";
 
 interface PatchDefaultsInput {
   patch: VisualizationTargetPatch;
@@ -176,6 +182,14 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     disabledReason: (context) =>
       context.selection ? null : "Selection controller is not available.",
     run: focusAirboxFromCommand,
+  },
+  {
+    id: RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
+    title: "Create 2D Cross-Section Draft",
+    group: "ribbon-visualization",
+    category: "View",
+    scope: "workspace",
+    run: beginCrossSectionDraftFromCommand,
   },
   {
     id: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
@@ -327,6 +341,42 @@ function focusAirboxFromCommand(context: CommandContext): CommandResult {
     },
     context.source,
   );
+  return { status: "completed" };
+}
+
+async function beginCrossSectionDraftFromCommand(
+  context: CommandContext,
+): Promise<CommandResult> {
+  const draft = beginCrossSectionDraft(visualizationStateFromContext(context));
+  const nodeId = "model:visualizations-2d:draft";
+  context.selection?.set(
+    {
+      kind: "mesh.cross-section.draft",
+      label: draft.name,
+      nodeId,
+      objectId: null,
+      ref: {
+        draftId: draft.id,
+        kind: "mesh.cross-section.draft",
+        nodeId,
+        type: "cross-section-draft",
+        visualizationTargetId: "cross-section:draft",
+      },
+    },
+    context.source,
+  );
+  context.layout?.setPanelVisible("left", true);
+  context.layout?.setPanelVisible("right", true);
+  context.layout?.setFocusedSlot("viewport-main");
+
+  if (context.visualizationSync || context.api) {
+    await patchVisualizationState(
+      context,
+      crossSectionVisualizationPatchFromDraft(draft),
+      { flush: true },
+    );
+  }
+
   return { status: "completed" };
 }
 

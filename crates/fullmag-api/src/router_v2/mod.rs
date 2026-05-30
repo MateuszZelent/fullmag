@@ -206,6 +206,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_shared_domain_topology),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
+            get(handlers::meshing::get_mesh_shared_domain_cross_section),
+        )
+        .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
+            get(handlers::meshing::get_mesh_shared_domain_cross_section_quality),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/shared-domain/quality",
             get(handlers::meshing::get_mesh_shared_domain_quality),
         )

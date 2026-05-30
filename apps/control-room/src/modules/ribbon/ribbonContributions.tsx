@@ -91,9 +91,9 @@ import {
 } from "@/shared/domain/mesh/buildPipeline";
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
-import { viewport3dStore } from "../viewport-3d/viewport3dStore";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
+  RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -118,6 +118,11 @@ type RibbonResourceInvalidator = Pick<
   NonNullable<CommandContext["resources"]>,
   "invalidate"
 >;
+type ClipAxis = VisualizationStateResource["clip"]["axis"];
+type SliceMeshColorScale = VisualizationStateResource["slice"]["mesh_color_scale"];
+type SliceMeshQualityMetric =
+  VisualizationStateResource["slice"]["mesh_quality_metric"];
+type SliceRenderMode = VisualizationStateResource["slice"]["render_mode"];
 
 function icon(Icon: typeof Play, props?: Record<string, unknown>) {
   return createElement(Icon, { size: I, ...props });
@@ -135,6 +140,40 @@ const C = {
   sky: "var(--fm-accent)",
   sapphire: "var(--fm-accent-strong)",
 } as const;
+
+const CLIP_AXIS_ITEMS: Array<{ value: ClipAxis; label: string }> = [
+  { value: "z", label: "XY plane" },
+  { value: "y", label: "XZ plane" },
+  { value: "x", label: "YZ plane" },
+];
+const SLICE_RENDER_MODE_ITEMS: Array<{ value: SliceRenderMode; label: string }> = [
+  { value: "heatmap", label: "Heatmap" },
+  { value: "contour", label: "Contour" },
+  { value: "heatmap+contour", label: "Heatmap + contour" },
+  { value: "vectors", label: "Vectors" },
+  { value: "mesh-overlay", label: "Mesh overlay" },
+];
+const SLICE_MESH_QUALITY_ITEMS: Array<{
+  value: SliceMeshQualityMetric;
+  label: string;
+}> = [
+  { value: "skewness", label: "Skewness" },
+  { value: "gamma", label: "Gamma" },
+  { value: "sicn", label: "SICN" },
+  { value: "volume", label: "Volume" },
+  { value: "aspect_ratio", label: "Aspect ratio" },
+  { value: "max_angle", label: "Max angle" },
+  { value: "min_edge", label: "Min edge" },
+];
+const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
+  value: SliceMeshColorScale;
+  label: string;
+}> = [
+  { value: "jet", label: "Jet" },
+  { value: "viridis", label: "Viridis" },
+  { value: "hot", label: "Hot" },
+  { value: "coolwarm", label: "Coolwarm" },
+];
 
 function menu(
   id: string,
@@ -685,6 +724,13 @@ const viewTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         {
+          id: RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
+          icon: icon(Scissors),
+          label: "2D Cross",
+          iconColor: "text-orange-300",
+          tooltip: "Create 2D cross-section draft",
+        },
+        {
           id: "view-slice-quantity",
           icon: icon(Sigma),
           label: "Quantity",
@@ -774,6 +820,44 @@ const viewTab: RibbonTabContent = {
                 { value: "surface+edges", label: "Shaded + wireframe" },
                 { value: "points",        label: "Points" },
               ],
+            },
+          ],
+        },
+        {
+          id: "view-slice-quality",
+          icon: icon(BarChart3),
+          label: "Quality",
+          iconColor: "text-amber-300",
+          menu: [
+            {
+              type: "radio-group",
+              id: "slice:quality:metric",
+              label: "Quality metric",
+              value: "skewness",
+              items: SLICE_MESH_QUALITY_ITEMS,
+            },
+            {
+              type: "radio-group",
+              id: "slice:quality:color-scale",
+              label: "Color scale",
+              value: "jet",
+              items: SLICE_MESH_COLOR_SCALE_ITEMS,
+            },
+            {
+              type: "text",
+              id: "slice:quality:filter",
+              label: "Element filter",
+              value: "",
+              placeholder: "quality < 0.3",
+            },
+            {
+              type: "slider",
+              id: "slice:quality:shrink",
+              label: "Shrink",
+              value: 1,
+              min: 0.5,
+              max: 1,
+              step: 0.05,
             },
           ],
         },
@@ -1635,6 +1719,8 @@ export function buildRibbonTabContent(
           ? buildViewGlobalDisplayGroup(group, context)
           : group.id === "view-orientation-tools"
             ? buildViewOrientationGroup(group, context)
+          : group.id === "view-slice-2d"
+            ? buildViewSlice2DGroup(group, context)
           : group.id === "view-display"
             ? buildViewDisplayGroup(group, context)
           : group.id === "view-selected-display"
@@ -2068,6 +2154,18 @@ function applyCommandStateToMenuNode(
     };
   }
 
+  if (node.type === "text" && node.commandId && context.commands?.get(node.commandId)) {
+    const disabledByCommand = isCommandDisabled(
+      node.commandId,
+      context,
+      commandContext,
+    );
+    return {
+      ...node,
+      disabled: node.disabled || disabledByCommand,
+    };
+  }
+
   return node;
 }
 
@@ -2165,6 +2263,204 @@ function buildViewOrientationGroup(
         ? buildHslReferenceAction(context)
         : action,
     ),
+  };
+}
+
+function buildViewSlice2DGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: group.actions.map((action) =>
+      action.id === "view-slice-plane"
+        ? buildSlicePlaneAction(action, context)
+      : action.id === "view-slice-layers"
+        ? buildSliceLayersAction(action, context)
+      : action.id === "view-slice-quality"
+        ? buildSliceQualityAction(action, context)
+        : action,
+    ),
+  };
+}
+
+function buildSlicePlaneAction(
+  action: RibbonTabContent["groups"][number]["actions"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const slice = context.visualizationState?.slice;
+  return {
+    ...action,
+    active: Boolean(slice),
+    disabled: !context.api,
+    menu: [
+      {
+        type: "label",
+        id: "slice:plane:header",
+        label: "Slice plane",
+        badge: slice?.axis.toUpperCase() ?? "XY",
+      },
+      {
+        type: "radio-group",
+        id: "slice:plane:axis",
+        label: "Plane",
+        value: slice?.axis ?? "z",
+        items: CLIP_AXIS_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (axis: string) =>
+          visualizationStateCommandInput({
+            slice: { axis: axis as ClipAxis },
+          }),
+      },
+      {
+        type: "radio-group",
+        id: "slice:plane:mode",
+        label: "Mode",
+        value: slice?.render_mode ?? "heatmap",
+        items: SLICE_RENDER_MODE_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (renderMode: string) =>
+          visualizationStateCommandInput({
+            slice: { render_mode: renderMode as SliceRenderMode },
+          }),
+      },
+      {
+        type: "slider",
+        id: "slice:plane:position",
+        label: "Position",
+        value: Math.min(100, Math.max(0, slice?.position_percent ?? 50)),
+        min: 0,
+        max: 100,
+        step: 0.5,
+        unit: "%",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (positionPercent: number) =>
+          visualizationStateCommandInput({
+            slice: { position_percent: positionPercent },
+          }),
+      },
+    ],
+  };
+}
+
+function buildSliceLayersAction(
+  action: RibbonTabContent["groups"][number]["actions"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const slice = context.visualizationState?.slice;
+  return {
+    ...action,
+    active: Boolean(slice?.show_mesh || slice?.show_quantity || slice?.show_vectors),
+    disabled: !context.api,
+    menu: [
+      {
+        type: "checkbox",
+        id: "slice:mesh:wireframe",
+        label: "Mesh wireframe",
+        checked: slice?.show_mesh ?? false,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (showMesh: boolean) =>
+          visualizationStateCommandInput({
+            slice: { show_mesh: showMesh },
+          }),
+      },
+      {
+        type: "checkbox",
+        id: "slice:layers:quantity",
+        label: "Quantity overlay",
+        checked: slice?.show_quantity ?? true,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (showQuantity: boolean) =>
+          visualizationStateCommandInput({
+            slice: { show_quantity: showQuantity },
+          }),
+      },
+      {
+        type: "checkbox",
+        id: "slice:layers:auto-contrast",
+        label: "Auto-scale range",
+        checked: slice?.auto_contrast ?? true,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (autoContrast: boolean) =>
+          visualizationStateCommandInput({
+            slice: { auto_contrast: autoContrast },
+          }),
+      },
+    ],
+  };
+}
+
+function buildSliceQualityAction(
+  action: RibbonTabContent["groups"][number]["actions"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const slice = context.visualizationState?.slice;
+  return {
+    ...action,
+    active: Boolean(slice),
+    disabled: !context.api,
+    menu: [
+      {
+        type: "radio-group",
+        id: "slice:quality:metric",
+        label: "Quality metric",
+        value: slice?.mesh_quality_metric ?? "skewness",
+        items: SLICE_MESH_QUALITY_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (metric: string) =>
+          visualizationStateCommandInput({
+            slice: { mesh_quality_metric: metric as SliceMeshQualityMetric },
+          }),
+      },
+      {
+        type: "radio-group",
+        id: "slice:quality:color-scale",
+        label: "Color scale",
+        value: slice?.mesh_color_scale ?? "jet",
+        items: SLICE_MESH_COLOR_SCALE_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (colorScale: string) =>
+          visualizationStateCommandInput({
+            slice: { mesh_color_scale: colorScale as SliceMeshColorScale },
+          }),
+      },
+      {
+        type: "text",
+        id: "slice:quality:filter",
+        label: "Element filter",
+        value: slice?.mesh_filter_expression ?? "",
+        placeholder: "quality < 0.3",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (filterExpression: string) =>
+          visualizationStateCommandInput({
+            slice: { mesh_filter_expression: filterExpression },
+          }),
+      },
+      {
+        type: "slider",
+        id: "slice:quality:shrink",
+        label: "Shrink",
+        value: Math.min(1, Math.max(0.5, slice?.mesh_shrink_factor ?? 1)),
+        min: 0.5,
+        max: 1,
+        step: 0.05,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (shrinkFactor: number) =>
+          visualizationStateCommandInput({
+            slice: { mesh_shrink_factor: shrinkFactor },
+          }),
+      },
+    ],
   };
 }
 
@@ -2322,7 +2618,6 @@ function buildTopographyAction({
   commandContext = { source: "ribbon" },
   commands,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
-  const snapshot = viewport3dStore.getSnapshot().widgets;
   const enabled = Boolean(
     commands?.isActive("viewport-3d.fdm-topography-toggle", commandContext),
   );
@@ -2332,7 +2627,7 @@ function buildTopographyAction({
       ["viewport-3d.fdm-topography-component-magnitude", "magnitude"],
       ["viewport-3d.fdm-topography-component-x", "x"],
       ["viewport-3d.fdm-topography-component-y", "y"],
-    ]) ?? snapshot.fdmTopographyComponent;
+    ]) ?? "z";
 
   return {
     id: "view-topography",
@@ -2353,7 +2648,7 @@ function buildTopographyAction({
         type: "slider",
         id: "topography:amplitude",
         label: "Amplitude",
-        value: snapshot.fdmTopographyAmplitudeCells,
+        value: 0,
         min: -16,
         max: 16,
         step: 0.25,
@@ -3069,6 +3364,119 @@ function resolveMeshRenderMode({
   if (!shaderVisible && wireframeVisible) return "wireframe";
   if (shaderVisible && wireframeVisible) return "surface+edges";
   return "surface";
+}
+
+function buildClipAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const clip = context.visualizationState?.clip ?? {
+    axis: "z" as ClipAxis,
+    enabled: false,
+    flipped: false,
+    position_percent: 50,
+  };
+
+  return {
+    id: "view-selected-clip",
+    icon: icon(Scissors),
+    label: "Clip",
+    active: clip.enabled,
+    iconColor: "text-orange-300",
+    disabled: !context.api,
+    menu: [
+      {
+        type: "label",
+        id: "selected-clip:header",
+        label: "Global clip",
+        badge: clip.enabled ? "on" : "off",
+      },
+      {
+        type: "checkbox",
+        id: "selected-clip:enabled",
+        label: "Clip on/off",
+        checked: clip.enabled,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (enabled: boolean) =>
+          visualizationStateCommandInput({ clip: { enabled } }),
+      },
+      {
+        type: "radio-group",
+        id: "selected-clip:axis",
+        label: "Plane",
+        value: clip.axis,
+        items: CLIP_AXIS_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (axis: string) =>
+          visualizationStateCommandInput({
+            clip: { axis: axis as ClipAxis, enabled: true },
+          }),
+      },
+      {
+        type: "slider",
+        id: "selected-clip:position",
+        label: "Position",
+        value: Math.min(100, Math.max(0, clip.position_percent)),
+        min: 0,
+        max: 100,
+        step: 0.5,
+        unit: "%",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (positionPercent: number) =>
+          visualizationStateCommandInput({
+            clip: {
+              enabled: true,
+              position_percent: positionPercent,
+            },
+          }),
+      },
+      {
+        type: "checkbox",
+        id: "selected-clip:flipped",
+        label: "Flip clipped side",
+        checked: clip.flipped,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (flipped: boolean) =>
+          visualizationStateCommandInput({
+            clip: { enabled: true, flipped },
+          }),
+      },
+      { type: "separator", id: "selected-clip:presets-separator" },
+      {
+        type: "item",
+        id: "selected-clip:mid-xy",
+        label: "Mid XY",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: visualizationStateCommandInput({
+          clip: { axis: "z", enabled: true, position_percent: 50 },
+        }),
+      },
+      {
+        type: "item",
+        id: "selected-clip:mid-xz",
+        label: "Mid XZ",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: visualizationStateCommandInput({
+          clip: { axis: "y", enabled: true, position_percent: 50 },
+        }),
+      },
+      {
+        type: "item",
+        id: "selected-clip:mid-yz",
+        label: "Mid YZ",
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: visualizationStateCommandInput({
+          clip: { axis: "x", enabled: true, position_percent: 50 },
+        }),
+      },
+    ],
+  };
 }
 
 function layerOpacityPercent(opacity: number): number {
@@ -3823,17 +4231,7 @@ function buildSelectedVisualizationGroup(
           },
         ],
       },
-      {
-        id: "view-selected-clip",
-        icon: icon(Scissors),
-        label: "Clip",
-        iconColor: "text-orange-300",
-        disabled: true,
-        menu: [
-          { type: "label",  id: "selected-clip:header",  label: "Selected clip", badge: "planned" },
-          { type: "status", id: "selected-clip:runtime", label: "Runtime",       value: "Runtime supports one active clip axis", tone: "warning" },
-        ],
-      },
+      buildClipAction(context),
       {
         id: "view-selected-opacity",
         icon: icon(Blend),
