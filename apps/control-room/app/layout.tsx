@@ -29,8 +29,8 @@ export default function RootLayout({
             __html: `
 window.__FULLMAG_CONFIG__ = {
   ...(window.__FULLMAG_CONFIG__ || {}),
-  disablePerformanceDiagnostics: true,
-  disableViewport3DCanvasLifecycleProbe: true,
+  disablePerformanceDiagnostics: false,
+  disableViewport3DCanvasLifecycleProbe: false,
   disableViewport3DOverlayLayers: false,
   disableViewport3DDimensionFrame: false,
   disableViewport3DDimensionFrameLabels: false,
@@ -43,8 +43,8 @@ window.__FULLMAG_CONFIG__ = {
   disableViewport3DPrimitiveObjectLayer: false,
   disableViewport3DTopologyMeshLayer: false,
   disableViewport3DMeshSizeHighlightLayer: false,
-  disableViewport3DOrientationHud: true,
-  disableViewport3DPostProcessing: true,
+  disableViewport3DOrientationHud: false,
+  disableViewport3DPostProcessing: false,
 };
 `,
           }}

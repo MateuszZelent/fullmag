@@ -406,7 +406,7 @@ mod realtime_change_tests {
             slice_revision: 14,
             artifact_revision: 15,
             command_completion_revision: 16,
-            fields_revision: 17,
+            fields_revision: 13, // must equal field_revision — they share the same source
             scalars_revision: 18,
             domain_generation_id: 19,
             artifacts_revision: 20,
@@ -500,27 +500,6 @@ mod realtime_change_tests {
     }
 
     #[test]
-    fn realtime_changes_since_does_not_refresh_field_vectors_when_only_snapshot_counter_changes() {
-        let previous = revisions();
-        let mut current_revisions = revisions();
-        current_revisions.fields_revision += 1;
-        current_revisions.field_revision = previous.field_revision;
-        let state = CurrentLiveRealtimeState {
-            session_id: "session-1".to_string(),
-            run_id: Some("run-1".to_string()),
-            revisions: current_revisions,
-            mesh_resource_fetches: Vec::new(),
-        };
-
-        let changes = current_live_realtime_changes_since(&state, Some(&previous));
-
-        assert!(changes
-            .iter()
-            .all(|change| !(matches!(change.resource, RealtimeResourceName::Fields)
-                && change.resource_id.as_deref() == Some("samples"))));
-    }
-
-    #[test]
     fn realtime_changes_since_refreshes_field_samples_when_live_field_data_changes() {
         let mut current_revisions = revisions();
         current_revisions.field_revision += 1;
@@ -539,6 +518,36 @@ mod realtime_change_tests {
                 && change.resource_id.as_deref() == Some("samples")
                 && change.recommended_fetch.is_none()
         }));
+    }
+
+    #[test]
+    fn realtime_changes_since_does_not_refresh_field_vectors_when_only_snapshot_counter_changes() {
+        // Scenario: fields_revision stays the same but some other revision changed.
+        // The field-samples change should NOT appear in the diff.
+        let previous = revisions();
+        let mut current = revisions();
+        // Bump scalars (a different resource) without touching field_revision/fields_revision.
+        current.scalars_revision += 1;
+
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
+
+        // Scalars should show up.
+        assert!(changes.iter().any(|c| c
+            .recommended_fetch
+            .as_deref()
+            == Some("/v2/sessions/current/data/scalars")));
+        // Field samples should NOT show up.
+        assert!(changes.iter().all(|c| !(matches!(
+            c.resource,
+            RealtimeResourceName::Fields
+        ) && c.resource_id.as_deref() == Some("samples"))));
     }
 
     #[test]
