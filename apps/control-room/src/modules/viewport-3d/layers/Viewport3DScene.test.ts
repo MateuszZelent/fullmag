@@ -214,6 +214,99 @@ describe("Viewport3DScene scale helpers", () => {
     expect(perspectiveBlock).not.toContain("onUpdate=");
   });
 
+  it("can skip viewport canvas probes and orientation widgets from browser runtime flags", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("viewport3DBoundsLayersEnabledFromBrowserConfig");
+    expect(source).toContain(
+      "viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig",
+    );
+    expect(source).toContain("viewport3DClipLayersEnabledFromBrowserConfig");
+    expect(source).toContain("viewport3DDimensionFrameEnabledFromBrowserConfig");
+    expect(source).toContain(
+      "viewport3DDimensionFrameLabelsEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DDimensionFrameLinesEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DDimensionFrameMajorLinesEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig",
+    );
+    expect(source).toContain("viewport3DFdmCuboidLayerEnabledFromBrowserConfig");
+    expect(source).toContain("viewport3DAirboxLayerEnabledFromBrowserConfig");
+    expect(source).toContain(
+      "viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig",
+    );
+    expect(source).toContain("viewport3DTopologyMeshLayerEnabledFromBrowserConfig");
+    expect(source).toContain(
+      "viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DOverlayLayersEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DOrientationHudEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DPostProcessingEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "viewport3DSceneLayersEnabledFromBrowserConfig",
+    );
+    expect(source).toContain(
+      "{viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain("{viewport3DOverlayLayersEnabledFromBrowserConfig() ? (");
+    expect(source).toContain(
+      "viewport3DClipLayersEnabledFromBrowserConfig() && clip?.enabled ? (",
+    );
+    expect(source).toContain(
+      "{viewport3DBoundsLayersEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain(
+      "{viewport3DDimensionFrameEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain(
+      "labelsVisible={",
+    );
+    expect(source).toContain("scaleLabelsVisible &&");
+    expect(source).toContain(
+      "viewport3DDimensionFrameLabelsEnabledFromBrowserConfig()",
+    );
+    expect(source).toContain(
+      "majorLinesVisible={",
+    );
+    expect(source).toContain(
+      "minorLinesVisible={",
+    );
+    expect(source).toContain(
+      "viewport3DDimensionFrameMajorLinesEnabledFromBrowserConfig()",
+    );
+    expect(source).toContain(
+      "viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig()",
+    );
+    expect(source).toContain("{viewport3DOrientationHudEnabledFromBrowserConfig()");
+    expect(source).toContain("{viewport3DSceneLayersEnabledFromBrowserConfig() ? (");
+    expect(source).toContain("{viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (");
+    expect(source).toContain("{viewport3DAirboxLayerEnabledFromBrowserConfig() ? (");
+    expect(source).toContain(
+      "{viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain(
+      "{viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain(
+      "{viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (",
+    );
+    expect(source).toContain("{viewport3DPostProcessingEnabledFromBrowserConfig() ? (");
+  });
+
   it("queues a follow-up projection frame for demand-rendered camera swaps", () => {
     let frameCallback: FrameRequestCallback | null = null;
     const invalidate = vi.fn();

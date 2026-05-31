@@ -44,10 +44,10 @@ describe("ObjectVisualizationController", () => {
       geometryScope: "full",
       opacityPercent: 28,
       pointColor: "var(--fm-info)",
-      renderMode: "wireframe",
+      renderMode: "surface",
       shaderColorMode: "monochrome",
       shaderMonoColor: "var(--fm-airbox-fill)",
-      shaderVisible: false,
+      shaderVisible: true,
       surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
@@ -56,7 +56,7 @@ describe("ObjectVisualizationController", () => {
       vectorsVisible: false,
       wireframeColor: "var(--fm-airbox-wire)",
       wireframeOpacityPercent: 100,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
   });
 
@@ -839,13 +839,14 @@ describe("ObjectVisualizationController", () => {
     expect(patch).toMatchObject({
       layers: {
         airbox: {
+          surface: { visible: true },
           visible: true,
-          wireframe: { visible: true },
         },
       },
       overrides: [
         {
           display: {
+            surface: { visible: true },
             visible: true,
           },
           quantity: {
@@ -920,7 +921,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("enables the default airbox wireframe when master visibility is turned on without active passes", () => {
+  it("enables the default airbox surface when master visibility is turned on without active passes", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         visible: true,
@@ -928,8 +929,8 @@ describe("ObjectVisualizationController", () => {
     ).toEqual({
       layers: {
         airbox: {
+          surface: { visible: true },
           visible: true,
-          wireframe: { visible: true },
         },
       },
     });

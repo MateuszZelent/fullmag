@@ -577,6 +577,28 @@ export function resolveAirboxTopologyVisualizationSettings(
   };
 }
 
+export function resolveAirboxRuntimeVisualizationSettings(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  const isLegacyWireframeOnlyMode =
+    settings.visible &&
+    settings.wireframeVisible &&
+    !settings.shaderVisible &&
+    !settings.pointsVisible &&
+    !settings.vectorsVisible &&
+    !settings.boundsVisible;
+
+  if (!isLegacyWireframeOnlyMode) {
+    return settings;
+  }
+  return {
+    ...settings,
+    renderMode: "surface",
+    shaderVisible: true,
+    wireframeVisible: false,
+  };
+}
+
 export function resolveAirboxSurfaceColorState(
   settings: VisualizationTargetSettings,
   fieldModel: Pick<Viewport3DFieldRenderModel, "scalarColorsByMode"> | null,
@@ -745,14 +767,16 @@ export function AirboxLayerContent({
   tracker: Viewport3DResourceTracker;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  const hasAnyVisibleSubLayer =
-    settings.shaderVisible ||
-    settings.wireframeVisible ||
-    settings.pointsVisible ||
-    settings.vectorsVisible ||
-    settings.boundsVisible;
+  const runtimeSettings = resolveAirboxRuntimeVisualizationSettings(settings);
 
-  if (!settings.visible && !hasAnyVisibleSubLayer) return null;
+  const hasAnyVisibleRuntimeSubLayer =
+    runtimeSettings.shaderVisible ||
+    runtimeSettings.wireframeVisible ||
+    runtimeSettings.pointsVisible ||
+    runtimeSettings.vectorsVisible ||
+    runtimeSettings.boundsVisible;
+
+  if (!runtimeSettings.visible && !hasAnyVisibleRuntimeSubLayer) return null;
 
   return (
     <>
@@ -765,7 +789,7 @@ export function AirboxLayerContent({
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}
           partModel={partModel}
-          settings={settings}
+          settings={runtimeSettings}
           topologyModel={topologyModel}
           topologyFreshness={topologyFreshness}
           tracker={tracker}

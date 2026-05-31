@@ -33,8 +33,10 @@ interface DimensionFrameLayerProps {
   colors: Viewport3DColors;
   density: DimensionFrameDensity;
   labelsVisible: boolean;
+  majorLinesVisible: boolean;
   materialProfile: Viewport3DMaterialProfile;
   mode: DimensionFrameMode;
+  minorLinesVisible: boolean;
   tracker: Viewport3DResourceTracker;
   unitMode: DimensionFrameUnitMode;
 }
@@ -55,8 +57,10 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
   colors,
   density,
   labelsVisible,
+  majorLinesVisible,
   materialProfile,
   mode,
+  minorLinesVisible,
   tracker,
   unitMode,
 }: DimensionFrameLayerProps) {
@@ -87,12 +91,14 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     ],
   );
   const minorGeometry = useMemo(
-    () => createDimensionFrameLineGeometry(model.minorLines),
-    [model.minorLines],
+    () =>
+      minorLinesVisible ? createDimensionFrameLineGeometry(model.minorLines) : null,
+    [minorLinesVisible, model.minorLines],
   );
   const majorGeometry = useMemo(
-    () => createDimensionFrameLineGeometry(model.majorLines),
-    [model.majorLines],
+    () =>
+      majorLinesVisible ? createDimensionFrameLineGeometry(model.majorLines) : null,
+    [majorLinesVisible, model.majorLines],
   );
 
   useEffect(() => {
@@ -112,7 +118,10 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
     invalidate();
   }, [invalidate, model.signature, tracker]);
 
-  if (mode === "off" || (!minorGeometry && !majorGeometry)) {
+  if (
+    mode === "off" ||
+    (!minorGeometry && !majorGeometry && model.tickLabels.length === 0 && model.axisLabels.length === 0)
+  ) {
     return null;
   }
 

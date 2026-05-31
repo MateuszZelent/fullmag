@@ -19,6 +19,7 @@ import {
   SelectionHighlightLayerContent,
   airboxWireframeOpacityFromSettings,
   buildBoundsVolumeWireframePositions,
+  resolveAirboxRuntimeVisualizationSettings,
   resolveAirboxSurfaceColorState,
   resolveAirboxTopologyVisualizationSettings,
   resolveAirboxWireframeEdgeIndices,
@@ -130,6 +131,25 @@ describe("AirboxLayer", () => {
       shaderVisible: false,
       wireframeVisible: true,
     });
+  });
+
+  it("converts legacy wireframe-only airbox settings to surface shading at runtime", () => {
+    expect(
+      resolveAirboxRuntimeVisualizationSettings(visibleWireframeAirbox),
+    ).toMatchObject({
+      renderMode: "surface",
+      shaderVisible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("preserves airbox settings that already have another drawable pass", () => {
+    const settings = {
+      ...visibleWireframeAirbox,
+      shaderVisible: true,
+    };
+
+    expect(resolveAirboxRuntimeVisualizationSettings(settings)).toBe(settings);
   });
 
   it("uses volume edges for full airbox wireframe and surface edges for surface mode", () => {
@@ -319,7 +339,12 @@ describe("AirboxLayer", () => {
     expect(child.props).toMatchObject({
       onSelectPart,
       materialProfile,
-      settings: visibleWireframeAirbox,
+      settings: {
+        ...visibleWireframeAirbox,
+        renderMode: "surface",
+        shaderVisible: true,
+        wireframeVisible: false,
+      },
       topologyModel,
       topologyFreshness: "current",
     });

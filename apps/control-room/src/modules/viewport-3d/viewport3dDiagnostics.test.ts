@@ -6,7 +6,7 @@ import {
 } from "./viewport3dDiagnostics";
 
 describe("viewport3dDiagnostics", () => {
-  it("tracks and disposes viewport-owned resources", () => {
+  it("tracks and disposes viewport-owned resources without forcing React updates", () => {
     const tracker = new Viewport3DResourceTracker();
     const dispose = vi.fn();
     const geometry = { dispose };
@@ -14,7 +14,7 @@ describe("viewport3dDiagnostics", () => {
     tracker.subscribe(listener);
 
     tracker.track("geometry", geometry);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).not.toHaveBeenCalled();
 
     tracker.recordDirtyFrame("topology");
 
@@ -23,13 +23,13 @@ describe("viewport3dDiagnostics", () => {
       frames: 1,
       geometries: 1,
     });
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).not.toHaveBeenCalled();
 
     tracker.release("geometry", geometry);
 
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(tracker.getSnapshot().geometries).toBe(0);
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("counts dirty-frame reasons until they are consumed", () => {

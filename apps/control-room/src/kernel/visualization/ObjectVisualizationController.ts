@@ -142,10 +142,10 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   pointColor: "var(--fm-info)",
   pointsVisible: false,
   primitiveVisible: false,
-  renderMode: "wireframe",
+  renderMode: "surface",
   shaderColorMode: "monochrome",
   shaderMonoColor: "var(--fm-airbox-fill)",
-  shaderVisible: false,
+  shaderVisible: true,
   surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
   vectorBudget: 1200,
@@ -160,7 +160,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   visible: true,
   wireframeColor: "var(--fm-airbox-wire)",
   wireframeOpacityPercent: 100,
-  wireframeVisible: true,
+  wireframeVisible: false,
 };
 
 const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
@@ -899,7 +899,7 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     patch.shaderVisible !== undefined ||
     patch.vectorsVisible !== undefined ||
     patch.wireframeVisible !== undefined;
-  const shouldEnableDefaultWireframe =
+  const shouldEnableDefaultSurface =
     patch.visible === true && !hasExplicitDrawablePass;
   const vectors =
     patch.vectorsVisible === undefined && patch.vectorBudget === undefined
@@ -928,14 +928,14 @@ export function airboxVisualizationStatePatchFromTargetPatch(
       ? {}
       : { points: { visible: patch.pointsVisible } }),
     ...(patch.shaderVisible === undefined
-      ? {}
+      ? shouldEnableDefaultSurface
+        ? { surface: { visible: true } }
+        : {}
       : { surface: { visible: patch.shaderVisible } }),
     ...vectors,
     ...(patch.visible === undefined ? {} : { visible: patch.visible }),
     ...(patch.wireframeVisible === undefined
-      ? shouldEnableDefaultWireframe
-        ? { wireframe: { visible: true } }
-        : {}
+      ? {}
       : { wireframe: { visible: patch.wireframeVisible } }),
   };
   const vectorStyle =
@@ -967,16 +967,16 @@ export function airboxVisualizationStatePatchFromTargetPatch(
           ? {}
           : { pointsVisible: patch.pointsVisible }),
         ...(patch.shaderVisible === undefined
-          ? {}
+          ? shouldEnableDefaultSurface
+            ? { shaderVisible: true }
+            : {}
           : { shaderVisible: patch.shaderVisible }),
         ...(patch.vectorsVisible === undefined
           ? {}
           : { vectorsVisible: patch.vectorsVisible }),
         ...(patch.visible === undefined ? {} : { visible: patch.visible }),
         ...(patch.wireframeVisible === undefined
-          ? shouldEnableDefaultWireframe
-            ? { wireframeVisible: true }
-            : {}
+          ? {}
           : { wireframeVisible: patch.wireframeVisible }),
       }
     : {};

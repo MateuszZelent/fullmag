@@ -1223,10 +1223,10 @@ describe("ribbon structure", () => {
       {
         layers: {
           airbox: {
-            visible: true,
-            wireframe: {
+            surface: {
               visible: true,
             },
+            visible: true,
           },
         },
       },

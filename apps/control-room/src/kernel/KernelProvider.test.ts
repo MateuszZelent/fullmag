@@ -49,6 +49,25 @@ describe("KernelProvider performance contracts", () => {
     );
   });
 
+  it("can skip performance diagnostics from browser runtime flags", () => {
+    expect(kernelProviderSource).toContain(
+      "performanceDiagnosticsEnabledFromBrowserConfig",
+    );
+    expect(kernelProviderSource).toContain(
+      "if (!performanceDiagnosticsEnabledFromBrowserConfig())",
+    );
+  });
+
+  it("resolves registered modules from runtime browser flags before kernel registration", () => {
+    expect(kernelProviderSource).toContain("resolveControlRoomModules");
+    expect(kernelProviderSource).toContain(
+      "for (const manifest of resolveControlRoomModules())",
+    );
+    expect(kernelProviderSource).not.toContain(
+      "for (const manifest of ALL_MODULES)",
+    );
+  });
+
   it("allows controlled browser audits to disable realtime websocket coupling", () => {
     expect(kernelProviderSource).toContain("disableRealtime");
     expect(kernelProviderSource).toContain(

@@ -19,6 +19,7 @@ import {
 import { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
+import { performanceDiagnosticsEnabledFromBrowserConfig } from "./browserFullmagConfig";
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
 import { SHELL_COMMANDS } from "./layout/shellCommands";
@@ -38,7 +39,7 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
-import { ALL_MODULES } from "@/modules";
+import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
 
@@ -93,7 +94,7 @@ function createKernel(): KernelApi {
   }
 
   // Register modules and auto-register their contributed commands.
-  for (const manifest of ALL_MODULES) {
+  for (const manifest of resolveControlRoomModules()) {
     modules.register(manifest);
     if (manifest.contributes?.commands) {
       for (const cmd of manifest.contributes.commands) {
@@ -251,6 +252,9 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
 function PerformanceDiagnosticsConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(
     () => {
+      if (!performanceDiagnosticsEnabledFromBrowserConfig()) {
+        return;
+      }
       const stopMeasures = startPerformanceMeasureDiagnostics({
         diagnostics: kernel.diagnostics,
       });

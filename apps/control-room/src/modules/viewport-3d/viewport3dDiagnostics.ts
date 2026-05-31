@@ -101,7 +101,6 @@ export class Viewport3DResourceTracker {
 
     this.disposables.set(resource, () => resource.dispose());
     this.counts = incrementCount(this.counts, kind, 1);
-    this.notify();
     return resource;
   }
 
@@ -113,7 +112,6 @@ export class Viewport3DResourceTracker {
     this.disposables.delete(resource);
     dispose();
     this.counts = incrementCount(this.counts, kind, -1);
-    this.notify();
   }
 
   disposeAll(): void {
@@ -129,7 +127,6 @@ export class Viewport3DResourceTracker {
       textures: 0,
       workers: 0,
     };
-    this.notify();
   }
 
   subscribe(listener: TrackerListener): () => void {
