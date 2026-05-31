@@ -1292,6 +1292,155 @@ describe("viewport3dRenderModel", () => {
     expect(segments?.[3]).toBeCloseTo(10.25);
   });
 
+  it("builds sampled scoped vector glyphs at the matching global topology positions", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array([4, 5, 6, 5, 6, 7]),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 2,
+        elementMarkers: new Uint32Array([1, 0]),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          4, 5, 6, 7,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          10, 0, 0,
+          11, 0, 0,
+          10, 1, 0,
+          10, 0, 1,
+        ]),
+      },
+      [],
+      [
+        {
+          boundary_face_count: 2,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          nodeCount: 4,
+          nodeStart: 4,
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partFieldVectors: new Map([
+          [
+            "airbox",
+            {
+              dtype: "float64",
+              grid: [2, 1, 1],
+              nComp: 3,
+              pointCount: 2,
+              quantityId: "H_demag",
+              valueCount: 6,
+              values: new Float64Array([
+                1, 0, 0,
+                0, 0, 1,
+              ]),
+            },
+          ],
+        ]),
+        partVectorBudgets: new Map([["airbox", 2]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const segments = fieldModel?.partVectorSegments.get("airbox");
+    expect(segments?.length).toBe(14);
+    expect(segments?.[0]).toBeCloseTo(9.75);
+    expect(segments?.[3]).toBeCloseTo(10.25);
+    expect(segments?.[7]).toBeCloseTo(10);
+    expect(segments?.[8]).toBeCloseTo(1);
+    expect(segments?.[9]).toBeCloseTo(-0.25);
+    expect(segments?.[12]).toBeCloseTo(0.25);
+  });
+
+  it("builds sampled magnetic part vectors at matching global topology positions", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array([4, 5, 6, 5, 6, 7]),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 2,
+        elementMarkers: new Uint32Array([1, 0]),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          4, 5, 6, 7,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          10, 0, 0,
+          11, 0, 0,
+          10, 1, 0,
+          10, 0, 1,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 2,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 4,
+        },
+      ],
+      [],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partFieldVectors: new Map([
+          [
+            "part-a",
+            {
+              dtype: "float64",
+              grid: [2, 1, 1],
+              nComp: 3,
+              pointCount: 2,
+              quantityId: "m",
+              valueCount: 6,
+              values: new Float64Array([
+                1, 0, 0,
+                0, 0, 1,
+              ]),
+            },
+          ],
+        ]),
+        partVectorBudgets: new Map([["part-a", 2]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const segments = fieldModel?.partVectorSegments.get("part-a");
+    expect(segments?.length).toBe(14);
+    expect(segments?.[0]).toBeCloseTo(9.75);
+    expect(segments?.[3]).toBeCloseTo(10.25);
+    expect(segments?.[7]).toBeCloseTo(10);
+    expect(segments?.[8]).toBeCloseTo(1);
+    expect(segments?.[9]).toBeCloseTo(-0.25);
+    expect(segments?.[12]).toBeCloseTo(0.25);
+  });
+
   it("uses an explicit global vector budget instead of per-part fixed budgets", () => {
     const budgets = distributeVectorGlyphBudget(
       [

@@ -65,6 +65,11 @@ pub struct FieldVectorQuery {
     pub scope_kind: Option<String>,
     /// Scope identifier for `object` and `part` scopes.
     pub scope_id: Option<String>,
+    /// Optional hard cap for scoped vector samples returned by the binary payload.
+    ///
+    /// This is intended for renderer glyph payloads. It requires a scoped FEM
+    /// query so the consumer can map sampled values back to topology nodes.
+    pub max_samples: Option<u32>,
 }
 
 // ── P2: 2D slice JSON types ───────────────────────────────────────────────────

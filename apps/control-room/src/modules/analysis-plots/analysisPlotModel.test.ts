@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { __analysisPlotsTestUtils } from "./AnalysisPlotsModule";
-import { buildLineChartModel } from "./analysisPlotModel";
+import { buildLineChartModel, MAX_LINE_CHART_POINTS } from "./analysisPlotModel";
 
 describe("analysisPlotModel", () => {
   it("builds a normalized SVG path from finite points", () => {
@@ -23,9 +23,40 @@ describe("analysisPlotModel", () => {
   it("returns null without finite samples", () => {
     expect(buildLineChartModel([{ x: Number.NaN, y: 1 }])).toBeNull();
   });
+
+  it("decimates large histories while preserving the full value range", () => {
+    const points = Array.from({ length: 1_000 }, (_, index) => ({
+      x: index,
+      y: index === 511 ? 100 : Math.sin(index / 10),
+    }));
+
+    const model = buildLineChartModel(points);
+
+    expect(model?.path.match(/[ML]/g)?.length).toBeLessThanOrEqual(
+      MAX_LINE_CHART_POINTS,
+    );
+    expect(model).toMatchObject({
+      xMax: 999,
+      xMin: 0,
+      yMax: 100,
+    });
+  });
 });
 
 describe("analysis plot scalar selection", () => {
+  it("uses one stable scalar column query for resource subscriptions", () => {
+    expect(__analysisPlotsTestUtils.analysisScalarColumns).toEqual([
+      "step",
+      "e_total",
+      "mx",
+      "my",
+      "mz",
+    ]);
+    expect(Object.isFrozen(__analysisPlotsTestUtils.analysisScalarColumns)).toBe(
+      true,
+    );
+  });
+
   it("uses physical scalar columns before time metadata", () => {
     expect(
       __analysisPlotsTestUtils.resolveScalarValueColumn([

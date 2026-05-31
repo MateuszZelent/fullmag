@@ -22,10 +22,12 @@ export interface BrowserFullmagConfig {
   readonly disableViewport3DPrimitiveObjectLayer?: unknown;
   readonly disableViewport3DSceneLayers?: unknown;
   readonly disableViewport3DTopologyMeshLayer?: unknown;
+  readonly enablePerformanceDiagnostics?: unknown;
+  readonly enableViewport3DOrbitDebug?: unknown;
   readonly runtimeHttpBase?: unknown;
 }
 
-export function readBrowserFullmagConfig():
+function readBrowserFullmagConfig():
   | BrowserFullmagConfig
   | undefined {
   if (typeof window === "undefined") {
@@ -45,7 +47,8 @@ export function viewport3DEnabledFromBrowserConfig(
 export function performanceDiagnosticsEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
-  return config?.disablePerformanceDiagnostics !== true;
+  if (config?.disablePerformanceDiagnostics === true) return false;
+  return config?.enablePerformanceDiagnostics === true;
 }
 
 export function viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig(
@@ -118,6 +121,12 @@ export function viewport3DOrientationHudEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
   return config?.disableViewport3DOrientationHud !== true;
+}
+
+export function viewport3DOrbitDebugEnabledFromBrowserConfig(
+  config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
+): boolean {
+  return config?.enableViewport3DOrbitDebug === true;
 }
 
 export function viewport3DOverlayLayersEnabledFromBrowserConfig(

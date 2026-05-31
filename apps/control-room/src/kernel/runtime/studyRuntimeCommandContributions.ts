@@ -137,22 +137,41 @@ function runtimeCommandDisabledReason(
     SIMULATION_COMMANDS_PATH,
   );
   const backendControl = backendRuntimeControl(queue, kind);
-  if (backendControl && !backendControl.enabled) {
-    return backendControl.reason ?? "Runtime command is unavailable.";
-  }
 
+  const state = runtimeState(context);
+  if (!state) return "Runtime state is unavailable.";
+  const staleQueue = runtimeCommandQueueIsStale(context, queue, state);
   if (
     kind === "solve" &&
+    !staleQueue &&
     queue?.commands.some((command) =>
       ACTIVE_RUNTIME_COMMAND_STATUSES.has(command.status),
     )
   ) {
     return "A runtime command is already active.";
   }
+  const stateReason = runtimeCommandStateDisabledReason(context, kind, state);
+  if (backendControl && !backendControl.enabled) {
+    const backendReason = backendControl.reason ?? "Runtime command is unavailable.";
+    if (
+      stateReason === null &&
+      (backendRuntimeControlReasonIsStateDerived(kind, backendReason) ||
+        (staleQueue &&
+          backendRuntimeControlReasonIsActiveCommandDerived(backendReason)))
+    ) {
+      return null;
+    }
+    return backendReason;
+  }
 
-  const state = runtimeState(context);
-  if (!state) return "Runtime state is unavailable.";
+  return stateReason;
+}
 
+function runtimeCommandStateDisabledReason(
+  context: CommandContext,
+  kind: SimpleStudyRuntimeCommandKind,
+  state: string,
+): string | null {
   switch (kind) {
     case "pause":
       return state === "running" ? null : "Runtime is not running.";
@@ -182,6 +201,84 @@ function runtimeCommandDisabledReason(
       }
       return runtimeReadinessDisabledReason(context, kind);
   }
+}
+
+function backendRuntimeControlReasonIsStateDerived(
+  kind: SimpleStudyRuntimeCommandKind,
+  reason: string,
+): boolean {
+  switch (kind) {
+    case "pause":
+      return reason === "Runtime is not running.";
+    case "resume":
+      return reason === "Runtime is not paused.";
+    case "stop":
+      return reason === "Runtime is not active.";
+    case "skip":
+      return (
+        reason === "No active stage is available to skip." ||
+        reason === "Runtime is not in an active stage."
+      );
+    case "compute_energies":
+    case "compute_fields":
+    case "solve":
+      return false;
+  }
+}
+
+function backendRuntimeControlReasonIsActiveCommandDerived(reason: string): boolean {
+  return reason === "A runtime command is already active.";
+}
+
+function runtimeCommandQueueIsStale(
+  context: CommandContext,
+  queue: CommandQueueStatusResource | null | undefined,
+  state: string,
+): boolean {
+  if (state === "running" || state === "paused") return false;
+  if (state === "idle" && !queueHasActiveCommandDerivedControl(queue)) {
+    return false;
+  }
+  const queueRevision = numericRevision(queue?.revision);
+  const lifecycleRevision = runtimeLifecycleRevision(context);
+  return (
+    queueRevision !== null &&
+    lifecycleRevision !== null &&
+    queueRevision < lifecycleRevision
+  );
+}
+
+function queueHasActiveCommandDerivedControl(
+  queue: CommandQueueStatusResource | null | undefined,
+): boolean {
+  return Boolean(
+    queue?.runtime_controls?.some(
+      (entry) =>
+        entry.enabled === false &&
+        typeof entry.reason === "string" &&
+        backendRuntimeControlReasonIsActiveCommandDerived(entry.reason),
+    ),
+  );
+}
+
+function numericRevision(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function runtimeLifecycleRevision(context: CommandContext): number | null {
+  const solver = resourceData<SolverStatusResource>(
+    context,
+    SIMULATION_SOLVER_STATUS_PATH,
+  );
+  const stage = resourceData<StageExecutionResource>(
+    context,
+    SIMULATION_STAGES_EXECUTION_PATH,
+  );
+  const solverRevision = numericRevision(solver?.revision);
+  const stageRevision = numericRevision(stage?.revision);
+  if (solverRevision === null) return stageRevision;
+  if (stageRevision === null) return solverRevision;
+  return Math.max(solverRevision, stageRevision);
 }
 
 function backendRuntimeControl(
@@ -278,9 +375,14 @@ function sharedDomainMeshReadyWithoutSceneProvenance(
     activeBuildRecord?.mesh_pipeline_status,
   ).some(
     (phase) =>
-      phase.id.toLowerCase() === "ready" &&
+      meshReadinessPhaseId(phase.id) &&
       meshReadyStatus(phase.status.toLowerCase()),
   );
+}
+
+function meshReadinessPhaseId(id: string): boolean {
+  const normalized = id.toLowerCase();
+  return normalized === "ready" || normalized === "readiness";
 }
 
 function meshReadyStatus(status: string): boolean {
@@ -351,6 +453,7 @@ function hasRuntimeGeometryBlocker(context: CommandContext): boolean {
     const severity = asString(record.severity)?.toLowerCase();
     const status = asString(record.status)?.toLowerCase();
     const key = keyHint.toLowerCase();
+    if (record.dirty === true) return true;
     const blocking =
       record.blocking === true ||
       recordBlocksRuntime(record) ||
@@ -465,6 +568,10 @@ function activeRuntimeCommandResource(
     context,
     SIMULATION_COMMANDS_PATH,
   );
+  const state = runtimeState(context);
+  if (state && runtimeCommandQueueIsStale(context, queue, state)) {
+    return null;
+  }
   const command = queue?.commands.find(
     (entry) =>
       entry.kind === kind &&

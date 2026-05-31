@@ -208,7 +208,6 @@ function createController({
   return {
     controller: new VisualizationRegistrySyncController({
       api: { patch: patchSpy },
-      intervalMs: 1_000,
       maxLatencyMs: 2_500,
       now,
       quietMs: 600,
@@ -255,6 +254,8 @@ describe("VisualizationRegistrySyncController", () => {
     expect(visualizationRegistrySyncControllerSource).not.toContain("stableJson");
     expect(visualizationRegistrySyncControllerSource).not.toContain("sortJson");
     expect(visualizationRegistrySyncControllerSource).not.toContain("JSON.stringify");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("intervalMs");
+    expect(visualizationRegistrySyncControllerSource).not.toContain("setInterval");
   });
 
   it("does not start an idle recurring timer when there are no pending patches", () => {
@@ -429,7 +430,6 @@ describe("VisualizationRegistrySyncController", () => {
     );
     const controller = new VisualizationRegistrySyncController({
       api: { patch: patchSpy },
-      intervalMs: 1_000,
       maxLatencyMs: 2_500,
       now: () => time,
       quietMs: 600,

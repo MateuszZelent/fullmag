@@ -16,6 +16,7 @@ import type { LiveStatusResource } from "../api/apiTypes";
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
   runtimeCommandControlSessionStatusEquals,
+  selectStudyRuntimeCommandSessionStatus,
   shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeCurrentRun,
   shouldLoadRuntimeMeshBuild,
@@ -23,6 +24,7 @@ import {
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeScalars,
   shouldLoadRuntimeStageExecution,
+  studyRuntimeCommandSessionStatusEquals,
 } from "./studyRuntimeResources";
 
 const studyRuntimeResourcesUrl = new URL("./studyRuntimeResources.ts", import.meta.url);
@@ -125,6 +127,54 @@ describe("study runtime command resource bundles", () => {
     expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
   });
 
+  it("treats run identity changes as runtime command control changes", () => {
+    const previous = statusWith({
+      resources: { commands_revision: 2, scene_revision: 8 },
+      run: {
+        run_id: "run-old",
+        solver_steps: 0,
+        solver_time: 0,
+        stage_count: 1,
+        stage_index: 0,
+        stage_label: "relax",
+        started_at: "0",
+      },
+    }) as LiveStatusResource;
+    const next = statusWith({
+      resources: { commands_revision: 2, scene_revision: 8 },
+      run: {
+        run_id: "run-new",
+        solver_steps: 0,
+        solver_time: 0,
+        stage_count: 1,
+        stage_index: 0,
+        stage_label: "relax",
+        started_at: "0",
+      },
+    }) as LiveStatusResource;
+
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
+  });
+
+  it("treats command completion revision changes as runtime command control changes", () => {
+    const previous = statusWith({
+      resources: {
+        command_completion_revision: 3,
+        commands_revision: 4,
+        stages_revision: 2,
+      },
+    }) as LiveStatusResource;
+    const next = statusWith({
+      resources: {
+        command_completion_revision: 4,
+        commands_revision: 4,
+        stages_revision: 2,
+      },
+    }) as LiveStatusResource;
+
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
+  });
+
   it("selects only command-palette session status fields for the full runtime command bundle", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const commandBundleHook = source.slice(
@@ -139,6 +189,29 @@ describe("study runtime command resource bundles", () => {
     );
     expect(commandBundleHook).not.toContain("useSessionStatus()");
     expect(commandBundleHook).not.toContain("sessionStatus.data");
+  });
+
+  it("treats command completion revision changes as full runtime command state changes", () => {
+    const previous = selectStudyRuntimeCommandSessionStatus({
+      data: statusWith({
+        resources: {
+          command_completion_revision: 3,
+          commands_revision: 4,
+          stages_revision: 2,
+        },
+      }) as LiveStatusResource,
+    });
+    const next = selectStudyRuntimeCommandSessionStatus({
+      data: statusWith({
+        resources: {
+          command_completion_revision: 4,
+          commands_revision: 4,
+          stages_revision: 2,
+        },
+      }) as LiveStatusResource,
+    });
+
+    expect(studyRuntimeCommandSessionStatusEquals(previous, next)).toBe(false);
   });
 
   it("keeps always-mounted command controls off the full runtime resource bundle", () => {

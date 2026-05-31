@@ -97,8 +97,6 @@ struct RenderPolygon {
     vertices: Vec<[f64; 2]>,
 }
 
-
-
 #[derive(Debug, Clone)]
 struct RenderGeometry {
     bounds: SliceOverlayBounds,
@@ -143,10 +141,7 @@ impl RenderGeometry {
             })
             .collect::<Vec<_>>();
         let bounds = bounds_for_polygons(&polygons).unwrap_or(overlay.bounds);
-        Self {
-            bounds,
-            polygons,
-        }
+        Self { bounds, polygons }
     }
 }
 
@@ -263,9 +258,20 @@ pub(crate) fn render_cross_section_png(
 
     // Compute logical image size, then scale by DPR for actual pixel size.
     let (logical_w, logical_h) = if aspect >= 1.0 {
-        (base_res, (base_res - legend_w - MARGIN_LEFT - MARGIN_RIGHT) / aspect + MARGIN_TOP + MARGIN_BOTTOM)
+        (
+            base_res,
+            (base_res - legend_w - MARGIN_LEFT - MARGIN_RIGHT) / aspect
+                + MARGIN_TOP
+                + MARGIN_BOTTOM,
+        )
     } else {
-        ((base_res - MARGIN_TOP - MARGIN_BOTTOM) * aspect + MARGIN_LEFT + MARGIN_RIGHT + legend_w, base_res)
+        (
+            (base_res - MARGIN_TOP - MARGIN_BOTTOM) * aspect
+                + MARGIN_LEFT
+                + MARGIN_RIGHT
+                + legend_w,
+            base_res,
+        )
     };
     let logical_w = logical_w.max(256.0);
     let logical_h = logical_h.max(256.0);
@@ -278,7 +284,12 @@ pub(crate) fn render_cross_section_png(
         .ok_or_else(|| ApiError::internal("failed to create cross-section image pixmap"))?;
 
     // Fill background
-    pixmap.fill(tiny_skia::Color::from_rgba8(BG_COLOR[0], BG_COLOR[1], BG_COLOR[2], BG_COLOR[3]));
+    pixmap.fill(tiny_skia::Color::from_rgba8(
+        BG_COLOR[0],
+        BG_COLOR[1],
+        BG_COLOR[2],
+        BG_COLOR[3],
+    ));
 
     let font = fontdue::Font::from_bytes(FONT_DATA, fontdue::FontSettings::default())
         .map_err(|err| ApiError::internal(format!("failed to load font: {err}")))?;
@@ -358,7 +369,10 @@ pub(crate) fn render_cross_section_png(
             // Fill
             let mut fill_paint = tiny_skia::Paint::default();
             fill_paint.set_color(tiny_skia::Color::from_rgba8(
-                fill_color[0], fill_color[1], fill_color[2], fill_color[3],
+                fill_color[0],
+                fill_color[1],
+                fill_color[2],
+                fill_color[3],
             ));
             fill_paint.anti_alias = true;
             pixmap.fill_path(
@@ -426,7 +440,8 @@ pub(crate) fn render_cross_section_png(
     // Draw axis labels
     let x_label = format!("{} (m)", overlay.u_axis);
     let x_label_width = measure_text(&font, &x_label, FONT_SIZE_LABEL * scale_factor);
-    let x_label_x = (transform.left + transform.width * 0.5) as f32 * scale_factor - x_label_width * 0.5;
+    let x_label_x =
+        (transform.left + transform.width * 0.5) as f32 * scale_factor - x_label_width * 0.5;
     draw_text(
         &mut pixmap,
         &font,
@@ -482,13 +497,18 @@ fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, col
         None => return,
     };
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+    paint.set_color(tiny_skia::Color::from_rgba8(
+        color[0], color[1], color[2], color[3],
+    ));
     pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
 }
 
 fn draw_rect_stroke(
     pixmap: &mut tiny_skia::Pixmap,
-    x: f32, y: f32, w: f32, h: f32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
     color: [u8; 4],
     width: f32,
 ) {
@@ -500,19 +520,30 @@ fn draw_rect_stroke(
     pb.close();
     if let Some(path) = pb.finish() {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+        paint.set_color(tiny_skia::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
         paint.anti_alias = true;
         let stroke = tiny_skia::Stroke {
             width,
             ..Default::default()
         };
-        pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 }
 
 fn draw_line(
     pixmap: &mut tiny_skia::Pixmap,
-    x1: f32, y1: f32, x2: f32, y2: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
     color: [u8; 4],
     width: f32,
 ) {
@@ -521,13 +552,21 @@ fn draw_line(
     pb.line_to(x2, y2);
     if let Some(path) = pb.finish() {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+        paint.set_color(tiny_skia::Color::from_rgba8(
+            color[0], color[1], color[2], color[3],
+        ));
         paint.anti_alias = true;
         let stroke = tiny_skia::Stroke {
             width,
             ..Default::default()
         };
-        pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
     }
 }
 
@@ -548,8 +587,10 @@ fn draw_grid(
         let x = (transform.left + transform.width * frac) as f32 * scale_factor;
         draw_line(
             pixmap,
-            x, transform.top as f32 * scale_factor,
-            x, transform.bottom() as f32 * scale_factor,
+            x,
+            transform.top as f32 * scale_factor,
+            x,
+            transform.bottom() as f32 * scale_factor,
             GRID_COLOR,
             1.0 * scale_factor,
         );
@@ -571,8 +612,10 @@ fn draw_grid(
         let y = (transform.top + transform.height * frac) as f32 * scale_factor;
         draw_line(
             pixmap,
-            transform.left as f32 * scale_factor, y,
-            transform.right() as f32 * scale_factor, y,
+            transform.left as f32 * scale_factor,
+            y,
+            transform.right() as f32 * scale_factor,
+            y,
             GRID_COLOR,
             1.0 * scale_factor,
         );
@@ -608,20 +651,54 @@ fn draw_legend(
     visible_count: usize,
 ) {
     // Legend background
-    fill_rect(pixmap, legend_left, 0.0, LEGEND_WIDTH as f32 * scale_factor, image_height, LEGEND_BG_COLOR);
+    fill_rect(
+        pixmap,
+        legend_left,
+        0.0,
+        LEGEND_WIDTH as f32 * scale_factor,
+        image_height,
+        LEGEND_BG_COLOR,
+    );
     // Divider line
-    draw_line(pixmap, legend_left, 0.0, legend_left, image_height, [207, 214, 224, 255], 1.0 * scale_factor);
+    draw_line(
+        pixmap,
+        legend_left,
+        0.0,
+        legend_left,
+        image_height,
+        [207, 214, 224, 255],
+        1.0 * scale_factor,
+    );
 
     // Title
-    draw_text(pixmap, font, "Quality", legend_left + 16.0 * scale_factor, 28.0 * scale_factor, FONT_SIZE_LEGEND_TITLE * scale_factor, TEXT_COLOR);
-    draw_text(pixmap, font, metric.as_str(), legend_left + 16.0 * scale_factor, 48.0 * scale_factor, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
+    draw_text(
+        pixmap,
+        font,
+        "Quality",
+        legend_left + 16.0 * scale_factor,
+        28.0 * scale_factor,
+        FONT_SIZE_LEGEND_TITLE * scale_factor,
+        TEXT_COLOR,
+    );
+    draw_text(
+        pixmap,
+        font,
+        metric.as_str(),
+        legend_left + 16.0 * scale_factor,
+        48.0 * scale_factor,
+        FONT_SIZE_LEGEND * scale_factor,
+        TEXT_COLOR,
+    );
 
     // Color bar
     let bar_left = legend_left + 20.0 * scale_factor;
     let bar_right = legend_left + 52.0 * scale_factor;
     let bar_width = bar_right - bar_left;
     let bar_top = 80.0 * scale_factor;
-    let bar_bottom = (image_height - 160.0 * scale_factor).clamp(bar_top + 100.0 * scale_factor, bar_top + 500.0 * scale_factor);
+    let bar_bottom = (image_height - 160.0 * scale_factor).clamp(
+        bar_top + 100.0 * scale_factor,
+        bar_top + 500.0 * scale_factor,
+    );
     let bar_height = bar_bottom - bar_top;
     let steps = (bar_height as usize).max(1);
 
@@ -633,7 +710,15 @@ fn draw_legend(
     }
 
     // Color bar border
-    draw_rect_stroke(pixmap, bar_left, bar_top, bar_width, bar_height, FRAME_COLOR, 1.0 * scale_factor);
+    draw_rect_stroke(
+        pixmap,
+        bar_left,
+        bar_top,
+        bar_width,
+        bar_height,
+        FRAME_COLOR,
+        1.0 * scale_factor,
+    );
 
     // Tick labels on colorbar
     let mid = min + (max - min) * 0.5;
@@ -655,8 +740,24 @@ fn draw_legend(
 
     // Stats
     let stats_y = bar_bottom + 30.0 * scale_factor;
-    draw_text(pixmap, font, &format!("scale: {}", color_scale.as_str()), legend_left + 16.0 * scale_factor, stats_y, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
-    draw_text(pixmap, font, &format!("polygons: {}/{}", visible_count, total_count), legend_left + 16.0 * scale_factor, stats_y + 20.0 * scale_factor, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
+    draw_text(
+        pixmap,
+        font,
+        &format!("scale: {}", color_scale.as_str()),
+        legend_left + 16.0 * scale_factor,
+        stats_y,
+        FONT_SIZE_LEGEND * scale_factor,
+        TEXT_COLOR,
+    );
+    draw_text(
+        pixmap,
+        font,
+        &format!("polygons: {}/{}", visible_count, total_count),
+        legend_left + 16.0 * scale_factor,
+        stats_y + 20.0 * scale_factor,
+        FONT_SIZE_LEGEND * scale_factor,
+        TEXT_COLOR,
+    );
 }
 
 // --- Text rendering with fontdue ---
@@ -665,7 +766,8 @@ fn draw_text(
     pixmap: &mut tiny_skia::Pixmap,
     font: &fontdue::Font,
     text: &str,
-    x: f32, y: f32,
+    x: f32,
+    y: f32,
     size: f32,
     color: [u8; 4],
 ) {
@@ -682,7 +784,15 @@ fn draw_text(
         }
         let gx = cursor_x + metrics.xmin as f32;
         let gy = y - metrics.ymin as f32 - metrics.height as f32 + size * 0.85;
-        composite_glyph(pixmap, &bitmap, metrics.width, metrics.height, gx, gy, color);
+        composite_glyph(
+            pixmap,
+            &bitmap,
+            metrics.width,
+            metrics.height,
+            gx,
+            gy,
+            color,
+        );
         cursor_x += metrics.advance_width;
     }
 }
@@ -691,7 +801,8 @@ fn draw_text_vertical(
     pixmap: &mut tiny_skia::Pixmap,
     font: &fontdue::Font,
     text: &str,
-    x: f32, center_y: f32,
+    x: f32,
+    center_y: f32,
     size: f32,
     color: [u8; 4],
 ) {
@@ -745,7 +856,8 @@ fn draw_text_vertical(
             let g = ((src.green() as u16 * a + dst.green() as u16 * ia) / 255) as u8;
             let b = ((src.blue() as u16 * a + dst.blue() as u16 * ia) / 255) as u8;
             let out_a = (a + (dst.alpha() as u16 * ia / 255)).min(255) as u8;
-            pixels[dst_idx] = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, out_a).unwrap_or(dst);
+            pixels[dst_idx] =
+                tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, out_a).unwrap_or(dst);
         }
     }
 }
@@ -766,8 +878,10 @@ fn measure_text(font: &fontdue::Font, text: &str, size: f32) -> f32 {
 fn composite_glyph(
     pixmap: &mut tiny_skia::Pixmap,
     bitmap: &[u8],
-    gw: usize, gh: usize,
-    x: f32, y: f32,
+    gw: usize,
+    gh: usize,
+    x: f32,
+    y: f32,
     color: [u8; 4],
 ) {
     let pw = pixmap.width() as i32;
@@ -813,9 +927,7 @@ fn padded_bounds(bounds: SliceOverlayBounds) -> SliceOverlayBounds {
     }
 }
 
-fn bounds_for_polygons(
-    polygons: &[RenderPolygon],
-) -> Option<SliceOverlayBounds> {
+fn bounds_for_polygons(polygons: &[RenderPolygon]) -> Option<SliceOverlayBounds> {
     let mut u_min = f64::INFINITY;
     let mut u_max = f64::NEG_INFINITY;
     let mut v_min = f64::INFINITY;
@@ -1220,7 +1332,12 @@ mod tests {
         .unwrap();
 
         // Wide mesh should produce a wider-than-tall image
-        assert!(rendered.width > rendered.height, "expected w>h, got {}x{}", rendered.width, rendered.height);
+        assert!(
+            rendered.width > rendered.height,
+            "expected w>h, got {}x{}",
+            rendered.width,
+            rendered.height
+        );
     }
 
     #[test]

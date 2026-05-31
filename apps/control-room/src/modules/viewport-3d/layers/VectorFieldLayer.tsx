@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -27,7 +27,8 @@ const UNIT_Y = new Vector3(0, 1, 0);
 const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
 const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
-const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 1024;
+const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 256;
+const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS = 3;
 const VECTOR_GLYPH_BUILD_MEASURE =
   "fullmag.viewport3d.buildVectorGlyphInstances";
 const VECTOR_GLYPH_COLOR_UPLOAD_MEASURE =
@@ -41,6 +42,17 @@ interface VectorGlyphUploadBatch {
 }
 
 type VectorGlyphUploadTaskHandle = ReturnType<typeof setTimeout>;
+type VectorGlyphInstances = NonNullable<
+  ReturnType<typeof buildVectorGlyphInstances>
+>;
+
+interface VectorGlyphTransformScratch {
+  direction: Vector3;
+  matrix: Matrix4;
+  position: Vector3;
+  quaternion: Quaternion;
+  scale: Vector3;
+}
 
 function buildVectorGlyphUploadBatches(
   count: number,
@@ -60,11 +72,28 @@ function buildVectorGlyphUploadBatches(
 function requestVectorGlyphUploadTask(
   callback: () => void,
 ): VectorGlyphUploadTaskHandle {
-  return setTimeout(callback, 0);
+  return setTimeout(callback, 16);
 }
 
 function cancelVectorGlyphUploadTask(handle: VectorGlyphUploadTaskHandle): void {
   clearTimeout(handle);
+}
+
+function nowVectorGlyphUploadMs(): number {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function markVectorGlyphAttributeRange(
+  attribute: InstancedBufferAttribute,
+  start: number,
+  count: number,
+  itemSize: number,
+): void {
+  const safeStart = Math.max(0, Math.floor(start));
+  const safeCount = Math.max(0, Math.floor(count));
+  if (safeCount <= 0) return;
+  attribute.addUpdateRange(safeStart * itemSize, safeCount * itemSize);
+  attribute.needsUpdate = true;
 }
 
 function markVectorGlyphWork(name: string): string | null {
@@ -200,73 +229,29 @@ export function ensureWhiteVertexColorAttribute(
   return geometry;
 }
 
-export function VectorFieldLayer({
-  colors,
-  colorMode = "orientation",
-  opacity = 1,
-  segments,
-  style,
-  materialProfile,
+function createVectorGlyphTransformScratch(): VectorGlyphTransformScratch {
+  return {
+    direction: new Vector3(),
+    matrix: new Matrix4(),
+    position: new Vector3(),
+    quaternion: new Quaternion(),
+    scale: new Vector3(),
+  };
+}
+
+function resolveVectorGlyphCapacity(glyphCount: number): number {
+  const desired = Math.max(1, glyphCount);
+  let next = 1;
+  while (next < desired) next *= 2;
+  return Math.min(next, 1 << 20); // cap at ~1M
+}
+
+function useTrackedVectorGlyphResources({
   tracker,
 }: {
-  colors: Viewport3DColors;
-  colorMode?: string;
-  materialProfile?: Viewport3DMaterialProfile["glyphs"];
-  opacity?: number;
-  segments: Float32Array | null;
-  style?: VectorFieldLayerVectorStyle;
   tracker: Viewport3DResourceTracker;
 }) {
-  const invalidate = useBatchedInvalidate();
-  const shaftRef = useRef<InstancedMesh>(null);
-  const headRef = useRef<InstancedMesh>(null);
   const glyphPolicy = RENDER_POLICIES.glyphs;
-  const resolvedStyle = resolveVectorFieldLayerStyle({
-    colorMode,
-    fallbackColor: String(colors.field),
-    opacity: opacity * (materialProfile?.opacityScale ?? 1),
-    style,
-  });
-  const glyphs = useMemo(
-    () =>
-      segments
-        ? measureVectorGlyphSyncWork(VECTOR_GLYPH_BUILD_MEASURE, () =>
-            buildVectorGlyphInstances(segments, {
-              colorMode,
-              headRadiusRatio: resolvedStyle.headRadiusRatio,
-              shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
-            }),
-          )
-        : null,
-    [
-      colorMode,
-      resolvedStyle.headRadiusRatio,
-      resolvedStyle.shaftRadiusRatio,
-      segments,
-    ],
-  );
-  const useInstanceColors = Boolean(glyphs?.colors);
-  const glyphCount = glyphs?.count ?? 0;
-  const transformScratch = useMemo(
-    () => ({
-      direction: new Vector3(),
-      matrix: new Matrix4(),
-      position: new Vector3(),
-      quaternion: new Quaternion(),
-      scale: new Vector3(),
-    }),
-    [],
-  );
-
-  // Stable power-of-two capacity keeps allocations bounded without render-time
-  // ref reads, which React Compiler rejects.
-  const capacity = useMemo(() => {
-    const desired = Math.max(1, glyphCount);
-    let next = 1;
-    while (next < desired) next *= 2;
-    return Math.min(next, 1 << 20); // cap at ~1M
-  }, [glyphCount]);
-
   const shaftGeometry = useMemo(
     () =>
       tracker.track(
@@ -298,12 +283,47 @@ export function VectorFieldLayer({
     [glyphPolicy, tracker],
   );
 
+  useEffect(
+    () => () => tracker.release("geometry", shaftGeometry),
+    [shaftGeometry, tracker],
+  );
+  useEffect(
+    () => () => tracker.release("geometry", headGeometry),
+    [headGeometry, tracker],
+  );
+  useEffect(
+    () => () => tracker.release("material", material),
+    [material, tracker],
+  );
+
+  return { glyphPolicy, headGeometry, material, shaftGeometry };
+}
+
+function useVectorGlyphMaterialSync({
+  glyphPolicy,
+  invalidate,
+  material,
+  materialProfile,
+  materialColor,
+  materialOpacity,
+  tracker,
+  useInstanceColors,
+}: {
+  glyphPolicy: typeof RENDER_POLICIES.glyphs;
+  invalidate: () => void;
+  material: MeshBasicMaterial;
+  materialColor: string;
+  materialOpacity: number;
+  materialProfile?: Viewport3DMaterialProfile["glyphs"];
+  tracker: Viewport3DResourceTracker;
+  useInstanceColors: boolean;
+}): void {
   useEffect(() => {
     syncVectorGlyphMaterialStyle({
       glyphTransparent: glyphPolicy.transparent,
       material,
-      materialColor: resolvedStyle.materialColor,
-      materialOpacity: resolvedStyle.materialOpacity,
+      materialColor,
+      materialOpacity,
       toneMapped: materialProfile?.toneMapped ?? false,
       useInstanceColors,
     });
@@ -311,17 +331,20 @@ export function VectorFieldLayer({
     invalidate();
   }, [
     material,
-    resolvedStyle.materialOpacity,
+    materialOpacity,
     glyphPolicy.transparent,
     materialProfile?.toneMapped,
     useInstanceColors,
-    resolvedStyle.materialColor,
+    materialColor,
     invalidate,
     tracker,
   ]);
+}
 
+function useVectorGlyphInstanceColorAttribute(
+  capacity: number,
+): RefObject<InstancedBufferAttribute | null> {
   const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);
-
   useEffect(() => {
     const attr = new InstancedBufferAttribute(
       new Float32Array(capacity * 3),
@@ -336,19 +359,30 @@ export function VectorFieldLayer({
     };
   }, [capacity]);
 
-  useEffect(
-    () => () => tracker.release("geometry", shaftGeometry),
-    [shaftGeometry, tracker],
-  );
-  useEffect(
-    () => () => tracker.release("geometry", headGeometry),
-    [headGeometry, tracker],
-  );
-  useEffect(
-    () => () => tracker.release("material", material),
-    [material, tracker],
-  );
+  return instanceColorAttrRef;
+}
 
+function useVectorGlyphUpload({
+  glyphs,
+  headRef,
+  instanceColorAttrRef,
+  invalidate,
+  material,
+  materialColor,
+  shaftRef,
+  tracker,
+  transformScratch,
+}: {
+  glyphs: VectorGlyphInstances | null;
+  headRef: RefObject<InstancedMesh | null>;
+  instanceColorAttrRef: RefObject<InstancedBufferAttribute | null>;
+  invalidate: () => void;
+  material: MeshBasicMaterial;
+  materialColor: string;
+  shaftRef: RefObject<InstancedMesh | null>;
+  tracker: Viewport3DResourceTracker;
+  transformScratch: VectorGlyphTransformScratch;
+}): void {
   useEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
@@ -369,7 +403,7 @@ export function VectorFieldLayer({
       head: activeHead,
       instanceColorAttr,
       material,
-      materialColor: resolvedStyle.materialColor,
+      materialColor,
       shaft: activeShaft,
     });
     activeShaft.instanceMatrix.setUsage(DynamicDrawUsage);
@@ -380,8 +414,14 @@ export function VectorFieldLayer({
     if (glyphColors) {
       measureVectorGlyphSyncWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, () => {
         const colorArray = instanceColorAttr.array as Float32Array;
+        instanceColorAttr.clearUpdateRanges();
         colorArray.set(glyphColors.subarray(0, activeGlyphs.count * 3));
-        instanceColorAttr.needsUpdate = true;
+        markVectorGlyphAttributeRange(
+          instanceColorAttr,
+          0,
+          activeGlyphs.count,
+          3,
+        );
       });
     }
 
@@ -392,55 +432,86 @@ export function VectorFieldLayer({
     let cancelled = false;
     let measured = false;
     let task: VectorGlyphUploadTaskHandle | null = null;
+    activeShaft.instanceMatrix.clearUpdateRanges();
+    activeHead.instanceMatrix.clearUpdateRanges();
 
     function uploadNextBatch(): void {
       if (cancelled) return;
 
-      const batch = batches[batchIndex];
-      if (!batch) return;
+      task = null;
+      const frameStart = nowVectorGlyphUploadMs();
+      let uploadedCount = 0;
 
-      for (let index = batch.start; index < batch.end; index += 1) {
-        const offset = index * 3;
-        direction.set(
-          activeGlyphs.directions[offset] ?? 0,
-          activeGlyphs.directions[offset + 1] ?? 1,
-          activeGlyphs.directions[offset + 2] ?? 0,
-        );
-        quaternion.setFromUnitVectors(UNIT_Y, direction);
+      while (batchIndex < batches.length) {
+        const batch = batches[batchIndex];
+        if (!batch) break;
 
-        position.set(
-          activeGlyphs.shaftCenters[offset] ?? 0,
-          activeGlyphs.shaftCenters[offset + 1] ?? 0,
-          activeGlyphs.shaftCenters[offset + 2] ?? 0,
-        );
-        scale.set(
-          activeGlyphs.shaftScales[offset] ?? 0,
-          activeGlyphs.shaftScales[offset + 1] ?? 0,
-          activeGlyphs.shaftScales[offset + 2] ?? 0,
-        );
-        matrix.compose(position, quaternion, scale);
-        activeShaft.setMatrixAt(index, matrix);
+        for (let index = batch.start; index < batch.end; index += 1) {
+          const offset = index * 3;
+          direction.set(
+            activeGlyphs.directions[offset] ?? 0,
+            activeGlyphs.directions[offset + 1] ?? 1,
+            activeGlyphs.directions[offset + 2] ?? 0,
+          );
+          quaternion.setFromUnitVectors(UNIT_Y, direction);
 
-        position.set(
-          activeGlyphs.headCenters[offset] ?? 0,
-          activeGlyphs.headCenters[offset + 1] ?? 0,
-          activeGlyphs.headCenters[offset + 2] ?? 0,
+          position.set(
+            activeGlyphs.shaftCenters[offset] ?? 0,
+            activeGlyphs.shaftCenters[offset + 1] ?? 0,
+            activeGlyphs.shaftCenters[offset + 2] ?? 0,
+          );
+          scale.set(
+            activeGlyphs.shaftScales[offset] ?? 0,
+            activeGlyphs.shaftScales[offset + 1] ?? 0,
+            activeGlyphs.shaftScales[offset + 2] ?? 0,
+          );
+          matrix.compose(position, quaternion, scale);
+          activeShaft.setMatrixAt(index, matrix);
+
+          position.set(
+            activeGlyphs.headCenters[offset] ?? 0,
+            activeGlyphs.headCenters[offset + 1] ?? 0,
+            activeGlyphs.headCenters[offset + 2] ?? 0,
+          );
+          scale.set(
+            activeGlyphs.headScales[offset] ?? 0,
+            activeGlyphs.headScales[offset + 1] ?? 0,
+            activeGlyphs.headScales[offset + 2] ?? 0,
+          );
+          matrix.compose(position, quaternion, scale);
+          activeHead.setMatrixAt(index, matrix);
+        }
+
+        const batchCount = batch.end - batch.start;
+        markVectorGlyphAttributeRange(
+          activeShaft.instanceMatrix,
+          batch.start,
+          batchCount,
+          16,
         );
-        scale.set(
-          activeGlyphs.headScales[offset] ?? 0,
-          activeGlyphs.headScales[offset + 1] ?? 0,
-          activeGlyphs.headScales[offset + 2] ?? 0,
+        markVectorGlyphAttributeRange(
+          activeHead.instanceMatrix,
+          batch.start,
+          batchCount,
+          16,
         );
-        matrix.compose(position, quaternion, scale);
-        activeHead.setMatrixAt(index, matrix);
+        uploadedCount += batchCount;
+        batchIndex += 1;
+
+        if (
+          batchIndex < batches.length &&
+          nowVectorGlyphUploadMs() - frameStart >=
+            VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS
+        ) {
+          break;
+        }
       }
 
-      activeShaft.instanceMatrix.needsUpdate = true;
-      activeHead.instanceMatrix.needsUpdate = true;
-      tracker.recordDirtyFrame("vector-glyphs");
-      invalidate();
+      if (uploadedCount > 0) {
+        tracker.recordDirtyFrame("vector-glyphs");
+        invalidate();
+      }
 
-      batchIndex += 1;
       if (batchIndex < batches.length) {
         task = requestVectorGlyphUploadTask(uploadNextBatch);
       } else {
@@ -462,12 +533,96 @@ export function VectorFieldLayer({
     };
   }, [
     glyphs,
+    headRef,
     invalidate,
+    instanceColorAttrRef,
     material,
-    resolvedStyle.materialColor,
+    materialColor,
+    shaftRef,
     tracker,
     transformScratch,
   ]);
+}
+
+export function VectorFieldLayer({
+  colors,
+  colorMode = "orientation",
+  opacity = 1,
+  segments,
+  style,
+  materialProfile,
+  tracker,
+}: {
+  colors: Viewport3DColors;
+  colorMode?: string;
+  materialProfile?: Viewport3DMaterialProfile["glyphs"];
+  opacity?: number;
+  segments: Float32Array | null;
+  style?: VectorFieldLayerVectorStyle;
+  tracker: Viewport3DResourceTracker;
+}) {
+  const invalidate = useBatchedInvalidate();
+  const shaftRef = useRef<InstancedMesh>(null);
+  const headRef = useRef<InstancedMesh>(null);
+  const resolvedStyle = resolveVectorFieldLayerStyle({
+    colorMode,
+    fallbackColor: String(colors.field),
+    opacity: opacity * (materialProfile?.opacityScale ?? 1),
+    style,
+  });
+  const glyphs = useMemo(
+    () =>
+      segments
+        ? measureVectorGlyphSyncWork(VECTOR_GLYPH_BUILD_MEASURE, () =>
+            buildVectorGlyphInstances(segments, {
+              colorMode,
+              headRadiusRatio: resolvedStyle.headRadiusRatio,
+              shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
+            }),
+          )
+        : null,
+    [
+      colorMode,
+      resolvedStyle.headRadiusRatio,
+      resolvedStyle.shaftRadiusRatio,
+      segments,
+    ],
+  );
+  const useInstanceColors = Boolean(glyphs?.colors);
+  const glyphCount = glyphs?.count ?? 0;
+  const transformScratch = useMemo(
+    () => createVectorGlyphTransformScratch(),
+    [],
+  );
+  const capacity = useMemo(
+    () => resolveVectorGlyphCapacity(glyphCount),
+    [glyphCount],
+  );
+  const { glyphPolicy, headGeometry, material, shaftGeometry } =
+    useTrackedVectorGlyphResources({ tracker });
+  const instanceColorAttrRef = useVectorGlyphInstanceColorAttribute(capacity);
+
+  useVectorGlyphMaterialSync({
+    glyphPolicy,
+    invalidate,
+    material,
+    materialColor: resolvedStyle.materialColor,
+    materialOpacity: resolvedStyle.materialOpacity,
+    materialProfile,
+    tracker,
+    useInstanceColors,
+  });
+  useVectorGlyphUpload({
+    glyphs,
+    headRef,
+    instanceColorAttrRef,
+    invalidate,
+    material,
+    materialColor: resolvedStyle.materialColor,
+    shaftRef,
+    tracker,
+    transformScratch,
+  });
 
   if (!glyphs || glyphs.count === 0) return null;
 

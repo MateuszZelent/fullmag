@@ -1,10 +1,10 @@
 "use client";
 
-import { OrbitControls } from "@react-three/drei";
+import { ArcballControls as DreiArcballControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import type { ComponentRef } from "react";
-import { MathUtils, MOUSE, type Camera } from "three";
+import { MathUtils, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
@@ -15,6 +15,12 @@ import {
   type Viewport3DCameraProjection,
   type Viewport3DCameraState,
 } from "../viewport3dStore";
+import {
+  beginViewport3DCameraGesture,
+  endViewport3DCameraGesture,
+  viewport3DCameraGestureActive,
+  type Viewport3DCameraGestureRef,
+} from "./viewport3DCameraGesture";
 
 interface Viewport3DCameraFit {
   far: number;
@@ -33,27 +39,15 @@ export interface Viewport3DOrbitDebugAngles {
   polar: number;
 }
 
-type OrbitControlsHandle = ComponentRef<typeof OrbitControls> & {
-  getAzimuthalAngle?: () => number;
-  getPolarAngle?: () => number;
-  rotateLeft?: (angle: number) => void;
-  rotateUp?: (angle: number) => void;
-};
-
-type OrbitMouseAction = (typeof MOUSE)[keyof typeof MOUSE];
+type ArcballControlsHandle = ComponentRef<typeof DreiArcballControls>;
 
 interface Viewport3DCameraInteractionOptions {
-  enableDamping: false;
-  enablePan: true;
-  enableZoom: true;
-  mouseButtons: {
-    LEFT: OrbitMouseAction;
-    MIDDLE: OrbitMouseAction;
-    RIGHT: OrbitMouseAction;
-  };
-  panSpeed: number;
-  rotateSpeed: number;
-  screenSpacePanning: true;
+  dampingFactor: number;
+  enableAnimations: boolean;
+  enablePan: boolean;
+  enableRotate: boolean;
+  enableZoom: boolean;
+  scaleFactor: number;
 }
 
 const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
@@ -67,6 +61,7 @@ const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;
 const ORBIT_DEBUG_TWO_PI = Math.PI * 2;
+const VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS = 180;
 export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
   azimuthMax: ORBIT_DEBUG_TWO_PI,
   azimuthMin: 0,
@@ -75,31 +70,38 @@ export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
 } as const;
 
 const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
-  enableDamping: false,
+  dampingFactor: 25,
+  enableAnimations: true,
   enablePan: true,
+  enableRotate: true,
   enableZoom: true,
-  mouseButtons: {
-    LEFT: MOUSE.ROTATE,
-    MIDDLE: MOUSE.DOLLY,
-    RIGHT: MOUSE.PAN,
-  },
-  panSpeed: 1,
-  rotateSpeed: 1,
-  screenSpacePanning: true,
+  scaleFactor: 1.08,
 } satisfies Viewport3DCameraInteractionOptions;
 
 export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
   return VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS;
 }
 
-export function shouldSyncOrbitControlsTarget(
-  currentTarget: readonly number[],
-  nextTarget: readonly number[],
-): boolean {
-  return !nearTuple3(
-    tuple3(currentTarget),
-    tuple3(nextTarget),
-    ORBIT_TARGET_SYNC_EPSILON,
+export function shouldSyncCameraControlsPose({
+  currentPosition,
+  currentTarget,
+  nextCameraState,
+}: {
+  currentPosition: readonly number[];
+  currentTarget: readonly number[];
+  nextCameraState: Viewport3DCameraState;
+}): boolean {
+  return (
+    !nearTuple3(
+      tuple3(currentPosition),
+      nextCameraState.position,
+      ORBIT_TARGET_SYNC_EPSILON,
+    ) ||
+    !nearTuple3(
+      tuple3(currentTarget),
+      nextCameraState.target,
+      ORBIT_TARGET_SYNC_EPSILON,
+    )
   );
 }
 
@@ -136,14 +138,19 @@ export function shouldApplyViewport3DOrbitDebugAngles(
 }
 
 function readViewport3DOrbitDebugAngles(
-  controls: OrbitControlsHandle | null,
+  controls: ArcballControlsHandle | null,
+  camera: Camera,
 ): Viewport3DOrbitDebugAngles | null {
-  if (!controls?.getAzimuthalAngle || !controls.getPolarAngle) return null;
+  const target = controls?.target;
+  if (!target) return null;
+  const offset = camera.position.clone().sub(target);
+  const radius = offset.length();
+  if (!Number.isFinite(radius) || radius <= 0) return null;
   return normalizeViewport3DOrbitDebugAngles({
     azimuth: normalizeOrbitDebugAzimuthFromControls(
-      controls.getAzimuthalAngle(),
+      Math.atan2(offset.y, offset.x),
     ),
-    polar: controls.getPolarAngle(),
+    polar: Math.acos(MathUtils.clamp(offset.z / radius, -1, 1)),
   });
 }
 
@@ -191,32 +198,44 @@ export function resolveViewport3DOrbitDebugControlDeltas({
 }: {
   currentAngles: Viewport3DOrbitDebugAngles;
   targetAngles: Viewport3DOrbitDebugAngles;
-}): { rotateLeft: number; rotateUp: number } {
+}): { azimuth: number; polar: number } {
   return {
-    rotateLeft: -shortestOrbitDebugAzimuthDelta(
+    azimuth: shortestOrbitDebugAzimuthDelta(
       currentAngles.azimuth,
       targetAngles.azimuth,
     ),
-    rotateUp: currentAngles.polar - targetAngles.polar,
+    polar: targetAngles.polar - currentAngles.polar,
   };
 }
 
-function applyViewport3DOrbitDebugControlAngles({
+function applyViewport3DOrbitDebugCameraAngles({
+  camera,
   controls,
   targetAngles,
 }: {
-  controls: OrbitControlsHandle;
+  camera: Camera;
+  controls: ArcballControlsHandle;
   targetAngles: Viewport3DOrbitDebugAngles;
 }): boolean {
-  if (!controls.rotateLeft || !controls.rotateUp) return false;
-  const currentAngles = readViewport3DOrbitDebugAngles(controls);
+  const target = controls.target;
+  if (!target) return false;
+  const currentAngles = readViewport3DOrbitDebugAngles(controls, camera);
   if (!currentAngles) return false;
+  const radius = camera.position.distanceTo(target);
+  if (!Number.isFinite(radius) || radius <= 0) return false;
   const deltas = resolveViewport3DOrbitDebugControlDeltas({
     currentAngles,
     targetAngles,
   });
-  controls.rotateLeft(deltas.rotateLeft);
-  controls.rotateUp(deltas.rotateUp);
+  const nextAzimuth = currentAngles.azimuth + deltas.azimuth;
+  const nextPolar = currentAngles.polar + deltas.polar;
+  const sinPolar = Math.sin(nextPolar);
+  camera.position.set(
+    target.x + radius * sinPolar * Math.cos(nextAzimuth),
+    target.y + radius * sinPolar * Math.sin(nextAzimuth),
+    target.z + radius * Math.cos(nextPolar),
+  );
+  applyCameraLookAt(camera, tuple3(target.toArray()));
   controls.update();
   return true;
 }
@@ -382,17 +401,17 @@ export function shouldAutoFitViewport3DBoundsChange({
 
 export function CameraController({
   bounds,
+  cameraGestureRef,
   cameraState,
   fitRevision,
-  interactionActive,
   onCameraChange,
   resetCameraRevision,
   tracker,
 }: {
   bounds: Viewport3DBounds | null;
+  cameraGestureRef: Viewport3DCameraGestureRef;
   cameraState: Viewport3DCameraState;
   fitRevision: number;
-  interactionActive: boolean;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
@@ -482,7 +501,7 @@ export function CameraController({
   }, []);
 
   useEffect(() => {
-    if (interactionActive) return;
+    if (viewport3DCameraGestureActive(cameraGestureRef)) return;
     if (
       !shouldApplyViewport3DCameraState({
         appliedCamera: appliedCameraRef.current,
@@ -501,7 +520,7 @@ export function CameraController({
     appliedCameraStateRef.current = cameraState;
     invalidate();
     tracker.recordDirtyFrame("camera-resource");
-  }, [camera, cameraState, interactionActive, invalidate, tracker]);
+  }, [camera, cameraGestureRef, cameraState, invalidate, tracker]);
 
   return null;
 }
@@ -532,35 +551,34 @@ function resolveViewport3DCurrentOrthographicScale({
   return fallbackScale;
 }
 
-export function OrbitCameraControls({
-  cameraOrthographicScale,
-  cameraProjection,
-  cameraState,
-  interactionActive,
-  orbitDebugAngles,
-  orbitDebugCommitRevision,
-  orbitDebugRevision,
-  onCameraChange,
-  onCameraInteractionEnd,
-  onCameraInteractionStart,
-  onOrbitDebugAnglesChange,
-  tracker,
-}: {
+interface OrbitCameraControlsProps {
+  cameraGestureRef: Viewport3DCameraGestureRef;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
-  interactionActive: boolean;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
-  onCameraInteractionEnd?: () => void;
-  onCameraInteractionStart?: () => void;
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   tracker: Viewport3DResourceTracker;
-}) {
+}
+
+function useOrbitCameraControlsModel({
+  cameraGestureRef,
+  cameraOrthographicScale,
+  cameraProjection,
+  cameraState,
+  orbitDebugAngles,
+  orbitDebugCommitRevision,
+  orbitDebugRevision,
+  onCameraChange,
+  onOrbitDebugAnglesChange,
+  tracker,
+}: OrbitCameraControlsProps) {
   const { camera, invalidate, size } = useThree();
-  const controlsRef = useRef<OrbitControlsHandle>(null);
+  const controlsRef = useRef<ArcballControlsHandle>(null);
+  const options = resolveViewport3DCameraInteractionOptions();
   const handledOrbitDebugRevisionRef = useRef(orbitDebugRevision);
   const handledOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
   const pendingOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
@@ -568,37 +586,62 @@ export function OrbitCameraControls({
   const orbitDebugTargetRef = useRef(
     normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
   );
+  const controlsSyncingRef = useRef(false);
+  const suppressNextRestCommitRef = useRef(false);
+  const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
 
   useEffect(() => {
-    if (interactionActive) return;
+    if (viewport3DCameraGestureActive(cameraGestureRef)) return;
     const controls = controlsRef.current;
-    if (!controls) return;
-    if (!shouldSyncOrbitControlsTarget(controls.target.toArray(), cameraState.target)) {
+    const currentTarget = controls?.target?.toArray();
+    if (!controls || !currentTarget) return;
+    const currentPosition = camera.position.toArray();
+    if (
+      !shouldSyncCameraControlsPose({
+        currentPosition,
+        currentTarget,
+        nextCameraState: cameraState,
+      })
+    ) {
       return;
     }
-    const [x, y, z] = cameraState.target;
-    controls.target.set(x, y, z);
-    controls.update();
+    controlsSyncingRef.current = true;
+    try {
+      applyViewport3DCameraUp(camera, cameraState.up);
+      camera.position.set(...cameraState.position);
+      applyCameraLookAt(camera, cameraState.target);
+      controls.target.set(...cameraState.target);
+      controls.update();
+    } finally {
+      controlsSyncingRef.current = false;
+    }
     invalidate();
     tracker.recordDirtyFrame("camera-control-target");
-  }, [cameraState.target, interactionActive, invalidate, tracker]);
+  }, [camera, cameraGestureRef, cameraState, invalidate, tracker]);
 
   useEffect(() => {
     const controls = controlsRef.current;
-    const currentAngles = readViewport3DOrbitDebugAngles(controls);
+    const currentAngles = controls
+      ? readViewport3DOrbitDebugAngles(controls, camera)
+      : null;
     if (currentAngles) {
       onOrbitDebugAnglesChange?.(currentAngles);
     }
-  }, [onOrbitDebugAnglesChange]);
+  }, [camera, onOrbitDebugAnglesChange]);
 
   useEffect(() => {
     if (handledOrbitDebugRevisionRef.current === orbitDebugRevision) return;
     handledOrbitDebugRevisionRef.current = orbitDebugRevision;
     orbitDebugTargetRef.current = normalizeViewport3DOrbitDebugAngles(orbitDebugAngles);
     orbitDebugAnimatingRef.current = true;
+    suppressNextRestCommitRef.current = true;
+    beginViewport3DCameraGesture(cameraGestureRef);
     invalidate();
     tracker.recordDirtyFrame("camera-orbit-debug-request");
   }, [
+    cameraGestureRef,
     invalidate,
     orbitDebugAngles,
     orbitDebugRevision,
@@ -611,9 +654,11 @@ export function OrbitCameraControls({
     }
     pendingOrbitDebugCommitRevisionRef.current = orbitDebugCommitRevision;
     orbitDebugAnimatingRef.current = true;
+    suppressNextRestCommitRef.current = true;
+    beginViewport3DCameraGesture(cameraGestureRef);
     invalidate();
     tracker.recordDirtyFrame("camera-orbit-debug-commit");
-  }, [invalidate, orbitDebugCommitRevision, tracker]);
+  }, [cameraGestureRef, invalidate, orbitDebugCommitRevision, tracker]);
 
   useFrame((_, deltaSeconds) => {
     if (!orbitDebugAnimatingRef.current) return;
@@ -623,7 +668,7 @@ export function OrbitCameraControls({
 
     const targetAngles = orbitDebugTargetRef.current;
     const currentAngles =
-      readViewport3DOrbitDebugAngles(controls) ?? targetAngles;
+      readViewport3DOrbitDebugAngles(controls, camera) ?? targetAngles;
     const nextAngles = resolveViewport3DOrbitDebugStep({
       currentAngles,
       deltaSeconds,
@@ -631,7 +676,8 @@ export function OrbitCameraControls({
     });
 
     if (
-      !applyViewport3DOrbitDebugControlAngles({
+      !applyViewport3DOrbitDebugCameraAngles({
+        camera,
         controls,
         targetAngles: nextAngles,
       })
@@ -651,10 +697,12 @@ export function OrbitCameraControls({
     ) {
       handledOrbitDebugCommitRevisionRef.current =
         pendingOrbitDebugCommitRevisionRef.current;
+      const controlPosition = camera.position.toArray();
+      const controlTarget = controls.target.toArray();
       commitOrbitCameraEnd({
-        cameraPosition: tuple3(camera.position.toArray()),
+        cameraPosition: tuple3(controlPosition),
         cameraUp: tuple3(camera.up.toArray()),
-        controlTarget: controls.target.toArray(),
+        controlTarget,
         onCameraChange,
         orthographicScale:
           cameraProjection === "orthographic"
@@ -665,42 +713,30 @@ export function OrbitCameraControls({
               })
             : undefined,
         projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
+        syncStore: false,
       });
-      onCameraInteractionEnd?.();
+      endViewport3DCameraGesture(cameraGestureRef);
+    } else if (settled) {
+      endViewport3DCameraGesture(cameraGestureRef);
     }
 
     invalidate();
     tracker.recordDirtyFrame("camera-orbit-debug");
   });
 
-  const recordOrbitControlFrame = useCallback(() => {
-    tracker.recordDirtyFrame("camera-control");
-  }, [tracker]);
-
-  // Performance Optimization: Debounce handleEnd for zoom/wheel interactions.
-  // OrbitControls dispatches start and end events back-to-back synchronously
-  // on every scroll/wheel event notch, which chokes the React/Zustand updates.
-  // Debouncing end-of-interaction by 200ms groups rapid ticks into one active session.
-  const endTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (endTimeoutRef.current !== null) {
-        clearTimeout(endTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleStart = useCallback(() => {
-    if (endTimeoutRef.current !== null) {
-      clearTimeout(endTimeoutRef.current);
-      endTimeoutRef.current = null;
+  const commitCameraControlsPose = useCallback(() => {
+    if (controlsSyncingRef.current) return;
+    if (suppressNextRestCommitRef.current) {
+      suppressNextRestCommitRef.current = false;
+      return;
     }
-    onCameraInteractionStart?.();
-  }, [onCameraInteractionStart]);
-
-  const handleEnd = useCallback(() => {
-    const target = controlsRef.current?.target.toArray() ?? cameraState.target;
+    const controls = controlsRef.current;
+    const controlTarget = controls?.target?.toArray();
+    if (!controls || !controlTarget) {
+      endViewport3DCameraGesture(cameraGestureRef);
+      return;
+    }
+    const controlPosition = camera.position.toArray();
     const orthographicScale =
       cameraProjection === "orthographic"
         ? resolveViewport3DCurrentOrthographicScale({
@@ -710,61 +746,103 @@ export function OrbitCameraControls({
           })
         : undefined;
     commitOrbitCameraEnd({
-      cameraPosition: tuple3(camera.position.toArray()),
+      cameraPosition: tuple3(controlPosition),
       cameraUp: tuple3(camera.up.toArray()),
-      controlTarget: target,
+      controlTarget,
       onCameraChange,
       orthographicScale,
       projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
+      syncStore: false,
     });
-    const currentAngles = readViewport3DOrbitDebugAngles(controlsRef.current);
+    const currentAngles = readViewport3DOrbitDebugAngles(controls, camera);
     if (currentAngles) {
       onOrbitDebugAnglesChange?.(currentAngles);
     }
-    onCameraInteractionEnd?.();
+    endViewport3DCameraGesture(cameraGestureRef);
   }, [
     camera,
+    cameraGestureRef,
     cameraOrthographicScale,
     cameraProjection,
-    cameraState.target,
     onCameraChange,
-    onCameraInteractionEnd,
     onOrbitDebugAnglesChange,
     size.height,
   ]);
 
-  const handleEndRef = useRef(handleEnd);
-  useEffect(() => {
-    handleEndRef.current = handleEnd;
-  }, [handleEnd]);
-
-  const debouncedHandleEnd = useCallback(() => {
-    if (endTimeoutRef.current !== null) {
-      clearTimeout(endTimeoutRef.current);
-    }
-    endTimeoutRef.current = setTimeout(() => {
-      endTimeoutRef.current = null;
-      handleEndRef.current();
-    }, 200);
+  const clearCameraControlsPoseCommit = useCallback(() => {
+    if (cameraControlsPoseCommitTimeoutRef.current === null) return;
+    clearTimeout(cameraControlsPoseCommitTimeoutRef.current);
+    cameraControlsPoseCommitTimeoutRef.current = null;
   }, []);
 
-  const options = resolveViewport3DCameraInteractionOptions();
+  const scheduleCameraControlsPoseCommit = useCallback(() => {
+    if (
+      controlsSyncingRef.current ||
+      orbitDebugAnimatingRef.current ||
+      suppressNextRestCommitRef.current
+    ) {
+      return;
+    }
+    clearCameraControlsPoseCommit();
+    cameraControlsPoseCommitTimeoutRef.current = setTimeout(() => {
+      cameraControlsPoseCommitTimeoutRef.current = null;
+      commitCameraControlsPose();
+    }, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS);
+  }, [clearCameraControlsPoseCommit, commitCameraControlsPose]);
+
+  useEffect(
+    () => () => {
+      clearCameraControlsPoseCommit();
+    },
+    [clearCameraControlsPoseCommit],
+  );
+
+  const recordOrbitControlFrame = useCallback(() => {
+    tracker.recordDirtyFrame("camera-control");
+    scheduleCameraControlsPoseCommit();
+  }, [scheduleCameraControlsPoseCommit, tracker]);
+
+  const handleTransitionStart = useCallback(() => {
+    if (controlsSyncingRef.current) return;
+    clearCameraControlsPoseCommit();
+    beginViewport3DCameraGesture(cameraGestureRef);
+  }, [cameraGestureRef, clearCameraControlsPoseCommit]);
+
+  const handleEnd = useCallback(() => {
+    scheduleCameraControlsPoseCommit();
+  }, [scheduleCameraControlsPoseCommit]);
+
+  return {
+    controlsRef,
+    handleEnd,
+    handleTransitionStart,
+    options,
+    recordOrbitControlFrame,
+  };
+}
+
+export function OrbitCameraControls(props: OrbitCameraControlsProps) {
+  const {
+    controlsRef,
+    handleEnd,
+    handleTransitionStart,
+    options,
+    recordOrbitControlFrame,
+  } = useOrbitCameraControlsModel(props);
 
   return (
-    <OrbitControls
+    <DreiArcballControls
       ref={controlsRef}
       makeDefault
-      enableDamping={options.enableDamping}
+      dampingFactor={options.dampingFactor}
+      enableAnimations={options.enableAnimations}
       enablePan={options.enablePan}
+      enableRotate={options.enableRotate}
       enableZoom={options.enableZoom}
-      mouseButtons={options.mouseButtons}
-      panSpeed={options.panSpeed}
-      rotateSpeed={options.rotateSpeed}
-      screenSpacePanning={options.screenSpacePanning}
-      zoomToCursor
+      scaleFactor={options.scaleFactor}
       onChange={recordOrbitControlFrame}
-      onEnd={debouncedHandleEnd}
-      onStart={handleStart}
+      onEnd={handleEnd}
+      onStart={handleTransitionStart}
     />
   );
 }

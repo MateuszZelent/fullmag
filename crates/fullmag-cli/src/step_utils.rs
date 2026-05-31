@@ -1994,6 +1994,18 @@ pub(crate) fn build_interactive_command_stage(
 ) -> Result<Option<ResolvedScriptStage>> {
     match command.kind.as_str() {
         "close" => Ok(None),
+        "solve" => {
+            let mut solve_command = command.clone();
+            solve_command.kind = match &base_problem.study {
+                fullmag_ir::StudyIR::Relaxation { .. } => "relax".to_string(),
+                fullmag_ir::StudyIR::TimeEvolution { .. } => "run".to_string(),
+                fullmag_ir::StudyIR::Eigenmodes { .. }
+                | fullmag_ir::StudyIR::FrequencyResponse { .. } => {
+                    anyhow::bail!("interactive 'solve' is not supported for this study kind")
+                }
+            };
+            build_interactive_command_stage(base_problem, &solve_command)
+        }
         "stop" | "break" | "pause" | "resume" => anyhow::bail!(
             "interactive control command '{}' must be handled before stage materialization",
             command.kind
@@ -2161,7 +2173,7 @@ pub(crate) fn build_resumable_interactive_command(
             resumed.until_seconds = Some(remaining_until_seconds);
             Some(resumed)
         }
-        "relax" => {
+        "relax" | "solve" => {
             let requested_max_steps = command.max_steps.unwrap_or(50_000);
             let executed_steps = stage_result.steps.last().map(|step| step.step).unwrap_or(0);
             let remaining_max_steps = requested_max_steps.saturating_sub(executed_steps);
@@ -2644,6 +2656,49 @@ mod tests {
         let stage = build_interactive_command_stage(&base_problem, &command)
             .expect("interactive relax should build")
             .expect("relax command should materialize a stage");
+
+        assert_eq!(stage.entrypoint_kind, "interactive_relax");
+        assert!(stage.until_seconds.is_infinite());
+    }
+
+    #[test]
+    fn build_interactive_solve_restarts_relaxation_study() {
+        let base_problem = sample_problem_ir_with_adaptive_relax_dt(4e-16);
+        let command = crate::types::SessionCommand {
+            seq: 1,
+            command_id: "cmd-solve".to_string(),
+            kind: "solve".to_string(),
+            created_at_unix_ms: 0,
+            target: None,
+            reason: None,
+            precondition: None,
+            client_intent_id: None,
+            requested_at_unix_ms: None,
+            until_seconds: None,
+            max_steps: Some(20),
+            torque_tolerance: Some(1e-4),
+            energy_tolerance: None,
+            integrator: None,
+            fixed_timestep: None,
+            max_error: None,
+            relax_algorithm: Some("llg_overdamped".to_string()),
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+            profile: None,
+        };
+
+        let stage = build_interactive_command_stage(&base_problem, &command)
+            .expect("interactive solve should build")
+            .expect("solve command should materialize a stage");
 
         assert_eq!(stage.entrypoint_kind, "interactive_relax");
         assert!(stage.until_seconds.is_infinite());

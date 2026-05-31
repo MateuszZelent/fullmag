@@ -12,7 +12,7 @@ function useCameraRegistryController(): CameraRegistryController {
   return useKernel().cameraRegistry;
 }
 
-export function useCameraRegistrySnapshot(): CameraRegistrySnapshot {
+export function useCameraRegistryCamera(): CameraRegistrySnapshot["camera"] {
   const cameraRegistry = useCameraRegistryController();
   const subscribe = useCallback(
     (onStoreChange: () => void) => cameraRegistry.subscribe(onStoreChange),
@@ -21,7 +21,7 @@ export function useCameraRegistrySnapshot(): CameraRegistrySnapshot {
 
   return useSyncExternalStore(
     subscribe,
-    () => cameraRegistry.getSnapshot(),
-    () => cameraRegistry.getSnapshot(),
+    () => cameraRegistry.getSnapshot().camera,
+    () => cameraRegistry.getSnapshot().camera,
   );
 }

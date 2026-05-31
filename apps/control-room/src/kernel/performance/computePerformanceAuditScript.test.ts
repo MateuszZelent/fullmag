@@ -71,6 +71,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("simulationStartupOverlayResourceStateEquals");
     expect(auditScript).toContain("selectRuntimeCommandControlSessionStatus");
     expect(auditScript).toContain("runtimeCommandControlSessionStatusEquals");
+    expect(auditScript).toContain("previous.run?.run_id !== next.run?.run_id");
     expect(auditScript).toContain(
       "checkStudyRuntimeCommandResourceDataSessionStatusSelector",
     );
@@ -147,6 +148,15 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkViewportSmokeComputeMetrics");
     expect(auditScript).toContain("checkComputePerformanceSmokeScript");
     expect(auditScript).toContain("checkComputePerformanceMicrobenchCoverage");
+    expect(auditScript).toContain("checkAnalysisPlotsStableResourceInputs");
+    expect(auditScript).toContain("checkAnalysisPlotDecimation");
+    expect(auditScript).toContain("src/modules/analysis-plots/AnalysisPlotsModule.tsx");
+    expect(auditScript).toContain("src/modules/analysis-plots/analysisPlotModel.ts");
+    expect(auditScript).toContain("ANALYSIS_SCALAR_COLUMNS");
+    expect(auditScript).toContain("MAX_LINE_CHART_POINTS");
+    expect(auditScript).toContain("decimateLinePoints");
+    expect(auditScript).toContain("const pathPoints = decimateLinePoints(finitePoints)");
+    expect(auditScript).toContain("Object.freeze([");
     expect(auditScript).toContain("computePerformanceMicrobench.test.ts");
     expect(auditScript).toContain("makeLargeTopologyBuffer");
     expect(auditScript).toContain("makeLargeQualityBuffer");
@@ -158,6 +168,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("smoke-compute-performance.mjs");
     expect(auditScript).toContain("FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS");
     expect(auditScript).toContain("assertNoImmediateResultResourceReloads");
+    expect(auditScript).toContain("COMPUTE_VIEWPORT_GESTURE_FORBIDDEN_REQUEST_PREFIXES");
+    expect(auditScript).toContain("verifyViewport3DGesturesDuringSolve");
+    expect(auditScript).toContain("viewportGestureProof");
+    expect(auditScript).toContain("recordViewportGestureRequests");
+    expect(auditScript).toContain("previousCameraSignature");
+    expect(auditScript).toContain("nextCameraSignature = await waitForCameraSignatureChange(");
     expect(auditScript).toContain("resultResourceRequestCount");
     expect(auditScript).toContain(DATA_SCALARS_PATH);
     expect(auditScript).toContain(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH);

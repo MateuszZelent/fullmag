@@ -2833,6 +2833,14 @@ export interface components {
              *     - `x`/`y`/`z`/`cN` → single component by index (nComp=1)
              */
             component?: string | null;
+            /**
+             * Format: int32
+             * @description Optional hard cap for scoped vector samples returned by the binary payload.
+             *
+             *     This is intended for renderer glyph payloads. It requires a scoped FEM
+             *     query so the consumer can map sampled values back to topology nodes.
+             */
+            max_samples?: number | null;
             /** @description Scope identifier for `object` and `part` scopes. */
             scope_id?: string | null;
             /**
@@ -6285,6 +6293,13 @@ export interface operations {
                 scope_kind?: string | null;
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
+                /**
+                 * @description Optional hard cap for scoped vector samples returned by the binary payload.
+                 *
+                 *     This is intended for renderer glyph payloads. It requires a scoped FEM
+                 *     query so the consumer can map sampled values back to topology nodes.
+                 */
+                max_samples?: number | null;
             };
             header?: {
                 /** @description Strong ETag from a previous field-vector response */

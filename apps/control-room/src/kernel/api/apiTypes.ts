@@ -267,7 +267,7 @@ export type RuntimeCommandTarget =
   components["schemas"]["RuntimeCommandTarget"];
 export type ScalarWindowResource = components["schemas"]["ScalarWindow"];
 export interface ScalarWindowQuery {
-  columns?: string[];
+  columns?: readonly string[];
   limit?: number;
   sinceRevision?: number;
 }

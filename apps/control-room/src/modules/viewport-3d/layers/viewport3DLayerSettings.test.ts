@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
-  resolveCameraInteractionSettings,
   resolveMeshPartSurfaceMaterialColor,
   surfaceMaterialColorFromSettings,
   VERTEX_COLOR_MATERIAL_COLOR,
@@ -74,33 +73,5 @@ describe("resolveMeshPartSurfaceMaterialColor", () => {
         false,
       ),
     ).toBe("#313244");
-  });
-});
-
-describe("resolveCameraInteractionSettings", () => {
-  it("uses a cheaper temporary layer set during active camera drag", () => {
-    expect(
-      resolveCameraInteractionSettings(
-        settings({
-          pointsVisible: true,
-          shaderVisible: false,
-          vectorsVisible: true,
-          wireframeVisible: true,
-        }),
-        true,
-      ),
-    ).toMatchObject({
-      boundsVisible: true,
-      pointsVisible: false,
-      shaderVisible: true,
-      vectorsVisible: false,
-      wireframeVisible: false,
-    });
-  });
-
-  it("leaves settings unchanged outside active camera drag", () => {
-    const source = settings({ wireframeVisible: true });
-
-    expect(resolveCameraInteractionSettings(source, false)).toBe(source);
   });
 });

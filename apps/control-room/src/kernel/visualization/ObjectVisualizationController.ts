@@ -809,6 +809,7 @@ export function resolveAirboxVisualizationSettingsFromState(
   );
   const baseSettings = targetSettings ?? DEFAULT_AIRBOX_VISUALIZATION;
   const activeQuantityId =
+    state?.targets?.airbox?.settings?.active_quantity_id ??
     state?.quantity?.active_quantity_id ??
     state?.active_quantity_id ??
     baseSettings.activeQuantityId;

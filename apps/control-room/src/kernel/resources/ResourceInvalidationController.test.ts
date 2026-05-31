@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { MODEL_SCENE_PATH, SESSION_CURRENT_PATH } from "../api/apiPaths";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 
@@ -93,5 +94,16 @@ describe("ResourceInvalidationController", () => {
     controller.invalidatePrefix("data:fields", 8);
 
     expect(controller.getRevision("data:fields:m:full")).toBe(9);
+  });
+
+  it("lets an exact resource revision supersede an older session-scope prefix", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+
+    controller.subscribe(MODEL_SCENE_PATH, () => {});
+    controller.invalidatePrefix(SESSION_CURRENT_PATH, "session:active:10");
+    controller.invalidate(MODEL_SCENE_PATH, 16);
+
+    expect(controller.getRevision(MODEL_SCENE_PATH)).toBe(16);
   });
 });

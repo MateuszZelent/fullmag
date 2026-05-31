@@ -85,12 +85,15 @@ type RibbonRuntimeStatus = {
     LiveStatusResource["resources"],
     | "field_revision"
     | "fields_revision"
+    | "command_completion_revision"
     | "commands_revision"
     | "mesh_build_revision"
     | "mesh_revision"
     | "scene_revision"
-    | "stages_revision"
+      | "stages_revision"
   >;
+  run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
+  session: Pick<LiveStatusResource["session"], "session_id">;
 };
 
 function selectRibbonRuntimeStatus(status: {
@@ -108,11 +111,17 @@ function selectRibbonRuntimeStatus(status: {
     resources: {
       field_revision: status.data.resources.field_revision,
       fields_revision: status.data.resources.fields_revision,
+      command_completion_revision:
+        status.data.resources.command_completion_revision,
       commands_revision: status.data.resources.commands_revision,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
+    },
+    run: status.data.run ? { run_id: status.data.run.run_id } : null,
+    session: {
+      session_id: status.data.session.session_id,
     },
   };
 }
@@ -130,12 +139,16 @@ function ribbonRuntimeStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.field_revision === next.resources.field_revision &&
     previous.resources.fields_revision === next.resources.fields_revision &&
+    previous.resources.command_completion_revision ===
+      next.resources.command_completion_revision &&
     previous.resources.commands_revision === next.resources.commands_revision &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
     previous.resources.scene_revision === next.resources.scene_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision
+    previous.resources.stages_revision === next.resources.stages_revision &&
+    previous.run?.run_id === next.run?.run_id &&
+    previous.session.session_id === next.session.session_id
   );
 }
 
@@ -386,6 +399,11 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     </WorkspaceRenderProfiler>
   );
 }
+
+export const __ribbonModuleTestUtils = {
+  ribbonRuntimeStatusEquals,
+  selectRibbonRuntimeStatus,
+};
 
 function isGlobalQuantityConfirmationInput(
   input: unknown,

@@ -29,14 +29,12 @@ export interface VisualizationRegistrySyncSnapshot {
 
 interface VisualizationRegistrySyncControllerOptions {
   api: VisualizationRegistrySyncApi;
-  intervalMs?: number;
   maxLatencyMs?: number;
   now?: () => number;
   quietMs?: number;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
 }
 
-const DEFAULT_INTERVAL_MS = 1_000;
 const DEFAULT_MAX_LATENCY_MS = 2_500;
 const DEFAULT_QUIET_MS = 600;
 
@@ -52,7 +50,6 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
 
 export class VisualizationRegistrySyncController {
   private readonly api: VisualizationRegistrySyncApi;
-  private readonly intervalMs: number;
   private readonly listeners = new Set<VisualizationRegistrySyncListener>();
   private readonly maxLatencyMs: number;
   private readonly now: () => number;
@@ -68,14 +65,12 @@ export class VisualizationRegistrySyncController {
 
   constructor({
     api,
-    intervalMs = DEFAULT_INTERVAL_MS,
     maxLatencyMs = DEFAULT_MAX_LATENCY_MS,
     now = Date.now,
     quietMs = DEFAULT_QUIET_MS,
     resources,
   }: VisualizationRegistrySyncControllerOptions) {
     this.api = api;
-    this.intervalMs = intervalMs;
     this.maxLatencyMs = maxLatencyMs;
     this.now = now;
     this.quietMs = quietMs;

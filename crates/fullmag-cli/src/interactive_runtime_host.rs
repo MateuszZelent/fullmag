@@ -43,12 +43,24 @@ struct ApiStatusSnapshot {
     resources: ApiStatusResources,
 }
 
-#[derive(Clone)]
 pub(super) struct CurrentLiveDisplaySelectionHandle {
     shared: Arc<(Mutex<CurrentLiveControlState>, Condvar)>,
     stop: Arc<AtomicBool>,
     running_interrupt: Arc<Mutex<Option<InteractiveStageInterrupt>>>,
     running_interrupt_requested: Arc<AtomicBool>,
+    worker_owner: bool,
+}
+
+impl Clone for CurrentLiveDisplaySelectionHandle {
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+            stop: Arc::clone(&self.stop),
+            running_interrupt: Arc::clone(&self.running_interrupt),
+            running_interrupt_requested: Arc::clone(&self.running_interrupt_requested),
+            worker_owner: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +86,7 @@ impl CurrentLiveDisplaySelectionHandle {
             stop: Arc::new(AtomicBool::new(false)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            worker_owner: true,
         };
         let worker = handle.clone();
         std::thread::spawn(move || {
@@ -96,10 +109,9 @@ impl CurrentLiveDisplaySelectionHandle {
                                 .store(requests_interrupt, Ordering::Relaxed);
                         }
                         let (lock, cvar) = &*worker.shared;
-                        if let Ok(mut state) = lock.lock() {
-                            state.queue.push_back(command);
-                            cvar.notify_all();
-                        }
+                        let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                        state.queue.push_back(command);
+                        cvar.notify_all();
                     }
                     Ok(None) => sync_display_selection_from_status(&worker.shared),
                     Err(_) => std::thread::sleep(Duration::from_millis(100)),
@@ -141,7 +153,7 @@ impl CurrentLiveDisplaySelectionHandle {
 
     pub(super) fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
         let (lock, cvar) = &*self.shared;
-        let mut state = lock.lock().ok()?;
+        let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
         if state.queue.is_empty() {
             let waited = cvar.wait_timeout(state, timeout).ok()?;
             state = waited.0;
@@ -196,10 +208,9 @@ impl CurrentLiveDisplaySelectionHandle {
     /// Push a synthetic command to the front of the queue (used by sequence runner).
     pub(super) fn push_command_front(&self, command: SessionCommand) {
         let (lock, cvar) = &*self.shared;
-        if let Ok(mut state) = lock.lock() {
-            state.queue.push_front(command);
-            cvar.notify_one();
-        }
+        let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        state.queue.push_front(command);
+        cvar.notify_one();
     }
 
     /// Apply an initial visualization quantity hint from script `runtime_metadata`.
@@ -390,6 +401,9 @@ fn sync_display_selection_from_status(shared: &Arc<(Mutex<CurrentLiveControlStat
 
 impl Drop for CurrentLiveDisplaySelectionHandle {
     fn drop(&mut self) {
+        if !self.worker_owner {
+            return;
+        }
         self.stop.store(true, Ordering::Relaxed);
         let (_, cvar) = &*self.shared;
         cvar.notify_all();
@@ -513,9 +527,6 @@ impl InteractiveRuntimeHost {
             0
         };
 
-        let continuation_slice = continuation_magnetization.as_deref();
-        self.ensure_base_runtime_ready(continuation_slice, live_workspace);
-
         if self.dynamic_idle_preview_supported {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
@@ -526,8 +537,6 @@ impl InteractiveRuntimeHost {
                 paused_generation,
             );
         }
-
-        self.refresh_idle_preview(continuation_slice, live_workspace);
     }
 
     pub(super) fn handle_display_sync(
@@ -1023,6 +1032,7 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            worker_owner: true,
         };
 
         assert_eq!(
@@ -1033,6 +1043,28 @@ mod tests {
             handle.take_running_interrupt(),
             Some(super::InteractiveStageInterrupt::Pause)
         );
+    }
+
+    #[test]
+    fn dropping_running_control_clone_does_not_stop_owner_worker() {
+        let handle = CurrentLiveDisplaySelectionHandle {
+            shared: Arc::new((
+                Mutex::new(CurrentLiveControlState {
+                    display_selection: Default::default(),
+                    queue: VecDeque::new(),
+                }),
+                Condvar::new(),
+            )),
+            stop: Arc::new(AtomicBool::new(false)),
+            running_interrupt: Arc::new(Mutex::new(None)),
+            running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            worker_owner: true,
+        };
+
+        let clone = handle.clone();
+        drop(clone);
+
+        assert!(!handle.stop.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

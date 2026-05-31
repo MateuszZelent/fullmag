@@ -61,6 +61,7 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildAirboxVisibilityDiagnostic,
+  buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   resolveVisualizationVectorBudgetRange,
@@ -73,6 +74,7 @@ import {
   type VisualizationVectorBudgetRange,
   visualizationQuantityItems,
 } from "./ObjectVisualizationPanelModel";
+import { formatCount } from "./MeshResourceView";
 
 const RENDER_MODES: Array<{
   label: string;
@@ -534,6 +536,10 @@ function VisualizationVectorsSection({
     vectorBudgetRange.min,
     Math.min(vectorBudgetRange.max, settings.vectorBudget),
   );
+  const vectorBudgetDiagnostic = buildVisualizationVectorBudgetDiagnostic({
+    requestedBudget: vectorBudgetValue,
+    vectorBudgetRange,
+  });
 
   return (
     <InspectorSection title="Vectors">
@@ -563,6 +569,10 @@ function VisualizationVectorsSection({
         step={vectorBudgetRange.step}
         value={vectorBudgetValue}
         onChange={(value) => patchNumber("vectorBudget", value)}
+      />
+      <FieldRow
+        label="Arrow samples"
+        value={`${formatCount(vectorBudgetDiagnostic.displayedGlyphCount)} / ${formatCount(vectorBudgetDiagnostic.availableNodeCount)}${vectorBudgetDiagnostic.exact ? "" : " est."}`}
       />
       <div className="fm-visualization-toggle-grid">
         <ToggleButton
@@ -939,6 +949,7 @@ function useObjectVisualizationPanelState(
     : null;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
   const vectorBudgetRange = resolveVisualizationVectorBudgetRange({
+    geometryScope: settings?.geometryScope,
     meshParts: manifest.data?.mesh_parts,
     target,
   });

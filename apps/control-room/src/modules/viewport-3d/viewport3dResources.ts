@@ -58,6 +58,12 @@ export interface Viewport3DQuantityFieldVectorRequest {
   query: FieldVectorQuery;
 }
 
+export interface Viewport3DPartFieldVectorRequest {
+  key: string;
+  quantityId: string;
+  query: FieldVectorQuery;
+}
+
 function resolveDomainMetaRevision(meta: { generation_id: number }) {
   return meta.generation_id;
 }
@@ -155,6 +161,9 @@ export function resolveViewport3DFieldVectorResourceKey(
   );
   const params = new URLSearchParams();
   if (query.component) params.set("component", query.component);
+  if (query.max_samples != null) {
+    params.set("max_samples", String(query.max_samples));
+  }
   if (query.scope_id) params.set("scope_id", query.scope_id);
   if (query.scope_kind) params.set("scope_kind", query.scope_kind);
   const suffix = params.toString();
@@ -216,8 +225,40 @@ export function resolveViewport3DQuantityFieldVectorResourceRequests(
   );
 }
 
+export function resolveViewport3DPartFieldVectorResourceRequests(
+  partQueries: ReadonlyMap<
+    string,
+    { quantityId: string; query: FieldVectorQuery }
+  >,
+): Map<string, Viewport3DPartFieldVectorRequest> {
+  return new Map(
+    Array.from(partQueries)
+      .filter(([, request]) => request.quantityId.trim().length > 0)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([partId, request]) => {
+        const query: FieldVectorQuery = {
+          ...request.query,
+          component: request.query.component ?? "full",
+          scope_id: partId,
+          scope_kind: "part",
+        };
+        return [
+          partId,
+          {
+            key: resolveViewport3DFieldVectorResourceKey(
+              request.quantityId,
+              query,
+            ),
+            quantityId: request.quantityId,
+            query,
+          },
+        ];
+      }),
+  );
+}
+
 function resolveViewport3DFieldVectorCollectionResourceKey(
-  kind: "airbox" | "quantity",
+  kind: "airbox" | "part" | "quantity",
   resourceKeys: Iterable<string>,
 ): string {
   const suffix = Array.from(resourceKeys).join("|");
@@ -266,15 +307,17 @@ export function useViewport3DFieldVector(
 ) {
   const { api, resources } = useKernel();
   const component = fieldQuery.component ?? "full";
+  const maxSamples = fieldQuery.max_samples ?? null;
   const scopeId = fieldQuery.scope_id ?? null;
   const scopeKind = fieldQuery.scope_kind ?? null;
   const query = useMemo<FieldVectorQuery>(
     () => ({
       component,
+      max_samples: maxSamples,
       scope_id: scopeId,
       scope_kind: scopeKind,
     }),
-    [component, scopeId, scopeKind],
+    [component, maxSamples, scopeId, scopeKind],
   );
   const requestKey = useMemo(
     () => resolveViewport3DFieldVectorResourceKey(quantityId, query),
@@ -437,6 +480,73 @@ export function useViewport3DQuantityFieldVectors(
             },
           );
           return [quantityId, data] as const;
+        }),
+      );
+
+      return new Map(
+        entries.filter(
+          (entry): entry is readonly [string, DecodedFieldVector] =>
+            entry[1] !== null,
+        ),
+      );
+    },
+    [api, requestKeys, resources],
+  );
+  const resolveRevision = useCallback(() => {
+    const revisions = Array.from(requestKeys.values()).map(
+      (request) => fieldVectorCache.peek(request.key)?.etag ?? "missing",
+    );
+    return revisions.length > 0 ? revisions.join("|") : null;
+  }, [requestKeys]);
+
+  return useResource({
+    enabled: enabled && requestKeys.size > 0,
+    load,
+    resolveRevision,
+    resourceKey,
+  });
+}
+
+export function useViewport3DPartFieldVectors(
+  partQueries: ReadonlyMap<
+    string,
+    { quantityId: string; query: FieldVectorQuery }
+  >,
+  enabled = true,
+) {
+  const { api, resources } = useKernel();
+  const requestKeys = useMemo(
+    () => resolveViewport3DPartFieldVectorResourceRequests(partQueries),
+    [partQueries],
+  );
+  const resourceKey = useMemo(() => {
+    return resolveViewport3DFieldVectorCollectionResourceKey(
+      "part",
+      Array.from(requestKeys.values(), (request) => request.key),
+    );
+  }, [requestKeys]);
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      const entries = await Promise.all(
+        Array.from(requestKeys, async ([partId, request]) => {
+          const data = await loadCachedBinaryResource(
+            fieldVectorCache,
+            request.key,
+            (etag) =>
+              api.data.fields.vector(
+                request.quantityId,
+                request.query,
+                { etag, signal },
+              ),
+            {
+              preferCached: cachedBinaryResourceMatchesRevision(
+                fieldVectorCache,
+                request.key,
+                resources.getRevision(request.key),
+              ),
+            },
+          );
+          return [partId, data] as const;
         }),
       );
 

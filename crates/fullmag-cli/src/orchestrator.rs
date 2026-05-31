@@ -1691,6 +1691,31 @@ impl ActiveSequenceState {
     }
 }
 
+fn discard_active_paused_stage_execution(
+    active_sequence: &mut Option<ActiveSequenceState>,
+    completed_at_unix_ms: u128,
+) -> Option<CurrentLiveStageExecutionState> {
+    finish_active_paused_stage_execution(active_sequence, "cancelled", completed_at_unix_ms)
+}
+
+fn finish_active_paused_stage_execution(
+    active_sequence: &mut Option<ActiveSequenceState>,
+    status: &str,
+    completed_at_unix_ms: u128,
+) -> Option<CurrentLiveStageExecutionState> {
+    let Some(mut sequence) = active_sequence.take() else {
+        return None;
+    };
+    let cancelled_completion = user_cancelled_stage_completion(status);
+    sequence.mark_current(
+        status,
+        Some(&cancelled_completion),
+        Some(completed_at_unix_ms),
+        None,
+    );
+    Some(sequence.completed_stage_execution("awaiting_command"))
+}
+
 fn millis_to_u64(value: u128) -> u64 {
     value.min(u64::MAX as u128) as u64
 }
@@ -5633,6 +5658,85 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
         loop {
+            if paused_stage.is_some() {
+                match interactive_runtime_host.take_running_interrupt() {
+                    Some(crate::interactive_runtime_host::InteractiveStageInterrupt::Break) => {
+                        paused_stage = None;
+                        let discarded_at_unix_ms = unix_time_millis().unwrap_or(0);
+                        let discarded_stage_execution = discard_active_paused_stage_execution(
+                            &mut active_sequence,
+                            discarded_at_unix_ms,
+                        );
+                        live_workspace.update(|state| {
+                            state.session = ctx.build_session(
+                                "awaiting_command",
+                                &plan_summary_json(&current_plan_summary),
+                                discarded_at_unix_ms,
+                            );
+                            state.run = ctx.build_run("awaiting_command", &aggregated_steps);
+                            set_live_state_status(
+                                &mut state.live_state,
+                                "awaiting_command",
+                                Some(false),
+                            );
+                            state.stage_execution = discarded_stage_execution;
+                        });
+                        interactive_runtime_host.enter_awaiting_command(
+                            continuation_magnetization.clone(),
+                            &live_workspace,
+                        );
+                        live_workspace.push_log(
+                            "system",
+                            "Paused stage discarded — workspace is awaiting the next command",
+                        );
+                        continue;
+                    }
+                    Some(crate::interactive_runtime_host::InteractiveStageInterrupt::Skip) => {
+                        paused_stage = None;
+                        let skipped_at_unix_ms = unix_time_millis().unwrap_or(0);
+                        let skipped_stage_execution = finish_active_paused_stage_execution(
+                            &mut active_sequence,
+                            "skipped",
+                            skipped_at_unix_ms,
+                        );
+                        live_workspace.update(|state| {
+                            state.session = ctx.build_session(
+                                "awaiting_command",
+                                &plan_summary_json(&current_plan_summary),
+                                skipped_at_unix_ms,
+                            );
+                            state.run = ctx.build_run("awaiting_command", &aggregated_steps);
+                            set_live_state_status(
+                                &mut state.live_state,
+                                "awaiting_command",
+                                Some(false),
+                            );
+                            state.stage_execution = skipped_stage_execution;
+                        });
+                        interactive_runtime_host.enter_awaiting_command(
+                            continuation_magnetization.clone(),
+                            &live_workspace,
+                        );
+                        live_workspace.push_log(
+                            "system",
+                            "Paused stage skipped — workspace is awaiting the next command",
+                        );
+                        continue;
+                    }
+                    Some(crate::interactive_runtime_host::InteractiveStageInterrupt::Close) => {
+                        break;
+                    }
+                    Some(crate::interactive_runtime_host::InteractiveStageInterrupt::Pause) => {
+                        live_workspace.push_log(
+                            "system",
+                            "Interactive workspace is already paused — use resume or stop",
+                        );
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+
             let Some(command) =
                 interactive_runtime_host.wait_next_command_coalesced(Duration::from_millis(250))
             else {
@@ -5712,11 +5816,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             if matches!(typed_cmd, Some(fullmag_runner::LiveControlCommand::Break)) {
                 if paused_stage.take().is_some() {
+                    let discarded_at_unix_ms = unix_time_millis().unwrap_or(0);
+                    let discarded_stage_execution = discard_active_paused_stage_execution(
+                        &mut active_sequence,
+                        discarded_at_unix_ms,
+                    );
                     live_workspace.update(|state| {
                         state.session = ctx.build_session(
                             "awaiting_command",
                             &plan_summary_json(&current_plan_summary),
-                            unix_time_millis().unwrap_or(0),
+                            discarded_at_unix_ms,
                         );
                         state.run = ctx.build_run("awaiting_command", &aggregated_steps);
                         set_live_state_status(
@@ -5724,6 +5833,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             "awaiting_command",
                             Some(false),
                         );
+                        state.stage_execution = discarded_stage_execution;
                     });
                     interactive_runtime_host.enter_awaiting_command(
                         continuation_magnetization.clone(),
@@ -5982,7 +6092,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             else {
                 break;
             };
-            if active_sequence.is_none() && matches!(command.kind.as_str(), "run" | "relax") {
+            if active_sequence.is_none()
+                && matches!(command.kind.as_str(), "run" | "relax" | "solve")
+            {
                 active_sequence = Some(ActiveSequenceState::single_current());
             }
 
@@ -7053,7 +7165,8 @@ pub(crate) fn prepare_live_workspace_for_ui(
 mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
-        classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
+        classify_wait_for_solve_command, default_domain_region_markers,
+        discard_active_paused_stage_execution, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
         has_heavy_live_payload, interactive_session_should_stay_alive,
@@ -7857,6 +7970,34 @@ mod tests {
             Some(fullmag_ir::StageStopReason::UserCancelled)
         );
         assert_eq!(execution.stages[1].status, "awaiting_command");
+    }
+
+    #[test]
+    fn discarding_paused_active_sequence_publishes_awaiting_command() {
+        let mut active_sequence = Some(ActiveSequenceState::single_current());
+        let sequence = active_sequence
+            .as_mut()
+            .expect("active sequence should be present");
+        sequence.mark_current_started("cmd-solve", 1_700_000_000_000, None);
+        sequence.mark_current("paused", None, None, None);
+
+        let execution =
+            discard_active_paused_stage_execution(&mut active_sequence, 1_700_000_001_000)
+                .expect("discarding a paused sequence should publish terminal stage execution");
+
+        assert!(active_sequence.is_none());
+        assert_eq!(execution.runtime_state, "awaiting_command");
+        assert_eq!(execution.active_stage_index, None);
+        assert_eq!(execution.completed_stage_indexes, Vec::<usize>::new());
+        assert_eq!(execution.stages[0].status, "cancelled");
+        assert_eq!(
+            execution.stages[0].completed_at_unix_ms,
+            Some(1_700_000_001_000)
+        );
+        assert_eq!(
+            execution.stages[0].reason,
+            Some(fullmag_ir::StageStopReason::UserCancelled)
+        );
     }
 
     #[test]

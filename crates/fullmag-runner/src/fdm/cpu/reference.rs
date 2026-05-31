@@ -749,6 +749,7 @@ pub(crate) fn execute_reference_fdm(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
+    let mut paused = false;
     let mut last_step_report: Option<StepReport> = None;
 
     if is_direct_minimization {
@@ -871,9 +872,16 @@ pub(crate) fn execute_reference_fdm(
                                 .revision,
                         );
                     }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
+                    match action {
+                        StepAction::Continue => {}
+                        StepAction::Stop => {
+                            cancelled = true;
+                            break;
+                        }
+                        StepAction::Pause => {
+                            paused = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1019,15 +1027,21 @@ pub(crate) fn execute_reference_fdm(
                             .revision,
                     );
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                    }
                 }
                 if !needs_observables {
                     current_observables_stale = true;
                 }
             }
 
-            if cancelled {
+            if cancelled || paused {
                 break;
             }
 
@@ -1062,7 +1076,9 @@ pub(crate) fn execute_reference_fdm(
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed
@@ -2432,6 +2448,47 @@ mod tests {
         }
         assert!(first_update.preview_field.is_some());
         assert!(!first_update.finished);
+    }
+
+    #[test]
+    fn live_callback_pause_returns_paused_status_and_stops_stepping() {
+        let plan = make_test_plan();
+        let mut update_steps = Vec::new();
+        let mut on_step = |update: StepUpdate| -> StepAction {
+            update_steps.push(update.stats.step);
+            StepAction::Pause
+        };
+
+        let executed = execute_reference_fdm(
+            &plan,
+            5e-14,
+            &[],
+            Some(LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: 1,
+                initial_snapshot: false,
+                display_selection: None,
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            }),
+            None,
+        )
+        .expect("pause callback CPU FDM run should pause cleanly");
+
+        assert_eq!(executed.result.status, RunStatus::Paused);
+        assert_eq!(
+            update_steps,
+            vec![1],
+            "runner should stop after the first live pause callback instead of continuing"
+        );
+        assert!(
+            executed
+                .result
+                .steps
+                .last()
+                .is_some_and(|stats| stats.step <= 1),
+            "paused run should not advance to the requested final time"
+        );
     }
 
     #[test]

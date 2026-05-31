@@ -26,8 +26,43 @@
 .fm-cross-section-image__plot-tabs {
   display: flex;
   min-width: 0;
+  flex: 1;
   gap: var(--fm-space-1);
   overflow-x: auto;
+}
+
+.fm-cross-section-image__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-cross-section-image__resolution {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-chrome);
+}
+
+.fm-cross-section-image__resolution-button {
+  min-width: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 600;
+  line-height: 1;
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-cross-section-image__resolution-button[aria-pressed="true"] {
+  background: var(--fm-accent-soft);
+  color: var(--fm-text-primary);
 }
 
 .fm-cross-section-image__plot-tab {

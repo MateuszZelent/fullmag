@@ -3,6 +3,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -9275,8 +9276,8 @@ def test_gpu_kernels_use_double_atomic_add_compatibility_helper():
     assert "atomicCAS(" in kernel_source
     assert "atomicAdd(&work_" not in kernel_body
     assert "atomicAdd(&node_weight" not in kernel_body
-    assert "stt_atomic_add_double(&work_x[node]" in kernel_body
-    assert "stt_atomic_add_double(&node_weight[node]" in kernel_body
+    assert re.search(r"stt_atomic_add_double\(\s*&work_x\[node\]\s*,", kernel_body)
+    assert re.search(r"stt_atomic_add_double\(\s*&node_weight\[node\]\s*,", kernel_body)
 
 
 def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
@@ -10206,7 +10207,7 @@ def test_gpu_rk_plan_supports_zhang_li_stt_with_device_mesh_geometry():
     assert "zhang_li_element_rhs_kernel" in stt_kernel_source
     assert "stt_tetra_gradients_device" in stt_kernel_source
     assert "zhang_li_normalize_add_rhs_kernel" in stt_kernel_source
-    assert "stt_atomic_add_double(&work_x[node]" in stt_kernel_source
+    assert re.search(r"stt_atomic_add_double\(\s*&work_x\[node\]\s*,", stt_kernel_source)
     assert "atomicAdd(&work_x[node]" not in stt_kernel_source
     assert "gpu.local_interactions.vector.x" in zhang_li_source
     assert "gpu.local_interactions.node_weight" in zhang_li_source

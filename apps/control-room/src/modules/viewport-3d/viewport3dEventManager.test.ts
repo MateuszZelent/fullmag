@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  createViewport3DMissedClickHandler,
+  createViewport3DClickSelectionHandler,
   createViewport3DPointerMoveHandler,
+  createViewport3DPointerDownHandler,
+  isViewport3DImmediatePointerDownRegion,
   pickViewport3DEventHandlers,
 } from "./viewport3dEventManager";
 
 describe("pickViewport3DEventHandlers", () => {
-  it("removes release and click handlers but keeps wheel zoom for orbit controls", () => {
+  it("removes release handlers but keeps click selection and wheel zoom", () => {
     const handlers = {
       onClick: vi.fn(),
       onContextMenu: vi.fn(),
@@ -22,6 +24,7 @@ describe("pickViewport3DEventHandlers", () => {
     };
 
     expect(Object.keys(pickViewport3DEventHandlers(handlers) ?? {}).sort()).toEqual([
+      "onClick",
       "onLostPointerCapture",
       "onPointerCancel",
       "onPointerDown",
@@ -31,40 +34,108 @@ describe("pickViewport3DEventHandlers", () => {
     ]);
   });
 
-  it("keeps background click clearing without replaying R3F release raycasts", () => {
-    const onPointerMissed = vi.fn();
+  it("records click origin without running the expensive R3F pointer-down handler", () => {
+    const state = {
+      internal: {
+        initialClick: [0, 0],
+        initialHits: [{}],
+      },
+    };
     const store = ({
-      getState: () => ({
-        internal: {
-          initialClick: [10, 20],
-          initialHits: [],
-        },
-        onPointerMissed,
-      }),
-    } as unknown) as Parameters<typeof createViewport3DMissedClickHandler>[0];
-    const handler = createViewport3DMissedClickHandler(store);
+      getState: () => state,
+    } as unknown) as Parameters<typeof createViewport3DPointerDownHandler>[0];
+    const handler = createViewport3DPointerDownHandler(store);
 
-    handler({ offsetX: 11, offsetY: 21 } as MouseEvent);
+    handler({ offsetX: 10, offsetY: 20 } as MouseEvent);
 
-    expect(onPointerMissed).toHaveBeenCalledTimes(1);
+    expect(state.internal.initialClick).toEqual([10, 20]);
+    expect(state.internal.initialHits).toEqual([]);
   });
 
-  it("does not clear selection when the pointer down hit a selectable object", () => {
-    const onPointerMissed = vi.fn();
+  it("replays R3F pointer-down and click only for static selection clicks", () => {
+    const state = {
+      internal: {
+        initialClick: [10, 20],
+        initialHits: [] as unknown[],
+      },
+    };
+    const store = ({
+      getState: () => state,
+    } as unknown) as Parameters<typeof createViewport3DClickSelectionHandler>[0]["store"];
+    const pointerDownHandler = vi.fn();
+    const clickHandler = vi.fn();
+    const handler = createViewport3DClickSelectionHandler({
+      clickHandler,
+      pointerDownHandler,
+      store,
+    });
+
+    handler({ offsetX: 11, offsetY: 21 } as MouseEvent);
+
+    expect(pointerDownHandler).toHaveBeenCalledTimes(1);
+    expect(clickHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run a second click raycast after pointer-down selection hit", () => {
+    const state = {
+      internal: {
+        initialClick: [10, 20],
+        initialHits: [] as unknown[],
+      },
+    };
+    const store = ({
+      getState: () => state,
+    } as unknown) as Parameters<typeof createViewport3DClickSelectionHandler>[0]["store"];
+    const pointerDownHandler = vi.fn(() => {
+      state.internal.initialHits = [{}];
+    });
+    const clickHandler = vi.fn();
+    const handler = createViewport3DClickSelectionHandler({
+      clickHandler,
+      pointerDownHandler,
+      store,
+    });
+
+    handler({ offsetX: 11, offsetY: 21 } as MouseEvent);
+
+    expect(pointerDownHandler).toHaveBeenCalledTimes(1);
+    expect(clickHandler).not.toHaveBeenCalled();
+  });
+
+  it("keeps immediate pointer-down handling for the ViewCube HUD region", () => {
+    const event = {
+      currentTarget: {
+        clientHeight: 600,
+        clientWidth: 800,
+      },
+      offsetX: 720,
+      offsetY: 80,
+    } as unknown as MouseEvent;
+
+    expect(isViewport3DImmediatePointerDownRegion(event)).toBe(true);
+  });
+
+  it("does not replay selection raycasts for camera drags", () => {
     const store = ({
       getState: () => ({
         internal: {
           initialClick: [10, 20],
-          initialHits: [{}],
+          initialHits: [] as unknown[],
         },
-        onPointerMissed,
       }),
-    } as unknown) as Parameters<typeof createViewport3DMissedClickHandler>[0];
-    const handler = createViewport3DMissedClickHandler(store);
+    } as unknown) as Parameters<typeof createViewport3DClickSelectionHandler>[0]["store"];
+    const pointerDownHandler = vi.fn();
+    const clickHandler = vi.fn();
+    const handler = createViewport3DClickSelectionHandler({
+      clickHandler,
+      pointerDownHandler,
+      store,
+    });
 
-    handler({ offsetX: 11, offsetY: 21 } as MouseEvent);
+    handler({ offsetX: 40, offsetY: 60 } as MouseEvent);
 
-    expect(onPointerMissed).not.toHaveBeenCalled();
+    expect(pointerDownHandler).not.toHaveBeenCalled();
+    expect(clickHandler).not.toHaveBeenCalled();
   });
 
   it("skips pointer-move raycasts while camera drag buttons are pressed", () => {

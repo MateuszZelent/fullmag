@@ -5,6 +5,7 @@ import {
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
 } from "@/kernel/api/apiPaths";
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import {
   createObjectTransaction,
   commitObjectTransformTransaction,
@@ -16,6 +17,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
+  publishCommittedSceneResource,
   useGeometryValidationResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -125,8 +127,13 @@ function optionalRef(value: string): string | undefined {
 function invalidateAuthoringResources(
   resources: ReturnType<typeof useKernel>["resources"],
   revision: number,
+  committedScene?: SceneResource,
 ): void {
-  resources.invalidate(MODEL_SCENE_PATH, revision);
+  if (committedScene) {
+    publishCommittedSceneResource(resources, committedScene, revision);
+  } else {
+    resources.invalidate(MODEL_SCENE_PATH, revision);
+  }
   resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
   resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
   resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
@@ -229,7 +236,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         region_name: optionalRef(draft.region),
         transform: transform.transform,
       });
-      invalidateAuthoringResources(resources, response.scene_revision);
+      invalidateAuthoringResources(
+        resources,
+        response.scene_revision,
+        response.committed_scene,
+      );
       selectionController.set(
         {
           kind: "object.root",
@@ -267,7 +278,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         base_revision: draft.baseRevision,
         geometry: geometry.geometry,
       });
-      invalidateAuthoringResources(resources, response.scene_revision);
+      invalidateAuthoringResources(
+        resources,
+        response.scene_revision,
+        response.committed_scene,
+      );
       setFeedback({ kind: "success", message: "Geometry patch committed." });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -289,7 +304,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         base_revision: draft.baseRevision,
         transform: transform.transform,
       });
-      invalidateAuthoringResources(resources, response.scene_revision);
+      invalidateAuthoringResources(
+        resources,
+        response.scene_revision,
+        response.committed_scene,
+      );
       setFeedback({ kind: "success", message: "Transform committed." });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -327,7 +346,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       const response = await deleteObjectTransaction(api, draft.objectId, {
         base_revision: draft.baseRevision,
       });
-      invalidateAuthoringResources(resources, response.scene_revision);
+      invalidateAuthoringResources(
+        resources,
+        response.scene_revision,
+        response.committed_scene,
+      );
       selectionController.clear("geometry-authoring");
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });

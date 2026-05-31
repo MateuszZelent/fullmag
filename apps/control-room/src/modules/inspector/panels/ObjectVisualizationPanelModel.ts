@@ -2,6 +2,7 @@ import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import {
   renderModePatch,
   type SurfaceColorSource,
+  type VisualizationGeometryScope,
   type VisualizationColorMode,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -58,16 +59,26 @@ const FALLBACK_VECTOR_BUDGET_MAX = 4096;
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 export interface VisualizationVectorBudgetRange {
+  availableNodeCount: number;
   exact: boolean;
   max: number;
   min: 0;
   step: 1;
 }
 
+export interface VisualizationVectorBudgetDiagnostic {
+  availableNodeCount: number;
+  displayedGlyphCount: number;
+  exact: boolean;
+  requestedBudget: number;
+}
+
 export function resolveVisualizationVectorBudgetRange({
+  geometryScope = "full",
   meshParts,
   target,
 }: {
+  geometryScope?: VisualizationGeometryScope;
   meshParts: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
@@ -78,17 +89,40 @@ export function resolveVisualizationVectorBudgetRange({
   const matchingParts = meshParts.filter((part) =>
     meshPartMatchesVisualizationTarget(part, target),
   );
-  const max = matchingParts.reduce((total, part) => total + part.node_count, 0);
+  let exact = true;
+  const max = matchingParts.reduce((total, part) => {
+    const count = meshPartVectorNodeCount(part, geometryScope);
+    if (!count.exact) exact = false;
+    return total + count.nodeCount;
+  }, 0);
 
   if (max <= 0) {
     return fallbackVisualizationVectorBudgetRange();
   }
 
   return {
-    exact: true,
+    availableNodeCount: max,
+    exact,
     max,
     min: 0,
     step: 1,
+  };
+}
+
+export function buildVisualizationVectorBudgetDiagnostic({
+  requestedBudget,
+  vectorBudgetRange,
+}: {
+  requestedBudget: number;
+  vectorBudgetRange: VisualizationVectorBudgetRange;
+}): VisualizationVectorBudgetDiagnostic {
+  const safeBudget = Math.max(0, Math.floor(requestedBudget));
+  const availableNodeCount = Math.max(0, vectorBudgetRange.availableNodeCount);
+  return {
+    availableNodeCount,
+    displayedGlyphCount: Math.min(safeBudget, availableNodeCount),
+    exact: vectorBudgetRange.exact,
+    requestedBudget: safeBudget,
   };
 }
 
@@ -159,11 +193,39 @@ function rgbToHex(red: number, green: number, blue: number): string {
 
 function fallbackVisualizationVectorBudgetRange(): VisualizationVectorBudgetRange {
   return {
+    availableNodeCount: FALLBACK_VECTOR_BUDGET_MAX,
     exact: false,
     max: FALLBACK_VECTOR_BUDGET_MAX,
     min: 0,
     step: 1,
   };
+}
+
+function meshPartVectorNodeCount(
+  part: MeshPart,
+  geometryScope: VisualizationGeometryScope,
+): { exact: boolean; nodeCount: number } {
+  if (geometryScope !== "surface") {
+    return { exact: true, nodeCount: part.node_count };
+  }
+
+  const surfaceFaces = part.surface_faces;
+  if (!surfaceFaces || surfaceFaces.length === 0) {
+    return { exact: false, nodeCount: part.node_count };
+  }
+
+  const nodeIndices = new Set<number>();
+  for (const face of surfaceFaces) {
+    for (const nodeIndex of face) {
+      if (Number.isInteger(nodeIndex) && nodeIndex >= 0) {
+        nodeIndices.add(nodeIndex);
+      }
+    }
+  }
+
+  return nodeIndices.size > 0
+    ? { exact: true, nodeCount: nodeIndices.size }
+    : { exact: false, nodeCount: part.node_count };
 }
 
 function meshPartMatchesVisualizationTarget(

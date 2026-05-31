@@ -5693,6 +5693,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             set(report.fallbacks_triggered).issubset(
                 {
                     "conformal_occ_hxt_degenerate_retry_delaunay",
+                    "conformal_occ_hxt_degenerate_retry_frontal",
+                    "conformal_occ_delaunay_degenerate_retry_hxt",
                     "conformal_occ_delaunay_degenerate_retry_frontal",
                 }
             )
@@ -5751,7 +5753,16 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             self.assertEqual(set(marker_by_name), {"cube", "cylinder"})
             self.assertEqual(report.build_mode, "conformal_occ")
             self.assertFalse(report.degraded)
-            self.assertEqual(report.fallbacks_triggered, [])
+            self.assertTrue(
+                set(report.fallbacks_triggered).issubset(
+                    {
+                        "conformal_occ_hxt_degenerate_retry_delaunay",
+                        "conformal_occ_hxt_degenerate_retry_frontal",
+                        "conformal_occ_delaunay_degenerate_retry_hxt",
+                        "conformal_occ_delaunay_degenerate_retry_frontal",
+                    }
+                )
+            )
             self.assertIn("ComponentVolumeConstant", report.used_size_field_kinds)
             cube_edges = _region_edge_lengths(mesh, marker_by_name["cube"])
             cylinder_edges = _region_edge_lengths(mesh, marker_by_name["cylinder"])

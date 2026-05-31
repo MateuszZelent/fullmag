@@ -87,6 +87,7 @@ export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
 ] as const;
 
 const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
+  "command_completion_revision",
   "commands_revision",
   "mesh_build_revision",
   "mesh_revision",
@@ -101,12 +102,13 @@ type StudyRuntimeCommandSessionStatus = {
   >;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
-    LiveStatusResource["resources"],
-    | "commands_revision"
-    | "mesh_build_revision"
-    | "mesh_revision"
-    | "scene_revision"
-    | "stages_revision"
+        LiveStatusResource["resources"],
+        | "command_completion_revision"
+        | "commands_revision"
+        | "mesh_build_revision"
+        | "mesh_revision"
+        | "scene_revision"
+        | "stages_revision"
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
   session: Pick<LiveStatusResource["session"], "session_id">;
@@ -125,6 +127,8 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       discretization: status.data.domain.discretization,
     },
     resources: {
+      command_completion_revision:
+        status.data.resources.command_completion_revision,
       commands_revision: status.data.resources.commands_revision,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
@@ -149,6 +153,8 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
+    previous.resources.command_completion_revision ===
+      next.resources.command_completion_revision &&
     previous.resources.commands_revision === next.resources.commands_revision &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
@@ -185,6 +191,9 @@ export function runtimeCommandControlSessionStatusEquals(
     return false;
   }
   if (previous.session.session_id !== next.session.session_id) {
+    return false;
+  }
+  if (previous.run?.run_id !== next.run?.run_id) {
     return false;
   }
 

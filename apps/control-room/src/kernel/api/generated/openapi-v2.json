@@ -3513,6 +3513,15 @@
               "null"
             ]
           },
+          "max_samples": {
+            "description": "Optional hard cap for scoped vector samples returned by the binary payload.\n\nThis is intended for renderer glyph payloads. It requires a scoped FEM\nquery so the consumer can map sampled values back to topology nodes.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scope_id": {
             "description": "Scope identifier for `object` and `part` scopes.",
             "type": [
@@ -14124,6 +14133,20 @@
             "schema": {
               "type": [
                 "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional hard cap for scoped vector samples returned by the binary payload.\n\nThis is intended for renderer glyph payloads. It requires a scoped FEM\nquery so the consumer can map sampled values back to topology nodes.",
+            "in": "query",
+            "name": "max_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
                 "null"
               ]
             }

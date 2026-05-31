@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import { ALL_MODULES } from "@/modules";
+import { ALL_MODULES } from "@/modules/registry";
 
 import { viewport3dManifest } from "./manifest";
 import { viewport3dStore } from "./viewport3dStore";

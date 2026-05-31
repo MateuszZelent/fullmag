@@ -59,4 +59,17 @@ describe("cross-section resources", () => {
       `${MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH}?color_scale=coolwarm&filter_expression=%3E%3D0.1&legend=false&metric=sicn&plane=yz&position_percent=75&resolution=2048&rotation_degrees=17&shrink_factor=0.95&wireframe=true&edge_width=1.5&dpr=1#revision=image-rev`,
     );
   });
+
+  it("uses a lightweight 1024 px default for cross-section image previews", () => {
+    expect(
+      resolveCrossSectionImageResourceKey(
+        {
+          metric: "skewness",
+          plane: "xy",
+          positionPercent: 50,
+        },
+        null,
+      ),
+    ).toContain("resolution=1024");
+  });
 });

@@ -56,13 +56,11 @@ function visualizationState(
 function createController({
   documentTarget,
   idleFlushMs,
-  intervalMs = 60_000,
   patch,
   windowTarget,
 }: {
   documentTarget?: ConstructorParameters<typeof CameraRegistryController>[0]["documentTarget"];
   idleFlushMs?: number | null;
-  intervalMs?: number;
   patch?: (patch: VisualizationStatePatch) => Promise<VisualizationStateResource>;
   windowTarget?: ConstructorParameters<typeof CameraRegistryController>[0]["windowTarget"];
 } = {}) {
@@ -76,7 +74,6 @@ function createController({
       api: { patch: patchSpy },
       documentTarget,
       idleFlushMs,
-      intervalMs,
       now: () => 0,
       windowTarget,
     }),
@@ -149,11 +146,11 @@ describe("CameraRegistryController", () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
-  it("syncs the full camera state on the background watcher tick", async () => {
+  it("does not install a periodic background sync timer", async () => {
     vi.useFakeTimers();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const { controller, patchSpy } = createController({
       idleFlushMs: null,
-      intervalMs: 60_000,
       patch: vi.fn(async (nextPatch: VisualizationStatePatch) =>
         visualizationState(22, camera(nextPatch.camera ?? {})),
       ),
@@ -161,23 +158,14 @@ describe("CameraRegistryController", () => {
     controller.start();
     controller.patchCamera({ projection: "orthographic" });
 
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(patchSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(120_000);
 
-    await vi.advanceTimersByTimeAsync(1);
-    expect(patchSpy).toHaveBeenCalledWith({
-      camera: {
-        fov_degrees: DEFAULT_CAMERA_REGISTRY_STATE.fov_degrees,
-        orthographic_scale: null,
-        position: DEFAULT_CAMERA_REGISTRY_STATE.position,
-        projection: "orthographic",
-        target: DEFAULT_CAMERA_REGISTRY_STATE.target,
-        up: DEFAULT_CAMERA_REGISTRY_STATE.up,
-      },
-    });
-    expect(controller.getSnapshot().dirty).toBe(false);
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(patchSpy).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().dirty).toBe(true);
 
     controller.stop();
+    setIntervalSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -185,7 +173,6 @@ describe("CameraRegistryController", () => {
     vi.useFakeTimers();
     const { controller, patchSpy } = createController({
       idleFlushMs: 5_000,
-      intervalMs: 60_000,
       patch: vi.fn(async (nextPatch: VisualizationStatePatch) =>
         visualizationState(23, camera(nextPatch.camera ?? {})),
       ),
@@ -209,7 +196,6 @@ describe("CameraRegistryController", () => {
     vi.useFakeTimers();
     const { controller, patchSpy } = createController({
       idleFlushMs: 500,
-      intervalMs: 60_000,
       patch: vi.fn(async (nextPatch: VisualizationStatePatch) =>
         visualizationState(24, camera(nextPatch.camera ?? {})),
       ),
@@ -230,6 +216,25 @@ describe("CameraRegistryController", () => {
 
     controller.stop();
     vi.useRealTimers();
+  });
+
+  it("keeps camera interaction state outside the public snapshot", () => {
+    const { controller } = createController();
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    const snapshot = controller.getSnapshot();
+
+    controller.beginInteraction();
+    controller.beginInteraction();
+
+    expect("interactionActive" in controller.getSnapshot()).toBe(false);
+    expect(controller.getSnapshot()).toBe(snapshot);
+    expect(listener).not.toHaveBeenCalled();
+
+    controller.endInteraction();
+
+    expect(controller.getSnapshot()).toBe(snapshot);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("does not let stale remote camera state overwrite dirty local camera state", () => {
@@ -259,7 +264,6 @@ describe("CameraRegistryController", () => {
 
     expect(controller.getSnapshot().camera.position).toEqual([0, 0, 1]);
     expect(controller.getSnapshot().persistedShadow?.position).toEqual([9, 8, 7]);
-    expect(controller.getSnapshot().interactionActive).toBe(true);
   });
 
   it("uses a stable camera signature so sub-epsilon jitter does not become dirty", async () => {

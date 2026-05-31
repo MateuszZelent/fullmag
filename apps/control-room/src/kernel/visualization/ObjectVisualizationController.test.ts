@@ -816,6 +816,57 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("prefers backend airbox target quantity over the global quantity", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        active_quantity_id: "m",
+        quantity: { active_quantity_id: "m" },
+        targets: {
+          airbox: {
+            label: "Airbox",
+            scope: "airbox",
+            scope_id: "airbox",
+            settings: {
+              active_quantity_id: "H_demag",
+              bounds_visible: false,
+              geometry_scope: "full",
+              opacity: 0.28,
+              point_color: "var(--fm-info)",
+              points_visible: false,
+              render_mode: "surface",
+              surface_color_source: "solid",
+              surface_mono_color: "var(--fm-airbox-fill)",
+              surface_visible: true,
+              vector_alpha: 1,
+              vector_budget: 1200,
+              vector_color_mode: "orientation",
+              vector_length_scale: 1,
+              vector_mono_color: "var(--fm-info)",
+              vector_thickness: 1,
+              vectors_visible: false,
+              visible: true,
+              wireframe_color: "var(--fm-airbox-wire)",
+              wireframe_opacity: 1,
+              wireframe_visible: false,
+            },
+            source: "airbox",
+          },
+          objects: [],
+          parts: [],
+        },
+      }).activeQuantityId,
+    ).toBe("H_demag");
+  });
+
+  it("falls back to canonical visualization quantity before compatibility quantity", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        active_quantity_id: "m",
+        quantity: { active_quantity_id: "H_demag" },
+      }).activeQuantityId,
+    ).toBe("H_demag");
+  });
+
   it("updates stale backend airbox visibility overrides when patching layer visibility", () => {
     const patch = airboxVisualizationStatePatchFromTargetPatch(
       {

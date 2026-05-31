@@ -14,6 +14,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
@@ -22,6 +23,10 @@ import {
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 import { RealtimeInvalidationBridge } from "./RealtimeInvalidationBridge";
+
+function dependentRevision(resourceKey: string, revision: string | number): string {
+  return `dependent:${resourceKey}:${revision}`;
+}
 
 describe("RealtimeInvalidationBridge", () => {
   it("maps backend resource batch events to resource invalidation", () => {
@@ -43,8 +48,74 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(handled).toBe(true);
-    expect(resources.getRevision("session:status")).toBeNull();
+    expect(resources.getRevision("session:status")).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 5),
+    );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 5),
+    );
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 5),
+    );
+  });
+
+  it("refreshes runtime lifecycle resources when command queue changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_COMMANDS_PATH,
+            resource: "commands",
+            revision: 8,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(8);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 8),
+    );
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 8),
+    );
+    expect(resources.getRevision("session:status")).toBe(
+      dependentRevision(SIMULATION_COMMANDS_PATH, 8),
+    );
+  });
+
+  it("uses dependency revisions that cannot be dropped by older numeric resource namespaces", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, 26);
+    resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, 26);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_COMMANDS_PATH,
+            resource: "commands",
+            revision: 4,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(4);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).not.toBe(26);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).not.toBe(26);
   });
 
   it("invalidates session-scoped resources when realtime switches sessions", () => {
@@ -96,6 +167,145 @@ describe("RealtimeInvalidationBridge", () => {
         },
       ]),
     );
+  });
+
+  it("invalidates session-scoped runtime resources when realtime switches runs", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    resources.subscribe(SIMULATION_RUN_CURRENT_PATH, () => {});
+    resources.subscribe(SIMULATION_SOLVER_STATUS_PATH, () => {});
+    resources.subscribe(SIMULATION_STAGES_EXECUTION_PATH, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: { resource_revisions: {} },
+        run_id: "run-old",
+        seq: 1,
+        session_id: "session-1",
+        type: "hello",
+      }),
+    ).toBe(true);
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_FIELDS_PATH,
+              resource: "fields",
+              revision: 7,
+            },
+          ],
+        },
+        run_id: "run-new",
+        seq: 2,
+        session_id: "session-1",
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision("session:status")).toBe("session:session-1:2");
+    expect(resources.getRevision(SIMULATION_RUN_CURRENT_PATH)).toBe(
+      "session:session-1:2",
+    );
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "session:session-1:2",
+    );
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
+      "session:session-1:2",
+    );
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(7);
+  });
+
+  it("invalidates session-scoped runtime resources when a run appears in the current session", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    resources.subscribe(SIMULATION_RUN_CURRENT_PATH, () => {});
+    resources.subscribe(SIMULATION_SOLVER_STATUS_PATH, () => {});
+
+    bridge.handleEvent({
+      payload: { resource_revisions: {} },
+      seq: 1,
+      session_id: "session-1",
+      type: "hello",
+    });
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_FIELDS_PATH,
+              resource: "fields",
+              revision: 7,
+            },
+          ],
+        },
+        run_id: "run-started",
+        seq: 2,
+        session_id: "session-1",
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(SIMULATION_RUN_CURRENT_PATH)).toBe(
+      "session:session-1:2",
+    );
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "session:session-1:2",
+    );
+  });
+
+  it("does not treat heartbeat run ids as runtime identity changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    let statusInvalidations = 0;
+
+    bus.on("resource:invalidated", ({ resourceKey }) => {
+      if (resourceKey === "session:status") {
+        statusInvalidations += 1;
+      }
+    });
+
+    bridge.handleEvent({
+      payload: { resource_revisions: {} },
+      run_id: "run-old",
+      seq: 1,
+      session_id: "session-1",
+      type: "hello",
+    });
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DATA_FIELDS_PATH,
+            resource: "fields",
+            revision: 7,
+          },
+        ],
+      },
+      run_id: "run-new",
+      seq: 2,
+      session_id: "session-1",
+      type: "resource.batch_changed",
+    });
+
+    expect(
+      bridge.handleEvent({
+        payload: { current_seq: 2 },
+        run_id: "run-old",
+        seq: 2,
+        session_id: "session-1",
+        type: "heartbeat",
+      }),
+    ).toBe(false);
+    expect(statusInvalidations).toBe(2);
+    expect(resources.getRevision("session:status")).toBe("session:session-1:2");
   });
 
   it("batches backend invalidations until the scheduled frame and keeps the latest revision", () => {
@@ -182,8 +392,12 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(handled).toBe(true);
     expect(statusInvalidations).toBe(1);
-    expect(resources.getRevision("session:status")).toBe(6);
-    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
+    expect(resources.getRevision("session:status")).toBe(
+      dependentRevision(SIMULATION_SOLVER_STATUS_PATH, 6),
+    );
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
+      dependentRevision(SIMULATION_SOLVER_STATUS_PATH, 6),
+    );
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(6);
   });
 
@@ -287,6 +501,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(10);
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
   });
 
@@ -402,7 +617,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBe(12);
   });
 
-  it("invalidates stage execution when realtime recommends the stage resource", () => {
+  it("invalidates runtime lifecycle resources when realtime recommends the stage resource", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
@@ -421,7 +636,15 @@ describe("RealtimeInvalidationBridge", () => {
     });
 
     expect(handled).toBe(true);
-    expect(resources.getRevision("session:status")).toBe(44);
+    expect(resources.getRevision("session:status")).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(44);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(
+      dependentRevision(SIMULATION_STAGES_EXECUTION_PATH, 44),
+    );
   });
 });

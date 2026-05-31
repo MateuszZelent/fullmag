@@ -13,6 +13,10 @@ const timeoutMs = Number(
 const pollMs = Number(process.env.CONTROL_ROOM_COMPUTE_SMOKE_POLL_MS ?? 500);
 const COMPUTE_RESPONSIVENESS_PROBE_INTERVAL_MS = 50;
 const COMPUTE_RESPONSIVENESS_DELAY_THRESHOLD_MS = 50;
+const VIEWPORT_3D_SELECTOR = ".fm-viewport-3d";
+const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
+const COMPUTE_VIEWPORT_GESTURE_LABEL = "compute-viewport-camera-gestures";
+const COMPUTE_VIEWPORT_GESTURE_SETTLE_MS = 25;
 
 const STRICT_COMPUTE_ACTIONS = [
   { actionId: "study.compute-fields", kind: "compute_fields", label: "Compute Fields" },
@@ -71,6 +75,14 @@ const FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS = new Set([
   "/v2/sessions/current/simulation/solver/energies/current",
   "/v2/sessions/current/simulation/solver/energies/history",
 ]);
+const COMPUTE_VIEWPORT_GESTURE_FORBIDDEN_REQUEST_PREFIXES = [
+  "/v2/sessions/current/model/",
+  "/v2/sessions/current/meshing/",
+  "/v2/sessions/current/visualization/state",
+];
+
+const viewportGestureRequests = [];
+let recordViewportGestureRequests = false;
 
 
 async function main() {
@@ -109,6 +121,15 @@ async function main() {
   });
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("request", (request) => {
+    if (recordViewportGestureRequests && isCurrentSessionResourceUrl(request.url())) {
+      viewportGestureRequests.push({
+        method: request.method(),
+        path: pathnameFromUrl(request.url()),
+        timestamp: Date.now(),
+        url: request.url(),
+      });
+    }
+
     if (request.method() === "GET" && isForbiddenAcceptanceResourceUrl(request.url())) {
       resultResourceRequests.push({
         path: pathnameFromUrl(request.url()),
@@ -141,6 +162,7 @@ async function main() {
       timeout: timeoutMs,
     });
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await ensureViewport3DActive(page);
     await page.getByRole("tab", { name: "Study" }).first().click({ timeout: timeoutMs });
     await waitForComputeActionReady(page, STRICT_COMPUTE_ACTIONS[0]);
     await resetComputePerformanceProbe(page);
@@ -198,16 +220,21 @@ async function clickComputeAction(page, action, resultResourceRequests) {
     requests: resultResourceRequests.slice(resultResourceStartIndex),
   });
 
-  const detail =
-    action.kind === "solve"
-      ? await waitForSolveExecutionProof(commandAcceptance.commandId)
-      : await waitForCommandSettled(commandAcceptance.commandId, action.kind);
+  let detail;
+  let viewportGestureProof = null;
+  if (action.kind === "solve") {
+    detail = await waitForSolveExecutionProof(commandAcceptance.commandId);
+    viewportGestureProof = await verifyViewport3DGesturesDuringSolve(page);
+  } else {
+    detail = await waitForCommandSettled(commandAcceptance.commandId, action.kind);
+  }
   return {
     actionId: action.actionId,
     commandId: commandAcceptance.commandId,
     kind: action.kind,
     resultResourceRequestCount: resultResourceRequests.length - resultResourceStartIndex,
     status: commandStatus(detail),
+    viewportGestureProof,
   };
 }
 
@@ -267,6 +294,205 @@ async function waitForComputeActionReady(page, action) {
   await button.waitFor({ state: "visible", timeout: timeoutMs });
   await waitForEnabledAction(button, action.label);
   return button;
+}
+
+async function ensureViewport3DActive(page) {
+  const viewportTab = page.getByRole("tab", { name: "3D Viewport" }).first();
+  if ((await viewportTab.count()) > 0) {
+    await viewportTab.click({ timeout: timeoutMs });
+  }
+
+  await waitForCanvasClipBox(page);
+  const { drawingBuffer, hasContext } = await readCanvasContextState(page);
+  if (!hasContext || drawingBuffer.width <= 0 || drawingBuffer.height <= 0) {
+    throw new Error(
+      `3D viewport canvas is not renderable before compute smoke: context=${hasContext} drawingBuffer=${drawingBuffer.width}x${drawingBuffer.height}.`,
+    );
+  }
+}
+
+async function verifyViewport3DGesturesDuringSolve(page) {
+  const box = await waitForCanvasClipBox(page);
+  const x = box.x + box.width * 0.5;
+  const y = box.y + box.height * 0.5;
+  const startIndex = viewportGestureRequests.length;
+
+  let cameraSignature = await readViewportCameraSignature(page);
+  cameraSignature = await assertViewportGestureDoesNotFetch(
+    page,
+    "compute orbit rotate",
+    cameraSignature,
+    "left-button orbit rotate changes the compute viewport camera state",
+    async () => {
+      await page.mouse.move(x, y);
+      await page.mouse.down({ button: "left" });
+      await page.mouse.move(x + 120, y + 42, { steps: 8 });
+      await page.mouse.up({ button: "left" });
+    },
+  );
+
+  cameraSignature = await assertViewportGestureDoesNotFetch(
+    page,
+    "compute wheel zoom",
+    cameraSignature,
+    "wheel zoom changes the compute viewport camera state",
+    async () => {
+      await page.mouse.move(x, y);
+      for (let index = 0; index < 4; index += 1) {
+        await page.mouse.wheel(0, -240);
+      }
+    },
+  );
+
+  await assertViewportGestureDoesNotFetch(
+    page,
+    "compute right pan",
+    cameraSignature,
+    "right-button pan changes the compute viewport camera state",
+    async () => {
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(x + 80, y + 36, { steps: 8 });
+      await page.mouse.up({ button: "right" });
+    },
+  );
+
+  const { drawingBuffer, hasContext } = await readCanvasContextState(page);
+  if (!hasContext || drawingBuffer.width <= 0 || drawingBuffer.height <= 0) {
+    throw new Error(
+      `3D viewport canvas is not renderable after compute camera gestures: context=${hasContext} drawingBuffer=${drawingBuffer.width}x${drawingBuffer.height}.`,
+    );
+  }
+
+  const requests = viewportGestureRequests.slice(startIndex);
+  const unexpectedRequests = unexpectedViewportGestureRequests(requests);
+  if (unexpectedRequests.length > 0) {
+    throw new Error(
+      `${COMPUTE_VIEWPORT_GESTURE_LABEL} emitted background resource work: ` +
+        unexpectedRequests
+          .map((request) => `${request.method} ${request.path}`)
+          .join(", "),
+    );
+  }
+
+  return {
+    canvasHasContext: hasContext,
+    drawingBuffer,
+    forbiddenRequestCount: unexpectedRequests.length,
+    label: COMPUTE_VIEWPORT_GESTURE_LABEL,
+    requestCount: requests.length,
+  };
+}
+
+async function assertViewportGestureDoesNotFetch(
+  page,
+  gestureName,
+  previousCameraSignature,
+  cameraChangeLabel,
+  gesture,
+) {
+  const startIndex = viewportGestureRequests.length;
+  let nextCameraSignature = previousCameraSignature;
+  recordViewportGestureRequests = true;
+  try {
+    await gesture();
+    await waitForViewportGestureSettle(page);
+    nextCameraSignature = await waitForCameraSignatureChange(
+      page,
+      previousCameraSignature,
+      cameraChangeLabel,
+    );
+  } finally {
+    recordViewportGestureRequests = false;
+  }
+
+  const unexpectedRequests = unexpectedViewportGestureRequests(
+    viewportGestureRequests.slice(startIndex),
+  );
+  if (unexpectedRequests.length > 0) {
+    throw new Error(
+      `${gestureName} triggered unexpected resource work: ` +
+        unexpectedRequests
+          .map((request) => `${request.method} ${request.path}`)
+          .join(", "),
+    );
+  }
+  return nextCameraSignature;
+}
+
+function unexpectedViewportGestureRequests(requests) {
+  return requests.filter((request) =>
+    COMPUTE_VIEWPORT_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
+      request.path.startsWith(prefix),
+    ),
+  );
+}
+
+async function waitForViewportGestureSettle(page) {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+  );
+  await page.waitForTimeout(COMPUTE_VIEWPORT_GESTURE_SETTLE_MS);
+}
+
+async function waitForCameraSignatureChange(page, previousSignature, label) {
+  return poll(label, async () => {
+    const signature = await readViewportCameraSignature(page);
+    return signature && signature !== previousSignature ? signature : null;
+  });
+}
+
+async function readViewportCameraSignature(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    return [
+      node?.getAttribute("data-camera-position") ?? "",
+      node?.getAttribute("data-camera-target") ?? "",
+      node?.getAttribute("data-camera-projection") ?? "",
+    ].join("|");
+  }, VIEWPORT_3D_SELECTOR);
+}
+
+async function readCanvasContextState(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    if (!(node instanceof HTMLCanvasElement)) {
+      return {
+        drawingBuffer: { height: 0, width: 0 },
+        hasContext: false,
+      };
+    }
+    const context = node.getContext("webgl2") ?? node.getContext("webgl");
+    return {
+      drawingBuffer: {
+        height: context?.drawingBufferHeight ?? 0,
+        width: context?.drawingBufferWidth ?? 0,
+      },
+      hasContext: Boolean(context),
+    };
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
+}
+
+async function waitForCanvasClipBox(page) {
+  return poll("measurable 3D viewport canvas bounds", async () => {
+    const box = await readCanvasClipBox(page);
+    return box.width > 0 && box.height > 0 ? box : null;
+  });
+}
+
+async function readCanvasClipBox(page) {
+  return page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    if (!(node instanceof HTMLCanvasElement)) {
+      return { height: 0, width: 0, x: 0, y: 0 };
+    }
+    const rect = node.getBoundingClientRect();
+    return {
+      height: rect.height,
+      width: rect.width,
+      x: rect.x,
+      y: rect.y,
+    };
+  }, VIEWPORT_3D_CANVAS_SELECTOR);
 }
 
 function assertNoImmediateResultResourceReloads({
@@ -858,6 +1084,10 @@ function isForbiddenAcceptanceResourceUrl(requestUrl) {
       pathname,
     )
   );
+}
+
+function isCurrentSessionResourceUrl(requestUrl) {
+  return pathnameFromUrl(requestUrl).startsWith("/v2/sessions/current/");
 }
 
 function pathnameFromUrl(rawUrl) {

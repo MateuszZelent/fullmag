@@ -18,6 +18,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { viewport3DOrbitDebugEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -372,10 +373,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const canvasDpr = resolveViewport3DCanvasDpr({
     devicePixelRatio:
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
-    interactionActive: sceneProps.interactionActive,
     profile: visualProfile,
   });
   const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
+  const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
   const [orbitDebugAngles, setOrbitDebugAngles] =
     useState<Viewport3DOrbitDebugAngles>(() =>
       normalizeViewport3DOrbitDebugAngles(null),
@@ -536,7 +537,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             orbitDebugAngles={orbitDebugAngles}
             orbitDebugCommitRevision={orbitDebugCommitRevision}
             orbitDebugRevision={orbitDebugRevision}
-            onOrbitDebugAnglesChange={syncOrbitDebugAngles}
+            onOrbitDebugAnglesChange={
+              orbitDebugEnabled ? syncOrbitDebugAngles : undefined
+            }
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -552,7 +555,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
-      {clientReady && colors ? (
+      {orbitDebugEnabled && clientReady && colors ? (
         <Viewport3DOrbitDebugPanel
           angles={orbitDebugAngles}
           onAnglesChange={applyOrbitDebugAngles}

@@ -13,6 +13,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
   SESSION_CURRENT_PATH,
+  SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -144,6 +145,15 @@ function latestRevision(
   return next;
 }
 
+function dependentResourceRevision(
+  sourceResourceKey: string,
+  revision: ResourceRevision,
+): ResourceRevision {
+  return typeof revision === "number"
+    ? `dependent:${sourceResourceKey}:${revision}`
+    : revision;
+}
+
 function defaultScheduleFlush(callback: () => void): () => void {
   if (
     typeof window !== "undefined" &&
@@ -158,6 +168,7 @@ function defaultScheduleFlush(callback: () => void): () => void {
 }
 
 export class RealtimeInvalidationBridge {
+  private currentRunId: string | null = null;
   private currentSessionId: string | null = null;
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
@@ -193,13 +204,17 @@ export class RealtimeInvalidationBridge {
         if (!change) {
           continue;
         }
+        const recommendedFetch = change.recommended_fetch;
 
-        if (shouldInvalidateSessionStatus(change.recommended_fetch)) {
-          statusRevision = latestRevision(statusRevision, change.revision);
+        if (recommendedFetch && shouldInvalidateSessionStatus(recommendedFetch)) {
+          statusRevision = latestRevision(
+            statusRevision,
+            dependentResourceRevision(recommendedFetch, change.revision),
+          );
         }
-        if (change.recommended_fetch) {
+        if (recommendedFetch) {
           this.queueResourceInvalidation(
-            change.recommended_fetch,
+            recommendedFetch,
             change.revision,
           );
         } else if (
@@ -251,11 +266,32 @@ export class RealtimeInvalidationBridge {
         : null;
     if (!sessionId) return false;
 
+    const tracksRunIdentity =
+      type === "hello" ||
+      type === "resource.batch_changed" ||
+      type === "resync.required";
+    const runId =
+      tracksRunIdentity &&
+      typeof record.run_id === "string" &&
+      record.run_id.length > 0
+        ? record.run_id
+        : null;
+    const sessionChanged =
+      this.currentSessionId !== null && this.currentSessionId !== sessionId;
+    const runChanged =
+      tracksRunIdentity &&
+      this.currentSessionId !== null &&
+      !sessionChanged &&
+      this.currentRunId !== runId;
     const shouldResync =
       type === "hello" ||
       type === "resync.required" ||
-      (this.currentSessionId !== null && this.currentSessionId !== sessionId);
+      sessionChanged ||
+      runChanged;
     this.currentSessionId = sessionId;
+    if (tracksRunIdentity || sessionChanged) {
+      this.currentRunId = runId;
+    }
     if (!shouldResync) return false;
 
     const seq = record.seq;
@@ -307,7 +343,7 @@ export class RealtimeInvalidationBridge {
   private flushPendingInvalidations(): void {
     const pendingFetches = this.pendingFetches;
     const pendingPrefixes = this.pendingPrefixes;
-    const statusRevision = this.pendingStatusRevision;
+    let statusRevision = this.pendingStatusRevision;
     this.pendingFetches = new Map<string, ResourceRevision>();
     this.pendingPrefixes = new Map<string, ResourceRevision>();
     this.pendingStatusRevision = null;
@@ -316,6 +352,11 @@ export class RealtimeInvalidationBridge {
       this.invalidateResource(resourceKey, revision);
       this.resources.invalidatePrefix(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
+      const dependentStatusRevision =
+        this.invalidateRuntimeLifecycleDependents(resourceKey, revision);
+      if (dependentStatusRevision !== null && statusRevision === null) {
+        statusRevision = latestRevision(statusRevision, dependentStatusRevision);
+      }
       if (resourceKey === DATA_SCALARS_PATH) {
         this.invalidateSimulationStepResources(revision);
       }
@@ -369,8 +410,37 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private invalidateRuntimeLifecycleDependents(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): ResourceRevision | null {
+    const dependentRevision = dependentResourceRevision(
+      recommendedFetch,
+      revision,
+    );
+    if (recommendedFetch === SIMULATION_COMMANDS_PATH) {
+      this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
+      this.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, dependentRevision);
+      return dependentRevision;
+    }
+
+    if (recommendedFetch === SIMULATION_STAGES_EXECUTION_PATH) {
+      this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
+      this.resources.invalidate(SIMULATION_COMMANDS_PATH, dependentRevision);
+      return null;
+    }
+
+    if (recommendedFetch === SIMULATION_SOLVER_STATUS_PATH) {
+      this.resources.invalidate(SIMULATION_COMMANDS_PATH, dependentRevision);
+      return null;
+    }
+
+    return null;
+  }
+
   private invalidateSimulationStepResources(revision: ResourceRevision): void {
     this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
+    this.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
     this.resources.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
     this.resources.invalidatePrefix(
       resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),

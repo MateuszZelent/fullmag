@@ -11,6 +11,19 @@ import {
 
 import { CrossSectionInspectorPanel } from "./CrossSectionInspectorPanel";
 
+vi.mock("@/kernel/KernelContext", () => ({
+  useKernel: () => ({
+    layout: {
+      setActiveViewportMainModule: vi.fn(),
+      setFocusedSlot: vi.fn(),
+      setPanelVisible: vi.fn(),
+    },
+    selection: {
+      set: vi.fn(),
+    },
+  }),
+}));
+
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
     data: {
@@ -151,5 +164,8 @@ describe("CrossSectionInspectorPanel", () => {
     expect(html).toContain("25");
     expect(html).toContain("12.5");
     expect(html).toContain("aspect_ratio");
+    expect(html).toContain("Plot Parameters");
+    expect(html).toContain("New Image");
+    expect(html).toContain('aria-label="Position slider"');
   });
 });

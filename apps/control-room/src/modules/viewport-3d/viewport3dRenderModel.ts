@@ -423,7 +423,11 @@ export function buildViewport3DFieldRenderModel(
         ? magneticFieldValueResolver
         : partFieldVector !== fieldVector &&
             partFieldVector.pointCount < topology.nodeCount
-          ? buildScopedPartFieldValueResolver(partModel.part, topology)
+          ? buildScopedPartFieldValueResolver(
+              vectorSelection,
+              topology,
+              partFieldVector.pointCount,
+            )
           : null);
     partVectorSegments.set(
       partId,
@@ -1849,8 +1853,18 @@ function uniqueSortedIndices(indices: Uint32Array): number[] {
 function buildScopedPartFieldValueResolver(
   partSelection: Viewport3DNodeSelection,
   topology: Pick<Viewport3DPositionSource, "nodeCount">,
+  fieldPointCount: number,
 ): Viewport3DVectorFieldValueResolver {
   const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
+  if (fieldPointCount > 0 && fieldPointCount < selectedNodeCount) {
+    const stride = Math.max(1, Math.floor(selectedNodeCount / fieldPointCount));
+    return (_globalNodeIndex, selectedOffset) => {
+      if (selectedOffset % stride !== 0) return null;
+      const sampleIndex = Math.floor(selectedOffset / stride);
+      return sampleIndex < fieldPointCount ? sampleIndex : null;
+    };
+  }
+
   const localIndexByGlobalNode = new Map<number, number>();
   for (let localIndex = 0; localIndex < selectedNodeCount; localIndex += 1) {
     const globalNodeIndex = resolveNodeSelectionIndex(partSelection, localIndex);

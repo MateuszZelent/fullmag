@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { EventBus } from "../events/EventBus";
+import type { KernelEventMap } from "../events/eventTypes";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -16,6 +18,8 @@ import {
   MODEL_SCENE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
+import { ResourceInvalidationController } from "./ResourceInvalidationController";
+import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
 
 import {
   GEOMETRY_DIAGNOSTICS_RESOURCE_KEY,
@@ -36,6 +40,7 @@ import {
   resolveObjectTopologyResourceKey,
   resolveSceneResourceRevision,
   resolveVisualizationStateRevision,
+  publishCommittedSceneResource,
 } from "./geometryLifecycleResources";
 
 describe("geometry lifecycle resources", () => {
@@ -115,5 +120,35 @@ describe("geometry lifecycle resources", () => {
         geometry_realization_revision: null,
       } as never),
     ).toBe("4:unknown:unknown");
+  });
+
+  it("seeds committed SceneDocument data even when the scene revision is unchanged", () => {
+    const resources = new ResourceInvalidationController(
+      new EventBus<KernelEventMap>(),
+    );
+    const runtimeStore = new ResourceRuntimeStore();
+
+    resources.invalidate(MODEL_SCENE_PATH, 4);
+    runtimeStore.updateData(MODEL_SCENE_PATH, { objects: [], revision: 4 }, 4);
+
+    publishCommittedSceneResource(
+      resources,
+      {
+        objects: [{ id: "box-1", name: "Box 1" }],
+        revision: 4,
+      },
+      4,
+      runtimeStore,
+    );
+
+    expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(4);
+    expect(runtimeStore.getSnapshot(MODEL_SCENE_PATH)).toMatchObject({
+      data: {
+        objects: [{ id: "box-1", name: "Box 1" }],
+        revision: 4,
+      },
+      revision: 4,
+      status: "ready",
+    });
   });
 });

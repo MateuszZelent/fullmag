@@ -45,7 +45,6 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   pointColorFromSettings,
-  resolveCameraInteractionSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
   surfaceScalarColorModeFromSettings,
@@ -61,7 +60,6 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings,
   femDomain,
   fieldModel,
-  interactionActive,
   materialProfile,
   meshQualityColors,
   onSelectDomain,
@@ -75,7 +73,6 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
-  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   meshQualityColors: ScalarColorBuffer | null;
   onSelectDomain: () => void;
@@ -85,10 +82,7 @@ export function FallbackTopologyMeshLayer({
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const invalidate = useBatchedInvalidate();
-  const renderSettings = useMemo(
-    () => resolveCameraInteractionSettings(fallbackSettings, interactionActive),
-    [fallbackSettings, interactionActive],
-  );
+  const renderSettings = fallbackSettings;
   const geometry = useMemo(() => {
     if (!topologyModel) return null;
     const next = tracker.track("geometry", new BufferGeometry());

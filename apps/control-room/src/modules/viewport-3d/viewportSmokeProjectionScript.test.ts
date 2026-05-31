@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+import {
+  DATA_FIELDS_PATH,
+  MESHING_SUMMARY_PATH,
+  MODEL_SCENE_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
+
 const smokeScriptUrl = new URL(
   "../../../scripts/smoke-viewport-3d.mjs",
   import.meta.url,
@@ -17,6 +24,16 @@ const profileSwitchScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-profile-switch.mjs",
   import.meta.url,
 );
+
+function endpointFamilyLiteral(path: string, suffix: string): string {
+  const suffixStart = path.lastIndexOf(suffix);
+
+  if (suffixStart < 0) {
+    throw new Error(`Expected ${path} to contain ${suffix}`);
+  }
+
+  return JSON.stringify(path.slice(0, suffixStart));
+}
 
 describe("viewport smoke projection round-trip", () => {
   it("toggles relative to the initial projection state", () => {
@@ -45,8 +62,12 @@ describe("viewport smoke projection round-trip", () => {
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
-    expect(smokeScript).toContain("return page.evaluate(({ label, measureNames }) => {");
-    expect(smokeScript).toContain("}, { label, measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES });");
+    expect(smokeScript).toContain(
+      "return page.evaluate(({ label, measureNames, scope }) => {",
+    );
+    expect(smokeScript).toContain(
+      "}, { label, measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES, scope });",
+    );
   });
 
   it("passes only measure names into the init script probe installer", () => {
@@ -63,6 +84,57 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("window.__FULLMAG_REACT_PROFILER__ = true");
     expect(smokeScript).toContain("reactRenderMeasureCount");
     expect(smokeScript).toContain("reactRenderMeasureTotals");
+    expect(smokeScript).toContain("longAnimationFrameCount");
+    expect(smokeScript).toContain("phaseElapsedMs");
+    expect(smokeScript).toContain("longAnimationFrameTopInvokers");
+    expect(smokeScript).toContain("viewportFrameDelta");
+    expect(smokeScript).toContain("viewportDiagnostics");
+  });
+
+  it("splits viewport smoke performance metrics into actionable phases", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("__FULLMAG_RESET_VIEWPORT_3D_PERFORMANCE__");
+    expect(smokeScript).toContain("resetViewport3DPerformanceProbe");
+    expect(smokeScript).toContain("collectViewport3DPerformancePhase");
+    expect(smokeScript).toContain("Viewport 3D phased compute metrics:");
+    expect(smokeScript).toContain('"long-animation-frame"');
+    expect(smokeScript).toContain('"startup-to-canvas"');
+    expect(smokeScript).toContain('"viewport-focus"');
+    expect(smokeScript).toContain('"camera-orbit-rotate"');
+    expect(smokeScript).toContain('"camera-wheel-zoom"');
+    expect(smokeScript).toContain('"camera-right-pan"');
+    expect(smokeScript).toContain("const gesturePerformancePhases = []");
+    expect(smokeScript).toContain("return gesturePerformancePhases");
+    expect(smokeScript).toContain('"projection-round-trip"');
+    expect(smokeScript).toContain('"dimension-frame-cage"');
+    expect(smokeScript).toContain('"geometry-authoring"');
+    expect(smokeScript).toContain("scope: \"phase\"");
+    expect(smokeScript).toContain("scope: \"all\"");
+    expect(smokeScript).toContain("state.phaseStartTime");
+    expect(smokeScript).toContain("state.phaseViewportDiagnostics");
+    expect(smokeScript).toContain('scope === "phase"');
+    expect(smokeScript).toContain("viewportDiagnostics?.frames ?? 0");
+    expect(smokeScript).toContain("__FULLMAG_READ_VIEWPORT_3D_DIAGNOSTICS__");
+  });
+
+  it("excludes smoke harness canvas sampling from viewport long-task metrics", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("probeWindows: []");
+    expect(smokeScript).toContain("__FULLMAG_BEGIN_VIEWPORT_3D_PROBE__");
+    expect(smokeScript).toContain("__FULLMAG_END_VIEWPORT_3D_PROBE__");
+    expect(smokeScript).toContain("withViewport3DPerformanceProbePaused");
+    expect(smokeScript).toContain("longTaskOverlapsProbeWindow");
+    expect(smokeScript).toContain(
+      "const longTasks = state.longTasks.filter(",
+    );
+    expect(smokeScript).toContain(
+      "!longTaskOverlapsProbeWindow(entry, probeWindows)",
+    );
+    expect(smokeScript).toContain(
+      "return withViewport3DPerformanceProbePaused(page, async () => {",
+    );
   });
 
   it("marks controlled missing-session smoke runs in browser config", () => {
@@ -77,14 +149,37 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("window.__FULLMAG_CONFIG__");
   });
 
-  it("guards camera wheel and drag gestures against visualization state PATCH churn", () => {
+  it("asserts camera gestures do not issue data/model/visualization fetches", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
+    expect(smokeScript).toContain("assertCameraGestureDoesNotFetch");
     expect(smokeScript).toContain("verifyCameraGesturesStayLocal");
+    expect(smokeScript).toContain("CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES");
+    expect(smokeScript).toContain(
+      endpointFamilyLiteral(DATA_FIELDS_PATH, "fields"),
+    );
+    expect(smokeScript).toContain(
+      endpointFamilyLiteral(MODEL_SCENE_PATH, "scene"),
+    );
+    expect(smokeScript).toContain(
+      endpointFamilyLiteral(MESHING_SUMMARY_PATH, "summary"),
+    );
+    expect(smokeScript).toContain(JSON.stringify(VISUALIZATION_STATE_PATH));
     expect(smokeScript).toContain("recordCameraGestureRequests = true");
     expect(smokeScript).toContain('request.method === "PATCH"');
     expect(smokeScript).toContain("request.path === VISUALIZATION_STATE_PATH");
     expect(smokeScript).toContain("visualization_state_patches=0");
+    expect(smokeScript).toContain("background_resource_requests=0");
+    expect(smokeScript).toContain('"orbit rotate"');
+    expect(smokeScript).toContain('"orbit pan"');
+    expect(smokeScript).toContain('"orbit zoom"');
+    expect(smokeScript).toContain('await page.mouse.down({ button: "left" });');
+    expect(smokeScript).toContain(
+      "left-button orbit rotate changes the viewport camera state",
+    );
+    expect(smokeScript).toContain(
+      "Viewport camera state did not change after left-button orbit rotate",
+    );
     expect(smokeScript).toContain('await page.mouse.down({ button: "right" });');
     expect(smokeScript).toContain(
       "right-button free-camera pan changes the viewport camera state",
@@ -93,6 +188,17 @@ describe("viewport smoke projection round-trip", () => {
       "Viewport camera state did not change after right-button free-camera pan",
     );
     expect(smokeScript).toContain("readViewportCameraSignature");
+  });
+
+  it("does not add fixed settle delays to measured camera gesture phases", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+    const gestureGuardBlock = smokeScript.slice(
+      smokeScript.indexOf("async function assertCameraGestureDoesNotFetch"),
+      smokeScript.indexOf("function unexpectedCameraGestureRequests"),
+    );
+
+    expect(gestureGuardBlock).toContain("waitForCameraGestureSettle(page)");
+    expect(gestureGuardBlock).not.toContain("delay(300)");
   });
 
   it("verifies the COMSOL-style dimension frame cage with canvas pixels", () => {
@@ -108,6 +214,41 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("dimension frame canvas renders after cage mode");
     expect(smokeScript).toContain(
       "Viewport canvas did not visually change after enabling dimension frame cage",
+    );
+  });
+
+  it("uses current inspector vector labels in the strict geometry authoring smoke", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain('fillDraftField(page, "Size X", "9e-7")');
+    expect(smokeScript).toContain('fillDraftField(page, "Size Y", "7e-7")');
+    expect(smokeScript).toContain('fillDraftField(page, "Size Z", "1e-7")');
+    expect(smokeScript).toContain(
+      'fillDraftField(page, "Translation X", "-1.6e-6")',
+    );
+    expect(smokeScript).not.toContain('fillDraftField(page, "TX"');
+  });
+
+  it("uses the transaction SceneDocument for the UI commit before checking observable state", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("const uiScene =");
+    expect(smokeScript).toContain("committedSceneWithObject ??");
+    expect(smokeScript).toContain("model/scene fallback refetch after UI object commit");
+    expect(smokeScript).not.toContain(
+      "GET /v2/sessions/current/model/scene refetch after UI object commit",
+    );
+  });
+
+  it("does not order websocket refetch proof by probe timestamps", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("sceneSequenceBeforeExternalCommit");
+    expect(smokeScript).toContain(
+      "GET /v2/sessions/current/model/scene refetch after websocket invalidation",
+    );
+    expect(smokeScript).not.toContain(
+      "record.timestamp >= realtimeSceneChange.timestamp",
     );
   });
 

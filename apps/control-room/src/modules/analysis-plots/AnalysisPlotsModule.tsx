@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+
 import {
   shouldLoadRuntimeScalars,
   useScalarWindowResource,
@@ -12,6 +14,14 @@ import {
   buildLineChartModel,
   type LinePoint,
 } from "./analysisPlotModel";
+
+const ANALYSIS_SCALAR_COLUMNS = Object.freeze([
+  "step",
+  "e_total",
+  "mx",
+  "my",
+  "mz",
+]);
 
 export default function AnalysisPlotsModule() {
   const scalarsRevision = useSessionStatusSelector(
@@ -27,16 +37,21 @@ export default function AnalysisPlotsModule() {
     enabled: loadScalars,
   });
   const scalarWindow = useScalarWindowResource({
-    columns: ["step", "e_total", "mx", "my", "mz"],
+    columns: ANALYSIS_SCALAR_COLUMNS,
     enabled: loadScalars,
     limit: 240,
   });
-  const energyPoints =
-    energyHistory.data?.rows.map((row) => ({
+  const energyPoints = useMemo(
+    () => energyHistory.data?.rows.map((row) => ({
       x: row.step,
       y: row.total,
-    })) ?? [];
-  const scalarPoints = scalarPointsFromWindow(scalarWindow.data);
+    })) ?? [],
+    [energyHistory.data],
+  );
+  const scalarPoints = useMemo(
+    () => scalarPointsFromWindow(scalarWindow.data),
+    [scalarWindow.data],
+  );
 
   return (
     <div className="fm-analysis-plots">
@@ -71,7 +86,7 @@ function AnalysisPlotCard({
   xLabel: string;
   yLabel: string;
 }) {
-  const model = buildLineChartModel(points);
+  const model = useMemo(() => buildLineChartModel(points), [points]);
   return (
     <section className="fm-analysis-plots__panel">
       <header className="fm-analysis-plots__header">
@@ -155,6 +170,7 @@ function resolveScalarValueColumn(columns: readonly string[]): number {
 }
 
 export const __analysisPlotsTestUtils = {
+  analysisScalarColumns: ANALYSIS_SCALAR_COLUMNS,
   resolveScalarValueColumn,
   scalarPointsFromWindow,
 };

@@ -10,6 +10,7 @@ import {
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
+  resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
 } from "./viewport3dResources";
@@ -24,11 +25,12 @@ describe("viewport3dResources", () => {
     expect(
       resolveViewport3DFieldVectorResourceKey("m", {
         component: "full",
+        max_samples: 512,
         scope_id: "part-1",
         scope_kind: "part",
       }),
     ).toBe(
-      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_id=part-1&scope_kind=part`,
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&max_samples=512&scope_id=part-1&scope_kind=part`,
     );
   });
 
@@ -37,16 +39,20 @@ describe("viewport3dResources", () => {
       resolveViewport3DAirboxFieldVectorResourceKeys("h_demag", [
         { id: "airbox" },
         { id: "airbox-shell" },
-      ]),
+      ], {
+        component: "full",
+        max_samples: 384,
+        scope_kind: "full",
+      }),
     ).toEqual(
       new Map([
         [
           "airbox",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&scope_id=airbox&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox&scope_kind=airbox`,
         ],
         [
           "airbox-shell",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&scope_id=airbox-shell&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox-shell&scope_kind=airbox`,
         ],
       ]),
     );
@@ -59,6 +65,66 @@ describe("viewport3dResources", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_ex", [{ id: "airbox" }]),
     ).toEqual(new Map());
+  });
+
+  it("builds scoped magnetic part field vector resource requests", () => {
+    expect(
+      resolveViewport3DPartFieldVectorResourceRequests(
+        new Map([
+          [
+            "part-b",
+            {
+              quantityId: "h_eff",
+              query: {
+                component: "full",
+                max_samples: 128,
+                scope_kind: "full",
+              },
+            },
+          ],
+          [
+            "part-a",
+            {
+              quantityId: "m",
+              query: {
+                component: "full",
+                max_samples: 64,
+                scope_kind: "full",
+              },
+            },
+          ],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "part-a",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&max_samples=64&scope_id=part-a&scope_kind=part`,
+            quantityId: "m",
+            query: {
+              component: "full",
+              max_samples: 64,
+              scope_id: "part-a",
+              scope_kind: "part",
+            },
+          },
+        ],
+        [
+          "part-b",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=128&scope_id=part-b&scope_kind=part`,
+            quantityId: "h_eff",
+            query: {
+              component: "full",
+              max_samples: 128,
+              scope_id: "part-b",
+              scope_kind: "part",
+            },
+          },
+        ],
+      ]),
+    );
   });
 
   it("builds stable full-field keys for target-specific quantities", () => {

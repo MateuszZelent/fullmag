@@ -177,6 +177,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
+    let mut paused = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
         let wall_start = Instant::now();
@@ -223,12 +224,18 @@ pub(crate) fn execute_reference_fdm_multilayer(
                 scalar_row_due: false,
                 finished: false,
             });
-            if action == StepAction::Stop {
-                cancelled = true;
+            match action {
+                StepAction::Continue => {}
+                StepAction::Stop => {
+                    cancelled = true;
+                }
+                StepAction::Pause => {
+                    paused = true;
+                }
             }
         }
 
-        if cancelled {
+        if cancelled || paused {
             break;
         }
 
@@ -283,7 +290,9 @@ pub(crate) fn execute_reference_fdm_multilayer(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed

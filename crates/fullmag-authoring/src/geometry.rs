@@ -1395,6 +1395,7 @@ mod tests {
                     aex: None,
                     alpha: 0.01,
                     dind: None,
+                    dbulk: None,
                 },
             }],
             magnetization_assets: vec![crate::MagnetizationAsset {

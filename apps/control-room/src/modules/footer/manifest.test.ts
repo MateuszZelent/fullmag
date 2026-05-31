@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ALL_MODULES } from "@/modules";
+import { ALL_MODULES } from "@/modules/registry";
 
 import { footerManifest } from "./manifest";
 

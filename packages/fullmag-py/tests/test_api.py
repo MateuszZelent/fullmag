@@ -810,6 +810,39 @@ class ProblemApiTests(unittest.TestCase):
             self.assertIn("body.m = fm.texture.random(seed=1)", rewritten)
             self.assertNotIn("random_seeded", rewritten)
 
+    def test_script_builder_rewrites_bulk_dmi(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "builder_bulk_dmi.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    fm.engine("fem")
+                    body = fm.geometry(fm.Box(size=(5e-9, 5e-9, 5e-9), name="body"), name="body")
+                    body.Ms = 800e3
+                    body.Aex = 13e-12
+                    body.alpha = 0.2
+                    body.Dbulk = -2e-3
+                    body.m = fm.texture.uniform(1, 0, 0)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            draft = export_builder_draft(loaded)
+            material = draft["geometries"][0]["material"]
+            self.assertEqual(material["Dbulk"], -2e-3)
+            self.assertIn(
+                {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": -2e-3}},
+                draft["geometries"][0]["physics_stack"],
+            )
+
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("body.Dbulk = -0.002", rewritten)
+
     def test_script_builder_rewrites_arch_waveguide_geometry(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             script_path = Path(tmp_dir) / "arch_builder.py"
@@ -1708,6 +1741,44 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(magnetization["preset_kind"], "vortex")
         self.assertEqual(magnetization["preset_params"]["circulation"], -1)
         self.assertEqual(magnetization["mapping"]["clamp_mode"], "repeat")
+
+    def test_scene_document_preserves_bulk_dmi_material_round_trip(self) -> None:
+        builder = {
+            "revision": 1,
+            "backend": "fem",
+            "demag_realization": "airbox_robin",
+            "solver": {},
+            "mesh": {},
+            "universe": None,
+            "stages": [],
+            "initial_state": None,
+            "geometries": [
+                {
+                    "name": "flower",
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [20e-9, 20e-9, 10e-9]},
+                    "material": {"Ms": 800e3, "Aex": 13e-12, "alpha": 0.1, "Dbulk": -2e-3},
+                    "magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]},
+                    "mesh": {"mode": "inherit", "hmax": ""},
+                }
+            ],
+            "current_modules": [],
+            "excitation_analysis": None,
+        }
+
+        scene = build_scene_document_from_builder(builder)
+        self.assertIn(
+            {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": -2e-3}},
+            scene["objects"][0]["physics_stack"],
+        )
+
+        rebuilt = build_builder_from_scene_document(scene)
+        geometry = rebuilt["geometries"][0]
+        self.assertEqual(geometry["material"]["Dbulk"], -2e-3)
+        self.assertIn(
+            {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": -2e-3}},
+            geometry["physics_stack"],
+        )
 
     def test_scene_document_preserves_study_pipeline_round_trip(self) -> None:
         builder = {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveControlRoomModules } from "./index";
+import { resolveControlRoomModules } from ".";
 
 describe("control-room module runtime flags", () => {
   it("can temporarily disable the 3D viewport module from browser config", () => {

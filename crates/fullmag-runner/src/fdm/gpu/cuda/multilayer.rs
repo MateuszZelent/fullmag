@@ -453,6 +453,7 @@ fn execute_cuda_assisted_multilayer_double(
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
+    let mut paused = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
         let wall_start = Instant::now();
@@ -512,12 +513,18 @@ fn execute_cuda_assisted_multilayer_double(
                 scalar_row_due: false,
                 finished: false,
             });
-            if action == StepAction::Stop {
-                cancelled = true;
+            match action {
+                StepAction::Continue => {}
+                StepAction::Stop => {
+                    cancelled = true;
+                }
+                StepAction::Pause => {
+                    paused = true;
+                }
             }
         }
 
-        if cancelled {
+        if cancelled || paused {
             break;
         }
 
@@ -578,7 +585,9 @@ fn execute_cuda_assisted_multilayer_double(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed
@@ -669,6 +678,7 @@ fn execute_cuda_assisted_multilayer_single(
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
+    let mut paused = false;
     while current_time_single(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time_single(&states));
         let wall_start = Instant::now();
@@ -728,12 +738,18 @@ fn execute_cuda_assisted_multilayer_single(
                 scalar_row_due: false,
                 finished: false,
             });
-            if action == StepAction::Stop {
-                cancelled = true;
+            match action {
+                StepAction::Continue => {}
+                StepAction::Stop => {
+                    cancelled = true;
+                }
+                StepAction::Pause => {
+                    paused = true;
+                }
             }
         }
 
-        if cancelled {
+        if cancelled || paused {
             break;
         }
 
@@ -794,7 +810,9 @@ fn execute_cuda_assisted_multilayer_single(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed
@@ -1122,6 +1140,7 @@ fn execute_native_stacked_cuda_multilayer(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut latest_stats: Option<StepStats> = None;
     let mut cancelled = false;
+    let mut paused = false;
     while latest_stats.as_ref().map_or(0.0, |stats| stats.time) < until_seconds {
         let current_time = latest_stats.as_ref().map_or(0.0, |stats| stats.time);
         let dt_step = dt.min(until_seconds - current_time);
@@ -1178,8 +1197,14 @@ fn execute_native_stacked_cuda_multilayer(
                     scalar_row_due: false,
                     finished: false,
                 });
-                if action == StepAction::Stop {
-                    cancelled = true;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                    }
                 }
             }
         } else if let Some((_, on_step)) = live.as_mut() {
@@ -1193,12 +1218,18 @@ fn execute_native_stacked_cuda_multilayer(
                 scalar_row_due: false,
                 finished: false,
             });
-            if action == StepAction::Stop {
-                cancelled = true;
+            match action {
+                StepAction::Continue => {}
+                StepAction::Stop => {
+                    cancelled = true;
+                }
+                StepAction::Pause => {
+                    paused = true;
+                }
             }
         }
 
-        if cancelled {
+        if cancelled || paused {
             break;
         }
 
@@ -1248,7 +1279,9 @@ fn execute_native_stacked_cuda_multilayer(
     }
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed

@@ -9,6 +9,7 @@ use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::live_magnetization_available;
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
 use crate::schemas::status::*;
+use crate::session::command_ledger_revisions;
 use crate::types::{
     AppState, CurrentDisplaySelection, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
     CurrentWorkspaceSelection, DisplayPresentationState, SessionStateResponse,
@@ -31,9 +32,10 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let workspace_layout = state.current_workspace_layout.read().await.clone();
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
+        let revisions = command_ledger_revisions(&ledger);
         (
-            ledger.len() as u64,
-            ledger.back().map(|record| record.command.seq).unwrap_or(0),
+            revisions.commands_revision,
+            revisions.command_completion_revision,
         )
     };
     let guard = state.current_live_state.read().await;
@@ -271,9 +273,7 @@ pub(crate) fn field_catalog_revision(snapshot: &SessionStateResponse) -> u64 {
                     && values.iter().all(|value| value.is_finite())
             })
     {
-        revision = revision
-            .wrapping_mul(16777619)
-            .wrapping_add(1);
+        revision = revision.wrapping_mul(16777619).wrapping_add(1);
     }
     revision
 }
@@ -302,10 +302,7 @@ pub(crate) fn field_revision(snapshot: &SessionStateResponse) -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn field_quantity_revision(
-    snapshot: &SessionStateResponse,
-    quantity_id: &str,
-) -> u64 {
+pub(crate) fn field_quantity_revision(snapshot: &SessionStateResponse, quantity_id: &str) -> u64 {
     snapshot
         .field_quantity_revisions
         .get(quantity_id)

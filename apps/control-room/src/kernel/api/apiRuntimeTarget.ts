@@ -137,8 +137,8 @@ export function resolveControlRoomApiBase(
   source: ControlRoomApiRuntimeSource = defaultRuntimeSource(),
 ): string {
   return (
-    configuredBaseFromEnv(source.env) ??
     configuredBaseFromWindow(source.windowConfig) ??
+    configuredBaseFromEnv(source.env) ??
     configuredDevelopmentBase(source.env) ??
     configuredLocalStandaloneFrontendBase(source.windowLocation) ??
     normalizeApiBase(source.windowLocation?.origin) ??

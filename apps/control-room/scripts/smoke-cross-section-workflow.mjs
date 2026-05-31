@@ -11,12 +11,18 @@ const apiBase =
 const WORKFLOW_TIMEOUT_MS = 20_000;
 const CANVAS_SCREENSHOT_TIMEOUT_MS = 15_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
+const VISUALIZATION_CLIENT_ACKS_PATH =
+  "/v2/sessions/current/visualization/client-acks";
 const CROSS_SECTION_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section";
 const CROSS_SECTION_IMAGE_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image";
 const CROSS_SECTION_QUALITY_PATH =
   "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality";
+const VIEWPORT_3D_REACT_MEASURE_NAMES = [
+  "fullmag.react.render.Viewport3DModule.mount",
+  "fullmag.react.render.Viewport3DModule.update",
+];
 
 async function loadPlaywright() {
   try {
@@ -45,6 +51,7 @@ const fixtureRequests = [];
 let visualizationState = visualizationStateFixture();
 
 await installCrossSectionFixtureApi(page, fixtureRequests);
+await installViewportTabLifecycleProbe(page);
 await page.addInitScript(({ baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -185,6 +192,16 @@ try {
     throw new Error(`Cross-section PNG did not load: ${JSON.stringify(imageState)}`);
   }
   await assertNoViewport3DCanvas(page, "Cross-section image tab");
+  const crossSectionImageActivityStart =
+    await captureViewport3DActivityCheckpoint(page);
+  const crossSectionImageRequestStart = fixtureRequests.length;
+  await page.waitForTimeout(150);
+  await assertNoViewport3DActivitySince({
+    checkpoint: crossSectionImageActivityStart,
+    label: "Cross-section image tab",
+    page,
+    requestStart: crossSectionImageRequestStart,
+  });
 
   const imageRequest = fixtureRequests.find(
     (request) => request.path === CROSS_SECTION_IMAGE_PATH,
@@ -199,6 +216,7 @@ try {
     );
   }
 
+  const analysisActivityStart = await captureViewport3DActivityCheckpoint(page);
   const non3dRequestStart = fixtureRequests.length;
   await page.getByRole("tab", { name: "Analysis" }).click();
   await waitForLocatorText(
@@ -207,7 +225,12 @@ try {
     "analysis tab",
   );
   await assertNoViewport3DCanvas(page, "Analysis tab");
-  assertNo3DResourceRequestsSince(non3dRequestStart, "Analysis tab");
+  await assertNoViewport3DActivitySince({
+    checkpoint: analysisActivityStart,
+    label: "Analysis tab",
+    page,
+    requestStart: non3dRequestStart,
+  });
 
   await page.getByRole("tab", { name: "3D Viewport" }).click();
   await waitForWebGLCanvasReady(canvas3d, "3D viewport after tab restore");
@@ -229,11 +252,111 @@ try {
       "inspector=commit",
       "cross-section-image=png",
       "analysis=no-3d",
+      "3d-lifecycle=inactive-tabs-clean",
       `requests=${fixtureRequests.length}`,
     ].join(" "),
   );
 } finally {
   await browser.close();
+}
+
+async function installViewportTabLifecycleProbe(page) {
+  await page.addInitScript((measureNames) => {
+    window.__FULLMAG_REACT_PROFILER__ = true;
+    const state = {
+      measures: [],
+      supportedEntryTypes:
+        typeof PerformanceObserver === "undefined"
+          ? []
+          : PerformanceObserver.supportedEntryTypes ?? [],
+    };
+    window.__FULLMAG_VIEWPORT_TAB_LIFECYCLE__ = state;
+
+    if (
+      typeof PerformanceObserver === "undefined" ||
+      !PerformanceObserver.supportedEntryTypes?.includes("measure")
+    ) {
+      return;
+    }
+
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (!measureNames.includes(entry.name)) continue;
+          state.measures.push({
+            duration: entry.duration,
+            name: entry.name,
+            startTime: entry.startTime,
+          });
+        }
+      });
+      observer.observe({ buffered: true, type: "measure" });
+    } catch {
+      // Browser support for buffered observers differs across Chromium versions.
+    }
+  }, VIEWPORT_3D_REACT_MEASURE_NAMES);
+}
+
+async function captureViewport3DActivityCheckpoint(page) {
+  return page.evaluate((measureNames) => {
+    const state = window.__FULLMAG_VIEWPORT_TAB_LIFECYCLE__ ?? {
+      measures: [],
+      supportedEntryTypes: [],
+    };
+    const measureEntries = performance
+      .getEntriesByType("measure")
+      .filter((entry) => measureNames.includes(entry.name))
+      .map((entry) => ({
+        duration: entry.duration,
+        name: entry.name,
+        startTime: entry.startTime,
+      }));
+    const measures = dedupePerformanceRows([
+      ...state.measures,
+      ...measureEntries,
+    ]);
+
+    return {
+      lastMeasureStartTime: Math.max(
+        0,
+        ...measures.map((entry) => entry.startTime),
+      ),
+      measureCount: measures.length,
+      measures,
+      supportedEntryTypes: state.supportedEntryTypes,
+    };
+
+    function dedupePerformanceRows(rows) {
+      const seen = new Set();
+      return rows.filter((row) => {
+        const key = `${row.name}:${row.startTime}:${row.duration}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }, VIEWPORT_3D_REACT_MEASURE_NAMES);
+}
+
+async function assertNoViewport3DActivitySince({
+  checkpoint,
+  label,
+  page,
+  requestStart,
+}) {
+  assertNo3DResourceRequestsSince(requestStart, label);
+  assertNoVisualizationClientAcksSince(requestStart, label);
+  const current = await captureViewport3DActivityCheckpoint(page);
+  const newMeasures = current.measures.filter(
+    (entry) => entry.startTime > checkpoint.lastMeasureStartTime + 0.01,
+  );
+  if (newMeasures.length > 0) {
+    throw new Error(
+      `${label} rendered Viewport3DModule while inactive: ${newMeasures
+        .map((entry) => `${entry.name}@${entry.startTime.toFixed(1)}`)
+        .join(", ")}`,
+    );
+  }
 }
 
 async function installCrossSectionFixtureApi(page, requests) {
@@ -387,6 +510,19 @@ function assertNo3DResourceRequestsSince(startIndex, label) {
   if (unexpected.length > 0) {
     throw new Error(
       `${label} triggered 3D-only resources: ${unexpected.map(formatRequest).join(", ")}`,
+    );
+  }
+}
+
+function assertNoVisualizationClientAcksSince(startIndex, label) {
+  const unexpected = fixtureRequests
+    .slice(startIndex)
+    .filter((request) => request.path === VISUALIZATION_CLIENT_ACKS_PATH);
+  if (unexpected.length > 0) {
+    throw new Error(
+      `${label} emitted 3D visualization client acks: ${unexpected
+        .map(formatRequest)
+        .join(", ")}`,
     );
   }
 }

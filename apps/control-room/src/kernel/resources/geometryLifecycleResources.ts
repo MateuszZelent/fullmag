@@ -71,6 +71,11 @@ import {
 import type { DecodedMeshQualityData, DecodedTopology } from "../api/codecs";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
+import type { ResourceInvalidationController } from "./ResourceInvalidationController";
+import {
+  sharedResourceRuntimeStore,
+  type ResourceRuntimeStore,
+} from "./ResourceRuntimeStore";
 export {
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveVisualizationStateRevision,
@@ -209,6 +214,17 @@ export function resolveMeshSharedDomainManifestRevision(
     manifest?.source_scene_revision ?? "unknown",
     manifest?.geometry_realization_revision ?? "unknown",
   ].join(":");
+}
+
+export function publishCommittedSceneResource(
+  resources: ResourceInvalidationController,
+  scene: SceneResource,
+  revision: ResourceRevision,
+  runtimeStore: ResourceRuntimeStore<SceneResource> =
+    sharedResourceRuntimeStore as ResourceRuntimeStore<SceneResource>,
+): void {
+  runtimeStore.updateData(SCENE_RESOURCE_KEY, scene, revision);
+  resources.invalidate(SCENE_RESOURCE_KEY, revision);
 }
 
 export function useSceneResource(options: ResourceHookOptions = {}) {

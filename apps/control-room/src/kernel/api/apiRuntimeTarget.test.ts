@@ -64,6 +64,17 @@ describe("control-room API runtime target", () => {
     ).toBe("https://api.fullmag.test");
   });
 
+  it("lets browser runtime config override build-time API env", () => {
+    expect(
+      resolveControlRoomApiBase({
+        env: {
+          NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: "http://localhost:8081",
+        },
+        windowConfig: { controlRoomApiBase: "http://localhost:8091" },
+      }),
+    ).toBe("http://localhost:8091");
+  });
+
   it("defaults local development to the local control-room API port", () => {
     expect(
       resolveControlRoomApiBase({

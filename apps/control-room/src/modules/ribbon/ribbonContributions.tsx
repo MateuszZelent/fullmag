@@ -331,6 +331,8 @@ const homeTab: RibbonTabContent = {
       actions: [
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
+        { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
+        { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
         { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
       ],

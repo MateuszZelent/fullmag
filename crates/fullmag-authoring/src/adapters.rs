@@ -1476,6 +1476,7 @@ mod tests {
                     aex: Some(15.5e-12),
                     alpha: 0.1,
                     dind: None,
+                    dbulk: None,
                 },
                 magnetization: ScriptBuilderMagnetizationState {
                     kind: "sampled".to_string(),

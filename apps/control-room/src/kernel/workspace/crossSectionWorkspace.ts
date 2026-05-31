@@ -144,6 +144,21 @@ export function beginCrossSectionDraft(
   return draft;
 }
 
+export function beginCrossSectionDraftFromPlot(
+  plotId: string,
+): CrossSectionDraft | null {
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  const plot = state.plots.find((entry) => entry.id === plotId) ?? null;
+  if (!plot) return null;
+
+  const draft = draftFromPlot(plot, nextPlotName());
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    draft,
+  });
+  return draft;
+}
+
 export function updateCrossSectionDraft(
   patch: Partial<CrossSectionDraft>,
 ): CrossSectionDraft | null {
@@ -173,6 +188,33 @@ export function commitCrossSectionDraft(): CrossSectionPlot | null {
     plots: [...state.plots, plot],
   });
   return plot;
+}
+
+export function updateCrossSectionPlot(
+  plotId: string,
+  patch: Partial<CrossSectionDraft>,
+): CrossSectionPlot | null {
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  const plotIndex = state.plots.findIndex((entry) => entry.id === plotId);
+  if (plotIndex < 0) return null;
+
+  const currentPlot = state.plots[plotIndex];
+  const draft = sanitizeDraft({
+    ...draftFromPlot(currentPlot, currentPlot.name),
+    ...patch,
+    id: "draft",
+  });
+  const updatedPlot = plotFromDraft(draft, {
+    fallbackName: currentPlot.name,
+    id: currentPlot.id,
+  });
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    plots: state.plots.map((entry) =>
+      entry.id === plotId ? updatedPlot : entry,
+    ),
+  });
+  return updatedPlot;
 }
 
 export function selectCrossSectionPlot(plotId: string): CrossSectionPlot | null {
@@ -266,13 +308,37 @@ function draftFromVisualizationState(
     plane,
     positionPercent:
       source?.position_percent ?? DEFAULT_DRAFT.positionPercent,
+    name: nextPlotName(),
     shrinkFactor: slice?.mesh_shrink_factor ?? DEFAULT_DRAFT.shrinkFactor,
   });
 }
 
-function plotFromDraft(draft: CrossSectionDraft): CrossSectionPlot {
-  const id = `plot-${++plotSequence}`;
-  const name = draft.name.trim() || `Plot ${plotSequence}`;
+function draftFromPlot(
+  plot: CrossSectionPlot,
+  name: string,
+): CrossSectionDraft {
+  return sanitizeDraft({
+    colorScale: plot.renderOptions.colorScale,
+    edgeWidth: plot.renderOptions.edgeWidth,
+    filterExpression: plot.renderOptions.filterExpression,
+    frameExtent: plot.frameExtent,
+    id: "draft",
+    includeWireframe: plot.renderOptions.wireframeVisible,
+    metric: plot.metric,
+    name,
+    plane: plot.plane,
+    positionPercent: plot.positionPercent,
+    rotationDegrees: plot.rotationDegrees,
+    shrinkFactor: plot.renderOptions.shrinkFactor,
+  });
+}
+
+function plotFromDraft(
+  draft: CrossSectionDraft,
+  existing?: { fallbackName: string; id: string },
+): CrossSectionPlot {
+  const id = existing?.id ?? `plot-${++plotSequence}`;
+  const name = draft.name.trim() || existing?.fallbackName || `Plot ${plotSequence}`;
   const query: Required<CrossSectionQuery> = {
     includePolygons: true,
     includeWireframe: draft.includeWireframe,
@@ -302,6 +368,10 @@ function plotFromDraft(draft: CrossSectionDraft): CrossSectionPlot {
     },
     rotationDegrees: draft.rotationDegrees,
   };
+}
+
+function nextPlotName(): string {
+  return `Plot ${plotSequence + 1}`;
 }
 
 function sanitizeDraft(draft: CrossSectionDraft): CrossSectionDraft {

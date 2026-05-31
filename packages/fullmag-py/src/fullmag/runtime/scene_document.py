@@ -44,6 +44,7 @@ _INTERACTION_ORDER = (
     "exchange",
     "demag",
     "interfacial_dmi",
+    "bulk_dmi",
     "uniaxial_anisotropy",
 )
 
@@ -57,10 +58,18 @@ def _normalize_axis3(value: object) -> list[float]:
     return [0.0, 0.0, 1.0]
 
 
-def _default_interaction_params(kind: str, *, material_dind: object) -> dict[str, object] | None:
+def _default_interaction_params(
+    kind: str,
+    *,
+    material_dind: object,
+    material_dbulk: object,
+) -> dict[str, object] | None:
     if kind == "interfacial_dmi":
         dind = _number_or_none(material_dind)
         return {"dind": dind if dind is not None else 1e-3}
+    if kind == "bulk_dmi":
+        dbulk = _number_or_none(material_dbulk)
+        return {"dbulk": dbulk if dbulk is not None else 1e-3}
     if kind == "uniaxial_anisotropy":
         return {"ku1": 0.0, "axis": [0.0, 0.0, 1.0]}
     return None
@@ -70,6 +79,7 @@ def _normalize_interaction_entry(
     raw: object,
     *,
     material_dind: object,
+    material_dbulk: object,
 ) -> dict[str, object] | None:
     if not isinstance(raw, dict):
         return None
@@ -79,12 +89,23 @@ def _normalize_interaction_entry(
     if kind in {"exchange", "demag"}:
         return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
     params = raw.get("params")
-    params_map = dict(params) if isinstance(params, dict) else (_default_interaction_params(kind, material_dind=material_dind) or {})
+    params_map = dict(params) if isinstance(params, dict) else (
+        _default_interaction_params(
+            kind,
+            material_dind=material_dind,
+            material_dbulk=material_dbulk,
+        ) or {}
+    )
     if kind == "interfacial_dmi":
         dind = _number_or_none(params_map.get("dind"))
         if dind is None:
             dind = _number_or_none(material_dind)
         params_map["dind"] = dind if dind is not None else 1e-3
+    elif kind == "bulk_dmi":
+        dbulk = _number_or_none(params_map.get("dbulk"))
+        if dbulk is None:
+            dbulk = _number_or_none(material_dbulk)
+        params_map["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params_map.get("ku1"))
         params_map["ku1"] = ku1 if ku1 is not None else 0.0
@@ -96,11 +117,20 @@ def _normalize_interaction_entry(
     }
 
 
-def _ensure_physics_stack(raw: object, *, material_dind: object = None) -> list[dict[str, object]]:
+def _ensure_physics_stack(
+    raw: object,
+    *,
+    material_dind: object = None,
+    material_dbulk: object = None,
+) -> list[dict[str, object]]:
     by_kind: dict[str, dict[str, object]] = {}
     if isinstance(raw, list):
         for entry in raw:
-            normalized = _normalize_interaction_entry(entry, material_dind=material_dind)
+            normalized = _normalize_interaction_entry(
+                entry,
+                material_dind=material_dind,
+                material_dbulk=material_dbulk,
+            )
             if normalized is not None:
                 by_kind[str(normalized["kind"])] = normalized
     for required in ("exchange", "demag"):
@@ -110,7 +140,14 @@ def _ensure_physics_stack(raw: object, *, material_dind: object = None) -> list[
         by_kind["interfacial_dmi"] = _normalize_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
             material_dind=material_dind,
+            material_dbulk=None,
         ) or {"kind": "interfacial_dmi", "enabled": True, "params": {"dind": 1e-3}}
+    if material_dbulk is not None and "bulk_dmi" not in by_kind:
+        by_kind["bulk_dmi"] = _normalize_interaction_entry(
+            {"kind": "bulk_dmi", "enabled": True, "params": None},
+            material_dind=None,
+            material_dbulk=material_dbulk,
+        ) or {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": 1e-3}}
     ordered: list[dict[str, object]] = []
     for kind in _INTERACTION_ORDER:
         entry = by_kind.get(kind)
@@ -140,6 +177,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         physics_stack = _ensure_physics_stack(
             geometry.get("physics_stack"),
             material_dind=material_properties.get("Dind"),
+            material_dbulk=material_properties.get("Dbulk"),
         )
 
         objects.append(
@@ -303,6 +341,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         physics_stack = _ensure_physics_stack(
             obj.get("physics_stack"),
             material_dind=material_properties.get("Dind"),
+            material_dbulk=material_properties.get("Dbulk"),
         )
 
         geometries.append(

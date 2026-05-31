@@ -2308,6 +2308,12 @@ describe("ribbon structure", () => {
     const computeAction = computeGroup?.actions.find(
       (action) => action.id === "study.run",
     );
+    const resumeAction = computeGroup?.actions.find(
+      (action) => action.id === "study.resume",
+    );
+    const discardAction = computeGroup?.actions.find(
+      (action) => action.id === "study.discard-paused-state",
+    );
 
     expect(computeGroup?.actions.some((action) => action.id === "run")).toBe(
       false,
@@ -2318,6 +2324,72 @@ describe("ribbon structure", () => {
     });
     expect(computeAction?.splitButton).toBeUndefined();
     expect(computeAction?.menu).toBeUndefined();
+    expect(resumeAction).toMatchObject({
+      disabled: true,
+      label: "Resume",
+    });
+    expect(discardAction).toMatchObject({
+      disabled: true,
+      label: "Discard",
+    });
+  });
+
+  it("enables paused-state discard from the Home Compute group", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+
+    const content = buildRibbonTabContent("home", {
+      commands,
+      commandContext: {
+        api: { commands: { submit: vi.fn() } } as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              explicit_topology: false,
+            },
+            domain: {
+              discretization: "fdm",
+            },
+            resources: {
+              mesh_revision: 0,
+              scene_revision: 1,
+            },
+          },
+          [SIMULATION_COMMANDS_PATH]: { commands: [] },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "paused" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: 0,
+            revision: 2,
+            runtime_state: "paused",
+            stages: [{ status: "paused" }],
+          },
+        },
+        source: "test" as const,
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const discardAction = content?.groups
+      .find((group) => group.id === "compute")
+      ?.actions.find((action) => action.id === "study.discard-paused-state");
+
+    expect(discardAction).toMatchObject({
+      disabled: false,
+      label: "Discard",
+    });
   });
 
   it("shows FEM mesh readiness reason on disabled Home and Study Compute actions", () => {

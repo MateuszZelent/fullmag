@@ -83,6 +83,20 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).not.toContain("${effectAntialias ? \"aa\" : \"no-aa\"}");
   });
 
+  it("keeps canvas DPR fixed during camera gestures to avoid zoom flicker", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const canvasStart = source.indexOf("<Canvas");
+    const canvasBlock = source.slice(canvasStart, source.indexOf(">", canvasStart));
+
+    expect(canvasBlock).toContain("dpr={canvasDpr}");
+    expect(source).not.toContain('import { AdaptiveDpr } from "@react-three/drei";');
+    expect(source).not.toContain("<AdaptiveDpr");
+    expect(source).not.toContain("interactionActive: sceneProps.interactionActive");
+  });
+
   it("exposes camera diagnostics for browser smoke checks", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
@@ -109,12 +123,18 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("Magnetic field data unavailable");
   });
 
-  it("mounts the temporary azimuth and polar controls beside the existing R3F canvas", () => {
+  it("gates the temporary azimuth and polar controls behind an explicit browser debug flag", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
+    expect(source).toContain("viewport3DOrbitDebugEnabledFromBrowserConfig()");
+    expect(source).toContain("const orbitDebugEnabled =");
+    expect(source).toContain("orbitDebugEnabled && clientReady && colors");
+    expect(source).toContain(
+      "onOrbitDebugAnglesChange={\n              orbitDebugEnabled ? syncOrbitDebugAngles : undefined\n            }",
+    );
     expect(source).toContain("Viewport3DOrbitDebugPanel");
     expect(source).toContain('aria-label="Temporary orbit controls"');
     expect(source).toContain('label="Azimuth"');

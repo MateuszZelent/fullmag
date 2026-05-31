@@ -761,6 +761,9 @@ def _render_geometry_and_materials(
         dmi = _magnet_dmi(problem, magnet.name)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+        bulk_dmi = _magnet_bulk_dmi(problem, magnet.name)
+        if bulk_dmi is not None:
+            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
         lines.append("")
     if lines[-1] == "":
         lines.pop()
@@ -803,10 +806,14 @@ def _render_geometries_from_override(
         physics_stack = _ensure_geometry_physics_stack(
             g.get("physics_stack"),
             material_dind=mat.get("Dind"),
+            material_dbulk=mat.get("Dbulk"),
         )
         dmi = _physics_stack_dmi_value(physics_stack)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+        bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
+        if bulk_dmi is not None:
+            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
@@ -872,6 +879,7 @@ _GEOMETRY_INTERACTION_ORDER = (
     "exchange",
     "demag",
     "interfacial_dmi",
+    "bulk_dmi",
     "uniaxial_anisotropy",
 )
 
@@ -880,6 +888,7 @@ def _normalize_geometry_interaction_entry(
     raw: object,
     *,
     material_dind: object,
+    material_dbulk: object,
 ) -> dict[str, object] | None:
     if not isinstance(raw, dict):
         return None
@@ -894,6 +903,11 @@ def _normalize_geometry_interaction_entry(
         if dind is None:
             dind = _number_or_none(material_dind)
         params["dind"] = dind if dind is not None else 1e-3
+    elif kind == "bulk_dmi":
+        dbulk = _number_or_none(params.get("dbulk"))
+        if dbulk is None:
+            dbulk = _number_or_none(material_dbulk)
+        params["dbulk"] = dbulk if dbulk is not None else 1e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params.get("ku1"))
         params["ku1"] = ku1 if ku1 is not None else 0.0
@@ -905,13 +919,19 @@ def _normalize_geometry_interaction_entry(
     }
 
 
-def _ensure_geometry_physics_stack(raw: object, *, material_dind: object) -> list[dict[str, object]]:
+def _ensure_geometry_physics_stack(
+    raw: object,
+    *,
+    material_dind: object,
+    material_dbulk: object,
+) -> list[dict[str, object]]:
     by_kind: dict[str, dict[str, object]] = {}
     if isinstance(raw, list):
         for entry in raw:
             normalized = _normalize_geometry_interaction_entry(
                 entry,
                 material_dind=material_dind,
+                material_dbulk=material_dbulk,
             )
             if normalized is not None:
                 by_kind[str(normalized["kind"])] = normalized
@@ -922,7 +942,14 @@ def _ensure_geometry_physics_stack(raw: object, *, material_dind: object) -> lis
         by_kind["interfacial_dmi"] = _normalize_geometry_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
             material_dind=material_dind,
+            material_dbulk=None,
         ) or {"kind": "interfacial_dmi", "enabled": True, "params": {"dind": 1e-3}}
+    if material_dbulk is not None and "bulk_dmi" not in by_kind:
+        by_kind["bulk_dmi"] = _normalize_geometry_interaction_entry(
+            {"kind": "bulk_dmi", "enabled": True, "params": None},
+            material_dind=None,
+            material_dbulk=material_dbulk,
+        ) or {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": 1e-3}}
     ordered: list[dict[str, object]] = []
     for kind in _GEOMETRY_INTERACTION_ORDER:
         entry = by_kind.get(kind)
@@ -939,6 +966,17 @@ def _physics_stack_dmi_value(stack: list[dict[str, object]]) -> float | None:
             return None
         params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
         return _number_or_none(params.get("dind"))
+    return None
+
+
+def _physics_stack_bulk_dmi_value(stack: list[dict[str, object]]) -> float | None:
+    for entry in stack:
+        if entry.get("kind") != "bulk_dmi":
+            continue
+        if not bool(entry.get("enabled", True)):
+            return None
+        params = entry.get("params") if isinstance(entry.get("params"), dict) else {}  # type: ignore[assignment]
+        return _number_or_none(params.get("dbulk"))
     return None
 
 
@@ -2994,10 +3032,14 @@ def _export_geometry_entry(
         "Aex": mat.A if mat.A is not None else None,
         "alpha": mat.alpha,
         "Dind": None,
+        "Dbulk": None,
     }
     dmi_val = _magnet_dmi(problem, magnet.name)
     if dmi_val is not None:
         material["Dind"] = dmi_val
+    bulk_dmi_val = _magnet_bulk_dmi(problem, magnet.name)
+    if bulk_dmi_val is not None:
+        material["Dbulk"] = bulk_dmi_val
     physics_stack: list[dict[str, object]] = [
         {"kind": "exchange", "enabled": _problem_has_exchange(problem), "params": None},
         {"kind": "demag", "enabled": _problem_has_demag(problem), "params": None},
@@ -3008,6 +3050,14 @@ def _export_geometry_entry(
                 "kind": "interfacial_dmi",
                 "enabled": True,
                 "params": {"dind": dmi_val},
+            }
+        )
+    if bulk_dmi_val is not None:
+        physics_stack.append(
+            {
+                "kind": "bulk_dmi",
+                "enabled": True,
+                "params": {"dbulk": bulk_dmi_val},
             }
         )
     if mat.Ku1 is not None or mat.anisU is not None:
@@ -3308,6 +3358,14 @@ def _magnet_dmi(problem: Problem, magnet_name: str) -> float | None:
     del magnet_name
     for term in problem.energy:
         if isinstance(term, InterfacialDMI):
+            return term.D
+    return None
+
+
+def _magnet_bulk_dmi(problem: Problem, magnet_name: str) -> float | None:
+    del magnet_name
+    for term in problem.energy:
+        if isinstance(term, BulkDMI):
             return term.D
     return None
 

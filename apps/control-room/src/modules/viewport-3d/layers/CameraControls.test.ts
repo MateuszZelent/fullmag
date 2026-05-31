@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
-import { MOUSE } from "three";
 
 import {
   commitOrbitCameraEnd,
@@ -13,7 +12,7 @@ import {
   shouldApplyViewport3DOrbitDebugAngles,
   shouldApplyViewport3DCameraState,
   shouldAutoFitViewport3DBoundsChange,
-  shouldSyncOrbitControlsTarget,
+  shouldSyncCameraControlsPose,
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./CameraControls";
 import {
@@ -22,46 +21,47 @@ import {
 } from "../viewport3dStore";
 
 describe("CameraControls", () => {
-  it("uses Drei OrbitControls instead of custom pointer and wheel handlers", () => {
+  it("uses Drei ArcballControls for unrestricted 3ds-style rotation", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain('import { OrbitControls } from "@react-three/drei"');
-    expect(source).toContain("<OrbitControls");
+    expect(source).toContain(
+      'import { ArcballControls as DreiArcballControls } from "@react-three/drei"',
+    );
+    expect(source).toContain("<DreiArcballControls");
+    expect(source).not.toContain("<DreiCameraControls");
+    expect(source).not.toContain("<OrbitControls");
     expect(source).not.toContain('addEventListener("pointerdown"');
     expect(source).not.toContain('addEventListener("pointermove"');
     expect(source).not.toContain('addEventListener("wheel"');
+    expect(source).not.toContain("lockPointer");
+    expect(source).not.toContain("unlockPointer");
     expect(source).not.toContain("useNativeCameraGestures");
     expect(source).not.toContain("useWheelZoom");
   });
 
-  it("configures native OrbitControls with the standard mouse mapping", () => {
+  it("configures arcball controls with unrestricted rotation and smooth native interaction", () => {
     const options = resolveViewport3DCameraInteractionOptions();
 
-    expect(options.enableDamping).toBe(false);
+    expect(options.dampingFactor).toBeGreaterThan(0);
+    expect(options.enableAnimations).toBe(true);
     expect(options.enablePan).toBe(true);
+    expect(options.enableRotate).toBe(true);
     expect(options.enableZoom).toBe(true);
-    expect(options.panSpeed).toBe(1);
-    expect(options.rotateSpeed).toBe(1);
-    expect(options.screenSpacePanning).toBe(true);
-    expect(options.mouseButtons).toEqual({
-      LEFT: MOUSE.ROTATE,
-      MIDDLE: MOUSE.DOLLY,
-      RIGHT: MOUSE.PAN,
-    });
+    expect(options.scaleFactor).toBeGreaterThan(1);
+    expect(options.scaleFactor).toBeLessThanOrEqual(1.12);
   });
 
-  it("drives the temporary azimuth and polar panel through a local demand-rendered rig", () => {
+  it("keeps temporary orbit debug isolated from direct arcball pointer rotation", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
 
     expect(source).toContain("useFrame((_, deltaSeconds) => {");
-    expect(source).toContain("controls.rotateLeft(deltas.rotateLeft)");
-    expect(source).toContain("controls.rotateUp(deltas.rotateUp)");
+    expect(source).toContain("applyViewport3DOrbitDebugCameraAngles");
     expect(source).toContain('tracker.recordDirtyFrame("camera-orbit-debug")');
     expect(source).toContain("orbitDebugCommitRevision");
   });
@@ -111,14 +111,14 @@ describe("CameraControls", () => {
     expect(next.polar).toBeLessThan(Math.PI / 2);
   });
 
-  it("maps absolute temporary orbit debug targets to OrbitControls deltas", () => {
+  it("maps absolute temporary orbit debug targets to camera deltas", () => {
     const deltas = resolveViewport3DOrbitDebugControlDeltas({
       currentAngles: { azimuth: 0.5, polar: 1.2 },
       targetAngles: { azimuth: 1.1, polar: 0.7 },
     });
 
-    expect(deltas.rotateLeft).toBeCloseTo(-0.6);
-    expect(deltas.rotateUp).toBeCloseTo(0.5);
+    expect(deltas.azimuth).toBeCloseTo(0.6);
+    expect(deltas.polar).toBeCloseTo(-0.5);
   });
 
   it("keeps a full-turn azimuth target equivalent to zero without snapping the panel value", () => {
@@ -132,7 +132,7 @@ describe("CameraControls", () => {
       resolveViewport3DOrbitDebugControlDeltas({
         currentAngles: { azimuth: 0, polar: Math.PI / 2 },
         targetAngles: { azimuth: Math.PI * 2, polar: Math.PI / 2 },
-      }).rotateLeft,
+      }).azimuth,
     ).toBeCloseTo(0);
   });
 
@@ -155,79 +155,150 @@ describe("CameraControls", () => {
     expect(frameBlock).toContain("commitOrbitCameraEnd({");
   });
 
-  it("does not re-render the debug panel on every OrbitControls change event", () => {
+  it("does not re-render the debug panel on every camera-controls update event", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
     const changeBlock = source.slice(
       source.indexOf("const recordOrbitControlFrame = useCallback"),
-      source.indexOf("const handleStart = useCallback"),
+      source.indexOf("const handleTransitionStart = useCallback"),
     );
 
     expect(changeBlock).toContain('tracker.recordDirtyFrame("camera-control")');
     expect(changeBlock).not.toContain("onOrbitDebugAnglesChange");
   });
 
-  it("does not duplicate Drei OrbitControls invalidation on every change event", () => {
+  it("treats arcball transitions as active gestures and commits them after updates settle", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const transitionBlock = source.slice(
+      source.indexOf("const handleTransitionStart = useCallback"),
+      source.indexOf("const handleEnd = useCallback"),
+    );
+    const updateBlock = source.slice(
+      source.indexOf("const recordOrbitControlFrame = useCallback"),
+      source.indexOf("const handleTransitionStart = useCallback"),
+    );
+    const endBlock = source.slice(
+      source.indexOf("const handleEnd = useCallback"),
+      source.indexOf("return {", source.indexOf("const handleEnd = useCallback")),
+    );
+    const controlsStart = source.indexOf("<DreiArcballControls");
+    const controlsBlock = source.slice(
+      controlsStart,
+      source.indexOf("/>", controlsStart),
+    );
+
+    expect(source).toContain("VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS");
+    expect(updateBlock).toContain("scheduleCameraControlsPoseCommit();");
+    expect(transitionBlock).toContain("beginViewport3DCameraGesture(cameraGestureRef);");
+    expect(transitionBlock).toContain("clearCameraControlsPoseCommit();");
+    expect(endBlock).toContain("scheduleCameraControlsPoseCommit();");
+    expect(controlsBlock).toContain("onStart={handleTransitionStart}");
+    expect(controlsBlock).toContain("onEnd={handleEnd}");
+  });
+
+  it("does not duplicate Drei ArcballControls invalidation on every change event", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
     const changeBlock = source.slice(
       source.indexOf("const recordOrbitControlFrame = useCallback"),
-      source.indexOf("const endTimeoutRef = useRef"),
+      source.indexOf("const handleTransitionStart = useCallback"),
     );
 
     expect(changeBlock).toContain('tracker.recordDirtyFrame("camera-control")');
     expect(changeBlock).not.toContain("invalidate();");
   });
 
-  it("does not clamp OrbitControls zoom distance so users can enter the scene interior", () => {
+  it("does not regress Canvas DPR during arcball interactions", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
-    const orbitControlsStart = source.indexOf("<OrbitControls");
+    const orbitControlsStart = source.indexOf("<DreiArcballControls");
     const orbitControlsBlock = source.slice(
       orbitControlsStart,
       source.indexOf("/>", orbitControlsStart),
     );
 
-    expect(orbitControlsBlock).toContain("zoomToCursor");
+    expect(orbitControlsBlock).not.toContain("regress");
+    expect(orbitControlsBlock).toContain("enableRotate={options.enableRotate}");
+    expect(orbitControlsBlock).not.toContain("onStart={onCameraInteractionStart}");
+    expect(orbitControlsBlock).not.toContain("onEnd={onCameraInteractionEnd}");
+  });
+
+  it("does not clamp arcball rotation or zoom distance so users can inspect freely", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const orbitControlsStart = source.indexOf("<DreiArcballControls");
+    const orbitControlsBlock = source.slice(
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
+    );
+
+    expect(orbitControlsBlock).not.toContain("minAzimuthAngle");
+    expect(orbitControlsBlock).not.toContain("maxAzimuthAngle");
+    expect(orbitControlsBlock).not.toContain("minPolarAngle");
+    expect(orbitControlsBlock).not.toContain("maxPolarAngle");
     expect(orbitControlsBlock).not.toContain("minDistance");
     expect(orbitControlsBlock).not.toContain("maxDistance");
   });
 
-  it("does not feed a stale declarative target back into OrbitControls during gestures", () => {
+  it("does not feed a stale declarative pose back into arcball controls during gestures", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
     const targetSyncBlock = source.slice(
-      source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 520,
+      source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 1200,
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') + 90,
     );
-    const orbitControlsStart = source.indexOf("<OrbitControls");
+    const orbitControlsStart = source.indexOf("<DreiArcballControls");
     const orbitControlsBlock = source.slice(
       orbitControlsStart,
       source.indexOf("/>", orbitControlsStart),
     );
 
-    expect(targetSyncBlock).toContain("if (interactionActive) return;");
+    expect(targetSyncBlock).toContain(
+      "if (viewport3DCameraGestureActive(cameraGestureRef)) return;",
+    );
     expect(orbitControlsBlock).not.toContain("target={cameraState.target}");
+    expect(targetSyncBlock).toContain(".target.set(");
   });
 
-  it("skips OrbitControls target updates for reference-only target changes", () => {
+  it("skips arcball pose updates for reference-only camera changes", () => {
     expect(
-      shouldSyncOrbitControlsTarget([0, 0, 0], [5e-13, 0, 0]),
+      shouldSyncCameraControlsPose({
+        currentPosition: [1, 1, 1],
+        currentTarget: [0, 0, 0],
+        nextCameraState: {
+          position: [1 + 5e-13, 1, 1],
+          target: [5e-13, 0, 0],
+          up: [0, 0, 1],
+        },
+      }),
     ).toBe(false);
     expect(
-      shouldSyncOrbitControlsTarget([0, 0, 0], [2e-12, 0, 0]),
+      shouldSyncCameraControlsPose({
+        currentPosition: [1, 1, 1],
+        currentTarget: [0, 0, 0],
+        nextCameraState: {
+          position: [1 + 2e-12, 1, 1],
+          target: [0, 0, 0],
+          up: [0, 0, 1],
+        },
+      }),
     ).toBe(true);
   });
 
-  it("does not passively apply resource camera state while OrbitControls are active", () => {
+  it("does not passively apply resource camera state while arcball controls are active", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -237,7 +308,9 @@ describe("CameraControls", () => {
       source.indexOf('tracker.recordDirtyFrame("camera-resource")') + 80,
     );
 
-    expect(cameraResourceBlock).toContain("if (interactionActive) return;");
+    expect(cameraResourceBlock).toContain(
+      "if (viewport3DCameraGestureActive(cameraGestureRef)) return;",
+    );
   });
 
   it("keeps CameraController from echoing resource cameras back into the module store", () => {
@@ -342,7 +415,7 @@ describe("CameraControls", () => {
     ).toBe(true);
   });
 
-  it("writes OrbitControls camera commits into the module store", () => {
+  it("writes arcball camera commits into the module store", () => {
     viewport3dStore.resetForTest();
     const onCameraChange = vi.fn();
 

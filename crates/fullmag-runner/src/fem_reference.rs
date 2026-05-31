@@ -460,6 +460,7 @@ fn execute_reference_fem_impl(
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
+    let mut paused = false;
     let mut current_observables = {
         let ant = antenna_field_at(&problem, state.magnetization().len());
         observe_state(&problem, &state, &ant)?
@@ -531,9 +532,16 @@ fn execute_reference_fem_impl(
                 if preview_due {
                     last_preview_revision = Some(display_selection.revision);
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
-                    break;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                        break;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                        break;
+                    }
                 }
             }
         }
@@ -673,8 +681,14 @@ fn execute_reference_fem_impl(
                             .revision,
                     );
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                    }
                 }
             }
         } else if let Some(live) = live.as_mut() {
@@ -737,12 +751,18 @@ fn execute_reference_fem_impl(
                         .revision,
                 );
             }
-            if action == StepAction::Stop {
-                cancelled = true;
+            match action {
+                StepAction::Continue => {}
+                StepAction::Stop => {
+                    cancelled = true;
+                }
+                StepAction::Pause => {
+                    paused = true;
+                }
             }
         }
 
-        if cancelled {
+        if cancelled || paused {
             break;
         }
 
@@ -821,7 +841,9 @@ fn execute_reference_fem_impl(
     )?;
 
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed

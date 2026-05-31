@@ -835,6 +835,28 @@ describe("study runtime command contributions", () => {
     );
   });
 
+  it("does not let stale state-derived backend readiness override fresher solver state", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        runtimeControls: [
+          {
+            enabled: false,
+            kind: "pause",
+            reason: "Runtime is not running.",
+          },
+        ],
+        runtimeState: "running",
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.pause", context)).toBe(true);
+    expect(registry.get("study.pause")?.disabledReason?.(context)).toBeNull();
+  });
+
   it("marks study runtime commands active from the command queue", () => {
     const registry = registryWithStudyRuntimeCommands();
     const activeStatuses = [
@@ -976,6 +998,29 @@ describe("study runtime command contributions", () => {
     );
   });
 
+  it("blocks runtime start commands while geometry validation is dirty", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        geometryValidation: { dirty: true, diagnostics: [] },
+        meshPipelineStatus: [
+          { id: "readiness", label: "Solver Readiness", status: "done" },
+        ],
+        meshRevision: 5,
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(false);
+    expect(
+      registry.get("study.compute-fields")?.disabledReason?.(context),
+    ).toBe(
+      "Resolve geometry validation blockers before running runtime commands.",
+    );
+  });
+
   it("blocks runtime start commands while a mesh build is active", () => {
     const registry = registryWithStudyRuntimeCommands();
     const context = {
@@ -1083,6 +1128,36 @@ describe("study runtime command contributions", () => {
         { id: "ready", label: "Ready", status: "active" },
       ],
       meshRevision: 5,
+    });
+    const manifest = resourceData[MESHING_SHARED_DOMAIN_MANIFEST_PATH] as {
+      source_scene_revision?: number | null;
+    };
+    manifest.source_scene_revision = null;
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(true);
+    expect(
+      registry.get("study.compute-fields")?.disabledReason?.(context),
+    ).toBeNull();
+    expect(registry.isEnabled("study.compute-energies", context)).toBe(true);
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+  });
+
+  it("accepts generated shared-domain meshes when solver readiness is done", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      meshPipelineStatus: [
+        { id: "import", label: "Import", status: "done" },
+        { id: "generate", label: "Generate", status: "done" },
+        { id: "validation", label: "Validation", status: "done" },
+        { id: "readiness", label: "Solver Readiness", status: "done" },
+      ],
+      meshRevision: 38,
     });
     const manifest = resourceData[MESHING_SHARED_DOMAIN_MANIFEST_PATH] as {
       source_scene_revision?: number | null;
@@ -1394,5 +1469,65 @@ describe("study runtime command contributions", () => {
     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
       "A runtime command is already active.",
     );
+  });
+
+  it("does not let stale active command queue block a newer inactive lifecycle state", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        commands: [
+          {
+            command_id: "cmd-stale-solve",
+            kind: "solve",
+            status: "running",
+          },
+        ],
+        runtimeControls: [
+          {
+            enabled: false,
+            kind: "solve",
+            reason: "A runtime command is already active.",
+          },
+        ],
+        runtimeState: "awaiting_command",
+        stageRevision: 36,
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    expect(registry.isActive("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBeNull();
+  });
+
+  it("does not let stale active command queue block a backend reset to idle", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        commands: [
+          {
+            command_id: "cmd-before-reset",
+            kind: "solve",
+            status: "running",
+          },
+        ],
+        runtimeControls: [
+          {
+            enabled: false,
+            kind: "solve",
+            reason: "A runtime command is already active.",
+          },
+        ],
+        runtimeState: "idle",
+        stageRevision: 42,
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    expect(registry.isActive("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBeNull();
   });
 });

@@ -320,7 +320,6 @@ describe("AirboxLayer", () => {
     const element = AirboxLayerContent({
       colors,
       fieldModel: null,
-      interactionActive: false,
       materialProfile,
       onSelectPart,
       settings: visibleWireframeAirbox,

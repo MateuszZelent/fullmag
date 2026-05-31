@@ -21,6 +21,12 @@ const CANVAS_SCREENSHOT_TIMEOUT_MS = Number(
 );
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
+const CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES = [
+  "/v2/sessions/current/data/",
+  "/v2/sessions/current/model/",
+  "/v2/sessions/current/meshing/",
+  "/v2/sessions/current/visualization/state",
+];
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
   "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
   "fullmag.viewport3d.buildMeshQualityVertexColors",
@@ -76,6 +82,7 @@ const errors = [];
 const sceneResponses = [];
 const realtimeMessages = [];
 const cameraGestureRequests = [];
+const viewport3DPerformancePhases = [];
 let sceneResponseSequence = 0;
 let recordCameraGestureRequests = false;
 
@@ -182,12 +189,24 @@ try {
   if (errors.length > 0) {
     throw new Error("Browser console errors:\n" + errors.join("\n"));
   }
-  await verifyCameraGesturesStayLocal({ page });
+  viewport3DPerformancePhases.push(
+    await collectViewport3DPerformancePhase(page, "startup-to-canvas"),
+  );
+  viewport3DPerformancePhases.push(
+    ...(await verifyCameraGesturesStayLocal({ page })),
+  );
   if (cameraOnlySmoke) {
+    logViewport3DPerformancePhases(viewport3DPerformancePhases);
     console.log(`Viewport 3D camera smoke passed at ${url}.`);
   } else {
     await verifyProjectionRoundTrip({ canvas, page });
+    viewport3DPerformancePhases.push(
+      await collectViewport3DPerformancePhase(page, "projection-round-trip"),
+    );
     await verifyDimensionFrameCage({ canvas, page });
+    viewport3DPerformancePhases.push(
+      await collectViewport3DPerformancePhase(page, "dimension-frame-cage"),
+    );
     if (requireGeometryFlow) {
       await verifyGeometryAuthoringFlow({
         canvas,
@@ -196,9 +215,17 @@ try {
         realtimeMessages,
         sceneResponses,
       });
+      viewport3DPerformancePhases.push(
+        await collectViewport3DPerformancePhase(page, "geometry-authoring"),
+      );
     }
 
-    const computeMetrics = await collectComputePerformanceProbe(page, "viewport-3d-smoke");
+    const computeMetrics = await collectComputePerformanceProbe(
+      page,
+      "viewport-3d-smoke",
+      { scope: "all" },
+    );
+    logViewport3DPerformancePhases(viewport3DPerformancePhases);
     logComputePerformanceProbe(computeMetrics);
     console.log(`Viewport 3D smoke passed at ${url}.`);
   }
@@ -207,6 +234,7 @@ try {
 }
 
 async function verifyCameraGesturesStayLocal({ page }) {
+  const gesturePerformancePhases = [];
   const box = await readCanvasClipBox(page);
   if (box.width <= 0 || box.height <= 0) {
     throw new Error("Cannot run camera gesture smoke: viewport canvas has no bounds.");
@@ -214,39 +242,62 @@ async function verifyCameraGesturesStayLocal({ page }) {
   const x = box.x + box.width * 0.5;
   const y = box.y + box.height * 0.5;
   const startIndex = cameraGestureRequests.length;
+
+  await assertCameraGestureDoesNotFetch(page, "viewport focus", async () => {
+    await page.mouse.move(x, y);
+    await page.mouse.click(x, y);
+  });
+  gesturePerformancePhases.push(
+    await collectViewport3DPerformancePhase(page, "viewport-focus"),
+  );
+
   const initialCameraSignature = await readViewportCameraSignature(page);
 
-  recordCameraGestureRequests = true;
-  try {
+  await assertCameraGestureDoesNotFetch(page, "orbit rotate", async () => {
+    await page.mouse.move(x, y);
+    await page.mouse.down({ button: "left" });
+    await page.mouse.move(x + 120, y + 42, { steps: 8 });
+    await page.mouse.up({ button: "left" });
+  });
+  const rotateCameraSignature = await waitForCameraSignatureChange(
+    page,
+    initialCameraSignature,
+    "left-button orbit rotate changes the viewport camera state",
+    "Viewport camera state did not change after left-button orbit rotate",
+  );
+  gesturePerformancePhases.push(
+    await collectViewport3DPerformancePhase(page, "camera-orbit-rotate"),
+  );
+
+  await assertCameraGestureDoesNotFetch(page, "orbit zoom", async () => {
     await page.mouse.move(x, y);
     for (let index = 0; index < 4; index += 1) {
       await page.mouse.wheel(0, -240);
     }
-    await delay(300);
-  } finally {
-    recordCameraGestureRequests = false;
-  }
+  });
   const wheelCameraSignature = await waitForCameraSignatureChange(
     page,
-    initialCameraSignature,
+    rotateCameraSignature,
     "camera wheel changes the viewport camera state",
     "Viewport camera state did not change after camera wheel",
   );
+  gesturePerformancePhases.push(
+    await collectViewport3DPerformancePhase(page, "camera-wheel-zoom"),
+  );
 
-  recordCameraGestureRequests = true;
-  try {
+  await assertCameraGestureDoesNotFetch(page, "orbit pan", async () => {
     await page.mouse.down({ button: "right" });
     await page.mouse.move(x + 80, y + 36, { steps: 8 });
     await page.mouse.up({ button: "right" });
-    await delay(300);
-  } finally {
-    recordCameraGestureRequests = false;
-  }
+  });
   await waitForCameraSignatureChange(
     page,
     wheelCameraSignature,
     "right-button free-camera pan changes the viewport camera state",
     "Viewport camera state did not change after right-button free-camera pan",
+  );
+  gesturePerformancePhases.push(
+    await collectViewport3DPerformancePhase(page, "camera-right-pan"),
   );
 
   const gestureRequests = cameraGestureRequests.slice(startIndex);
@@ -255,10 +306,19 @@ async function verifyCameraGesturesStayLocal({ page }) {
       request.method === "PATCH" &&
       request.path === VISUALIZATION_STATE_PATH,
   );
-  if (visualizationStatePatches.length > 0) {
+  const backgroundResourceRequests = gestureRequests.filter((request) =>
+    CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
+      request.path.startsWith(prefix),
+    ),
+  );
+  const unexpectedGestureRequests = [
+    ...visualizationStatePatches,
+    ...backgroundResourceRequests,
+  ];
+  if (unexpectedGestureRequests.length > 0) {
     throw new Error(
-      "Camera wheel/drag gestures emitted visualization PATCH requests: " +
-        visualizationStatePatches
+      "Camera rotate/wheel/pan gestures emitted background resource work: " +
+        unexpectedGestureRequests
           .map((request) => `${request.method} ${request.path}`)
           .join(", "),
     );
@@ -271,8 +331,44 @@ async function verifyCameraGesturesStayLocal({ page }) {
     );
   }
   console.log(
-    `Camera gesture smoke passed: visualization_state_patches=0 session_requests=${gestureRequests.length}`,
+    `Camera gesture smoke passed: visualization_state_patches=0 background_resource_requests=0 session_requests=${gestureRequests.length}`,
   );
+  return gesturePerformancePhases;
+}
+
+async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {
+  const startIndex = cameraGestureRequests.length;
+  recordCameraGestureRequests = true;
+  try {
+    await gesture();
+    await waitForCameraGestureSettle(page);
+  } finally {
+    recordCameraGestureRequests = false;
+  }
+
+  const gestureRequests = cameraGestureRequests.slice(startIndex);
+  const unexpectedGestureRequests = unexpectedCameraGestureRequests(gestureRequests);
+  if (unexpectedGestureRequests.length > 0) {
+    throw new Error(
+      `${gestureName} triggered unexpected resource work: ` +
+        unexpectedGestureRequests
+          .map((request) => `${request.method} ${request.path}`)
+          .join(", "),
+    );
+  }
+}
+
+function unexpectedCameraGestureRequests(gestureRequests) {
+  return gestureRequests.filter((request) =>
+    CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
+      request.path.startsWith(prefix),
+    ),
+  );
+}
+
+async function waitForCameraGestureSettle(page) {
+  await waitForBrowserPaint(page);
+  await delay(25);
 }
 
 async function readViewportCameraSignature(page) {
@@ -351,9 +447,50 @@ async function readCanvasBackground(page) {
 async function installComputePerformanceProbe(page) {
   await page.addInitScript((measureNames) => {
     window.__FULLMAG_REACT_PROFILER__ = true;
+    function readViewportDiagnosticsSnapshot() {
+      const spans = Array.from(
+        document.querySelectorAll(".fm-viewport-3d__hud span"),
+      );
+      const raw =
+        spans.find((span) => span.textContent?.includes("frames:"))
+          ?.textContent ?? "";
+      return {
+        cacheBytes: parseDiagnosticBytes(readDiagnosticToken(raw, "cache")),
+        frames: parseDiagnosticNumber(readDiagnosticToken(raw, "frames")),
+        geo: parseDiagnosticNumber(readDiagnosticToken(raw, "geo")),
+        raw,
+      };
+    }
+
+    function readDiagnosticToken(value, key) {
+      const match = value.match(new RegExp(`(?:^|\\s)${key}:([^\\s]+)`));
+      return match?.[1] ?? null;
+    }
+
+    function parseDiagnosticNumber(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : 0;
+    }
+
+    function parseDiagnosticBytes(value) {
+      if (!value) return 0;
+      const match = value.match(/^([0-9]+)(B|KB|MB)$/);
+      if (!match) return 0;
+      const amount = Number(match[1]);
+      if (!Number.isFinite(amount)) return 0;
+      if (match[2] === "MB") return amount * 1024 * 1024;
+      if (match[2] === "KB") return amount * 1024;
+      return amount;
+    }
+
     const state = {
+      longAnimationFrames: [],
       longTasks: [],
       measures: [],
+      phaseStartTime: 0,
+      phaseViewportDiagnostics: readViewportDiagnosticsSnapshot(),
+      nextProbeWindowId: 1,
+      probeWindows: [],
       resources: [],
       supportedEntryTypes:
         typeof PerformanceObserver === "undefined"
@@ -361,6 +498,28 @@ async function installComputePerformanceProbe(page) {
           : PerformanceObserver.supportedEntryTypes ?? [],
     };
     window.__FULLMAG_COMPUTE_PERFORMANCE__ = state;
+    window.__FULLMAG_READ_VIEWPORT_3D_DIAGNOSTICS__ =
+      readViewportDiagnosticsSnapshot;
+    window.__FULLMAG_RESET_VIEWPORT_3D_PERFORMANCE__ = () => {
+      state.phaseStartTime = performance.now();
+      state.phaseViewportDiagnostics = readViewportDiagnosticsSnapshot();
+    };
+    window.__FULLMAG_BEGIN_VIEWPORT_3D_PROBE__ = () => {
+      const id = state.nextProbeWindowId;
+      state.nextProbeWindowId += 1;
+      state.probeWindows.push({
+        endTime: Number.POSITIVE_INFINITY,
+        id,
+        startTime: performance.now(),
+      });
+      return id;
+    };
+    window.__FULLMAG_END_VIEWPORT_3D_PROBE__ = (id) => {
+      const windowRecord = state.probeWindows.find((item) => item.id === id);
+      if (windowRecord) {
+        windowRecord.endTime = performance.now();
+      }
+    };
 
     function observePerformanceEntries(type, handler) {
       if (typeof PerformanceObserver === "undefined") return;
@@ -382,6 +541,26 @@ async function installComputePerformanceProbe(page) {
         duration: entry.duration,
         name: entry.name,
         startTime: entry.startTime,
+      });
+    });
+
+    observePerformanceEntries("long-animation-frame", (entry) => {
+      state.longAnimationFrames.push({
+        blockingDuration: entry.blockingDuration ?? 0,
+        duration: entry.duration,
+        renderStart: entry.renderStart ?? 0,
+        scripts: Array.from(entry.scripts ?? []).map((script) => ({
+          duration: script.duration ?? 0,
+          forcedStyleAndLayoutDuration:
+            script.forcedStyleAndLayoutDuration ?? 0,
+          invoker: String(script.invoker ?? ""),
+          invokerType: String(script.invokerType ?? ""),
+          pauseDuration: script.pauseDuration ?? 0,
+          sourceFunctionName: String(script.sourceFunctionName ?? ""),
+          sourceURL: String(script.sourceURL ?? ""),
+        })),
+        startTime: entry.startTime,
+        styleAndLayoutStart: entry.styleAndLayoutStart ?? 0,
       });
     });
 
@@ -407,14 +586,50 @@ async function installComputePerformanceProbe(page) {
   }, COMPUTE_PERFORMANCE_MEASURE_NAMES);
 }
 
-async function collectComputePerformanceProbe(page, label) {
-  return page.evaluate(({ label, measureNames }) => {
+async function resetViewport3DPerformanceProbe(page) {
+  await page.evaluate(() => {
+    window.__FULLMAG_RESET_VIEWPORT_3D_PERFORMANCE__?.();
+  });
+}
+
+async function collectViewport3DPerformancePhase(page, label) {
+  const metrics = await collectComputePerformanceProbe(page, label, {
+    scope: "phase",
+  });
+  await resetViewport3DPerformanceProbe(page);
+  return metrics;
+}
+
+async function collectComputePerformanceProbe(page, label, { scope = "all" } = {}) {
+  return page.evaluate(({ label, measureNames, scope }) => {
     const state = window.__FULLMAG_COMPUTE_PERFORMANCE__ ?? {
+      longAnimationFrames: [],
       longTasks: [],
       measures: [],
+      phaseStartTime: 0,
+      phaseViewportDiagnostics: null,
+      probeWindows: [],
       resources: [],
       supportedEntryTypes: [],
     };
+    const viewportDiagnostics =
+      window.__FULLMAG_READ_VIEWPORT_3D_DIAGNOSTICS__?.() ?? null;
+    const phaseViewportDiagnostics =
+      scope === "phase"
+        ? state.phaseViewportDiagnostics ?? viewportDiagnostics
+        : null;
+    const viewportFrameDelta =
+      scope === "phase" && viewportDiagnostics && phaseViewportDiagnostics
+        ? Math.max(
+            0,
+            viewportDiagnostics.frames - phaseViewportDiagnostics.frames,
+          )
+        : viewportDiagnostics?.frames ?? 0;
+    const startTime =
+      scope === "phase" && Number.isFinite(state.phaseStartTime)
+        ? state.phaseStartTime
+        : 0;
+    const phaseElapsedMs = Math.max(0, performance.now() - startTime);
     const sessionResourceEntries = performance
       .getEntriesByType("resource")
       .filter((entry) => String(entry.name).includes("/v2/sessions/current/"))
@@ -436,11 +651,11 @@ async function collectComputePerformanceProbe(page, label) {
     const resources = dedupePerformanceRows([
       ...state.resources,
       ...sessionResourceEntries,
-    ]);
+    ]).filter((entry) => entry.startTime >= startTime);
     const measuredEntries = dedupePerformanceRows([
       ...state.measures,
       ...measureEntries,
-    ]);
+    ]).filter((entry) => entry.startTime >= startTime);
     const reactRenderMeasureNames = measureNames.filter((name) =>
       name.startsWith("fullmag.react.render."),
     );
@@ -453,10 +668,32 @@ async function collectComputePerformanceProbe(page, label) {
     const reactRenderMeasures = measuredEntries.filter((entry) =>
       reactRenderMeasureNames.includes(entry.name),
     );
-    const longTasks = state.longTasks;
+    const probeWindows = state.probeWindows ?? [];
+    const longTasks = state.longTasks.filter(
+      (entry) =>
+        entry.startTime >= startTime &&
+        !longTaskOverlapsProbeWindow(entry, probeWindows),
+    );
+    const longAnimationFrames = (state.longAnimationFrames ?? []).filter(
+      (entry) =>
+        entry.startTime >= startTime &&
+        !longTaskOverlapsProbeWindow(entry, probeWindows),
+    );
     const maxLongTaskMs = Math.max(0, ...longTasks.map((entry) => entry.duration));
     const totalLongTaskMs = longTasks.reduce(
       (total, entry) => total + entry.duration,
+      0,
+    );
+    const maxLongAnimationFrameMs = Math.max(
+      0,
+      ...longAnimationFrames.map((entry) => entry.duration),
+    );
+    const totalLongAnimationFrameMs = longAnimationFrames.reduce(
+      (total, entry) => total + entry.duration,
+      0,
+    );
+    const totalLongAnimationFrameBlockingMs = longAnimationFrames.reduce(
+      (total, entry) => total + (entry.blockingDuration ?? 0),
       0,
     );
     const viewportMeasureTotals = summarizeMeasureTotals(
@@ -471,13 +708,26 @@ async function collectComputePerformanceProbe(page, label) {
     return {
       compute_metrics: true,
       label,
+      longAnimationFrameBlockingMs: totalLongAnimationFrameBlockingMs,
+      longAnimationFrameCount: longAnimationFrames.length,
+      longAnimationFrameTopInvokers:
+        summarizeLongAnimationFrameInvokers(longAnimationFrames),
       longTaskCount: longTasks.length,
+      maxLongAnimationFrameMs,
       maxLongTaskMs,
+      phaseElapsedMs,
       reactRenderMeasureCount: reactRenderMeasures.length,
       reactRenderMeasureTotals,
       sessionRequestCount: resources.length,
+      scope,
       supportedEntryTypes: state.supportedEntryTypes,
+      totalLongAnimationFrameMs,
       totalLongTaskMs,
+      viewportDiagnostics: {
+        current: viewportDiagnostics,
+        phaseStart: phaseViewportDiagnostics,
+      },
+      viewportFrameDelta,
       viewportMeasureCount: viewportMeasures.length,
       viewportMeasureTotals,
     };
@@ -501,6 +751,69 @@ async function collectComputePerformanceProbe(page, label) {
       );
     }
 
+    function summarizeLongAnimationFrameInvokers(entries) {
+      const totals = new Map();
+      for (const entry of entries) {
+        const scripts = Array.isArray(entry.scripts) ? entry.scripts : [];
+        if (scripts.length === 0) {
+          addLongAnimationFrameInvoker(totals, {
+            duration: entry.duration,
+            forcedStyleAndLayoutDuration: 0,
+            invoker: "unknown-frame",
+            invokerType: "",
+            pauseDuration: 0,
+            sourceFunctionName: "",
+            sourceURL: "",
+          });
+          continue;
+        }
+        for (const script of scripts) {
+          addLongAnimationFrameInvoker(totals, script);
+        }
+      }
+      return Array.from(totals.values())
+        .sort((left, right) => right.totalDurationMs - left.totalDurationMs)
+        .slice(0, 8);
+    }
+
+    function addLongAnimationFrameInvoker(totals, script) {
+      const invoker =
+        script.invoker ||
+        script.sourceFunctionName ||
+        shortSourceURL(script.sourceURL) ||
+        "unknown-script";
+      const current =
+        totals.get(invoker) ?? {
+          count: 0,
+          invoker,
+          invokerType: script.invokerType || "",
+          maxDurationMs: 0,
+          source: shortSourceURL(script.sourceURL),
+          sourceFunctionName: script.sourceFunctionName || "",
+          totalDurationMs: 0,
+          totalForcedStyleAndLayoutMs: 0,
+          totalPauseMs: 0,
+        };
+      const duration = script.duration ?? 0;
+      current.count += 1;
+      current.maxDurationMs = Math.max(current.maxDurationMs, duration);
+      current.totalDurationMs += duration;
+      current.totalForcedStyleAndLayoutMs +=
+        script.forcedStyleAndLayoutDuration ?? 0;
+      current.totalPauseMs += script.pauseDuration ?? 0;
+      totals.set(invoker, current);
+    }
+
+    function shortSourceURL(sourceURL) {
+      if (!sourceURL) return "";
+      try {
+        const url = new URL(sourceURL);
+        return url.pathname.split("/").slice(-2).join("/");
+      } catch {
+        return String(sourceURL).split("/").slice(-2).join("/");
+      }
+    }
+
     function dedupePerformanceRows(rows) {
       const seen = new Set();
       return rows.filter((row) => {
@@ -510,11 +823,24 @@ async function collectComputePerformanceProbe(page, label) {
         return true;
       });
     }
-  }, { label, measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES });
+
+    function longTaskOverlapsProbeWindow(entry, probeWindows) {
+      const taskStart = entry.startTime;
+      const taskEnd = entry.startTime + entry.duration;
+      return probeWindows.some(
+        (probeWindow) =>
+          taskStart < probeWindow.endTime && taskEnd > probeWindow.startTime,
+      );
+    }
+  }, { label, measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES, scope });
 }
 
 function logComputePerformanceProbe(metrics) {
   console.log(`Viewport 3D compute metrics: ${JSON.stringify(metrics)}`);
+}
+
+function logViewport3DPerformancePhases(phases) {
+  console.log(`Viewport 3D phased compute metrics: ${JSON.stringify(phases)}`);
 }
 
 async function verifyProjectionRoundTrip({ canvas, page }) {
@@ -635,10 +961,10 @@ async function verifyGeometryAuthoringFlow({
     const draftName = page.locator('.fm-inspector-panel input[aria-label="Name"]').first();
     await draftName.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
     await fillDraftInput(draftName, objectName);
-    await fillDraftField(page, "X", "9e-7");
-    await fillDraftField(page, "Y", "7e-7");
-    await fillDraftField(page, "Z", "1e-7");
-    await fillDraftField(page, "TX", "-1.6e-6");
+    await fillDraftField(page, "Size X", "9e-7");
+    await fillDraftField(page, "Size Y", "7e-7");
+    await fillDraftField(page, "Size Z", "1e-7");
+    await fillDraftField(page, "Translation X", "-1.6e-6");
 
     const transactionResponsePromise = page.waitForResponse(
       (response) =>
@@ -658,24 +984,34 @@ async function verifyGeometryAuthoringFlow({
     cleanupRevision =
       transaction.scene_revision ?? sceneRevision(transaction.committed_scene) ?? cleanupRevision;
     const committedScene = transaction.committed_scene ?? null;
-    let createdObject = findCreatedObject(
+    const committedSceneWithObject = findCreatedObject(
       sceneObjects(committedScene),
+      knownObjectIds,
+      objectName,
+    )
+      ? committedScene
+      : null;
+
+    const uiScene =
+      committedSceneWithObject ??
+      (
+        await waitForSceneResponse(
+          sceneResponses,
+          (record) =>
+            record.sequence >= sceneSequenceBeforeCommit &&
+            sceneObjects(record.body).some((object) => sceneObjectName(object) === objectName),
+          "model/scene fallback refetch after UI object commit",
+        )
+      ).body;
+    cleanupRevision = sceneRevision(uiScene) ?? cleanupRevision;
+    const createdObject = findCreatedObject(
+      sceneObjects(uiScene),
       knownObjectIds,
       objectName,
     );
 
     if (!createdObject) {
-      const sceneWithCreatedObject = await waitForSceneResponse(
-        sceneResponses,
-        (record) =>
-          record.sequence >= sceneSequenceBeforeCommit &&
-          sceneObjects(record.body).some((object) => sceneObjectName(object) === objectName),
-        "model/scene refetch containing the committed smoke object",
-      );
-      cleanupRevision = sceneRevision(sceneWithCreatedObject.body) ?? cleanupRevision;
-      createdObject = sceneObjects(sceneWithCreatedObject.body).find(
-        (object) => sceneObjectName(object) === objectName,
-      );
+      throw new Error("Committed geometry object is missing from SceneDocument.");
     }
 
     const objectId = sceneObjectId(createdObject);
@@ -683,15 +1019,6 @@ async function verifyGeometryAuthoringFlow({
       throw new Error("Committed geometry object has no id in SceneDocument.");
     }
     cleanupObjectIds.push(objectId);
-
-    const uiScene = await waitForSceneResponse(
-      sceneResponses,
-      (record) =>
-        record.sequence >= sceneSequenceBeforeCommit &&
-        sceneObjects(record.body).some((object) => sceneObjectId(object) === objectId),
-      "GET /v2/sessions/current/model/scene refetch after UI object commit",
-    );
-    cleanupRevision = sceneRevision(uiScene.body) ?? cleanupRevision;
     await verifyObjectInViewportRenderModel(page, objectId);
     await verifyObjectInExplorerViewportAndInspector(page, objectId);
     const uiCanvasSample = await waitForCanvasChange(
@@ -704,7 +1031,7 @@ async function verifyGeometryAuthoringFlow({
     const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
     const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
     const externalBaseRevision =
-      sceneRevision(uiScene.body) ?? transaction.scene_revision ?? null;
+      sceneRevision(uiScene) ?? transaction.scene_revision ?? null;
     if (typeof externalBaseRevision !== "number") {
       throw new Error(
         "Cannot run websocket refetch check: current SceneDocument revision is missing.",
@@ -720,7 +1047,7 @@ async function verifyGeometryAuthoringFlow({
     });
     cleanupRevision = externalTransaction.scene_revision ?? cleanupRevision;
     cleanupObjectIds.push(externalObjectId);
-    const realtimeSceneChange = await waitForRealtimeBatchChanged(
+    await waitForRealtimeBatchChanged(
       realtimeMessages,
       "/v2/sessions/current/model/scene",
       "resource.batch_changed for externally committed model/scene",
@@ -730,7 +1057,6 @@ async function verifyGeometryAuthoringFlow({
       sceneResponses,
       (record) =>
         record.sequence >= sceneSequenceBeforeExternalCommit &&
-        record.timestamp >= realtimeSceneChange.timestamp &&
         sceneObjects(record.body).some(
           (object) => sceneObjectId(object) === externalObjectId,
         ),
@@ -1051,64 +1377,81 @@ function withTimeout(promise, timeoutMs, label) {
   });
 }
 
-async function sampleCanvasComposite(page) {
-  const box = await readCanvasClipBox(page);
-  if (box.width <= 0 || box.height <= 0) {
-    throw new Error(
-      `3D viewport canvas has no measurable bounding box: ${box.width}x${box.height}.`,
-    );
-  }
-
-  const background = await readCanvasBackground(page);
-  const backgroundRgb = parseCssRgb(background);
-  const webglSample = await sampleCanvasWebGLPixels(page, backgroundRgb);
-  if (webglSample?.nonBlank) return webglSample;
-
-  const png = await withTimeout(
-    page.screenshot({
-      clip: {
-        height: Math.max(1, box.height),
-        width: Math.max(1, box.width),
-        x: box.x,
-        y: box.y,
-      },
-    }),
-    CANVAS_SCREENSHOT_TIMEOUT_MS,
-    "3D viewport canvas composite screenshot",
+async function withViewport3DPerformanceProbePaused(page, run) {
+  const probeWindowId = await page.evaluate(() =>
+    window.__FULLMAG_BEGIN_VIEWPORT_3D_PROBE__?.(),
   );
-  const bitmap = parsePng(png);
-  const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
-  const signature = [];
-  let sampledPixels = 0;
-  let variedPixels = 0;
-
-  for (let y = 0; y < bitmap.height; y += stride) {
-    for (let x = 0; x < bitmap.width; x += stride) {
-      sampledPixels += 1;
-      const offset = (y * bitmap.width + x) * 4;
-      const alpha = bitmap.rgba[offset + 3];
-      if (alpha === 0) {
-        continue;
+  try {
+    return await run();
+  } finally {
+    await page.evaluate((id) => {
+      if (typeof id === "number") {
+        window.__FULLMAG_END_VIEWPORT_3D_PROBE__?.(id);
       }
+    }, probeWindowId);
+  }
+}
 
-      const rgb = [
-        bitmap.rgba[offset],
-        bitmap.rgba[offset + 1],
-        bitmap.rgba[offset + 2],
-      ];
-      signature.push(...rgb);
-      if (pixelDiffers(rgb, backgroundRgb)) {
-        variedPixels += 1;
+async function sampleCanvasComposite(page) {
+  return withViewport3DPerformanceProbePaused(page, async () => {
+    const box = await waitForCanvasClipBox(page);
+    if (box.width <= 0 || box.height <= 0) {
+      throw new Error(
+        `3D viewport canvas has no measurable bounding box: ${box.width}x${box.height}.`,
+      );
+    }
+
+    const background = await readCanvasBackground(page);
+    const backgroundRgb = parseCssRgb(background);
+    const webglSample = await sampleCanvasWebGLPixels(page, backgroundRgb);
+    if (webglSample?.nonBlank) return webglSample;
+
+    const png = await withTimeout(
+      page.screenshot({
+        clip: {
+          height: Math.max(1, box.height),
+          width: Math.max(1, box.width),
+          x: box.x,
+          y: box.y,
+        },
+      }),
+      CANVAS_SCREENSHOT_TIMEOUT_MS,
+      "3D viewport canvas composite screenshot",
+    );
+    const bitmap = parsePng(png);
+    const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
+    const signature = [];
+    let sampledPixels = 0;
+    let variedPixels = 0;
+
+    for (let y = 0; y < bitmap.height; y += stride) {
+      for (let x = 0; x < bitmap.width; x += stride) {
+        sampledPixels += 1;
+        const offset = (y * bitmap.width + x) * 4;
+        const alpha = bitmap.rgba[offset + 3];
+        if (alpha === 0) {
+          continue;
+        }
+
+        const rgb = [
+          bitmap.rgba[offset],
+          bitmap.rgba[offset + 1],
+          bitmap.rgba[offset + 2],
+        ];
+        signature.push(...rgb);
+        if (pixelDiffers(rgb, backgroundRgb)) {
+          variedPixels += 1;
+        }
       }
     }
-  }
 
-  return {
-    nonBlank: variedPixels > 0,
-    sampledPixels,
-    signature,
-    variedPixels,
-  };
+    return {
+      nonBlank: variedPixels > 0,
+      sampledPixels,
+      signature,
+      variedPixels,
+    };
+  });
 }
 
 async function sampleCanvasWebGLPixels(page, backgroundRgb) {

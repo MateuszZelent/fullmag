@@ -14,7 +14,7 @@ use fullmag_authoring::{
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture, TextureSamplePoint};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -106,14 +106,11 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
 ) -> CurrentLiveRealtimeState {
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
-        let commands_revision = ledger.len() as u64;
-        let command_completion_revision = ledger
-            .iter()
-            .filter_map(|record| record.completed_at_unix_ms)
-            .filter_map(|value| u64::try_from(value).ok())
-            .max()
-            .unwrap_or_else(|| ledger.back().map(|record| record.command.seq).unwrap_or(0));
-        (commands_revision, command_completion_revision)
+        let revisions = command_ledger_revisions(&ledger);
+        (
+            revisions.commands_revision,
+            revisions.command_completion_revision,
+        )
     };
     let workspace_revision = current_live_workspace_revision(state).await;
     let domain_generation_id = snapshot
@@ -189,6 +186,13 @@ async fn current_live_workspace_revision(state: &AppState) -> u64 {
     let ribbon_revision = state.current_workspace_ribbon.read().await.revision;
     let layout_revision = state.current_workspace_layout.read().await.revision;
     selection_revision.max(ribbon_revision).max(layout_revision)
+}
+
+fn current_live_commands_effective_revision(revisions: &RealtimeResourceRevisionMap) -> u64 {
+    command_queue_revision_from_parts(
+        revisions.commands_revision,
+        revisions.command_completion_revision,
+    )
 }
 
 fn current_live_realtime_changes(
@@ -302,10 +306,11 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/meshing/builds/current".to_string()),
         });
     }
-    if realtime_state.revisions.commands_revision > 0 {
+    let commands_revision = current_live_commands_effective_revision(&realtime_state.revisions);
+    if commands_revision > 0 {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Commands,
-            revision: realtime_state.revisions.commands_revision,
+            revision: commands_revision,
             resource_id: None,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/simulation/commands".to_string()),
@@ -360,17 +365,15 @@ fn current_live_realtime_change_revision_changed(
             previous.visualization_state_revision != change.revision
         }
         RealtimeResourceName::Workspace => previous.workspace_revision != change.revision,
-        RealtimeResourceName::Fields => {
-            match change.resource_id.as_deref() {
-                Some("catalog") => {
-                    previous.field_catalog_revision != change.revision || domain_generation_changed
-                }
-                Some("samples") => {
-                    previous.field_revision != change.revision || domain_generation_changed
-                }
-                _ => previous.fields_revision != change.revision || domain_generation_changed,
+        RealtimeResourceName::Fields => match change.resource_id.as_deref() {
+            Some("catalog") => {
+                previous.field_catalog_revision != change.revision || domain_generation_changed
             }
-        }
+            Some("samples") => {
+                previous.field_revision != change.revision || domain_generation_changed
+            }
+            _ => previous.fields_revision != change.revision || domain_generation_changed,
+        },
         RealtimeResourceName::Scalars => previous.scalars_revision != change.revision,
         RealtimeResourceName::Domain => {
             if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/domain/meta")
@@ -387,7 +390,9 @@ fn current_live_realtime_change_revision_changed(
             previous.mesh_revision != change.revision || domain_generation_changed
         }
         RealtimeResourceName::MeshBuilds => previous.mesh_build_revision != change.revision,
-        RealtimeResourceName::Commands => previous.commands_revision != change.revision,
+        RealtimeResourceName::Commands => {
+            current_live_commands_effective_revision(previous) != change.revision
+        }
         RealtimeResourceName::Stages => previous.stages_revision != change.revision,
         RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
         RealtimeResourceName::VisualizationClientAcks => true,
@@ -397,6 +402,7 @@ fn current_live_realtime_change_revision_changed(
 #[cfg(test)]
 mod realtime_change_tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn revisions() -> RealtimeResourceRevisionMap {
         RealtimeResourceRevisionMap {
@@ -458,8 +464,7 @@ mod realtime_change_tests {
         assert!(changes.iter().any(|change| {
             matches!(change.resource, RealtimeResourceName::Fields)
                 && change.resource_id.as_deref() == Some("catalog")
-                && change.recommended_fetch.as_deref()
-                    == Some("/v2/sessions/current/data/fields")
+                && change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/fields")
         }));
         assert!(changes.iter().any(|change| {
             matches!(change.resource, RealtimeResourceName::Fields)
@@ -497,6 +502,56 @@ mod realtime_change_tests {
         assert!(fetches.contains("/v2/sessions/current/data/fields"));
         assert!(!fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(!fetches.contains("/v2/sessions/current/workspace/selection"));
+    }
+
+    #[test]
+    fn realtime_changes_since_refreshes_commands_when_command_completion_changes() {
+        let mut previous = revisions();
+        previous.commands_revision = 1;
+        previous.command_completion_revision = 1000;
+
+        let mut current = previous.clone();
+        current.command_completion_revision = 2000;
+        let expected_revision = current_live_commands_effective_revision(&current);
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
+
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Commands)
+                && change.revision == expected_revision
+                && change.recommended_fetch.as_deref()
+                    == Some("/v2/sessions/current/simulation/commands")
+        }));
+    }
+
+    #[test]
+    fn realtime_changes_since_refreshes_commands_when_command_is_queued_after_completion() {
+        let mut previous = revisions();
+        previous.commands_revision = 3;
+        previous.command_completion_revision = 1000;
+
+        let mut current = previous.clone();
+        current.commands_revision = 4;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
+
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Commands)
+                && change.recommended_fetch.as_deref()
+                    == Some("/v2/sessions/current/simulation/commands")
+        }));
     }
 
     #[test]
@@ -539,15 +594,14 @@ mod realtime_change_tests {
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
 
         // Scalars should show up.
-        assert!(changes.iter().any(|c| c
-            .recommended_fetch
-            .as_deref()
-            == Some("/v2/sessions/current/data/scalars")));
+        assert!(changes
+            .iter()
+            .any(|c| c.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/scalars")));
         // Field samples should NOT show up.
-        assert!(changes.iter().all(|c| !(matches!(
-            c.resource,
-            RealtimeResourceName::Fields
-        ) && c.resource_id.as_deref() == Some("samples"))));
+        assert!(changes
+            .iter()
+            .all(|c| !(matches!(c.resource, RealtimeResourceName::Fields)
+                && c.resource_id.as_deref() == Some("samples"))));
     }
 
     #[test]
@@ -570,10 +624,55 @@ mod realtime_change_tests {
             Some(100)
         );
     }
+
+    #[test]
+    fn realtime_command_and_stage_events_bypass_coalescing() {
+        let event = LiveRealtimeServerEvent::ResourceBatchChanged {
+            seq: 1,
+            ts: "2026-05-21T00:00:00.000Z".to_string(),
+            session_id: "session-1".to_string(),
+            run_id: None,
+            contract_version: current_live_realtime_contract_version().to_string(),
+            payload: ResourceBatchChangedPayload {
+                changes: vec![
+                    RealtimeResourceChange {
+                        resource: RealtimeResourceName::Stages,
+                        revision: 2,
+                        resource_id: None,
+                        domain_generation_id: None,
+                        recommended_fetch: Some(
+                            "/v2/sessions/current/simulation/stages/execution".to_string(),
+                        ),
+                    },
+                    RealtimeResourceChange {
+                        resource: RealtimeResourceName::Commands,
+                        revision: 4,
+                        resource_id: None,
+                        domain_generation_id: None,
+                        recommended_fetch: Some(
+                            "/v2/sessions/current/simulation/commands".to_string(),
+                        ),
+                    },
+                ],
+                coalesced: true,
+                window_ms: 100,
+            },
+        };
+
+        assert_eq!(current_live_realtime_event_coalesce_window_ms(&event), None);
+    }
 }
 
 fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
     if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
+        if payload.changes.iter().any(|change| {
+            matches!(
+                change.resource,
+                RealtimeResourceName::Commands | RealtimeResourceName::Stages
+            )
+        }) {
+            return None;
+        }
         if payload.coalesced && payload.window_ms > 0 {
             return Some(payload.window_ms);
         }

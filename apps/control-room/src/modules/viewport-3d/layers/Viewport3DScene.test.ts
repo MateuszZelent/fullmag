@@ -214,6 +214,23 @@ describe("Viewport3DScene scale helpers", () => {
     expect(perspectiveBlock).not.toContain("onUpdate=");
   });
 
+  it("keeps camera gesture state local to Canvas controls", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("createViewport3DCameraGestureRef()");
+    expect(source).toContain(
+      "useMemo(() => createViewport3DCameraGestureRef(), [])",
+    );
+    expect(source).toContain("cameraGestureRef={cameraGestureRef}");
+    expect(source).not.toContain(
+      "useRef(createViewport3DCameraGestureRef()).current",
+    );
+    expect(source).not.toContain("interactionActive={interactionActive}");
+  });
+
   it("can skip viewport canvas probes and orientation widgets from browser runtime flags", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
@@ -262,7 +279,7 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).toContain(
       "{viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (",
     );
-    expect(source).toContain("{viewport3DOverlayLayersEnabledFromBrowserConfig() ? (");
+    expect(source).toContain("viewport3DOverlayLayersEnabledFromBrowserConfig()");
     expect(source).toContain(
       "viewport3DClipLayersEnabledFromBrowserConfig() && clip?.enabled ? (",
     );
@@ -292,17 +309,17 @@ describe("Viewport3DScene scale helpers", () => {
       "viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig()",
     );
     expect(source).toContain("{viewport3DOrientationHudEnabledFromBrowserConfig()");
-    expect(source).toContain("{viewport3DSceneLayersEnabledFromBrowserConfig() ? (");
-    expect(source).toContain("{viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (");
-    expect(source).toContain("{viewport3DAirboxLayerEnabledFromBrowserConfig() ? (");
+    expect(source).toContain("viewport3DSceneLayersEnabledFromBrowserConfig()");
+    expect(source).toContain("viewport3DFdmCuboidLayerEnabledFromBrowserConfig()");
+    expect(source).toContain("viewport3DAirboxLayerEnabledFromBrowserConfig()");
     expect(source).toContain(
-      "{viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (",
+      "viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig()",
     );
     expect(source).toContain(
-      "{viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (",
+      "viewport3DTopologyMeshLayerEnabledFromBrowserConfig()",
     );
     expect(source).toContain(
-      "{viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (",
+      "viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig()",
     );
     expect(source).toContain("{viewport3DPostProcessingEnabledFromBrowserConfig() ? (");
   });

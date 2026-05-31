@@ -8,19 +8,29 @@ type ResourceListener = (revision: ResourceRevision) => void;
 
 export class ResourceInvalidationController {
   private readonly revisions = new Map<ResourceKey, ResourceRevision>();
+  private readonly revisionOrders = new Map<ResourceKey, number>();
   private readonly prefixRevisions = new Map<ResourceKey, ResourceRevision>();
+  private readonly prefixRevisionOrders = new Map<ResourceKey, number>();
   private readonly listeners = new Map<ResourceKey, Set<ResourceListener>>();
+  private sequence = 0;
 
   constructor(private readonly bus: EventBus<KernelEventMap>) {}
 
   getRevision(resourceKey: ResourceKey): ResourceRevision | null {
     let revision = this.revisions.get(resourceKey) ?? null;
+    let revisionOrder = this.revisionOrders.get(resourceKey) ?? -1;
     for (const [prefix, prefixRevision] of this.prefixRevisions) {
       if (resourceKey !== prefix && resourceKey.startsWith(prefix)) {
-        revision =
-          revision === null
-            ? prefixRevision
-            : latestRevision(revision, prefixRevision);
+        const prefixRevisionOrder =
+          this.prefixRevisionOrders.get(prefix) ?? -1;
+        const selected = selectRevision(
+          revision,
+          revisionOrder,
+          prefixRevision,
+          prefixRevisionOrder,
+        );
+        revision = selected.revision;
+        revisionOrder = selected.order;
       }
     }
     return revision;
@@ -32,7 +42,9 @@ export class ResourceInvalidationController {
       return;
     }
 
+    const revisionOrder = ++this.sequence;
     this.revisions.set(resourceKey, revision);
+    this.revisionOrders.set(resourceKey, revisionOrder);
     this.bus.emit("resource:invalidated", { resourceKey, revision });
 
     const listeners = this.listeners.get(resourceKey);
@@ -49,7 +61,9 @@ export class ResourceInvalidationController {
   ): void {
     const current = this.prefixRevisions.get(resourcePrefix);
     if (current !== revision && !isOlderNumericRevision(revision, current)) {
+      const revisionOrder = ++this.sequence;
       this.prefixRevisions.set(resourcePrefix, revision);
+      this.prefixRevisionOrders.set(resourcePrefix, revisionOrder);
     }
 
     for (const resourceKey of this.listeners.keys()) {
@@ -77,14 +91,25 @@ export class ResourceInvalidationController {
   }
 }
 
-function latestRevision(
-  current: ResourceRevision,
+function selectRevision(
+  current: ResourceRevision | null,
+  currentOrder: number,
   next: ResourceRevision,
-): ResourceRevision {
-  if (typeof current === "number" && typeof next === "number") {
-    return Math.max(current, next);
+  nextOrder: number,
+): { order: number; revision: ResourceRevision } {
+  if (current === null) {
+    return { order: nextOrder, revision: next };
   }
-  return next;
+
+  if (typeof current === "number" && typeof next === "number") {
+    return next > current
+      ? { order: nextOrder, revision: next }
+      : { order: currentOrder, revision: current };
+  }
+
+  return nextOrder > currentOrder
+    ? { order: nextOrder, revision: next }
+    : { order: currentOrder, revision: current };
 }
 
 function isOlderNumericRevision(

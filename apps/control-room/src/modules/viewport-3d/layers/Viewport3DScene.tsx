@@ -24,7 +24,13 @@ import {
 } from "@/kernel/browserFullmagConfig";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type RefObject,
+} from "react";
 import {
   Vector3,
   type OrthographicCamera as ThreeOrthographicCamera,
@@ -92,6 +98,7 @@ import {
 } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { clampNumber } from "../viewport3dMath";
+import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
@@ -115,7 +122,6 @@ interface Viewport3DSceneProps {
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
-  interactionActive: boolean;
   getObjectSettings: (
     object: Viewport3DPrimitiveObject,
   ) => VisualizationTargetSettings;
@@ -180,6 +186,7 @@ interface Viewport3DCameraClip {
 
 const FALLBACK_GRID_SIZE = 1e-6;
 const PERSPECTIVE_CAMERA_FOV_DEGREES = 42;
+type Viewport3DVisualProfile = ReturnType<typeof getViewport3DVisualProfile>;
 
 export function resolveViewport3DProjectionCameraClip(
   bounds: Viewport3DBounds | null,
@@ -377,6 +384,388 @@ export function scheduleViewport3DProjectionRenderFrames({
   return () => frameHost.cancelAnimationFrame(frameId);
 }
 
+function Viewport3DProjectionStack({
+  bounds,
+  cameraClip,
+  cameraGestureRef,
+  cameraState,
+  fitRevision,
+  onCameraChange,
+  orthographicCameraFrame,
+  orthographicCameraRef,
+  perspectiveCameraRef,
+  resetCameraRevision,
+  tracker,
+}: Pick<
+  Viewport3DSceneProps,
+  | "bounds"
+  | "cameraState"
+  | "fitRevision"
+  | "onCameraChange"
+  | "resetCameraRevision"
+  | "tracker"
+> & {
+  cameraClip: Viewport3DCameraClip;
+  cameraGestureRef: ReturnType<typeof createViewport3DCameraGestureRef>;
+  orthographicCameraFrame: Viewport3DOrthographicCameraFrame;
+  orthographicCameraRef: RefObject<ThreeOrthographicCamera | null>;
+  perspectiveCameraRef: RefObject<ThreePerspectiveCamera | null>;
+}) {
+  return (
+    <>
+      <OrthographicCamera
+        key="viewport-3d-orthographic-camera"
+        ref={orthographicCameraRef}
+        bottom={orthographicCameraFrame.bottom}
+        left={orthographicCameraFrame.left}
+        near={cameraClip.near}
+        far={cameraClip.far}
+        right={orthographicCameraFrame.right}
+        top={orthographicCameraFrame.top}
+        zoom={orthographicCameraFrame.zoom}
+      />
+      <PerspectiveCamera
+        key="viewport-3d-perspective-camera"
+        ref={perspectiveCameraRef}
+        far={cameraClip.far}
+        fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
+        near={cameraClip.near}
+      />
+      <CameraController
+        bounds={bounds}
+        cameraGestureRef={cameraGestureRef}
+        cameraState={cameraState}
+        fitRevision={fitRevision}
+        onCameraChange={onCameraChange}
+        resetCameraRevision={resetCameraRevision}
+        tracker={tracker}
+      />
+    </>
+  );
+}
+
+function Viewport3DOverlayLayerStack({
+  bounds,
+  cameraProjection,
+  cameraState,
+  clip,
+  clipFrameRotationDegrees,
+  clipIntersectionMarkers,
+  colors,
+  crossSectionFrameClip,
+  crossSectionFrameRotationDegrees,
+  dimensionFrameDensity,
+  dimensionFrameMode,
+  fdmSettings,
+  materialProfile,
+  onSelectDomain,
+  scaleLabelsVisible,
+  scaleUnitMode,
+  selectionBounds,
+  tracker,
+}: Pick<
+  Viewport3DSceneProps,
+  | "bounds"
+  | "cameraProjection"
+  | "cameraState"
+  | "clip"
+  | "clipFrameRotationDegrees"
+  | "clipIntersectionMarkers"
+  | "colors"
+  | "crossSectionFrameClip"
+  | "crossSectionFrameRotationDegrees"
+  | "dimensionFrameDensity"
+  | "dimensionFrameMode"
+  | "fdmSettings"
+  | "onSelectDomain"
+  | "scaleLabelsVisible"
+  | "scaleUnitMode"
+  | "selectionBounds"
+  | "tracker"
+> & {
+  materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
+}) {
+  if (!viewport3DOverlayLayersEnabledFromBrowserConfig()) return null;
+
+  return (
+    <>
+      {viewport3DClipLayersEnabledFromBrowserConfig() && clip?.enabled ? (
+        <ClipPlaneLayer
+          bounds={bounds}
+          clip={clip}
+          frameRotationDegrees={clipFrameRotationDegrees}
+          intersectionMarkers={clipIntersectionMarkers}
+          colors={colors}
+          tracker={tracker}
+        />
+      ) : null}
+      {viewport3DClipLayersEnabledFromBrowserConfig() &&
+      crossSectionFrameClip?.enabled &&
+      !clip?.enabled ? (
+        <ClipPlaneFramePreviewLayer
+          bounds={bounds}
+          clip={crossSectionFrameClip}
+          colors={colors}
+          frameRotationDegrees={crossSectionFrameRotationDegrees}
+          tracker={tracker}
+        />
+      ) : null}
+      {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
+        <>
+          <DomainBoxLayer
+            bounds={bounds}
+            boundsVisible={fdmSettings.boundsVisible}
+            colors={colors}
+            onSelectDomain={onSelectDomain}
+          />
+          <SelectionHighlightLayer
+            bounds={selectionBounds}
+            colors={colors}
+            materialProfile={materialProfile}
+          />
+        </>
+      ) : null}
+      {viewport3DDimensionFrameEnabledFromBrowserConfig() ? (
+        <DimensionFrameLayer
+          bounds={bounds}
+          cameraProjection={cameraProjection}
+          cameraState={cameraState}
+          colors={colors}
+          density={dimensionFrameDensity}
+          labelsVisible={
+            scaleLabelsVisible &&
+            viewport3DDimensionFrameLabelsEnabledFromBrowserConfig()
+          }
+          majorLinesVisible={
+            viewport3DDimensionFrameLinesEnabledFromBrowserConfig() &&
+            viewport3DDimensionFrameMajorLinesEnabledFromBrowserConfig()
+          }
+          materialProfile={materialProfile}
+          mode={dimensionFrameMode}
+          minorLinesVisible={
+            viewport3DDimensionFrameLinesEnabledFromBrowserConfig() &&
+            viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig()
+          }
+          tracker={tracker}
+          unitMode={scaleUnitMode}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function Viewport3DModelLayerStack({
+  airboxSettings,
+  colors,
+  fdmDomain,
+  fdmInstanceModel,
+  fdmSettings,
+  fdmSurfaceColors,
+  fieldModel,
+  fieldVector,
+  fallbackSettings,
+  femDomain,
+  getObjectSettings,
+  getPartSettings,
+  magnetizationTexturePreviews,
+  materialProfile,
+  maxVectorGlyphs,
+  meshQualityColors,
+  meshQualityOverlayVisible,
+  meshSizeHighlightModel,
+  onSelectDomain,
+  onSelectObject,
+  onSelectPart,
+  primitiveModel,
+  topologyFreshness,
+  topologyModel,
+  tracker,
+  vectorColorMode,
+  vectorScale,
+  vectorStyle,
+  visualProfile,
+}: Pick<
+  Viewport3DSceneProps,
+  | "airboxSettings"
+  | "colors"
+  | "fdmDomain"
+  | "fdmInstanceModel"
+  | "fdmSettings"
+  | "fdmSurfaceColors"
+  | "fieldModel"
+  | "fieldVector"
+  | "fallbackSettings"
+  | "femDomain"
+  | "getObjectSettings"
+  | "getPartSettings"
+  | "magnetizationTexturePreviews"
+  | "maxVectorGlyphs"
+  | "meshQualityColors"
+  | "meshQualityOverlayVisible"
+  | "meshSizeHighlightModel"
+  | "onSelectDomain"
+  | "onSelectObject"
+  | "onSelectPart"
+  | "primitiveModel"
+  | "topologyFreshness"
+  | "topologyModel"
+  | "tracker"
+  | "vectorColorMode"
+  | "vectorScale"
+  | "vectorStyle"
+> & {
+  materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
+  visualProfile: Viewport3DVisualProfile;
+}) {
+  if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
+
+  return (
+    <>
+      {viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
+        <FdmCuboidLayer
+          colors={colors}
+          domain={fdmDomain}
+          fieldVector={fieldVector}
+          instanceModel={fdmInstanceModel}
+          maxVectorGlyphs={maxVectorGlyphs}
+          materialProfile={materialProfile}
+          onSelectDomain={onSelectDomain}
+          settings={fdmSettings}
+          surfaceColors={fdmSurfaceColors}
+          tracker={tracker}
+          vectorColorMode={vectorColorMode}
+          vectorScale={vectorScale}
+          vectorStyle={vectorStyle}
+          voxelFillRatio={visualProfile.voxelFillRatio}
+          voxelMagnitudeThreshold={visualProfile.voxelMagnitudeThreshold}
+          voxelTopography={visualProfile.voxelTopography}
+        />
+      ) : null}
+      {viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
+        <AirboxLayer
+          colors={colors}
+          fieldModel={fieldModel}
+          materialProfile={materialProfile}
+          onSelectPart={onSelectPart}
+          settings={airboxSettings}
+          topologyModel={topologyModel}
+          topologyFreshness={topologyFreshness}
+          tracker={tracker}
+          vectorColorMode={vectorColorMode}
+          vectorStyle={vectorStyle}
+        />
+      ) : null}
+      {viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
+        <PrimitiveObjectLayer
+          colors={colors}
+          getObjectSettings={getObjectSettings}
+          materialProfile={materialProfile}
+          onSelectObject={onSelectObject}
+          primitiveModel={primitiveModel}
+          tracker={tracker}
+        />
+      ) : null}
+      {viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+        <TopologyMeshLayer
+          colors={colors}
+          fallbackSettings={fallbackSettings}
+          femDomain={femDomain}
+          fieldModel={fieldModel}
+          getPartSettings={getPartSettings}
+          materialProfile={materialProfile}
+          magnetizationTexturePreviews={magnetizationTexturePreviews}
+          meshQualityColors={meshQualityColors}
+          meshQualityOverlayVisible={meshQualityOverlayVisible}
+          onSelectDomain={onSelectDomain}
+          onSelectPart={onSelectPart}
+          tracker={tracker}
+          topologyFreshness={topologyFreshness}
+          topologyModel={topologyModel}
+          vectorColorMode={vectorColorMode}
+          vectorStyle={vectorStyle}
+        />
+      ) : null}
+      {viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (
+        <MeshSizeHighlightLayer
+          colors={colors}
+          model={meshSizeHighlightModel}
+          tracker={tracker}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function Viewport3DInteractionAndHudStack({
+  cameraGestureRef,
+  cameraOrthographicScale,
+  cameraProjection,
+  cameraState,
+  colors,
+  hslReferenceVisible,
+  onCameraChange,
+  onCameraInteractionEnd,
+  onCameraInteractionStart,
+  onOrbitDebugAnglesChange,
+  orbitDebugAngles,
+  orbitDebugCommitRevision,
+  orbitDebugRevision,
+  rotationMode,
+  tracker,
+  viewCubeVisible,
+}: Pick<
+  Viewport3DSceneProps,
+  | "cameraOrthographicScale"
+  | "cameraProjection"
+  | "cameraState"
+  | "colors"
+  | "hslReferenceVisible"
+  | "onCameraChange"
+  | "onCameraInteractionEnd"
+  | "onCameraInteractionStart"
+  | "onOrbitDebugAnglesChange"
+  | "orbitDebugAngles"
+  | "orbitDebugCommitRevision"
+  | "orbitDebugRevision"
+  | "rotationMode"
+  | "tracker"
+  | "viewCubeVisible"
+> & {
+  cameraGestureRef: ReturnType<typeof createViewport3DCameraGestureRef>;
+}) {
+  return (
+    <>
+      <OrbitCameraControls
+        cameraGestureRef={cameraGestureRef}
+        cameraOrthographicScale={cameraOrthographicScale}
+        cameraProjection={cameraProjection}
+        cameraState={cameraState}
+        orbitDebugAngles={orbitDebugAngles}
+        orbitDebugCommitRevision={orbitDebugCommitRevision}
+        orbitDebugRevision={orbitDebugRevision}
+        onCameraChange={onCameraChange}
+        onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+        tracker={tracker}
+      />
+      {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
+        <OrientationHudLayer
+          colors={colors}
+          hslReferenceVisible={hslReferenceVisible}
+          onCameraChange={onCameraChange}
+          onCameraInteractionEnd={onCameraInteractionEnd}
+          onCameraInteractionStart={onCameraInteractionStart}
+          rotationMode={rotationMode}
+          tracker={tracker}
+          viewCubeVisible={viewCubeVisible}
+        />
+      ) : null}
+      {viewport3DPostProcessingEnabledFromBrowserConfig() ? (
+        <PostProcessingLayer />
+      ) : null}
+    </>
+  );
+}
+
 export function Viewport3DScene({
   bounds,
   cameraOrthographicScale,
@@ -400,7 +789,6 @@ export function Viewport3DScene({
   fieldModel,
   fitRevision,
   fallbackSettings,
-  interactionActive,
   getObjectSettings,
   getPartSettings,
   magnetizationTexturePreviews,
@@ -443,6 +831,7 @@ export function Viewport3DScene({
   const viewportSize = useThree((state) => state.size);
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
+  const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
   const cameraClip = useMemo(
     () => resolveViewport3DProjectionCameraClip(bounds, cameraState),
     [bounds, cameraState],
@@ -457,12 +846,13 @@ export function Viewport3DScene({
       ),
     [bounds, cameraOrthographicScale, cameraState, viewportSize],
   );
-  const materialProfile = useMemo(
-    () =>
-      resolveViewport3DMaterialProfile(
-        getViewport3DVisualProfile(visualProfileId),
-      ),
+  const visualProfile = useMemo(
+    () => getViewport3DVisualProfile(visualProfileId),
     [visualProfileId],
+  );
+  const materialProfile = useMemo(
+    () => resolveViewport3DMaterialProfile(visualProfile),
+    [visualProfile],
   );
 
   useLayoutEffect(() => {
@@ -504,187 +894,77 @@ export function Viewport3DScene({
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       ) : null}
-      <OrthographicCamera
-        key="viewport-3d-orthographic-camera"
-        ref={orthographicCameraRef}
-        bottom={orthographicCameraFrame.bottom}
-        left={orthographicCameraFrame.left}
-        near={cameraClip.near}
-        far={cameraClip.far}
-        right={orthographicCameraFrame.right}
-        top={orthographicCameraFrame.top}
-        zoom={orthographicCameraFrame.zoom}
-      />
-      <PerspectiveCamera
-        key="viewport-3d-perspective-camera"
-        ref={perspectiveCameraRef}
-        far={cameraClip.far}
-        fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
-        near={cameraClip.near}
-      />
-      <CameraController
+      <Viewport3DProjectionStack
         bounds={bounds}
+        cameraClip={cameraClip}
+        cameraGestureRef={cameraGestureRef}
         cameraState={cameraState}
         fitRevision={fitRevision}
-        interactionActive={interactionActive}
         onCameraChange={onCameraChange}
+        orthographicCameraFrame={orthographicCameraFrame}
+        orthographicCameraRef={orthographicCameraRef}
+        perspectiveCameraRef={perspectiveCameraRef}
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
-      {viewport3DOverlayLayersEnabledFromBrowserConfig() ? (
-        <>
-          {viewport3DClipLayersEnabledFromBrowserConfig() && clip?.enabled ? (
-            <ClipPlaneLayer
-              bounds={bounds}
-              clip={clip}
-              frameRotationDegrees={clipFrameRotationDegrees}
-              intersectionMarkers={clipIntersectionMarkers}
-              colors={colors}
-              tracker={tracker}
-            />
-          ) : null}
-          {viewport3DClipLayersEnabledFromBrowserConfig() &&
-          crossSectionFrameClip?.enabled &&
-          !clip?.enabled ? (
-            <ClipPlaneFramePreviewLayer
-              bounds={bounds}
-              clip={crossSectionFrameClip}
-              colors={colors}
-              frameRotationDegrees={crossSectionFrameRotationDegrees}
-              tracker={tracker}
-            />
-          ) : null}
-          {viewport3DBoundsLayersEnabledFromBrowserConfig() ? (
-            <>
-              <DomainBoxLayer
-                bounds={bounds}
-                boundsVisible={fdmSettings.boundsVisible}
-                colors={colors}
-                onSelectDomain={onSelectDomain}
-              />
-              <SelectionHighlightLayer
-                bounds={selectionBounds}
-                colors={colors}
-                materialProfile={materialProfile}
-              />
-            </>
-          ) : null}
-          {viewport3DDimensionFrameEnabledFromBrowserConfig() ? (
-            <DimensionFrameLayer
-              bounds={bounds}
-              cameraProjection={cameraProjection}
-              cameraState={cameraState}
-              colors={colors}
-              density={dimensionFrameDensity}
-              labelsVisible={
-                scaleLabelsVisible &&
-                viewport3DDimensionFrameLabelsEnabledFromBrowserConfig()
-              }
-              majorLinesVisible={
-                viewport3DDimensionFrameLinesEnabledFromBrowserConfig() &&
-                viewport3DDimensionFrameMajorLinesEnabledFromBrowserConfig()
-              }
-              materialProfile={materialProfile}
-              mode={dimensionFrameMode}
-              minorLinesVisible={
-                viewport3DDimensionFrameLinesEnabledFromBrowserConfig() &&
-                viewport3DDimensionFrameMinorLinesEnabledFromBrowserConfig()
-              }
-              tracker={tracker}
-              unitMode={scaleUnitMode}
-            />
-          ) : null}
-        </>
-      ) : null}
-      {viewport3DSceneLayersEnabledFromBrowserConfig() ? (
-        <>
-          {viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
-            <FdmCuboidLayer
-              colors={colors}
-              domain={fdmDomain}
-              fieldVector={fieldVector}
-              instanceModel={fdmInstanceModel}
-              interactionActive={interactionActive}
-              maxVectorGlyphs={maxVectorGlyphs}
-              materialProfile={materialProfile}
-              onSelectDomain={onSelectDomain}
-              settings={fdmSettings}
-              surfaceColors={fdmSurfaceColors}
-              tracker={tracker}
-              vectorColorMode={vectorColorMode}
-              vectorScale={vectorScale}
-              vectorStyle={vectorStyle}
-              voxelFillRatio={
-                getViewport3DVisualProfile(visualProfileId).voxelFillRatio
-              }
-              voxelMagnitudeThreshold={
-                getViewport3DVisualProfile(visualProfileId).voxelMagnitudeThreshold
-              }
-              voxelTopography={
-                getViewport3DVisualProfile(visualProfileId).voxelTopography
-              }
-            />
-          ) : null}
-          {viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
-            <AirboxLayer
-              colors={colors}
-              fieldModel={fieldModel}
-              interactionActive={interactionActive}
-              materialProfile={materialProfile}
-              onSelectPart={onSelectPart}
-              settings={airboxSettings}
-              topologyModel={topologyModel}
-              topologyFreshness={topologyFreshness}
-              tracker={tracker}
-              vectorColorMode={vectorColorMode}
-              vectorStyle={vectorStyle}
-            />
-          ) : null}
-          {viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig() ? (
-            <PrimitiveObjectLayer
-              colors={colors}
-              getObjectSettings={getObjectSettings}
-              materialProfile={materialProfile}
-              onSelectObject={onSelectObject}
-              primitiveModel={primitiveModel}
-              tracker={tracker}
-            />
-          ) : null}
-          {viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
-            <TopologyMeshLayer
-              colors={colors}
-              fallbackSettings={fallbackSettings}
-              femDomain={femDomain}
-              fieldModel={fieldModel}
-              getPartSettings={getPartSettings}
-              interactionActive={interactionActive}
-              materialProfile={materialProfile}
-              magnetizationTexturePreviews={magnetizationTexturePreviews}
-              meshQualityColors={meshQualityColors}
-              meshQualityOverlayVisible={meshQualityOverlayVisible}
-              onSelectDomain={onSelectDomain}
-              onSelectPart={onSelectPart}
-              tracker={tracker}
-              topologyFreshness={topologyFreshness}
-              topologyModel={topologyModel}
-              vectorColorMode={vectorColorMode}
-              vectorStyle={vectorStyle}
-            />
-          ) : null}
-          {viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig() ? (
-            <MeshSizeHighlightLayer
-              colors={colors}
-              model={meshSizeHighlightModel}
-              tracker={tracker}
-            />
-          ) : null}
-        </>
-      ) : null}
-      <OrbitCameraControls
+      <Viewport3DOverlayLayerStack
+        bounds={bounds}
+        cameraProjection={cameraProjection}
+        cameraState={cameraState}
+        clip={clip}
+        clipFrameRotationDegrees={clipFrameRotationDegrees}
+        clipIntersectionMarkers={clipIntersectionMarkers}
+        colors={colors}
+        crossSectionFrameClip={crossSectionFrameClip}
+        crossSectionFrameRotationDegrees={crossSectionFrameRotationDegrees}
+        dimensionFrameDensity={dimensionFrameDensity}
+        dimensionFrameMode={dimensionFrameMode}
+        fdmSettings={fdmSettings}
+        materialProfile={materialProfile}
+        onSelectDomain={onSelectDomain}
+        scaleLabelsVisible={scaleLabelsVisible}
+        scaleUnitMode={scaleUnitMode}
+        selectionBounds={selectionBounds}
+        tracker={tracker}
+      />
+      <Viewport3DModelLayerStack
+        airboxSettings={airboxSettings}
+        colors={colors}
+        fdmDomain={fdmDomain}
+        fdmInstanceModel={fdmInstanceModel}
+        fdmSettings={fdmSettings}
+        fdmSurfaceColors={fdmSurfaceColors}
+        fieldModel={fieldModel}
+        fieldVector={fieldVector}
+        fallbackSettings={fallbackSettings}
+        femDomain={femDomain}
+        getObjectSettings={getObjectSettings}
+        getPartSettings={getPartSettings}
+        magnetizationTexturePreviews={magnetizationTexturePreviews}
+        materialProfile={materialProfile}
+        maxVectorGlyphs={maxVectorGlyphs}
+        meshQualityColors={meshQualityColors}
+        meshQualityOverlayVisible={meshQualityOverlayVisible}
+        meshSizeHighlightModel={meshSizeHighlightModel}
+        onSelectDomain={onSelectDomain}
+        onSelectObject={onSelectObject}
+        onSelectPart={onSelectPart}
+        primitiveModel={primitiveModel}
+        topologyFreshness={topologyFreshness}
+        topologyModel={topologyModel}
+        tracker={tracker}
+        vectorColorMode={vectorColorMode}
+        vectorScale={vectorScale}
+        vectorStyle={vectorStyle}
+        visualProfile={visualProfile}
+      />
+      <Viewport3DInteractionAndHudStack
+        cameraGestureRef={cameraGestureRef}
         cameraOrthographicScale={cameraOrthographicScale}
         cameraProjection={cameraProjection}
         cameraState={cameraState}
-        interactionActive={interactionActive}
+        colors={colors}
+        hslReferenceVisible={hslReferenceVisible}
         orbitDebugAngles={orbitDebugAngles}
         orbitDebugCommitRevision={orbitDebugCommitRevision}
         orbitDebugRevision={orbitDebugRevision}
@@ -692,23 +972,10 @@ export function Viewport3DScene({
         onCameraInteractionEnd={onCameraInteractionEnd}
         onCameraInteractionStart={onCameraInteractionStart}
         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+        rotationMode={rotationMode}
         tracker={tracker}
+        viewCubeVisible={viewCubeVisible}
       />
-      {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
-        <OrientationHudLayer
-          colors={colors}
-          hslReferenceVisible={hslReferenceVisible}
-          onCameraChange={onCameraChange}
-          onCameraInteractionEnd={onCameraInteractionEnd}
-          onCameraInteractionStart={onCameraInteractionStart}
-          rotationMode={rotationMode}
-          tracker={tracker}
-          viewCubeVisible={viewCubeVisible}
-        />
-      ) : null}
-      {viewport3DPostProcessingEnabledFromBrowserConfig() ? (
-        <PostProcessingLayer />
-      ) : null}
     </>
   );
 }

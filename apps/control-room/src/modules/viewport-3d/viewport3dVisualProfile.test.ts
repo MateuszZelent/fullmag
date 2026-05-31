@@ -59,16 +59,15 @@ describe("viewport3d visual profiles", () => {
     ).toBe(2);
   });
 
-  it("drops DPR below 1 only during active camera interaction", () => {
+  it("keeps DPR profile-owned during camera interaction", () => {
     const profile = getViewport3DVisualProfile("interactive");
 
     expect(
       resolveViewport3DCanvasDpr({
         devicePixelRatio: 2,
-        interactionActive: true,
         profile,
       }),
-    ).toBe(0.75);
+    ).toBe(1.25);
   });
 
   it("uses preserveDrawingBuffer only for capture", () => {

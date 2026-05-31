@@ -156,6 +156,14 @@ const computePerformanceMicrobenchPath = path.join(
   appRoot,
   "src/kernel/performance/computePerformanceMicrobench.test.ts",
 );
+const analysisPlotsModulePath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/AnalysisPlotsModule.tsx",
+);
+const analysisPlotModelPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/analysisPlotModel.ts",
+);
 const broadSessionStatusConsumerPaths = [
   "src/modules/explorer/ExplorerModule.tsx",
   "src/modules/ribbon/RibbonModule.tsx",
@@ -288,6 +296,8 @@ checkFooterTelemetryIsOptIn();
 checkViewportSmokeComputeMetrics();
 checkComputePerformanceSmokeScript();
 checkComputePerformanceMicrobenchCoverage();
+checkAnalysisPlotsStableResourceInputs();
+checkAnalysisPlotDecimation();
 
 if (failures.length > 0) {
   console.error(`Compute performance audit failed:\n${failures.join("\n")}`);
@@ -633,6 +643,7 @@ function checkRuntimeControlSessionStatusSelector() {
     "selectRuntimeCommandControlSessionStatus",
     "runtimeCommandControlSessionStatusEquals",
     "RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS",
+    "previous.run?.run_id !== next.run?.run_id",
   ]);
   requireTokens(controlHook, "useRuntimeCommandControlResourceData", [
     "useSessionStatusSelector(selectRuntimeCommandControlSessionStatus",
@@ -1515,6 +1526,42 @@ function checkComputePerformanceMicrobenchCoverage() {
   ]);
 }
 
+function checkAnalysisPlotsStableResourceInputs() {
+  const source = readFileSync(analysisPlotsModulePath, "utf8");
+  requireTokens(source, "analysis plots stable resource inputs", [
+    'import { useMemo } from "react";',
+    "const ANALYSIS_SCALAR_COLUMNS = Object.freeze([",
+    "columns: ANALYSIS_SCALAR_COLUMNS",
+    "const energyPoints = useMemo(",
+    "const scalarPoints = useMemo(",
+    "const model = useMemo(",
+    "buildLineChartModel(points)",
+    "analysisScalarColumns: ANALYSIS_SCALAR_COLUMNS",
+  ]);
+  forbidTokens(source, "analysis plots stable resource inputs", [
+    'columns: ["step", "e_total", "mx", "my", "mz"]',
+  ]);
+}
+
+function checkAnalysisPlotDecimation() {
+  const source = readFileSync(analysisPlotModelPath, "utf8");
+  requireTokens(source, "analysis plot decimation", [
+    "export const MAX_LINE_CHART_POINTS = 320",
+    "function decimateLinePoints",
+    "points.length <= MAX_LINE_CHART_POINTS",
+    "const finitePoints: LinePoint[] = []",
+    "finitePoints.push(point)",
+    "const pathPoints = decimateLinePoints(finitePoints)",
+    "for (const point of points)",
+    "const path = pathPoints",
+  ]);
+  forbidTokens(source, "analysis plot decimation", [
+    ".filter(",
+    "const path = finitePoints",
+    "finitePoints.map((point, index)",
+  ]);
+}
+
 function checkComputePerformanceSmokeScript() {
   const source = readFileSync(computePerformanceSmokePath, "utf8");
   requireTokens(source, "compute performance smoke", [
@@ -1534,6 +1581,13 @@ function checkComputePerformanceSmokeScript() {
     "commandResponseCount",
     "FORBIDDEN_ACCEPTANCE_RESOURCE_PATHS",
     "assertNoImmediateResultResourceReloads",
+    "COMPUTE_VIEWPORT_GESTURE_FORBIDDEN_REQUEST_PREFIXES",
+    "verifyViewport3DGesturesDuringSolve",
+    "viewportGestureProof",
+    "recordViewportGestureRequests",
+    "previousCameraSignature",
+    "nextCameraSignature = await waitForCameraSignatureChange(",
+    "return nextCameraSignature;",
     "resultResourceRequestCount",
     "isForbiddenAcceptanceResourceUrl",
     "/v2/sessions/current/data/fields",

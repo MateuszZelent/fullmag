@@ -11,6 +11,7 @@ import {
 
 import {
   buildAirboxVisibilityDiagnostic,
+  buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   geometryScopeDisplayPatch,
@@ -268,6 +269,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "airbox", kind: "airbox" },
       }),
     ).toEqual({
+      availableNodeCount: 34668,
       exact: true,
       max: 34668,
       min: 0,
@@ -299,6 +301,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "arch_waveguide", kind: "object" },
       }),
     ).toMatchObject({
+      availableNodeCount: 34229,
       exact: true,
       max: 34229,
     });
@@ -308,8 +311,59 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "cap", kind: "part" },
       }),
     ).toMatchObject({
+      availableNodeCount: 912,
       exact: true,
       max: 912,
+    });
+  });
+
+  it("scales surface arrow budgets to surface node counts", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:arch_waveguide",
+        label: "Arch",
+        node_count: 8,
+        object_id: "arch_waveguide",
+        role: "object",
+        surface_faces: [
+          [0, 1, 2],
+          [2, 3, 4],
+        ],
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "arch_waveguide", kind: "object" },
+      }),
+    ).toEqual({
+      availableNodeCount: 5,
+      exact: true,
+      max: 5,
+      min: 0,
+      step: 1,
+    });
+  });
+
+  it("reports displayed arrow samples against available target nodes", () => {
+    expect(
+      buildVisualizationVectorBudgetDiagnostic({
+        requestedBudget: 12,
+        vectorBudgetRange: {
+          availableNodeCount: 5,
+          exact: true,
+          max: 5,
+          min: 0,
+          step: 1,
+        },
+      }),
+    ).toEqual({
+      availableNodeCount: 5,
+      displayedGlyphCount: 5,
+      exact: true,
+      requestedBudget: 12,
     });
   });
 

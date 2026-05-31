@@ -45,7 +45,6 @@ import {
   opacityFromSettings,
   percentToUnit,
   pointColorFromSettings,
-  resolveCameraInteractionSettings,
   shaderColorFromSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
@@ -169,7 +168,6 @@ function BoundsVolumeWireframe({
 const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   colors,
   fieldModel,
-  interactionActive,
   materialProfile,
   onSelectPart,
   partModel,
@@ -182,7 +180,6 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
 }: {
   colors: Viewport3DColors;
   fieldModel: Viewport3DFieldRenderModel | null;
-  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
@@ -196,10 +193,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const invalidate = useBatchedInvalidate();
   const resolvedSettings =
     resolveAirboxTopologyVisualizationSettings(settings, topologyFreshness);
-  const renderSettings = useMemo(
-    () => resolveCameraInteractionSettings(resolvedSettings, interactionActive),
-    [interactionActive, resolvedSettings],
-  );
+  const renderSettings = resolvedSettings;
   const geometry = useMemo(() => {
     const { surfaceIndices } = partModel;
     if (!surfaceIndices?.length) return null;
@@ -746,7 +740,6 @@ export function AirboxLayerContent({
   colors,
   vectorColorMode,
   fieldModel,
-  interactionActive,
   materialProfile,
   onSelectPart,
   settings,
@@ -758,7 +751,6 @@ export function AirboxLayerContent({
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
-  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   settings: VisualizationTargetSettings;
@@ -785,7 +777,6 @@ export function AirboxLayerContent({
           key={partModel.part.id}
           colors={colors}
           fieldModel={fieldModel}
-          interactionActive={interactionActive}
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}
           partModel={partModel}

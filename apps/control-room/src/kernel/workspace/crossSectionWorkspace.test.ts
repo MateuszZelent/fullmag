@@ -6,11 +6,13 @@ import {
   activeCrossSectionFrameRotationDegrees,
   activeCrossSectionFramePreview,
   beginCrossSectionDraft,
+  beginCrossSectionDraftFromPlot,
   commitCrossSectionDraft,
   crossSectionFramePreviewToClip,
   crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
   updateCrossSectionDraft,
+  updateCrossSectionPlot,
 } from "./crossSectionWorkspace";
 
 const visualizationState = {
@@ -41,7 +43,7 @@ describe("crossSectionWorkspace", () => {
       frameExtent: "universe",
       id: "draft",
       metric: "skewness",
-      name: "Draft Cross-Section",
+      name: "Plot 1",
       plane: "xy",
       positionPercent: 62.5,
     });
@@ -100,6 +102,92 @@ describe("crossSectionWorkspace", () => {
 
     expect(draft?.name).toBe("");
     expect(plot?.name).toBe("Plot 1");
+  });
+
+  it("commits repeated drafts as separate saved plots and keeps stable active references", () => {
+    resetCrossSectionWorkspaceForTests();
+
+    beginCrossSectionDraft(visualizationState);
+    updateCrossSectionDraft({ name: "First cut", positionPercent: 20 });
+    const first = commitCrossSectionDraft();
+    beginCrossSectionDraft(visualizationState);
+    updateCrossSectionDraft({ name: "Second cut", positionPercent: 80 });
+    const second = commitCrossSectionDraft();
+
+    expect(first?.id).toBe("plot-1");
+    expect(second?.id).toBe("plot-2");
+    expect(crossSectionWorkspaceStore.getSnapshot()).toMatchObject({
+      activePlotId: "plot-2",
+      draft: null,
+      plots: [
+        { id: "plot-1", name: "First cut", positionPercent: 20 },
+        { id: "plot-2", name: "Second cut", positionPercent: 80 },
+      ],
+    });
+  });
+
+  it("starts the next draft from a saved plot without replacing that plot", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+    updateCrossSectionDraft({
+      colorScale: "hot",
+      metric: "gamma",
+      name: "Reusable cut",
+      plane: "yz",
+      positionPercent: 33,
+      rotationDegrees: 45,
+    });
+    const plot = commitCrossSectionDraft();
+    if (!plot) throw new Error("Expected committed cross-section plot");
+
+    const draft = beginCrossSectionDraftFromPlot(plot.id);
+
+    expect(draft).toMatchObject({
+      colorScale: "hot",
+      metric: "gamma",
+      name: "Plot 2",
+      plane: "yz",
+      positionPercent: 33,
+      rotationDegrees: 45,
+    });
+    expect(crossSectionWorkspaceStore.getSnapshot().plots).toHaveLength(1);
+  });
+
+  it("edits saved plot settings without changing its object identity", () => {
+    resetCrossSectionWorkspaceForTests();
+    beginCrossSectionDraft(visualizationState);
+    const plot = commitCrossSectionDraft();
+    if (!plot) throw new Error("Expected committed cross-section plot");
+
+    const updated = updateCrossSectionPlot(plot.id, {
+      includeWireframe: false,
+      metric: "min_edge",
+      name: "Moved cut",
+      plane: "xz",
+      positionPercent: 12.5,
+      rotationDegrees: -30,
+      shrinkFactor: 0.7,
+    });
+
+    expect(updated).toMatchObject({
+      id: "plot-1",
+      metric: "min_edge",
+      name: "Moved cut",
+      plane: "xz",
+      positionPercent: 12.5,
+      query: {
+        includeWireframe: false,
+        plane: "xz",
+        positionPercent: 12.5,
+      },
+      renderOptions: {
+        shrinkFactor: 0.7,
+        wireframeVisible: false,
+      },
+      rotationDegrees: -30,
+    });
+    expect(crossSectionWorkspaceStore.getSnapshot().activePlotId).toBe("plot-1");
+    expect(crossSectionWorkspaceStore.getSnapshot().plots).toHaveLength(1);
   });
 
   it("resolves active frame rotation from an editable draft before saved plots", () => {

@@ -107,38 +107,6 @@ export function wireframeOpacityFromSettings(
   return Math.max(0, Math.min(1, opacity * (featureEdges?.opacity ?? 1)));
 }
 
-export function resolveCameraInteractionSettings(
-  settings: VisualizationTargetSettings,
-  interactionActive: boolean,
-): VisualizationTargetSettings {
-  if (
-    !interactionActive ||
-    (!settings.wireframeVisible &&
-      !settings.pointsVisible &&
-      !settings.vectorsVisible)
-  ) {
-    return settings;
-  }
-
-  return {
-    ...settings,
-    boundsVisible:
-      settings.boundsVisible ||
-      (!settings.shaderVisible &&
-        (settings.wireframeVisible ||
-          settings.pointsVisible ||
-          settings.vectorsVisible)),
-    pointsVisible: false,
-    shaderVisible:
-      settings.shaderVisible ||
-      settings.wireframeVisible ||
-      settings.pointsVisible ||
-      settings.vectorsVisible,
-    vectorsVisible: false,
-    wireframeVisible: false,
-  };
-}
-
 function renderableColor(
   value: string | null | undefined,
   fallback: ColorRepresentation,

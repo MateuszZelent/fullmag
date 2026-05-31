@@ -30,9 +30,47 @@ pub(crate) fn build_runtime_status_view(status_code: &str) -> RuntimeStatusView 
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommandLedgerRevisions {
+    pub commands_revision: u64,
+    pub command_completion_revision: u64,
+    pub command_queue_revision: u64,
+}
+
+pub(crate) fn command_queue_revision_from_parts(
+    commands_revision: u64,
+    command_completion_revision: u64,
+) -> u64 {
+    command_completion_revision.saturating_add(commands_revision)
+}
+
+pub(crate) fn command_ledger_revisions(
+    ledger: &VecDeque<TrackedCommandRecord>,
+) -> CommandLedgerRevisions {
+    let commands_revision = ledger.len() as u64;
+    let command_completion_revision = ledger
+        .iter()
+        .filter_map(|record| record.completed_at_unix_ms)
+        .filter_map(|value| u64::try_from(value).ok())
+        .max()
+        .unwrap_or_else(|| ledger.back().map(|record| record.command.seq).unwrap_or(0));
+    CommandLedgerRevisions {
+        commands_revision,
+        command_completion_revision,
+        command_queue_revision: command_queue_revision_from_parts(
+            commands_revision,
+            command_completion_revision,
+        ),
+    }
+}
+
 pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> String {
     if snapshot.session.status == "waiting_for_compute" {
         return snapshot.session.status.clone();
+    }
+
+    if let Some(stage_execution) = snapshot.stage_execution.as_ref() {
+        return stage_execution.runtime_state.as_str().to_string();
     }
 
     snapshot
@@ -490,8 +528,7 @@ fn bump_field_sample_revision(
     if current.field_samples_revision == 0 {
         current.field_samples_revision = (*entry).max(1);
     } else {
-        current.field_samples_revision =
-            next_revision(current.field_samples_revision.max(*entry));
+        current.field_samples_revision = next_revision(current.field_samples_revision.max(*entry));
     }
 }
 
@@ -733,10 +770,49 @@ fn apply_fem_mesh_update(
 
     let changed =
         current.fem_mesh.as_ref().map(fem_mesh_identity) != Some(fem_mesh_identity(&fem_mesh));
+    if changed {
+        clear_mesh_dirty_tags_for_solver_mesh(current, &fem_mesh);
+    }
     current.fem_mesh = Some(fem_mesh);
     if changed {
         bump_mesh_revision(current);
         bump_mesh_build_revision(current);
+    }
+}
+
+fn clear_mesh_dirty_tags_for_solver_mesh(
+    current: &mut SessionStateResponse,
+    mesh: &fullmag_runner::FemMeshPayload,
+) {
+    let Some(scene) = current.scene_document.as_mut() else {
+        return;
+    };
+    let scene_object_ids = scene
+        .objects
+        .iter()
+        .filter(|object| object.visible)
+        .map(|object| object.id.clone())
+        .collect::<BTreeSet<_>>();
+    if scene_object_ids.is_empty() {
+        return;
+    }
+
+    let mesh_object_ids = mesh
+        .object_segments
+        .iter()
+        .map(|segment| segment.object_id.clone())
+        .chain(
+            mesh.mesh_parts
+                .iter()
+                .filter_map(|part| part.object_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    if !scene_object_ids.is_subset(&mesh_object_ids) {
+        return;
+    }
+
+    for object in &mut scene.objects {
+        object.tags.retain(|tag| tag != "mesh:dirty");
     }
 }
 
@@ -932,7 +1008,11 @@ pub(crate) fn apply_current_live_snapshot(
 ) -> Result<(), ApiError> {
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = req.latest_fields.as_ref() {
-        affected_field_quantities.extend(latest_fields.entries().map(|(quantity, _)| quantity.clone()));
+        affected_field_quantities.extend(
+            latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
     }
     if req.clear_preview_cache {
         affected_field_quantities.extend(
@@ -943,16 +1023,13 @@ pub(crate) fn apply_current_live_snapshot(
         );
     }
     if let Some(preview_fields) = req.preview_fields.as_ref() {
-        affected_field_quantities.extend(
-            preview_fields
-                .iter()
-                .map(|field| field.quantity.clone()),
-        );
+        affected_field_quantities.extend(preview_fields.iter().map(|field| field.quantity.clone()));
     }
     if req.live_state.is_some() || req.fem_mesh.is_some() {
         affected_field_quantities.insert("m".to_string());
     }
-    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
+    let previous_field_sources =
+        capture_effective_field_sources(current, &affected_field_quantities);
     let previous_stage_execution = current.stage_execution.clone();
     let flags = CurrentLiveApplyFlags {
         has_metadata: req.metadata.is_some(),
@@ -980,7 +1057,10 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(mut stage_execution) = req.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
-        if stage_execution_changed(previous_stage_execution.as_ref(), current.stage_execution.as_ref()) {
+        if stage_execution_changed(
+            previous_stage_execution.as_ref(),
+            current.stage_execution.as_ref(),
+        ) {
             bump_stage_execution_revision(current);
         }
     }
@@ -1054,7 +1134,10 @@ pub(crate) fn apply_current_live_session_frame(
     if let Some(mut stage_execution) = frame.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
-        if stage_execution_changed(previous_stage_execution.as_ref(), current.stage_execution.as_ref()) {
+        if stage_execution_changed(
+            previous_stage_execution.as_ref(),
+            current.stage_execution.as_ref(),
+        ) {
             bump_stage_execution_revision(current);
         }
     }
@@ -1075,7 +1158,8 @@ pub(crate) fn apply_current_live_runtime_frame(
     if frame.live_state.is_some() || frame.fem_mesh.is_some() {
         affected_field_quantities.insert("m".to_string());
     }
-    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
+    let previous_field_sources =
+        capture_effective_field_sources(current, &affected_field_quantities);
     if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
@@ -1142,7 +1226,11 @@ pub(crate) fn apply_current_live_field_frame(
 ) -> Result<(), ApiError> {
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = frame.latest_fields.as_ref() {
-        affected_field_quantities.extend(latest_fields.entries().map(|(quantity, _)| quantity.clone()));
+        affected_field_quantities.extend(
+            latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
     }
     if frame.clear_preview_cache {
         affected_field_quantities.extend(
@@ -1153,13 +1241,10 @@ pub(crate) fn apply_current_live_field_frame(
         );
     }
     if let Some(preview_fields) = frame.preview_fields.as_ref() {
-        affected_field_quantities.extend(
-            preview_fields
-                .iter()
-                .map(|field| field.quantity.clone()),
-        );
+        affected_field_quantities.extend(preview_fields.iter().map(|field| field.quantity.clone()));
     }
-    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
+    let previous_field_sources =
+        capture_effective_field_sources(current, &affected_field_quantities);
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
     if let Some(latest_fields) = frame.latest_fields {
@@ -1567,6 +1652,51 @@ mod tests {
             current.runtime_status.kind,
             RuntimeStatus::WaitingForCompute
         );
+        assert!(!current.runtime_status.is_busy);
+        assert!(current.runtime_status.can_accept_commands);
+    }
+
+    #[test]
+    fn runtime_status_prefers_stage_execution_over_stale_live_state() {
+        let mut current = test_current_snapshot();
+        current.session.status = "awaiting_command".to_string();
+        current.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::AwaitingCommand,
+            None,
+            StageLifecycleState::Skipped,
+        ));
+        current.live_state = Some(LiveState {
+            status: "paused".to_string(),
+            updated_at_unix_ms: 1_700_000_000_000,
+            latest_step: StepUpdateView {
+                step: 0,
+                time: 0.0,
+                dt: 0.0,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+
+        refresh_runtime_status(&mut current);
+
+        assert_eq!(effective_runtime_status_code(&current), "awaiting_command");
+        assert_eq!(current.runtime_status.kind, RuntimeStatus::AwaitingCommand);
         assert!(!current.runtime_status.is_busy);
         assert!(current.runtime_status.can_accept_commands);
     }

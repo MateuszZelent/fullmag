@@ -42,6 +42,7 @@ const CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY =
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH;
 const CROSS_SECTION_QUALITY_RESOURCE_BASE_KEY =
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH;
+const DEFAULT_CROSS_SECTION_IMAGE_RESOLUTION = 1024;
 
 export function resolveCrossSectionResourceKey(
   query: CrossSectionQuery,
@@ -69,7 +70,7 @@ export function resolveCrossSectionImageResourceKey(
   params.set("metric", stableQuery.metric);
   params.set("plane", stableQuery.plane);
   params.set("position_percent", String(stableQuery.positionPercent));
-  params.set("resolution", String(stableQuery.resolution ?? 4096));
+  params.set("resolution", String(stableQuery.resolution));
   params.set("rotation_degrees", String(stableQuery.rotationDegrees ?? 0));
   params.set("shrink_factor", String(stableQuery.shrinkFactor ?? 1));
   params.set("wireframe", String(stableQuery.wireframe ?? true));
@@ -269,7 +270,7 @@ function normalizeCrossSectionImageQuery(
     metric: query.metric,
     plane: query.plane,
     positionPercent: query.positionPercent,
-    resolution: query.resolution ?? 4096,
+    resolution: query.resolution ?? DEFAULT_CROSS_SECTION_IMAGE_RESOLUTION,
     rotationDegrees: query.rotationDegrees ?? 0,
     shrinkFactor: query.shrinkFactor ?? 1,
     wireframe: query.wireframe ?? true,

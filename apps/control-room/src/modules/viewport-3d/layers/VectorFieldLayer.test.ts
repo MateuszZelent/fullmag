@@ -37,10 +37,14 @@ describe("VectorFieldLayer performance contracts", () => {
       "const VECTOR_GLYPH_UPLOAD_BATCH_SIZE",
     );
     expect(vectorFieldLayerSource).toContain(
+      "const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS",
+    );
+    expect(vectorFieldLayerSource).toContain(
       "function buildVectorGlyphUploadBatches",
     );
     expect(vectorFieldLayerSource).toContain("requestVectorGlyphUploadTask");
     expect(vectorFieldLayerSource).toContain("cancelVectorGlyphUploadTask");
+    expect(vectorFieldLayerSource).toContain("addUpdateRange");
     expect(vectorFieldLayerSource).toContain(
       "fullmag.viewport3d.buildVectorGlyphInstances",
     );
@@ -53,6 +57,8 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).not.toContain(
       "for (let index = 0; index < glyphs.count; index += 1)",
     );
+    expect(vectorFieldLayerSource).not.toContain("requestAnimationFrame");
+    expect(vectorFieldLayerSource).not.toContain("setTimeout(callback, 0)");
   });
 });
 

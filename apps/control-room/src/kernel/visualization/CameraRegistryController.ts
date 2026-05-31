@@ -13,7 +13,6 @@ export type CameraRegistryFlushReason =
   | "idle"
   | "manual"
   | "pagehide"
-  | "periodic"
   | "visibilitychange";
 type CameraRegistrySource = "default" | "local" | "remote" | "sync";
 
@@ -38,7 +37,6 @@ export interface CameraRegistrySnapshot {
   dirty: boolean;
   error: Error | null;
   inflightCamera: CameraRegistryCameraState | null;
-  interactionActive: boolean;
   lastChangedAt: number | null;
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
@@ -58,12 +56,10 @@ interface CameraRegistryControllerOptions {
   api: CameraRegistryApi;
   documentTarget?: CameraRegistryDocumentTarget | null;
   idleFlushMs?: number | null;
-  intervalMs?: number;
   now?: () => number;
   windowTarget?: CameraRegistryEventTarget | null;
 }
 
-const DEFAULT_CAMERA_REGISTRY_SYNC_INTERVAL_MS = 60_000;
 const DEFAULT_CAMERA_REGISTRY_IDLE_FLUSH_MS = 8_000;
 
 export const DEFAULT_CAMERA_REGISTRY_STATE: CameraRegistryCameraState = {
@@ -80,7 +76,6 @@ const INITIAL_SNAPSHOT: CameraRegistrySnapshot = {
   dirty: false,
   error: null,
   inflightCamera: null,
-  interactionActive: false,
   lastChangedAt: null,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
@@ -100,7 +95,6 @@ export class CameraRegistryController {
   private readonly api: CameraRegistryApi;
   private readonly documentTarget: CameraRegistryDocumentTarget | null;
   private readonly idleFlushMs: number | null;
-  private readonly intervalMs: number;
   private readonly listeners = new Set<CameraRegistryListener>();
   private readonly now: () => number;
   private flushPromise: Promise<void> | null = null;
@@ -114,9 +108,10 @@ export class CameraRegistryController {
   };
   private idleFlushId: ReturnType<typeof setTimeout> | null = null;
   private inflightCameraInvalidationSuppressed = false;
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private interactionActive = false;
   private localDirty = false;
   private snapshot: CameraRegistrySnapshot = INITIAL_SNAPSHOT;
+  private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private readonly windowTarget: CameraRegistryEventTarget | null;
 
@@ -125,7 +120,6 @@ export class CameraRegistryController {
     documentTarget =
       typeof document === "undefined" ? null : document,
     idleFlushMs = DEFAULT_CAMERA_REGISTRY_IDLE_FLUSH_MS,
-    intervalMs = DEFAULT_CAMERA_REGISTRY_SYNC_INTERVAL_MS,
     now = Date.now,
     windowTarget =
       typeof window === "undefined" ? null : window,
@@ -133,7 +127,6 @@ export class CameraRegistryController {
     this.api = api;
     this.documentTarget = documentTarget;
     this.idleFlushMs = idleFlushMs;
-    this.intervalMs = intervalMs;
     this.now = now;
     this.windowTarget = windowTarget;
   }
@@ -150,23 +143,12 @@ export class CameraRegistryController {
 
   beginInteraction(): void {
     this.clearIdleFlushTimer();
-    if (this.snapshot.interactionActive) return;
-    this.snapshot = {
-      ...this.snapshot,
-      interactionActive: true,
-      version: this.snapshot.version + 1,
-    };
-    this.notify();
+    this.interactionActive = true;
   }
 
   endInteraction(): void {
-    if (!this.snapshot.interactionActive) return;
-    this.snapshot = {
-      ...this.snapshot,
-      interactionActive: false,
-      version: this.snapshot.version + 1,
-    };
-    this.notify();
+    if (!this.interactionActive) return;
+    this.interactionActive = false;
 
     if (this.snapshot.dirty) {
       this.scheduleIdleFlush();
@@ -203,7 +185,7 @@ export class CameraRegistryController {
     let error = previous.error;
     let lastSource = previous.lastSource;
 
-    if (!dirty && !previous.interactionActive) {
+    if (!dirty && !this.interactionActive) {
       camera = remoteCamera;
       error = null;
       lastSource = source;
@@ -256,11 +238,8 @@ export class CameraRegistryController {
   }
 
   flushDue(reason: CameraRegistryFlushReason = "manual"): Promise<void> {
-    if (this.snapshot.interactionActive) {
+    if (this.interactionActive) {
       this.setPendingFlushReason(reason);
-      return Promise.resolve();
-    }
-    if (reason === "periodic" && !this.isDocumentVisible()) {
       return Promise.resolve();
     }
     if (!this.snapshot.dirty) {
@@ -359,10 +338,8 @@ export class CameraRegistryController {
   }
 
   start(): void {
-    if (this.intervalId !== null) return;
-    this.intervalId = setInterval(() => {
-      void this.flushDue("periodic");
-    }, this.intervalMs);
+    if (this.started) return;
+    this.started = true;
     this.documentTarget?.addEventListener(
       "visibilitychange",
       this.handleVisibilityChange,
@@ -374,9 +351,8 @@ export class CameraRegistryController {
   }
 
   stop(): void {
-    if (this.intervalId === null) return;
-    clearInterval(this.intervalId);
-    this.intervalId = null;
+    if (!this.started) return;
+    this.started = false;
     this.clearIdleFlushTimer();
     this.documentTarget?.removeEventListener(
       "visibilitychange",
@@ -396,7 +372,6 @@ export class CameraRegistryController {
       this.snapshot.dirty === next.dirty &&
       this.snapshot.error === next.error &&
       cameraStatesEqualNullable(this.snapshot.inflightCamera, next.inflightCamera) &&
-      this.snapshot.interactionActive === next.interactionActive &&
       this.snapshot.lastChangedAt === next.lastChangedAt &&
       this.snapshot.lastLocalChangedAt === next.lastLocalChangedAt &&
       this.snapshot.lastRemoteRevision === next.lastRemoteRevision &&
@@ -437,7 +412,7 @@ export class CameraRegistryController {
   }
 
   private scheduleIdleFlush(): void {
-    if (this.intervalId === null || this.idleFlushMs === null) return;
+    if (!this.started || this.idleFlushMs === null) return;
     this.clearIdleFlushTimer();
     this.setPendingFlushReason("idle");
     this.idleFlushId = setTimeout(() => {

@@ -14,6 +14,7 @@ import {
   viewport3DEnabledFromBrowserConfig,
   viewport3DFdmCuboidLayerEnabledFromBrowserConfig,
   viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig,
+  viewport3DOrbitDebugEnabledFromBrowserConfig,
   viewport3DOverlayLayersEnabledFromBrowserConfig,
   viewport3DOrientationHudEnabledFromBrowserConfig,
   viewport3DPostProcessingEnabledFromBrowserConfig,
@@ -33,10 +34,17 @@ describe("browser fullmag config", () => {
     );
   });
 
-  it("allows performance diagnostics to be disabled independently from viewport 3D", () => {
-    expect(performanceDiagnosticsEnabledFromBrowserConfig()).toBe(true);
+  it("keeps performance diagnostics opt-in so production viewport work stays quiet", () => {
+    expect(performanceDiagnosticsEnabledFromBrowserConfig()).toBe(false);
+    expect(performanceDiagnosticsEnabledFromBrowserConfig({})).toBe(false);
     expect(
       performanceDiagnosticsEnabledFromBrowserConfig({
+        enablePerformanceDiagnostics: true,
+      }),
+    ).toBe(true);
+    expect(
+      performanceDiagnosticsEnabledFromBrowserConfig({
+        enablePerformanceDiagnostics: true,
         disablePerformanceDiagnostics: true,
       }),
     ).toBe(false);
@@ -151,5 +159,20 @@ describe("browser fullmag config", () => {
         disableViewport3DTopologyMeshLayer: true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps temporary viewport 3D orbit debug controls disabled by default", () => {
+    expect(viewport3DOrbitDebugEnabledFromBrowserConfig()).toBe(false);
+    expect(viewport3DOrbitDebugEnabledFromBrowserConfig({})).toBe(false);
+    expect(
+      viewport3DOrbitDebugEnabledFromBrowserConfig({
+        enableViewport3DOrbitDebug: false,
+      }),
+    ).toBe(false);
+    expect(
+      viewport3DOrbitDebugEnabledFromBrowserConfig({
+        enableViewport3DOrbitDebug: true,
+      }),
+    ).toBe(true);
   });
 });

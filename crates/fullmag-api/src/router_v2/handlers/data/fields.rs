@@ -656,6 +656,51 @@ fn apply_field_scope(
     scoped
 }
 
+fn resolve_field_vector_sample_limit(
+    query: &FieldVectorQuery,
+    scope: Option<&ResolvedFieldScope>,
+) -> Result<Option<usize>, ApiError> {
+    let Some(max_samples) = query.max_samples else {
+        return Ok(None);
+    };
+    if max_samples == 0 {
+        return Err(ApiError::bad_request(
+            "max_samples must be greater than zero",
+        ));
+    }
+    if scope.is_none() {
+        return Err(ApiError::bad_request(
+            "max_samples requires a scoped FEM field query",
+        ));
+    }
+    Ok(Some(max_samples as usize))
+}
+
+fn sample_field_scope(
+    mut scope: ResolvedFieldScope,
+    max_samples: Option<usize>,
+) -> ResolvedFieldScope {
+    let Some(max_samples) = max_samples else {
+        return scope;
+    };
+    if max_samples >= scope.node_indices.len() {
+        return scope;
+    }
+
+    let sample_count = max_samples.max(1);
+    let stride = (scope.node_indices.len() / sample_count).max(1);
+    scope.node_indices = (0..sample_count)
+        .filter_map(|sample| scope.node_indices.get(sample * stride).copied())
+        .collect();
+    scope
+}
+
+fn field_vector_sample_cache_token(max_samples: Option<usize>) -> String {
+    max_samples
+        .map(|value| format!(":max_samples={value}"))
+        .unwrap_or_default()
+}
+
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
 
 #[utoipa::path(
@@ -761,6 +806,8 @@ pub async fn get_field_vector(
         raw_point_count,
         quantity_id,
     )?;
+    let sample_limit = resolve_field_vector_sample_limit(&query, resolved_scope.as_ref())?;
+    let resolved_scope = resolved_scope.map(|scope| sample_field_scope(scope, sample_limit));
 
     drop(guard);
 
@@ -768,8 +815,9 @@ pub async fn get_field_vector(
         .as_ref()
         .map(ResolvedFieldScope::cache_token)
         .unwrap_or_else(|| "full-domain".to_string());
+    let sample_token = field_vector_sample_cache_token(sample_limit);
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}",
+        "{}:{scope_token}{sample_token}",
         component_etag_token(quantity_id, field_revision, gen_id, &component)
     ));
     let scoped_grid = resolved_scope
@@ -790,7 +838,7 @@ pub async fn get_field_vector(
         quantity_id,
         field_revision,
         gen_id,
-        &format!("{comp_key}:{scope_token}"),
+        &format!("{comp_key}:{scope_token}{sample_token}"),
     );
     {
         let mut proj_cache = state.quantity_data_plane.projection_cache.lock().await;

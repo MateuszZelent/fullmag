@@ -99,6 +99,7 @@ pub(crate) struct ControlRoomGuard {
     web_port: Option<u16>,
     api_child: Option<std::process::Child>,
     frontend_child: Option<std::process::Child>,
+    stop_frontend_on_drop: bool,
 }
 
 impl ControlRoomGuard {
@@ -107,6 +108,7 @@ impl ControlRoomGuard {
             web_port: None,
             api_child: None,
             frontend_child: None,
+            stop_frontend_on_drop: false,
         }
     }
 
@@ -115,21 +117,27 @@ impl ControlRoomGuard {
         api_child: Option<std::process::Child>,
         frontend_child: Option<std::process::Child>,
     ) -> Self {
+        let stop_frontend_on_drop = frontend_child.is_some();
         Self {
             web_port: Some(web_port),
             api_child,
             frontend_child,
+            stop_frontend_on_drop,
         }
     }
 }
 
 impl Drop for ControlRoomGuard {
     fn drop(&mut self) {
+        let stop_frontend_on_drop = self.stop_frontend_on_drop;
         if let Some(mut child) = self.frontend_child.take() {
             terminate_child_process(&mut child);
         }
         if let Some(mut child) = self.api_child.take() {
             terminate_child_process(&mut child);
+        }
+        if !stop_frontend_on_drop {
+            return;
         }
         let Some(web_port) = self.web_port else {
             return;
@@ -139,6 +147,18 @@ impl Drop for ControlRoomGuard {
             format!("tearing down control room (port {web_port})"),
         );
         stop_control_room_frontend_processes(web_port);
+    }
+}
+
+#[cfg(test)]
+mod control_room_guard_tests {
+    use super::ControlRoomGuard;
+
+    #[test]
+    fn reused_frontend_is_not_stopped_on_drop() {
+        let guard = ControlRoomGuard::active(3100, None, None);
+
+        assert!(!guard.stop_frontend_on_drop);
     }
 }
 

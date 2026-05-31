@@ -6,19 +6,27 @@ import type {
   CrossSectionQualityMetric,
   CrossSectionQualityQuery,
 } from "@/kernel/api/apiTypes";
+import { useKernel } from "@/kernel/KernelContext";
 import {
   useCrossSectionQualityResource,
   useCrossSectionResource,
 } from "@/kernel/resources/crossSectionResources";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
-import { activeCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
+import {
+  activeCrossSectionPlot,
+  beginCrossSectionDraftFromPlot,
+  updateCrossSectionPlot,
+  type CrossSectionDraft,
+  type CrossSectionPlot,
+} from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
 import {
   buildCrossSectionIntersectionStatistics,
   buildCrossSectionQualityStatistics,
 } from "@/shared/domain/mesh/crossSectionStatistics";
+import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { InspectorSection } from "../primitives/InspectorSection";
@@ -30,11 +38,13 @@ import {
 } from "./MeshResourceView";
 import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 import { CrossSectionQualityChart } from "./CrossSectionQualityChart";
+import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
 
 const DEFAULT_METRIC: CrossSectionQualityMetric = "skewness";
 const QUALITY_THRESHOLD = 0.1;
 
 export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
+  const kernel = useKernel();
   const visualizationState = useVisualizationStateResource();
   const workspace = useCrossSectionWorkspaceSelector((state) => state);
   const draftMode = selection.ref?.type === "cross-section-draft";
@@ -106,32 +116,71 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
     crossSection.data.parentElementIds,
     quality.data?.perElementQuality ?? null,
   );
+  const duplicateSelectedPlot = () => {
+    if (!selectedPlot) return;
+    const draft = beginCrossSectionDraftFromPlot(selectedPlot.id);
+    if (!draft) return;
+    const nodeId = "model:visualizations-2d:draft";
+    kernel.selection.set(
+      {
+        kind: "mesh.cross-section.draft",
+        label: draft.name,
+        nodeId,
+        objectId: null,
+        ref: {
+          draftId: "draft",
+          kind: "mesh.cross-section.draft",
+          nodeId,
+          type: "cross-section-draft",
+          visualizationTargetId: "cross-section:draft",
+        },
+      },
+      "inspector",
+    );
+    kernel.layout.setActiveViewportMainModule("cross-section-image");
+    kernel.layout.setFocusedSlot("viewport-main");
+    kernel.layout.setPanelVisible("right", true);
+  };
 
   return (
     <div className="fm-cross-section-inspector">
-      <InspectorSection title="Cut Plane">
-        <MeshResourceFields
-          fields={[
-            ...(selectedPlot
-              ? [{ label: "Plot", value: selectedPlot.name }]
-              : []),
-            { label: "Plane", value: query.plane.toUpperCase() },
-            { label: "Frame", value: formatFrameExtent(frameExtent) },
-            {
-              label: "Position",
-              unit: "%",
-              value: formatValue(query.positionPercent),
-            },
-            {
-              label: "Rotation",
-              unit: "deg",
-              value: formatValue(rotationDegrees),
-            },
-            { label: "Quality metric", value: metric },
-            { label: "Wireframe", value: query.includeWireframe ? "shown" : "hidden" },
-          ]}
+      {selectedPlot ? (
+        <CrossSectionSettingsEditor
+          value={settingsValueFromPlot(selectedPlot)}
+          onChange={(patch) => updateCrossSectionPlot(selectedPlot.id, patch)}
+          action={
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={duplicateSelectedPlot}
+            >
+              New Image
+            </Button>
+          }
         />
-      </InspectorSection>
+      ) : (
+        <InspectorSection title="Cut Plane">
+          <MeshResourceFields
+            fields={[
+              { label: "Plane", value: query.plane.toUpperCase() },
+              { label: "Frame", value: formatFrameExtent(frameExtent) },
+              {
+                label: "Position",
+                unit: "%",
+                value: formatValue(query.positionPercent),
+              },
+              {
+                label: "Rotation",
+                unit: "deg",
+                value: formatValue(rotationDegrees),
+              },
+              { label: "Quality metric", value: metric },
+              { label: "Wireframe", value: query.includeWireframe ? "shown" : "hidden" },
+            ]}
+          />
+        </InspectorSection>
+      )}
 
       <InspectorSection title="Cross-Section Statistics">
         <MeshResourceFields
@@ -189,6 +238,23 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       </InspectorSection>
     </div>
   );
+}
+
+function settingsValueFromPlot(plot: CrossSectionPlot): CrossSectionDraft {
+  return {
+    colorScale: plot.renderOptions.colorScale,
+    edgeWidth: plot.renderOptions.edgeWidth,
+    filterExpression: plot.renderOptions.filterExpression,
+    frameExtent: plot.frameExtent,
+    id: "draft",
+    includeWireframe: plot.renderOptions.wireframeVisible,
+    metric: plot.metric,
+    name: plot.name,
+    plane: plot.plane,
+    positionPercent: plot.positionPercent,
+    rotationDegrees: plot.rotationDegrees,
+    shrinkFactor: plot.renderOptions.shrinkFactor,
+  };
 }
 
 function polygonQualitySamples(

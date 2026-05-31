@@ -49,7 +49,6 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   pointColorFromSettings,
-  resolveCameraInteractionSettings,
   resolveMeshPartSurfaceMaterialColor,
   shaderUsesVertexColors,
   surfaceScalarColorModeFromSettings,
@@ -63,7 +62,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   colors,
   vectorColorMode,
   fieldModel,
-  interactionActive,
   materialProfile,
   onSelectPart,
   partModel,
@@ -77,7 +75,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
-  interactionActive: boolean;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
@@ -89,10 +86,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const invalidate = useBatchedInvalidate();
-  const renderSettings = useMemo(
-    () => resolveCameraInteractionSettings(settings, interactionActive),
-    [interactionActive, settings],
-  );
+  const renderSettings = settings;
   const geometry = useMemo(() => {
     if (!topologyModel) return null;
     const surfaceIndices = partModel.surfaceIndices;

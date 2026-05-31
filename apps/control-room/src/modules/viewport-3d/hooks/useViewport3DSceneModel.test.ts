@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import {
-  resolveCommittedViewport3DFieldVector,
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
   resolveViewport3DSceneCameraView,
+  resolveViewport3DScopedPartVectorFieldRequests,
+  resolveViewport3DScopedVectorFieldQuery,
   resolveViewport3DTargetFieldQuery,
 } from "./useViewport3DSceneModel";
 import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
@@ -110,6 +111,30 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("adds sample limits only for scoped vector-only field queries", () => {
+    expect(
+      resolveViewport3DScopedVectorFieldQuery({
+        maxSamples: 384,
+        surfaceColorMode: null,
+        vectorsVisible: true,
+      }),
+    ).toEqual({
+      component: "full",
+      max_samples: 384,
+      scope_kind: "full",
+    });
+    expect(
+      resolveViewport3DScopedVectorFieldQuery({
+        maxSamples: 384,
+        surfaceColorMode: "magnitude",
+        vectorsVisible: true,
+      }),
+    ).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+  });
+
   it("does not let scoped airbox vectors force a full-domain primary field request", () => {
     const primaryOptions = resolveViewport3DPrimaryFieldRenderOptions({
       fieldRenderOptions: {
@@ -149,6 +174,81 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("keeps vector-only magnetic parts on scoped sampled field requests", () => {
+    const part = { id: "part:arch_waveguide" };
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: false,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 512,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      magneticParts: [{ part }] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests).toEqual(
+      new Map([
+        [
+          "part:arch_waveguide",
+          {
+            quantityId: "m",
+            query: {
+              component: "full",
+              max_samples: 512,
+              scope_kind: "full",
+            },
+          },
+        ],
+      ]),
+    );
+
+    const primaryOptions = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part:arch_waveguide", 512]]),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: false,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 512,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      magneticParts: [{ part }] as never,
+      quantityId: "m",
+      scopedVectorOnlyPartIds: new Set(["part:arch_waveguide"]),
+      vectorDomain: "auto",
+    });
+
+    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryOptions)).toBe(false);
+  });
+
+  it("keeps scalar-colored magnetic parts on the unsampled primary path", () => {
+    const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: true,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 512,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      magneticParts: [{ part: { id: "part:arch_waveguide" } }] as never,
+      vectorDomain: "auto",
+    });
+
+    expect(scopedRequests.size).toBe(0);
+  });
+
   it("consumes visualization resources separately from the camera registry", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -156,13 +256,22 @@ describe("useViewport3DSceneModel", () => {
       'import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";',
     );
     expect(source).toContain(
-      'import { useCameraRegistrySnapshot } from "@/kernel/visualization/useCameraRegistry";',
+      'import { useCameraRegistryCamera } from "@/kernel/visualization/useCameraRegistry";',
     );
     expect(source).toContain("const visualizationState = useVisualizationStateResource();");
-    expect(source).toContain("const cameraRegistrySnapshot = useCameraRegistrySnapshot();");
+    expect(source).toContain("const cameraRegistryCamera = useCameraRegistryCamera();");
     expect(source).toContain("const cameraView = resolveViewport3DSceneCameraView({");
     expect(source).toContain("const cameraResource = cameraView.cameraResource;");
     expect(source).not.toContain("useViewport3DVisualizationState");
+  });
+
+  it("subscribes to camera registry camera data without rendering on interactionActive flips", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("useCameraRegistryCamera()");
+    expect(source).not.toContain("useCameraRegistrySnapshot()");
+    expect(source).not.toContain("interactionActive: cameraView.interactionActive");
+    expect(source).not.toContain("resolveCommittedViewport3DFieldVector({");
   });
 
   it("observes backend camera state in the kernel registry without remote camera overwrite logic in the scene model", () => {
@@ -227,119 +336,40 @@ describe("useViewport3DSceneModel", () => {
 
     expect(
       resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: registryCamera,
-          interactionActive: true,
-        },
+        cameraRegistryCamera: registryCamera,
         commandState,
       }).cameraState,
     ).toEqual(commandState.camera);
     expect(
       resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: {
-            ...registryCamera,
-            orthographic_scale: 2.5e-6,
-            projection: "orthographic",
-          },
-          interactionActive: true,
+        cameraRegistryCamera: {
+          ...registryCamera,
+          orthographic_scale: 2.5e-6,
+          projection: "orthographic",
         },
         commandState,
       }).cameraOrthographicScale,
     ).toBe(4e-6);
     expect(
       resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: {
-            ...registryCamera,
-            orthographic_scale: 2.5e-6,
-            projection: "orthographic",
-          },
-          interactionActive: false,
+        cameraRegistryCamera: {
+          ...registryCamera,
+          orthographic_scale: 2.5e-6,
+          projection: "orthographic",
         },
         commandState,
       }).cameraState,
     ).toEqual(commandState.camera);
     expect(
       resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: {
-            ...registryCamera,
-            orthographic_scale: 2.5e-6,
-            projection: "orthographic",
-          },
-          interactionActive: false,
+        cameraRegistryCamera: {
+          ...registryCamera,
+          orthographic_scale: 2.5e-6,
+          projection: "orthographic",
         },
         commandState,
       }).cameraOrthographicScale,
     ).toBe(4e-6);
-  });
-
-  it("exposes the camera interaction state to the 3D scene", () => {
-    const commandState = {
-      camera: DEFAULT_VIEWPORT_3D_CAMERA_STATE,
-      widgets: {
-        cameraOrthographicScale: 4e-6,
-        cameraProjection: "perspective",
-      },
-    } as Pick<Viewport3DCommandState, "camera" | "widgets">;
-
-    expect(
-      resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: DEFAULT_CAMERA_REGISTRY_STATE,
-          interactionActive: true,
-        },
-        commandState,
-      }).interactionActive,
-    ).toBe(true);
-    expect(
-      resolveViewport3DSceneCameraView({
-        cameraRegistrySnapshot: {
-          camera: DEFAULT_CAMERA_REGISTRY_STATE,
-          interactionActive: false,
-        },
-        commandState,
-      }).interactionActive,
-    ).toBe(false);
-  });
-
-  it("keeps the committed field vector stable while the camera interaction is active", () => {
-    const current = {
-      quantityId: "m",
-      values: new Float64Array([1, 0, 0]),
-    } as never;
-    const next = {
-      quantityId: "m",
-      values: new Float64Array([0, 1, 0]),
-    } as never;
-
-    expect(
-      resolveCommittedViewport3DFieldVector({
-        current,
-        interactionActive: true,
-        next,
-      }),
-    ).toBe(current);
-  });
-
-  it("adopts the latest field vector once camera interaction stops", () => {
-    const current = {
-      quantityId: "m",
-      values: new Float64Array([1, 0, 0]),
-    } as never;
-    const next = {
-      quantityId: "m",
-      values: new Float64Array([0, 1, 0]),
-    } as never;
-
-    expect(
-      resolveCommittedViewport3DFieldVector({
-        current,
-        interactionActive: false,
-        next,
-      }),
-    ).toBe(next);
   });
 
   it("builds the FDM instance model once in the scene model without coupling solid rendering to field revisions", () => {

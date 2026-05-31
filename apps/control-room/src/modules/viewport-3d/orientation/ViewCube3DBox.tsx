@@ -25,8 +25,18 @@ import {
   type ViewCubeTargetKind,
 } from "./viewCubeModel";
 
-export type OrbitControlsHandle = {
+export type ViewportCameraControlsHandle = {
   enabled?: boolean;
+  getTarget?: (out: Vector3, receiveEndValue?: boolean) => Vector3;
+  setLookAt?: (
+    positionX: number,
+    positionY: number,
+    positionZ: number,
+    targetX: number,
+    targetY: number,
+    targetZ: number,
+    enableTransition?: boolean,
+  ) => Promise<void>;
   target?: Vector3;
   update?: (delta?: number) => void;
 };
@@ -93,7 +103,7 @@ export function ViewCube3DBox({
   onSnap,
 }: {
   colors: Viewport3DColors;
-  controls?: OrbitControlsHandle;
+  controls?: ViewportCameraControlsHandle;
   onOrbit: (deltaX: number) => void;
   onOrbitEnd: () => void;
   onSnap: (direction: Direction3) => void;
@@ -206,7 +216,7 @@ function OrbitRing3D({
   onOrbitEnd,
 }: {
   colors: Viewport3DColors;
-  controls?: OrbitControlsHandle;
+  controls?: ViewportCameraControlsHandle;
   onOrbit: (dx: number) => void;
   onOrbitEnd: () => void;
 }) {

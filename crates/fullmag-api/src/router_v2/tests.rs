@@ -4630,6 +4630,142 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
 }
 
 #[tokio::test]
+async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 43;
+    scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(sample_fem_mesh_payload_with_manifest()),
+            },
+        )
+        .expect("snapshot should apply");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source_scene_revision"], 43);
+}
+
+#[tokio::test]
+async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
+    let state = test_app_state_with_live_session().await;
+    let mesh = sample_fem_mesh_payload_with_manifest();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.revision = 43;
+        snapshot.scene_document = Some(scene);
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(mesh.clone()),
+            },
+        )
+        .expect("snapshot should apply");
+    }
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let scene = snapshot.scene_document.as_mut().expect("scene exists");
+        scene.revision = 44;
+        scene.objects[0].tags.push("mesh:dirty".to_string());
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(mesh),
+            },
+        )
+        .expect("snapshot should apply");
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source_scene_revision"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn commands_endpoint_rejects_public_remesh_variant() {
     let app = test_router_with_session().await;
 
@@ -7866,15 +8002,31 @@ async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
 async fn commands_endpoint_validates_runtime_precondition_against_effective_status() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.session.status = "awaiting_command".into();
+        snapshot.session.status = "cancelled".into();
         snapshot.stage_execution = Some(StageExecutionState {
             total_stages: 1,
             completed_stage_indexes: Vec::new(),
-            stages: Vec::new(),
-            stage_statuses: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                stage_id: Some("stage-000".into()),
+                kind: Some("relax".into()),
+                status: StageLifecycleState::Cancelled,
+                command_id: Some("cmd-solve".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_001_000),
+                reason: Some(fullmag_ir::StageStopReason::UserCancelled),
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Cancelled],
             active_stage_index: None,
             active_stage_kind: None,
-            runtime_state: RuntimeLifecycleState::Cancelled,
+            runtime_state: RuntimeLifecycleState::AwaitingCommand,
         });
         snapshot.state_version = 9;
         crate::session::refresh_runtime_status(snapshot);
@@ -8267,6 +8419,7 @@ async fn command_status_endpoint_returns_queue_and_dispatch_ledger() {
     assert_eq!(json["completed_count"], 1);
     assert_eq!(json["rejected_count"], 0);
     assert_eq!(json["failed_count"], 0);
+    assert_eq!(json["revision"], 1_700_000_001_003u64);
     assert_eq!(json["commands"].as_array().map(Vec::len), Some(3));
     assert_eq!(json["commands"][0]["request_id"], "req-cmd-1");
     assert_eq!(json["commands"][1]["request_id"], "req-cmd-2");
@@ -10562,6 +10715,184 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
         first_value, 4.0,
         "airbox scope should start at airbox node values"
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_applies_max_samples_to_scoped_samples() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 29;
+        snapshot.mesh_revision = 31;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=airbox&max_samples=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("sampled vector response should include etag")
+        .to_string();
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(&bytes[12..16], &(6u32).to_le_bytes(), "2 vector points");
+    assert_eq!(&bytes[16..20], &(2u32).to_le_bytes(), "sampled grid x-size");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![4.0, 4.1, 4.2, 6.0, 6.1, 6.2]);
+
+    let unsampled = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let unsampled_etag = unsampled
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("unsampled vector response should include etag");
+    assert_ne!(etag, unsampled_etag);
+}
+
+#[tokio::test]
+async fn v2_field_vector_applies_max_samples_to_part_scope() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 29;
+        snapshot.mesh_revision = 31;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=part&scope_id=body&max_samples=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-scope-kind")
+            .and_then(|value| value.to_str().ok()),
+        Some("part")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-scope-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("body")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(&bytes[12..16], &(6u32).to_le_bytes(), "2 vector points");
+    assert_eq!(&bytes[16..20], &(2u32).to_le_bytes(), "sampled grid x-size");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![0.0, 0.1, 0.2, 2.0, 2.1, 2.2]);
+}
+
+#[tokio::test]
+async fn v2_field_vector_rejects_max_samples_without_scope() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[0.0, 0.1, 0.2], [1.0, 1.1, 1.2]],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?max_samples=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

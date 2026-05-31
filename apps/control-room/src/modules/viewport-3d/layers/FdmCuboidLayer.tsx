@@ -29,7 +29,6 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
-  resolveCameraInteractionSettings,
   surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
@@ -599,7 +598,6 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   vectorStyle,
   fieldVector,
   instanceModel,
-  interactionActive,
   maxVectorGlyphs,
   voxelFillRatio,
   voxelMagnitudeThreshold,
@@ -609,7 +607,6 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   domain: FdmGridRenderDomain | null;
   fieldVector: DecodedFieldVector | null | undefined;
   instanceModel?: FdmCuboidInstanceModel | null;
-  interactionActive: boolean;
   maxVectorGlyphs: number;
   materialProfile: Viewport3DMaterialProfile;
   onSelectDomain: () => void;
@@ -626,10 +623,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const invalidate = useBatchedInvalidate();
   const surfaceRef = useRef<InstancedMesh>(null);
   const wireframeRef = useRef<InstancedMesh>(null);
-  const renderSettings = useMemo(
-    () => resolveCameraInteractionSettings(settings, interactionActive),
-    [interactionActive, settings],
-  );
+  const renderSettings = settings;
   const model = useMemo(
     () =>
       instanceModel !== undefined

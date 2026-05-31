@@ -39,7 +39,10 @@ import {
   WIDGET_RENDER_ORDER,
 } from "./orientationHudConstants";
 import { AxisLabelSprite } from "./AxisLabelSprite";
-import { ViewCube3DBox, type OrbitControlsHandle } from "./ViewCube3DBox";
+import {
+  ViewCube3DBox,
+  type ViewportCameraControlsHandle,
+} from "./ViewCube3DBox";
 
 interface OrientationHudLayerProps {
   colors: Viewport3DColors;
@@ -73,9 +76,12 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   const camera = useThree((state) => state.camera);
   const invalidate = useThree((state) => state.invalidate);
   const controls = useThree((state) =>
-    "controls" in state ? (state.controls as OrbitControlsHandle | undefined) : undefined,
+    "controls" in state
+      ? (state.controls as ViewportCameraControlsHandle | undefined)
+      : undefined,
   );
   const pendingOrbitCameraRef = useRef<Viewport3DCameraState | null>(null);
+  const controlsTargetRef = useRef(new Vector3());
   const commitCameraChange = useCallback(
     (nextCamera: Viewport3DCameraState) => {
       onCameraInteractionStart?.();
@@ -86,15 +92,44 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
     [onCameraChange, onCameraInteractionEnd, onCameraInteractionStart],
   );
   const getCurrentCamera = useCallback(
-    () =>
-      resolveViewCubeCurrentCameraState({
+    () => {
+      const controlsTarget = controls?.getTarget
+        ? controls.getTarget(controlsTargetRef.current, false).toArray()
+        : controls?.target?.toArray();
+      return resolveViewCubeCurrentCameraState({
         cameraPosition: camera.position.toArray() as [number, number, number],
         cameraState: viewport3dStore.getSnapshot().camera,
         cameraUp: camera.up.toArray() as [number, number, number],
-        controlsTarget: controls?.target?.toArray() as
+        controlsTarget: controlsTarget as
           | [number, number, number]
           | undefined,
-      }),
+      });
+    },
+    [camera, controls],
+  );
+  const applyLiveCamera = useCallback(
+    (nextCamera: Viewport3DCameraState) => {
+      camera.up.set(...nextCamera.up);
+      camera.position.set(...nextCamera.position);
+      camera.lookAt(...nextCamera.target);
+      camera.updateProjectionMatrix();
+      if (controls?.setLookAt) {
+        void controls
+          .setLookAt(
+            nextCamera.position[0],
+            nextCamera.position[1],
+            nextCamera.position[2],
+            nextCamera.target[0],
+            nextCamera.target[1],
+            nextCamera.target[2],
+            false,
+          )
+          .catch(() => undefined);
+      } else {
+        controls?.target?.set(...nextCamera.target);
+      }
+      controls?.update?.(0);
+    },
     [camera, controls],
   );
   const snapToDirection = useCallback(
@@ -106,18 +141,13 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           : snapCameraToDirection(currentCamera, direction)),
       };
 
-      camera.up.set(...nextCamera.up);
-      camera.position.set(...nextCamera.position);
-      camera.lookAt(...nextCamera.target);
-      camera.updateProjectionMatrix();
-      controls?.target?.set(...nextCamera.target);
-      controls?.update?.();
+      applyLiveCamera(nextCamera);
       viewport3dStore.setCamera(nextCamera);
       commitCameraChange(nextCamera);
       tracker.recordDirtyFrame("orientation-hud-snap");
       invalidate();
     },
-    [camera, commitCameraChange, controls, getCurrentCamera, invalidate, rotationMode, tracker],
+    [applyLiveCamera, commitCameraChange, getCurrentCamera, invalidate, rotationMode, tracker],
   );
 
   const onOrbit = useCallback(
@@ -129,12 +159,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
           : orbitCameraAroundTarget(currentCamera, deltaX, ORBIT_SENSITIVITY)),
       };
 
-      camera.up.set(...nextCamera.up);
-      camera.position.set(nextCamera.position[0], nextCamera.position[1], nextCamera.position[2]);
-      camera.lookAt(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
-      camera.updateProjectionMatrix();
-      controls?.target?.set(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
-      controls?.update?.();
+      applyLiveCamera(nextCamera);
       if (!pendingOrbitCameraRef.current) {
         onCameraInteractionStart?.();
       }
@@ -143,8 +168,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
       invalidate();
     },
     [
-      camera,
-      controls,
+      applyLiveCamera,
       getCurrentCamera,
       invalidate,
       onCameraInteractionStart,

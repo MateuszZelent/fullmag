@@ -16,7 +16,9 @@ use crate::schemas::runtime::{
     RuntimeCommandReadinessResource, SolverEnergyCurrentResource, SolverEnergyHistoryResource,
     SolverEnergyRow, SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
-use crate::session::{build_runtime_status_view, effective_runtime_status_code};
+use crate::session::{
+    build_runtime_status_view, command_ledger_revisions, effective_runtime_status_code,
+};
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, ScalarRow, SessionStateResponse,
     StageExecutionRecord, StageExecutionState, TrackedCommandRecord,
@@ -482,7 +484,7 @@ pub async fn get_command_status(
         .iter()
         .filter(|record| record.status == CommandLifecycleState::Failed)
         .count() as u64;
-    let revision = ledger.back().map(|record| record.command.seq).unwrap_or(0);
+    let revision = command_ledger_revisions(&ledger).command_queue_revision;
     let (can_accept_commands, runtime_controls) = {
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref();
