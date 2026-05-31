@@ -85,6 +85,7 @@ try {
     state: "visible",
     timeout: WORKFLOW_TIMEOUT_MS,
   });
+  const draftRequestStart = fixtureRequests.length;
   await crossSectionAction.click();
 
   await waitForLocatorVisible(
@@ -100,9 +101,9 @@ try {
     "Cut Frame",
     "Inspector cross-section draft editor",
   );
-  await waitForCondition("clip state enabled by 2D Cross command", () => {
+  await waitForCondition("2D Cross keeps canonical clip state disabled", () => {
     if (
-      visualizationState.clip.enabled &&
+      !visualizationState.clip.enabled &&
       visualizationState.clip.axis === "z" &&
       visualizationState.clip.position_percent === 50
     ) {
@@ -112,6 +113,21 @@ try {
       `clip=${JSON.stringify(visualizationState.clip)}`,
     );
   });
+  assertNoRequestsSince(
+    draftRequestStart,
+    "2D Cross draft",
+    (request) => request.method === "PATCH" && request.path === VISUALIZATION_STATE_PATH,
+    "canonical visualization PATCH requests",
+  );
+  assertNoRequestsSince(
+    draftRequestStart,
+    "2D Cross draft",
+    (request) =>
+      request.path === CROSS_SECTION_PATH ||
+      request.path === CROSS_SECTION_QUALITY_PATH ||
+      request.path === CROSS_SECTION_IMAGE_PATH,
+    "cross-section data-plane requests before image generation",
+  );
   await waitForCanvasCompositeChange(
     page,
     canvas3d,
@@ -371,6 +387,15 @@ function assertNo3DResourceRequestsSince(startIndex, label) {
   if (unexpected.length > 0) {
     throw new Error(
       `${label} triggered 3D-only resources: ${unexpected.map(formatRequest).join(", ")}`,
+    );
+  }
+}
+
+function assertNoRequestsSince(startIndex, label, predicate, description) {
+  const unexpected = fixtureRequests.slice(startIndex).filter(predicate);
+  if (unexpected.length > 0) {
+    throw new Error(
+      `${label} triggered ${description}: ${unexpected.map(formatRequest).join(", ")}`,
     );
   }
 }

@@ -496,6 +496,18 @@ pub(crate) struct SessionStateResponse {
     /// Revision for mesh build lifecycle resources.
     #[serde(skip)]
     pub mesh_build_revision: u64,
+    /// Revision for field catalog availability/resource family.
+    #[serde(skip)]
+    pub field_catalog_revision: u64,
+    /// Revision for field sample resources.
+    #[serde(skip)]
+    pub field_samples_revision: u64,
+    /// Per-quantity revisions used by data/fields freshness validators.
+    #[serde(skip, default)]
+    pub field_quantity_revisions: BTreeMap<String, u64>,
+    /// Revision for simulation stage execution state.
+    #[serde(skip)]
+    pub stage_execution_revision: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -565,12 +577,16 @@ impl LatestFields {
         self.0.len()
     }
 
-    pub(crate) fn extend(&mut self, incoming: Self) {
-        self.0.extend(incoming.0);
+    pub(crate) fn insert(&mut self, quantity: String, value: Value) {
+        self.0.insert(quantity, value);
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter()
+    }
+
+    pub(crate) fn into_inner(self) -> BTreeMap<String, Value> {
+        self.0
     }
 }
 
@@ -585,6 +601,10 @@ impl CachedPreviewFields {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &LivePreviewField)> {
         self.0.iter()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -1284,6 +1304,10 @@ mod tests {
             scalar_revision: 0,
             mesh_revision: 0,
             mesh_build_revision: 0,
+            field_catalog_revision: 0,
+            field_samples_revision: 0,
+            field_quantity_revisions: BTreeMap::new(),
+            stage_execution_revision: 0,
         };
 
         let value = serde_json::to_value(SessionStateResponseView {

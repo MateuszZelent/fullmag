@@ -4,7 +4,6 @@ import type {
   CrossSectionQualityQuery,
   CrossSectionQuery,
   SliceMeshColorScale,
-  VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 
@@ -18,6 +17,7 @@ export type CrossSectionFrameExtent =
 
 interface CrossSectionPlotRenderOptions {
   colorScale: SliceMeshColorScale;
+  edgeWidth: number;
   frameRotationDegrees: number;
   filterExpression: string;
   shrinkFactor: number;
@@ -26,6 +26,7 @@ interface CrossSectionPlotRenderOptions {
 
 export interface CrossSectionDraft {
   colorScale: SliceMeshColorScale;
+  edgeWidth: number;
   filterExpression: string;
   frameExtent: CrossSectionFrameExtent;
   id: "draft";
@@ -51,6 +52,12 @@ export interface CrossSectionPlot {
   rotationDegrees: number;
 }
 
+export interface CrossSectionFramePreview {
+  axis: ClipAxis;
+  positionPercent: number;
+  rotationDegrees: number;
+}
+
 export interface CrossSectionWorkspaceState {
   activePlotId: string | null;
   draft: CrossSectionDraft | null;
@@ -61,6 +68,7 @@ type CrossSectionWorkspaceListener = () => void;
 
 const DEFAULT_DRAFT: CrossSectionDraft = {
   colorScale: "jet",
+  edgeWidth: 1.5,
   filterExpression: "",
   frameExtent: "universe",
   id: "draft",
@@ -195,30 +203,45 @@ export function activeCrossSectionFrameRotationDegrees(
   return activeCrossSectionPlot(state)?.rotationDegrees ?? 0;
 }
 
-function crossSectionAxisFromPlane(plane: CrossSectionPlane): ClipAxis {
-  return AXIS_BY_PLANE[plane];
+export function activeCrossSectionFramePreview(
+  state: CrossSectionWorkspaceState,
+): CrossSectionFramePreview | null {
+  const source = state.draft ?? activeCrossSectionPlot(state);
+  if (!source) return null;
+  return {
+    axis: crossSectionAxisFromPlane(source.plane),
+    positionPercent: source.positionPercent,
+    rotationDegrees: source.rotationDegrees,
+  };
 }
 
-export function crossSectionVisualizationPatchFromDraft(
-  draft: CrossSectionDraft,
-): VisualizationStatePatch {
-  const axis = crossSectionAxisFromPlane(draft.plane);
+export function crossSectionFramePreviewEquals(
+  previous: CrossSectionFramePreview | null,
+  next: CrossSectionFramePreview | null,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return false;
+  return (
+    previous.axis === next.axis &&
+    previous.positionPercent === next.positionPercent &&
+    previous.rotationDegrees === next.rotationDegrees
+  );
+}
+
+export function crossSectionFramePreviewToClip(
+  preview: CrossSectionFramePreview | null,
+): VisualizationStateResource["clip"] | null {
+  if (!preview) return null;
   return {
-    clip: {
-      axis,
-      enabled: true,
-      position_percent: draft.positionPercent,
-    },
-    slice: {
-      axis,
-      mesh_color_scale: draft.colorScale,
-      mesh_filter_expression: draft.filterExpression,
-      mesh_quality_metric: draft.metric,
-      mesh_shrink_factor: draft.shrinkFactor,
-      position_percent: draft.positionPercent,
-      show_mesh: draft.includeWireframe,
-    },
+    axis: preview.axis,
+    enabled: true,
+    flipped: false,
+    position_percent: preview.positionPercent,
   };
+}
+
+function crossSectionAxisFromPlane(plane: CrossSectionPlane): ClipAxis {
+  return AXIS_BY_PLANE[plane];
 }
 
 export function resetCrossSectionWorkspaceForTests(): void {
@@ -271,6 +294,7 @@ function plotFromDraft(draft: CrossSectionDraft): CrossSectionPlot {
     query,
     renderOptions: {
       colorScale: draft.colorScale,
+      edgeWidth: draft.edgeWidth,
       frameRotationDegrees: draft.rotationDegrees,
       filterExpression: draft.filterExpression,
       shrinkFactor: draft.shrinkFactor,

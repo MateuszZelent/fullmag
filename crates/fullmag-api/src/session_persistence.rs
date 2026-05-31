@@ -1,6 +1,6 @@
 //! Session persistence API handlers — save, load, inspect, checkpoints, recovery.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::sessions::status::field_revision;
 use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
@@ -113,6 +114,10 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             scalar_revision,
             mesh_revision: value.mesh_revision,
             mesh_build_revision: value.mesh_build_revision,
+            field_catalog_revision: 0,
+            field_samples_revision: 0,
+            field_quantity_revisions: BTreeMap::new(),
+            stage_execution_revision: 0,
         }
     }
 }
@@ -658,7 +663,29 @@ pub(crate) async fn restore_checkpoint(
     let loaded_state_ref = checkpoint.common_state_ref.clone();
     link_active_stage_checkpoint_restored(snapshot, &checkpoint_id, Some(&loaded_state_ref));
     snapshot.state_version = snapshot.state_version.saturating_add(1);
-    let field_revision = snapshot.state_version;
+    snapshot.field_catalog_revision = if snapshot.field_catalog_revision == 0 {
+        1
+    } else {
+        snapshot.field_catalog_revision.saturating_add(1)
+    };
+    let next_quantity_revision = snapshot
+        .field_quantity_revisions
+        .get("m")
+        .copied()
+        .map(|revision| revision.saturating_add(1))
+        .unwrap_or(2);
+    snapshot
+        .field_quantity_revisions
+        .insert("m".to_string(), next_quantity_revision);
+    snapshot.field_samples_revision = if snapshot.field_samples_revision == 0 {
+        next_quantity_revision
+    } else {
+        snapshot
+            .field_samples_revision
+            .max(next_quantity_revision)
+            .saturating_add(1)
+    };
+    let field_revision = field_revision(snapshot);
     let context = checkpoint_context_from_active_stage(snapshot, magnetization.len() as u64);
     let restored_snapshot = snapshot.clone();
     drop(guard);
@@ -840,7 +867,7 @@ fn checkpoint_context_from_snapshot(
         checksum: None,
         stage_id: None,
         command_id: None,
-        field_revision: Some(snapshot.state_version),
+        field_revision: Some(field_revision(snapshot)),
         mesh_revision: Some(snapshot.mesh_revision),
         scene_revision: None,
         vector_count,

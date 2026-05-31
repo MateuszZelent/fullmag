@@ -61,14 +61,15 @@ try {
   const baseline3d = await sampleCanvasComposite(".fm-viewport-3d canvas", ".fm-viewport-3d");
 
   await clickTabByText("View");
+  const draftRequestStart = fixtureRequests.length;
   await clickSelector('[data-action-id="ribbon.cross-section.begin-draft"]');
 
   await waitForVisible('[data-node-id="model:visualizations-2d"]');
   await waitForVisible('[data-node-id="model:visualizations-2d:draft"]');
   await waitForText(".fm-inspector", "Cut Frame");
-  await waitForCondition("clip state enabled", () => {
+  await waitForCondition("2D Cross keeps canonical clip state disabled", () => {
     if (
-      visualizationState.clip.enabled &&
+      !visualizationState.clip.enabled &&
       visualizationState.clip.axis === "z" &&
       visualizationState.clip.position_percent === 50
     ) {
@@ -76,6 +77,21 @@ try {
     }
     throw new Error(`clip=${JSON.stringify(visualizationState.clip)}`);
   });
+  assertNoRequestsSince(
+    draftRequestStart,
+    "2D Cross draft",
+    (request) => request.method === "PATCH" && request.path === VISUALIZATION_STATE_PATH,
+    "canonical visualization PATCH requests",
+  );
+  assertNoRequestsSince(
+    draftRequestStart,
+    "2D Cross draft",
+    (request) =>
+      request.path === CROSS_SECTION_PATH ||
+      request.path === CROSS_SECTION_QUALITY_PATH ||
+      request.path === CROSS_SECTION_IMAGE_PATH,
+    "cross-section data-plane requests before image generation",
+  );
   await waitForCanvasCompositeChange(
     ".fm-viewport-3d canvas",
     ".fm-viewport-3d",
@@ -698,6 +714,15 @@ function assertNo3DResourceRequestsSince(startIndex, label) {
   if (unexpected.length > 0) {
     throw new Error(
       `${label} triggered 3D-only resources: ${unexpected.map(formatRequest).join(", ")}`,
+    );
+  }
+}
+
+function assertNoRequestsSince(startIndex, label, predicate, description) {
+  const unexpected = fixtureRequests.slice(startIndex).filter(predicate);
+  if (unexpected.length > 0) {
+    throw new Error(
+      `${label} triggered ${description}: ${unexpected.map(formatRequest).join(", ")}`,
     );
   }
 }

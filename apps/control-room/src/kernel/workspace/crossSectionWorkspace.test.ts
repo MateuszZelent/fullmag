@@ -4,9 +4,10 @@ import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import {
   activeCrossSectionFrameRotationDegrees,
+  activeCrossSectionFramePreview,
   beginCrossSectionDraft,
   commitCrossSectionDraft,
-  crossSectionVisualizationPatchFromDraft,
+  crossSectionFramePreviewToClip,
   crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
   updateCrossSectionDraft,
@@ -122,7 +123,7 @@ describe("crossSectionWorkspace", () => {
     ).toBe(22);
   });
 
-  it("builds the visualization patch that drives the 3D clip frame from the draft", () => {
+  it("builds a local 3D frame preview from the draft without producing a visualization patch", () => {
     resetCrossSectionWorkspaceForTests();
     const draft = beginCrossSectionDraft(visualizationState);
     const updated = updateCrossSectionDraft({
@@ -135,21 +136,19 @@ describe("crossSectionWorkspace", () => {
     });
 
     expect(updated).not.toBeNull();
-    expect(crossSectionVisualizationPatchFromDraft(updated ?? draft)).toEqual({
-      clip: {
-        axis: "x",
-        enabled: true,
-        position_percent: 12.5,
-      },
-      slice: {
-        axis: "x",
-        mesh_color_scale: "hot",
-        mesh_filter_expression: "quality < 0.3",
-        mesh_quality_metric: "max_angle",
-        mesh_shrink_factor: 0.65,
-        position_percent: 12.5,
-        show_mesh: false,
-      },
+    const preview = activeCrossSectionFramePreview(
+      crossSectionWorkspaceStore.getSnapshot(),
+    );
+    expect(preview).toEqual({
+      axis: "x",
+      positionPercent: 12.5,
+      rotationDegrees: draft.rotationDegrees,
+    });
+    expect(crossSectionFramePreviewToClip(preview)).toEqual({
+      axis: "x",
+      enabled: true,
+      flipped: false,
+      position_percent: 12.5,
     });
   });
 });

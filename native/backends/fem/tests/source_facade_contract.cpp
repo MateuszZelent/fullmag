@@ -5164,6 +5164,24 @@ void managed_runtime_export_keeps_mfem_headers_linkable() {
             std::string::npos,
         "FEM runtime export must bundle OpenMPI headers referenced by MFEM package metadata");
     check(
+        export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-mpi-runtime.txt") !=
+                std::string::npos &&
+            export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_ess_singleton.so") !=
+                std::string::npos,
+        "FEM runtime export must validate OpenMPI help files and runtime components");
+    check(
+        export_script.find(".fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcompress_zlib.so") !=
+                std::string::npos &&
+            export_script.find(".fullmag/runtimes/fem-gpu-host/lib/pmix2/share/pmix/help-pmix-runtime.txt") !=
+                std::string::npos,
+        "FEM runtime export must validate PMIx components and help files");
+    check(
+        export_script.find("managed FEM runtime is missing OpenMPI runtime component") !=
+                std::string::npos &&
+            export_script.find("managed FEM runtime is missing PMIx runtime component") !=
+                std::string::npos,
+        "managed FEM launcher must fail fast when exported MPI runtime components are missing");
+    check(
         export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so") !=
             std::string::npos &&
             export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so") !=

@@ -22,18 +22,18 @@ WIDTH = 1000e-9
 HEIGHT = 40e-9
 AIRBOX_Z = 500e-9
 AIRBOX_HMAX = 500e-9
-AIRBOX_HMIN = 20e-9
+AIRBOX_HMIN = 80e-9
 
-WAVEGUIDE_BULK_HMAX = 20e-9
-WAVEGUIDE_LOCAL_HMAX = 12e-9
-WAVEGUIDE_HMIN = 5e-9
-AIRBOX_NEAR_INTERFACE_HMAX = 40e-9
-AIRBOX_NEAR_INTERFACE_THICKNESS = 20e-9
-AIRBOX_TRANSITION_DISTANCE = 120e-9
-AIRBOX_EDGE_HMAX = WAVEGUIDE_BULK_HMAX
-AIRBOX_EDGE_THICKNESS = WAVEGUIDE_BULK_HMAX
-AIRBOX_EDGE_TRANSITION_DISTANCE = 60e-9
-AIRBOX_CORNER_TRANSITION_DISTANCE = 40e-9
+WAVEGUIDE_BULK_HMAX = 40e-9
+WAVEGUIDE_LOCAL_HMAX = 16e-9
+WAVEGUIDE_HMIN = 10e-9
+AIRBOX_NEAR_INTERFACE_HMAX = 120e-9
+AIRBOX_NEAR_INTERFACE_THICKNESS = 40e-9
+AIRBOX_TRANSITION_DISTANCE = 100e-9
+AIRBOX_EDGE_HMAX = 120e-9
+AIRBOX_EDGE_THICKNESS = 40e-9
+AIRBOX_EDGE_TRANSITION_DISTANCE = 80e-9
+AIRBOX_CORNER_TRANSITION_DISTANCE = 60e-9
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -50,6 +50,7 @@ ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
 ADAPTIVE_DT_MIN = float(os.environ.get("FULLMAG_ARCH_ADAPTIVE_DT_MIN", "1e-17"))
+RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_ARCH_RELAX_MAX_STEPS", "5000"))
 
 study = fm.study("arch_waveguide_relax_50nm")
 
@@ -112,10 +113,10 @@ waveguide.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
 waveguide.visualization(show=True, mode="surface")
 # waveguide.m = fm.texture.random(1)
 # Exchange length lex = sqrt(2*Aex/(μ0·Ms²)) ≈ 5.2 nm.
-# Interactive preset: keep the magnetic body much finer than the far-field
-# airbox without making the full 2.5 um x 1.0 um sheet a 2 nm surface mesh.
-# A 5 nm / 2 nm production preset passes mesh validation but creates about
-# 2.35M tetrahedra here and is too slow as the default interactive example.
+# Interactive preset: keep a local skyrmion-resolution patch while avoiding a
+# globally fine 2.5 um x 1.0 um interface mesh. Tighter production studies can
+# lower these values explicitly, but the default must materialize quickly enough
+# for control-room startup and inspection.
 # The interface/transition controls are COMSOL-style automatic sizing fields:
 # keep air moderately resolved near the magnetic surface, then grade smoothly
 # to the coarse far-field airbox target without hand-drawing airbox boxes.
@@ -139,7 +140,7 @@ waveguide.mesh.size_field(
     GeometryName="arch_waveguide_geom",
     VIn=WAVEGUIDE_LOCAL_HMAX,
     VOut=WAVEGUIDE_BULK_HMAX,
-    Radius=500e-9,
+    Radius=350e-9,
     XCenter=0.0,
     YCenter=0.0,
     ZCenter=0.0,
@@ -176,5 +177,5 @@ study.stages.add_relax(
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
     tol=RELAX_TORQUE_TOLERANCE_APM,
-    max_steps=5000,
+    max_steps=RELAX_MAX_STEPS,
 )

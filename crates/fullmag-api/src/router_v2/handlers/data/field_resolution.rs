@@ -3,11 +3,11 @@ use crate::preview::quantity_spatial_domain;
 use crate::types::SessionStateResponse;
 use fullmag_runner::FemMeshPayload;
 
-pub(super) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
+pub(crate) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
     live_magnetization_values(snapshot).is_some()
 }
 
-pub(super) fn field_values_match_current_domain(
+pub(crate) fn field_values_match_current_domain(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
     n_comp: usize,
@@ -38,7 +38,7 @@ pub(super) fn field_point_count_matches_current_domain(
         && fem_magnetic_node_count(mesh).is_some_and(|count| point_count == count)
 }
 
-pub(super) fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
+pub(crate) fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
     raw.get("values")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -57,7 +57,7 @@ pub(super) fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
         .unwrap_or_default()
 }
 
-pub(super) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
+pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
     raw.get("layout")
         .and_then(|l| l.get("grid_cells"))
         .and_then(|g| g.as_array())
@@ -74,7 +74,7 @@ pub(super) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
         })
 }
 
-pub(super) fn live_magnetization_values(
+pub(crate) fn live_magnetization_values(
     snapshot: &SessionStateResponse,
 ) -> Option<(Vec<f64>, [u32; 3])> {
     snapshot.live_state.as_ref().and_then(|ls| {

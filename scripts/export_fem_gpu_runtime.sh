@@ -103,6 +103,20 @@ if [ -d /usr/share/openmpi ]; then
   cp -a /usr/share/openmpi \
     .fullmag/runtimes/fem-gpu-host/openmpi/share/
 fi
+require_exported_path() {
+  local path="$1"
+  local label="$2"
+  if [ ! -e "$path" ]; then
+    echo "[export_fem_gpu_runtime] missing exported $label: $path" >&2
+    exit 1
+  fi
+}
+require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-mpi-runtime.txt "OpenMPI help data"
+require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-opal-runtime.txt "OpenMPI OPAL help data"
+require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_ess_singleton.so "OpenMPI singleton ESS component"
+require_exported_path .fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
+require_exported_path .fullmag/runtimes/fem-gpu-host/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
 echo "[export_fem_gpu_runtime] container-side export complete"
 '
 
@@ -115,6 +129,23 @@ REPO_ROOT="$(cd "${RUNTIME_ROOT}/../../.." && pwd)"
 export FULLMAG_REPO_ROOT="${REPO_ROOT}"
 export LD_LIBRARY_PATH="${RUNTIME_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 OPENMPI_ROOT="${RUNTIME_ROOT}/openmpi"
+if [ -e "${RUNTIME_ROOT}/lib/libmpi.so.40" ]; then
+  missing_openmpi=0
+  for required in \
+    "${OPENMPI_ROOT}/share/openmpi/help-mpi-runtime.txt" \
+    "${OPENMPI_ROOT}/share/openmpi/help-opal-runtime.txt" \
+    "${OPENMPI_ROOT}/lib/openmpi3/mca_ess_singleton.so" \
+    "${OPENMPI_ROOT}/lib/openmpi3/mca_btl_self.so"; do
+    if [ ! -e "${required}" ]; then
+      echo "managed FEM runtime is missing OpenMPI runtime component: ${required}" >&2
+      missing_openmpi=1
+    fi
+  done
+  if [ "${missing_openmpi}" -ne 0 ]; then
+    echo "Re-export the managed FEM runtime with: ./scripts/export_fem_gpu_runtime.sh" >&2
+    exit 2
+  fi
+fi
 if [ -d "${OPENMPI_ROOT}/share/openmpi" ]; then
   export OPAL_PREFIX="${OPENMPI_ROOT}"
   export PATH="${OPENMPI_ROOT}/bin${PATH:+:${PATH}}"
@@ -122,6 +153,21 @@ if [ -d "${OPENMPI_ROOT}/share/openmpi" ]; then
   export OMPI_MCA_orte_launch_agent="${OPENMPI_ROOT}/bin/orted"
   export OMPI_MCA_reachable="${OMPI_MCA_reachable:-weighted}"
   export OMPI_MCA_mca_base_component_show_load_errors="${OMPI_MCA_mca_base_component_show_load_errors:-0}"
+fi
+if [ -e "${RUNTIME_ROOT}/lib/libmpi.so.40" ]; then
+  missing_pmix=0
+  for required in \
+    "${RUNTIME_ROOT}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so" \
+    "${RUNTIME_ROOT}/lib/pmix2/share/pmix/help-pmix-runtime.txt"; do
+    if [ ! -e "${required}" ]; then
+      echo "managed FEM runtime is missing PMIx runtime component: ${required}" >&2
+      missing_pmix=1
+    fi
+  done
+  if [ "${missing_pmix}" -ne 0 ]; then
+    echo "Re-export the managed FEM runtime with: ./scripts/export_fem_gpu_runtime.sh" >&2
+    exit 2
+  fi
 fi
 if [ -d "${RUNTIME_ROOT}/lib/pmix2/share/pmix" ]; then
   export PMIX_PREFIX="${RUNTIME_ROOT}/lib/pmix2"

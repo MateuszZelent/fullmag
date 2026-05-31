@@ -5460,6 +5460,96 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             ["conformal_occ_hxt_degenerate_retry_delaunay"],
         )
 
+    def test_conformal_occ_delaunay_degenerate_with_size_fields_retries_hxt_first(self) -> None:
+        left = fm.Box((20e-9, 20e-9, 10e-9), name="left")
+        calls: list[int] = []
+
+        def _mesh(degenerate: bool) -> MeshData:
+            if degenerate:
+                nodes = np.asarray(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [1e-8, 0.0, 0.0],
+                        [0.0, 1e-8, 0.0],
+                        [0.0, 0.0, 1e-50],
+                    ],
+                    dtype=np.float64,
+                )
+                elements = np.asarray([[0, 1, 2, 3]], dtype=np.int32)
+                markers = np.asarray([0], dtype=np.int32)
+            else:
+                nodes = np.asarray(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [1e-8, 0.0, 0.0],
+                        [0.0, 1e-8, 0.0],
+                        [0.0, 0.0, 1e-8],
+                        [2e-8, 0.0, 0.0],
+                        [3e-8, 0.0, 0.0],
+                        [2e-8, 1e-8, 0.0],
+                        [2e-8, 0.0, 1e-8],
+                    ],
+                    dtype=np.float64,
+                )
+                elements = np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32)
+                markers = np.asarray([0, 7], dtype=np.int32)
+            return MeshData(
+                nodes=nodes,
+                elements=elements,
+                element_markers=markers,
+                boundary_faces=np.empty((0, 3), dtype=np.int32),
+                boundary_markers=np.empty((0,), dtype=np.int32),
+            )
+
+        def _fake_occ(*args: object, **kwargs: object) -> SharedDomainMeshResult:
+            options = kwargs.get("options")
+            self.assertIsInstance(options, MeshOptions)
+            calls.append(options.algorithm_3d)
+            return SharedDomainMeshResult(
+                mesh=_mesh(degenerate=len(calls) == 1),
+                component_marker_tags={"left": 7},
+                component_volume_tags={"left": [7]},
+                component_surface_tags={"left": [1]},
+                interface_surface_tags=[1],
+                outer_boundary_surface_tags=[2],
+            )
+
+        with patch(
+            "fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ",
+            side_effect=_fake_occ,
+        ):
+            mesh, region_markers, report = realize_fem_domain_mesh_asset_from_components_with_report(
+                geometries=[left],
+                hints=fm.FEM(order=1, hmax=80e-9),
+                study_universe={
+                    "mode": "manual",
+                    "size": [120e-9, 120e-9, 80e-9],
+                    "center": [0.0, 0.0, 0.0],
+                    "airbox_hmax": 120e-9,
+                    "airbox_hmin": 20e-9,
+                },
+                mesh_workflow={
+                    "mesh_options": {"algorithm_3d": ALGO_3D_DELAUNAY},
+                    "per_geometry": [
+                        {
+                            "geometry": "left",
+                            "mode": "custom",
+                            "hmax": 20e-9,
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(calls, [ALGO_3D_DELAUNAY, ALGO_3D_HXT])
+        self.assertEqual(mesh.n_elements, 2)
+        self.assertEqual(region_markers, [{"geometry_name": "left", "marker": 1}])
+        self.assertEqual(report.build_mode, "conformal_occ")
+        self.assertFalse(report.degraded)
+        self.assertEqual(
+            report.fallbacks_triggered,
+            ["conformal_occ_delaunay_degenerate_retry_hxt"],
+        )
+
     def test_conformal_occ_hxt_degenerate_retries_through_frontal(self) -> None:
         left = fm.Box((20e-9, 20e-9, 10e-9), name="left")
         calls: list[int] = []

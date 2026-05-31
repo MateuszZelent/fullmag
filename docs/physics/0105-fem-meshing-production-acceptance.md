@@ -129,6 +129,20 @@ FEM production meshing must satisfy these contracts:
    - the default interactive examples stay below declared node/tetra/RAM
      budgets or are not labeled interactive defaults.
 
+   The default interactive arch-waveguide example
+   `examples/arch_waveguide_relax_50nm.py` must materialize below:
+
+   - 75,000 total nodes,
+   - 450,000 tetrahedra,
+   - the configured interactive dense-FEM RAM budget when a legacy dense demag
+     realization is active,
+   - no automatic coarsening before the user explicitly asks to compute.
+
+   The canonical example uses `poisson_robin` demag, where the legacy dense-FEM
+   RAM warning is not applicable. Changing the limits above requires a measured
+   explanation in the same commit with old limit, new limit, fixture, wall time,
+   node count, tetrahedron count, and RAM estimate.
+
 5. **Quality truthfulness**
    - Gmsh SICN is reported as SICN only when computed as SICN,
    - swept or topology-proxy quality metrics are labeled as proxy metrics,

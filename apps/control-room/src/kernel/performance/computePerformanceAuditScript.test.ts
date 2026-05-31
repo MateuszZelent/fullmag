@@ -118,6 +118,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("fullmag.viewport3d.buildViewport3DTopologyRenderModel");
     expect(auditScript).toContain("fullmag.api.requestBinaryResource.topology");
     expect(auditScript).toContain("fullmag.viewport3d.buildFdmCuboidInstanceModel");
+    expect(auditScript).toContain("fullmag.viewport3d.buildVectorGlyphInstances");
+    expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphColors");
+    expect(auditScript).toContain("fullmag.viewport3d.uploadVectorGlyphMatrices");
     expect(auditScript).toContain("checkFdmCuboidChunkedUpload");
     expect(auditScript).toContain("buildFdmCuboidUploadBatches");
     expect(auditScript).toContain("checkFdmVectorSegmentCache");

@@ -1,20 +1,36 @@
-use plotters::prelude::*;
 use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::fem_cross_section::CrossSectionQualityMetric;
 use crate::fem_slice_overlay::{FemSliceOverlay, SliceOverlayBounds};
 
-const DEFAULT_BACKGROUND: RGBColor = RGBColor(248, 249, 252);
-const DEFAULT_FOREGROUND: RGBColor = RGBColor(28, 31, 38);
-const DEFAULT_GRID: RGBColor = RGBColor(207, 214, 224);
-const DEFAULT_WIREFRAME: RGBColor = RGBColor(31, 35, 44);
 const MIN_SHRINK_FACTOR: f64 = 0.5;
 const MAX_SHRINK_FACTOR: f64 = 1.0;
-const PLOT_MARGIN_LEFT: i32 = 62;
-const PLOT_MARGIN_RIGHT: i32 = 20;
-const PLOT_MARGIN_TOP: i32 = 54;
-const PLOT_MARGIN_BOTTOM: i32 = 58;
+const MIN_EDGE_WIDTH: f64 = 0.5;
+const MAX_EDGE_WIDTH: f64 = 4.0;
+const MIN_DPR: f64 = 1.0;
+const MAX_DPR: f64 = 2.0;
+const MARGIN_LEFT: f64 = 72.0;
+const MARGIN_RIGHT: f64 = 24.0;
+const MARGIN_TOP: f64 = 48.0;
+const MARGIN_BOTTOM: f64 = 64.0;
+const LEGEND_WIDTH: f64 = 160.0;
+
+const FONT_SIZE_TITLE: f32 = 16.0;
+const FONT_SIZE_LABEL: f32 = 12.0;
+const FONT_SIZE_TICK: f32 = 11.0;
+const FONT_SIZE_LEGEND: f32 = 11.0;
+const FONT_SIZE_LEGEND_TITLE: f32 = 13.0;
+
+const BG_COLOR: [u8; 4] = [248, 249, 252, 255];
+const PLOT_BG_COLOR: [u8; 4] = [255, 255, 255, 255];
+const FRAME_COLOR: [u8; 4] = [28, 31, 38, 255];
+const GRID_COLOR: [u8; 4] = [207, 214, 224, 128];
+const WIREFRAME_COLOR: [u8; 4] = [20, 24, 32, 255];
+const LEGEND_BG_COLOR: [u8; 4] = [239, 242, 247, 255];
+const TEXT_COLOR: [u8; 4] = [28, 31, 38, 255];
+
+static FONT_DATA: &[u8] = include_bytes!("../resources/DejaVuSans.ttf");
 
 #[derive(Debug, Clone, Copy, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +39,8 @@ pub(crate) enum CrossSectionImageColorScale {
     Viridis,
     Hot,
     Coolwarm,
+    Plasma,
+    Inferno,
 }
 
 impl CrossSectionImageColorScale {
@@ -32,6 +50,8 @@ impl CrossSectionImageColorScale {
             Self::Viridis => "viridis",
             Self::Hot => "hot",
             Self::Coolwarm => "coolwarm",
+            Self::Plasma => "plasma",
+            Self::Inferno => "inferno",
         }
     }
 }
@@ -51,23 +71,22 @@ pub(crate) struct CrossSectionImageRenderOptions {
     pub rotation_degrees: f64,
     pub shrink_factor: f64,
     pub wireframe: bool,
+    pub edge_width: f64,
+    pub dpr: f64,
 }
 
-#[derive(Debug, Clone)]
-struct ImageLabel {
-    text: String,
-    x: i32,
-    y: i32,
-    scale: u32,
-    color: [u8; 3],
+pub(crate) struct RenderedImage {
+    pub png_bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PlotTransform {
-    left: i32,
-    top: i32,
-    width: i32,
-    height: i32,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
     u_min: f64,
     v_max: f64,
     scale: f64,
@@ -78,17 +97,12 @@ struct RenderPolygon {
     vertices: Vec<[f64; 2]>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RenderSegment {
-    a: [f64; 2],
-    b: [f64; 2],
-}
+
 
 #[derive(Debug, Clone)]
 struct RenderGeometry {
     bounds: SliceOverlayBounds,
     polygons: Vec<RenderPolygon>,
-    segments: Vec<RenderSegment>,
 }
 
 impl RenderGeometry {
@@ -101,14 +115,6 @@ impl RenderGeometry {
                     .iter()
                     .map(|polygon| RenderPolygon {
                         vertices: polygon.vertices.clone(),
-                    })
-                    .collect(),
-                segments: overlay
-                    .segments
-                    .iter()
-                    .map(|segment| RenderSegment {
-                        a: segment.a,
-                        b: segment.b,
                     })
                     .collect(),
             };
@@ -136,34 +142,23 @@ impl RenderGeometry {
                 vertices: polygon.vertices.iter().copied().map(rotate).collect(),
             })
             .collect::<Vec<_>>();
-        let segments = overlay
-            .segments
-            .iter()
-            .map(|segment| RenderSegment {
-                a: rotate(segment.a),
-                b: rotate(segment.b),
-            })
-            .collect::<Vec<_>>();
-        let bounds = bounds_for_geometry(&polygons, &segments).unwrap_or(overlay.bounds);
+        let bounds = bounds_for_polygons(&polygons).unwrap_or(overlay.bounds);
         Self {
             bounds,
             polygons,
-            segments,
         }
     }
 }
 
 impl PlotTransform {
-    fn new(bounds: SliceOverlayBounds, plot_width: u32, image_height: u32) -> Self {
-        let available_width = (plot_width as i32 - PLOT_MARGIN_LEFT - PLOT_MARGIN_RIGHT).max(1);
-        let available_height = (image_height as i32 - PLOT_MARGIN_TOP - PLOT_MARGIN_BOTTOM).max(1);
+    fn new(bounds: SliceOverlayBounds, available_width: f64, available_height: f64) -> Self {
         let u_span = (bounds.u_max - bounds.u_min).abs().max(f64::EPSILON);
         let v_span = (bounds.v_max - bounds.v_min).abs().max(f64::EPSILON);
-        let scale = (available_width as f64 / u_span).min(available_height as f64 / v_span);
-        let width = (u_span * scale).round().max(1.0) as i32;
-        let height = (v_span * scale).round().max(1.0) as i32;
-        let left = PLOT_MARGIN_LEFT + (available_width - width) / 2;
-        let top = PLOT_MARGIN_TOP + (available_height - height) / 2;
+        let scale = (available_width / u_span).min(available_height / v_span);
+        let width = (u_span * scale).max(1.0);
+        let height = (v_span * scale).max(1.0);
+        let left = MARGIN_LEFT + (available_width - width) * 0.5;
+        let top = MARGIN_TOP + (available_height - height) * 0.5;
         Self {
             left,
             top,
@@ -175,18 +170,18 @@ impl PlotTransform {
         }
     }
 
-    fn right(self) -> i32 {
+    fn right(self) -> f64 {
         self.left + self.width
     }
 
-    fn bottom(self) -> i32 {
+    fn bottom(self) -> f64 {
         self.top + self.height
     }
 
-    fn point(self, point: (f64, f64)) -> (i32, i32) {
-        let x = self.left as f64 + (point.0 - self.u_min) * self.scale;
-        let y = self.top as f64 + (self.v_max - point.1) * self.scale;
-        (x.round() as i32, y.round() as i32)
+    fn point(self, u: f64, v: f64) -> (f32, f32) {
+        let x = self.left + (u - self.u_min) * self.scale;
+        let y = self.top + (self.v_max - v) * self.scale;
+        (x as f32, y as f32)
     }
 }
 
@@ -195,15 +190,17 @@ pub(crate) fn validate_cross_section_image_query(
     resolution: u32,
     rotation_degrees: f64,
     shrink_factor: f64,
+    edge_width: f64,
+    dpr: f64,
 ) -> Result<(), ApiError> {
     if !position_percent.is_finite() || !(0.0..=100.0).contains(&position_percent) {
         return Err(ApiError::bad_request(
             "invalid_query: position_percent must be finite and in [0, 100]",
         ));
     }
-    if !matches!(resolution, 512 | 1024 | 2048) {
+    if resolution < 256 || resolution > 8192 {
         return Err(ApiError::bad_request(
-            "invalid_query: resolution must be one of 512, 1024, 2048",
+            "invalid_query: resolution must be in [256, 8192]",
         ));
     }
     if !rotation_degrees.is_finite() || !(-180.0..=180.0).contains(&rotation_degrees) {
@@ -218,6 +215,16 @@ pub(crate) fn validate_cross_section_image_query(
             "invalid_query: shrink_factor must be finite and in [0.5, 1.0]",
         ));
     }
+    if !edge_width.is_finite() || !(MIN_EDGE_WIDTH..=MAX_EDGE_WIDTH).contains(&edge_width) {
+        return Err(ApiError::bad_request(
+            "invalid_query: edge_width must be finite and in [0.5, 4.0]",
+        ));
+    }
+    if !dpr.is_finite() || !(MIN_DPR..=MAX_DPR).contains(&dpr) {
+        return Err(ApiError::bad_request(
+            "invalid_query: dpr must be finite and in [1.0, 2.0]",
+        ));
+    }
     Ok(())
 }
 
@@ -226,7 +233,7 @@ pub(crate) fn render_cross_section_png(
     quality_values: &[f32],
     options: CrossSectionImageRenderOptions,
     filter_expression: Option<&str>,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<RenderedImage, ApiError> {
     if quality_values.len() != overlay.polygons.len() {
         return Err(ApiError::internal(
             "cross-section image quality value count must match polygon count",
@@ -240,129 +247,560 @@ pub(crate) fn render_cross_section_png(
         .filter(|value| value.is_finite() && filter.matches(*value as f64))
         .collect::<Vec<_>>();
     let (min, max) = quality_range(&filtered_values).unwrap_or((0.0, 1.0));
+    let lut = build_color_lut(options.color_scale);
 
-    let width = options.resolution;
-    let height = options.resolution;
-    let mut rgb = vec![255u8; width as usize * height as usize * 3];
-    let mut labels = Vec::new();
+    let geometry = RenderGeometry::from_overlay(overlay, options.rotation_degrees);
+    let bounds = padded_bounds(geometry.bounds);
+
+    // Compute physical aspect ratio for non-square images.
+    let u_span = (bounds.u_max - bounds.u_min).abs().max(f64::EPSILON);
+    let v_span = (bounds.v_max - bounds.v_min).abs().max(f64::EPSILON);
+    let aspect = (u_span / v_span).clamp(0.25, 4.0);
+
+    let legend_w = if options.legend { LEGEND_WIDTH } else { 0.0 };
+    let base_res = options.resolution as f64;
+    let dpr = options.dpr.clamp(MIN_DPR, MAX_DPR);
+
+    // Compute logical image size, then scale by DPR for actual pixel size.
+    let (logical_w, logical_h) = if aspect >= 1.0 {
+        (base_res, (base_res - legend_w - MARGIN_LEFT - MARGIN_RIGHT) / aspect + MARGIN_TOP + MARGIN_BOTTOM)
+    } else {
+        ((base_res - MARGIN_TOP - MARGIN_BOTTOM) * aspect + MARGIN_LEFT + MARGIN_RIGHT + legend_w, base_res)
+    };
+    let logical_w = logical_w.max(256.0);
+    let logical_h = logical_h.max(256.0);
+
+    let pixel_w = (logical_w * dpr).round() as u32;
+    let pixel_h = (logical_h * dpr).round() as u32;
+    let scale_factor = dpr as f32;
+
+    let mut pixmap = tiny_skia::Pixmap::new(pixel_w, pixel_h)
+        .ok_or_else(|| ApiError::internal("failed to create cross-section image pixmap"))?;
+
+    // Fill background
+    pixmap.fill(tiny_skia::Color::from_rgba8(BG_COLOR[0], BG_COLOR[1], BG_COLOR[2], BG_COLOR[3]));
+
+    let font = fontdue::Font::from_bytes(FONT_DATA, fontdue::FontSettings::default())
+        .map_err(|err| ApiError::internal(format!("failed to load font: {err}")))?;
+
+    let plot_available_w = logical_w - MARGIN_LEFT - MARGIN_RIGHT - legend_w;
+    let plot_available_h = logical_h - MARGIN_TOP - MARGIN_BOTTOM;
+    let transform = PlotTransform::new(bounds, plot_available_w, plot_available_h);
+
+    // Draw plot background
+    fill_rect(
+        &mut pixmap,
+        transform.left as f32 * scale_factor,
+        transform.top as f32 * scale_factor,
+        transform.width as f32 * scale_factor,
+        transform.height as f32 * scale_factor,
+        PLOT_BG_COLOR,
+    );
+
+    // Draw grid lines
+    draw_grid(&mut pixmap, &transform, scale_factor, &bounds, &font);
+
+    // Draw filled polygons with per-polygon stroke
+    let span = (max - min).abs().max(f32::EPSILON);
+    let user_edge_width_px = (options.edge_width * dpr) as f32;
+
+    // Adaptive wireframe: compute average polygon pixel area and auto-scale
+    // edge width and opacity. Dense meshes get thinner, more transparent edges
+    // so color fills remain visible (the COMSOL approach).
+    let plot_area_px = (transform.width * dpr) * (transform.height * dpr);
+    let polygon_count = geometry.polygons.len() as f64;
+    let avg_polygon_area_px = if polygon_count > 0.0 {
+        plot_area_px / polygon_count
+    } else {
+        plot_area_px
+    };
+
+    // avg_polygon_area_px is the average polygon size in pixels².
+    // A triangle with area ~25px² has edges ~7px long → 1.5px stroke is fine.
+    // A triangle with area ~4px² has edges ~3px long → 1.5px stroke covers half.
+    // We threshold at 25px² as "comfortable" and scale down below that.
+    let density_scale = (avg_polygon_area_px / 25.0).sqrt().clamp(0.0, 1.0) as f32;
+    let effective_edge_width = (user_edge_width_px * density_scale).max(0.3 * dpr as f32);
+    let effective_edge_alpha = if density_scale < 1.0 {
+        // For dense meshes, also reduce opacity to let color show through
+        (density_scale * 0.8 + 0.2).clamp(0.15, 1.0)
+    } else {
+        1.0
+    };
+
+    // Pre-compute wireframe color with effective alpha
+    let wf_alpha = (WIREFRAME_COLOR[3] as f32 * effective_edge_alpha).round() as u8;
+
+    for (polygon, value) in geometry
+        .polygons
+        .iter()
+        .zip(quality_values.iter().copied())
+        .filter(|(_, value)| value.is_finite() && filter.matches(*value as f64))
     {
-        let root = BitMapBackend::with_buffer(&mut rgb, (width, height)).into_drawing_area();
-        root.fill(&DEFAULT_BACKGROUND)
-            .map_err(plotters_error("fill background"))?;
+        let local = ((value - min) / span).clamp(0.0, 1.0);
+        let fill_color = color_from_lut(&lut, local as f64);
 
-        let legend_width = if options.legend { width.min(170) } else { 0 };
-        let plot_width = width.saturating_sub(legend_width).max(1);
-        let geometry = RenderGeometry::from_overlay(overlay, options.rotation_degrees);
-        let bounds = padded_bounds(geometry.bounds);
-        let transform = PlotTransform::new(bounds, plot_width, height);
-        root.draw(&Rectangle::new(
-            [
-                (transform.left, transform.top),
-                (transform.right(), transform.bottom()),
-            ],
-            ShapeStyle::from(&RGBColor(255, 255, 255)).filled(),
-        ))
-        .map_err(plotters_error("draw plot background"))?;
-        draw_plot_grid(&root, &transform)?;
-
-        labels.push(ImageLabel {
-            text: format!(
-                "{} cross-section at {:.3}%",
-                overlay.plane.as_str().to_uppercase(),
-                overlay.cut_norm * 100.0
-            ),
-            x: transform.left,
-            y: 18,
-            scale: 2,
-            color: rgb_bytes(DEFAULT_FOREGROUND),
-        });
-        labels.push(ImageLabel {
-            text: axis_label(overlay.u_axis),
-            x: transform.left + transform.width / 2 - 32,
-            y: transform.bottom() + 34,
-            scale: 1,
-            color: rgb_bytes(DEFAULT_FOREGROUND),
-        });
-        labels.push(ImageLabel {
-            text: axis_label(overlay.v_axis),
-            x: 12,
-            y: transform.top,
-            scale: 1,
-            color: rgb_bytes(DEFAULT_FOREGROUND),
-        });
-
-        let span = (max - min).abs().max(f32::EPSILON);
-        for (polygon, value) in geometry
-            .polygons
-            .iter()
-            .zip(quality_values.iter().copied())
-            .filter(|(_, value)| value.is_finite() && filter.matches(*value as f64))
-        {
-            let local = ((value - min) / span).clamp(0.0, 1.0);
-            let color = color_for_scale(local as f64, options.color_scale);
-            root.draw(&Polygon::new(
-                shrink_vertices(&polygon.vertices, options.shrink_factor)
-                    .into_iter()
-                    .map(|point| transform.point(point))
-                    .collect::<Vec<_>>(),
-                ShapeStyle::from(&color).filled(),
-            ))
-            .map_err(plotters_error("draw polygons"))?;
+        let shrunk = shrink_vertices(&polygon.vertices, options.shrink_factor);
+        if shrunk.len() < 3 {
+            continue;
         }
 
-        if options.wireframe {
-            for segment in &geometry.segments {
-                root.draw(&PathElement::new(
-                    vec![
-                        transform.point((segment.a[0], segment.a[1])),
-                        transform.point((segment.b[0], segment.b[1])),
-                    ],
-                    ShapeStyle::from(&DEFAULT_WIREFRAME.mix(0.62)).stroke_width(1),
-                ))
-                .map_err(plotters_error("draw wireframe"))?;
+        let mut pb = tiny_skia::PathBuilder::new();
+        let (x0, y0) = transform.point(shrunk[0].0, shrunk[0].1);
+        pb.move_to(x0 * scale_factor, y0 * scale_factor);
+        for &(u, v) in &shrunk[1..] {
+            let (x, y) = transform.point(u, v);
+            pb.line_to(x * scale_factor, y * scale_factor);
+        }
+        pb.close();
+
+        if let Some(path) = pb.finish() {
+            // Fill
+            let mut fill_paint = tiny_skia::Paint::default();
+            fill_paint.set_color(tiny_skia::Color::from_rgba8(
+                fill_color[0], fill_color[1], fill_color[2], fill_color[3],
+            ));
+            fill_paint.anti_alias = true;
+            pixmap.fill_path(
+                &path,
+                &fill_paint,
+                tiny_skia::FillRule::Winding,
+                tiny_skia::Transform::identity(),
+                None,
+            );
+
+            // Stroke (per-polygon outline)
+            if options.wireframe {
+                let mut stroke_paint = tiny_skia::Paint::default();
+                stroke_paint.set_color(tiny_skia::Color::from_rgba8(
+                    WIREFRAME_COLOR[0],
+                    WIREFRAME_COLOR[1],
+                    WIREFRAME_COLOR[2],
+                    wf_alpha,
+                ));
+                stroke_paint.anti_alias = true;
+                let stroke = tiny_skia::Stroke {
+                    width: effective_edge_width,
+                    line_cap: tiny_skia::LineCap::Round,
+                    line_join: tiny_skia::LineJoin::Round,
+                    ..Default::default()
+                };
+                pixmap.stroke_path(
+                    &path,
+                    &stroke_paint,
+                    &stroke,
+                    tiny_skia::Transform::identity(),
+                    None,
+                );
             }
         }
-        root.draw(&Rectangle::new(
-            [
-                (transform.left, transform.top),
-                (transform.right(), transform.bottom()),
-            ],
-            ShapeStyle::from(&DEFAULT_FOREGROUND).stroke_width(1),
-        ))
-        .map_err(plotters_error("draw plot frame"))?;
-
-        if options.legend {
-            draw_legend_shapes(
-                &root,
-                plot_width as i32,
-                height as i32,
-                options.metric,
-                options.color_scale,
-                min,
-                max,
-                overlay.polygons.len(),
-                filtered_values.len(),
-                &mut labels,
-            )?;
-        }
-
-        root.present().map_err(plotters_error("present"))?;
     }
-    for label in labels {
-        draw_text_5x7(
-            &mut rgb,
-            width,
-            height,
-            label.x,
-            label.y,
-            &label.text,
-            label.scale,
-            label.color,
+
+    // Draw plot frame border
+    draw_rect_stroke(
+        &mut pixmap,
+        transform.left as f32 * scale_factor,
+        transform.top as f32 * scale_factor,
+        transform.width as f32 * scale_factor,
+        transform.height as f32 * scale_factor,
+        FRAME_COLOR,
+        1.5 * scale_factor,
+    );
+
+    // Draw title
+    let title = format!(
+        "{} Cross-Section at {:.3}%",
+        overlay.plane.as_str().to_uppercase(),
+        overlay.cut_norm * 100.0,
+    );
+    draw_text(
+        &mut pixmap,
+        &font,
+        &title,
+        transform.left as f32 * scale_factor,
+        24.0 * scale_factor,
+        FONT_SIZE_TITLE * scale_factor,
+        TEXT_COLOR,
+    );
+
+    // Draw axis labels
+    let x_label = format!("{} (m)", overlay.u_axis);
+    let x_label_width = measure_text(&font, &x_label, FONT_SIZE_LABEL * scale_factor);
+    let x_label_x = (transform.left + transform.width * 0.5) as f32 * scale_factor - x_label_width * 0.5;
+    draw_text(
+        &mut pixmap,
+        &font,
+        &x_label,
+        x_label_x,
+        (transform.bottom() + 42.0) as f32 * scale_factor,
+        FONT_SIZE_LABEL * scale_factor,
+        TEXT_COLOR,
+    );
+
+    let y_label = format!("{} (m)", overlay.v_axis);
+    draw_text_vertical(
+        &mut pixmap,
+        &font,
+        &y_label,
+        16.0 * scale_factor,
+        (transform.top + transform.height * 0.5) as f32 * scale_factor,
+        FONT_SIZE_LABEL * scale_factor,
+        TEXT_COLOR,
+    );
+
+    // Draw legend
+    if options.legend {
+        draw_legend(
+            &mut pixmap,
+            &font,
+            (logical_w - LEGEND_WIDTH) as f32 * scale_factor,
+            logical_h as f32 * scale_factor,
+            scale_factor,
+            options.metric,
+            options.color_scale,
+            &lut,
+            min,
+            max,
+            overlay.polygons.len(),
+            filtered_values.len(),
         );
     }
 
-    encode_rgb_png(width, height, &rgb)
+    let png_bytes = encode_pixmap_png(&pixmap)?;
+    Ok(RenderedImage {
+        png_bytes,
+        width: pixel_w,
+        height: pixel_h,
+    })
 }
+
+// --- Drawing helpers ---
+
+fn fill_rect(pixmap: &mut tiny_skia::Pixmap, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+    let rect = match tiny_skia::Rect::from_xywh(x, y, w, h) {
+        Some(r) => r,
+        None => return,
+    };
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+    pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+}
+
+fn draw_rect_stroke(
+    pixmap: &mut tiny_skia::Pixmap,
+    x: f32, y: f32, w: f32, h: f32,
+    color: [u8; 4],
+    width: f32,
+) {
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x, y);
+    pb.line_to(x + w, y);
+    pb.line_to(x + w, y + h);
+    pb.line_to(x, y + h);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+        paint.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+    }
+}
+
+fn draw_line(
+    pixmap: &mut tiny_skia::Pixmap,
+    x1: f32, y1: f32, x2: f32, y2: f32,
+    color: [u8; 4],
+    width: f32,
+) {
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x1, y1);
+    pb.line_to(x2, y2);
+    if let Some(path) = pb.finish() {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::from_rgba8(color[0], color[1], color[2], color[3]));
+        paint.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+    }
+}
+
+fn draw_grid(
+    pixmap: &mut tiny_skia::Pixmap,
+    transform: &PlotTransform,
+    scale_factor: f32,
+    bounds: &SliceOverlayBounds,
+    font: &fontdue::Font,
+) {
+    let u_span = bounds.u_max - bounds.u_min;
+    let v_span = bounds.v_max - bounds.v_min;
+
+    for i in 0..=4 {
+        let frac = i as f64 / 4.0;
+
+        // Vertical grid line
+        let x = (transform.left + transform.width * frac) as f32 * scale_factor;
+        draw_line(
+            pixmap,
+            x, transform.top as f32 * scale_factor,
+            x, transform.bottom() as f32 * scale_factor,
+            GRID_COLOR,
+            1.0 * scale_factor,
+        );
+        // Tick label at bottom
+        let u_val = bounds.u_min + u_span * frac;
+        let tick_text = format_si_value(u_val);
+        let tw = measure_text(font, &tick_text, FONT_SIZE_TICK * scale_factor);
+        draw_text(
+            pixmap,
+            font,
+            &tick_text,
+            x - tw * 0.5,
+            (transform.bottom() + 14.0) as f32 * scale_factor,
+            FONT_SIZE_TICK * scale_factor,
+            TEXT_COLOR,
+        );
+
+        // Horizontal grid line
+        let y = (transform.top + transform.height * frac) as f32 * scale_factor;
+        draw_line(
+            pixmap,
+            transform.left as f32 * scale_factor, y,
+            transform.right() as f32 * scale_factor, y,
+            GRID_COLOR,
+            1.0 * scale_factor,
+        );
+        // Tick label at left
+        let v_val = bounds.v_max - v_span * frac;
+        let tick_text = format_si_value(v_val);
+        let tw = measure_text(font, &tick_text, FONT_SIZE_TICK * scale_factor);
+        draw_text(
+            pixmap,
+            font,
+            &tick_text,
+            (transform.left - 8.0) as f32 * scale_factor - tw,
+            y - FONT_SIZE_TICK * scale_factor * 0.35,
+            FONT_SIZE_TICK * scale_factor,
+            TEXT_COLOR,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_legend(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &fontdue::Font,
+    legend_left: f32,
+    image_height: f32,
+    scale_factor: f32,
+    metric: CrossSectionQualityMetric,
+    color_scale: CrossSectionImageColorScale,
+    lut: &[[u8; 4]; 256],
+    min: f32,
+    max: f32,
+    total_count: usize,
+    visible_count: usize,
+) {
+    // Legend background
+    fill_rect(pixmap, legend_left, 0.0, LEGEND_WIDTH as f32 * scale_factor, image_height, LEGEND_BG_COLOR);
+    // Divider line
+    draw_line(pixmap, legend_left, 0.0, legend_left, image_height, [207, 214, 224, 255], 1.0 * scale_factor);
+
+    // Title
+    draw_text(pixmap, font, "Quality", legend_left + 16.0 * scale_factor, 28.0 * scale_factor, FONT_SIZE_LEGEND_TITLE * scale_factor, TEXT_COLOR);
+    draw_text(pixmap, font, metric.as_str(), legend_left + 16.0 * scale_factor, 48.0 * scale_factor, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
+
+    // Color bar
+    let bar_left = legend_left + 20.0 * scale_factor;
+    let bar_right = legend_left + 52.0 * scale_factor;
+    let bar_width = bar_right - bar_left;
+    let bar_top = 80.0 * scale_factor;
+    let bar_bottom = (image_height - 160.0 * scale_factor).clamp(bar_top + 100.0 * scale_factor, bar_top + 500.0 * scale_factor);
+    let bar_height = bar_bottom - bar_top;
+    let steps = (bar_height as usize).max(1);
+
+    for step in 0..steps {
+        let t = 1.0 - step as f64 / (steps.max(1) - 1).max(1) as f64;
+        let color = color_from_lut(lut, t);
+        let y = bar_top + step as f32;
+        fill_rect(pixmap, bar_left, y, bar_width, 1.5, color);
+    }
+
+    // Color bar border
+    draw_rect_stroke(pixmap, bar_left, bar_top, bar_width, bar_height, FRAME_COLOR, 1.0 * scale_factor);
+
+    // Tick labels on colorbar
+    let mid = min + (max - min) * 0.5;
+    for (text, y) in [
+        (format_number(max), bar_top),
+        (format_number(mid), bar_top + bar_height * 0.5),
+        (format_number(min), bar_bottom),
+    ] {
+        draw_text(
+            pixmap,
+            font,
+            &text,
+            bar_right + 8.0 * scale_factor,
+            y - FONT_SIZE_LEGEND * scale_factor * 0.3,
+            FONT_SIZE_LEGEND * scale_factor,
+            TEXT_COLOR,
+        );
+    }
+
+    // Stats
+    let stats_y = bar_bottom + 30.0 * scale_factor;
+    draw_text(pixmap, font, &format!("scale: {}", color_scale.as_str()), legend_left + 16.0 * scale_factor, stats_y, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
+    draw_text(pixmap, font, &format!("polygons: {}/{}", visible_count, total_count), legend_left + 16.0 * scale_factor, stats_y + 20.0 * scale_factor, FONT_SIZE_LEGEND * scale_factor, TEXT_COLOR);
+}
+
+// --- Text rendering with fontdue ---
+
+fn draw_text(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &fontdue::Font,
+    text: &str,
+    x: f32, y: f32,
+    size: f32,
+    color: [u8; 4],
+) {
+    let mut cursor_x = x;
+    for ch in text.chars() {
+        if ch == ' ' {
+            cursor_x += size * 0.35;
+            continue;
+        }
+        let (metrics, bitmap) = font.rasterize(ch, size);
+        if metrics.width == 0 || metrics.height == 0 {
+            cursor_x += metrics.advance_width;
+            continue;
+        }
+        let gx = cursor_x + metrics.xmin as f32;
+        let gy = y - metrics.ymin as f32 - metrics.height as f32 + size * 0.85;
+        composite_glyph(pixmap, &bitmap, metrics.width, metrics.height, gx, gy, color);
+        cursor_x += metrics.advance_width;
+    }
+}
+
+fn draw_text_vertical(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &fontdue::Font,
+    text: &str,
+    x: f32, center_y: f32,
+    size: f32,
+    color: [u8; 4],
+) {
+    // Render text horizontally into a temporary pixmap, then blit rotated
+    let total_width = measure_text(font, text, size);
+    let total_height = size * 1.4;
+    let tw = total_width.ceil() as u32 + 4;
+    let th = total_height.ceil() as u32 + 4;
+    if tw == 0 || th == 0 || tw > 2048 || th > 2048 {
+        return;
+    }
+    let mut temp = match tiny_skia::Pixmap::new(tw, th) {
+        Some(p) => p,
+        None => return,
+    };
+    draw_text(&mut temp, font, text, 2.0, size * 0.9, size, color);
+
+    // Rotate 90° CCW and blit to main pixmap
+    let dest_x = x;
+    let dest_y_start = center_y - total_width * 0.5;
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let pixels = pixmap.pixels_mut();
+    let temp_pixels = temp.pixels();
+
+    for ty in 0..th as i32 {
+        for tx in 0..tw as i32 {
+            let src_idx = (ty * tw as i32 + tx) as usize;
+            if src_idx >= temp_pixels.len() {
+                continue;
+            }
+            let src = temp_pixels[src_idx];
+            let alpha = src.alpha();
+            if alpha == 0 {
+                continue;
+            }
+            // Rotate 90° CCW: (tx, ty) -> (ty, tw-1-tx)
+            let dx = dest_x as i32 + ty;
+            let dy = dest_y_start as i32 + (tw as i32 - 1 - tx);
+            if dx < 0 || dy < 0 || dx >= pw || dy >= ph {
+                continue;
+            }
+            let dst_idx = (dy * pw + dx) as usize;
+            if dst_idx >= pixels.len() {
+                continue;
+            }
+            let dst = pixels[dst_idx];
+            let a = alpha as u16;
+            let ia = 255 - a;
+            let r = ((src.red() as u16 * a + dst.red() as u16 * ia) / 255) as u8;
+            let g = ((src.green() as u16 * a + dst.green() as u16 * ia) / 255) as u8;
+            let b = ((src.blue() as u16 * a + dst.blue() as u16 * ia) / 255) as u8;
+            let out_a = (a + (dst.alpha() as u16 * ia / 255)).min(255) as u8;
+            pixels[dst_idx] = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, out_a).unwrap_or(dst);
+        }
+    }
+}
+
+fn measure_text(font: &fontdue::Font, text: &str, size: f32) -> f32 {
+    let mut width = 0.0f32;
+    for ch in text.chars() {
+        if ch == ' ' {
+            width += size * 0.35;
+            continue;
+        }
+        let metrics = font.metrics(ch, size);
+        width += metrics.advance_width;
+    }
+    width
+}
+
+fn composite_glyph(
+    pixmap: &mut tiny_skia::Pixmap,
+    bitmap: &[u8],
+    gw: usize, gh: usize,
+    x: f32, y: f32,
+    color: [u8; 4],
+) {
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let pixels = pixmap.pixels_mut();
+
+    for row in 0..gh {
+        for col in 0..gw {
+            let alpha = bitmap[row * gw + col] as u16;
+            if alpha == 0 {
+                continue;
+            }
+            let alpha = (alpha * color[3] as u16) / 255;
+            let px = x as i32 + col as i32;
+            let py = y as i32 + row as i32;
+            if px < 0 || py < 0 || px >= pw || py >= ph {
+                continue;
+            }
+            let idx = (py * pw + px) as usize;
+            let dst = pixels[idx];
+            let ia = 255 - alpha;
+            let r = ((color[0] as u16 * alpha + dst.red() as u16 * ia) / 255) as u8;
+            let g = ((color[1] as u16 * alpha + dst.green() as u16 * ia) / 255) as u8;
+            let b = ((color[2] as u16 * alpha + dst.blue() as u16 * ia) / 255) as u8;
+            let a = (alpha + (dst.alpha() as u16 * ia / 255)).min(255) as u8;
+            if let Some(c) = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a) {
+                pixels[idx] = c;
+            }
+        }
+    }
+}
+
+// --- Geometry helpers ---
 
 fn padded_bounds(bounds: SliceOverlayBounds) -> SliceOverlayBounds {
     let u_span = (bounds.u_max - bounds.u_min).abs().max(f64::EPSILON);
@@ -375,9 +813,8 @@ fn padded_bounds(bounds: SliceOverlayBounds) -> SliceOverlayBounds {
     }
 }
 
-fn bounds_for_geometry(
+fn bounds_for_polygons(
     polygons: &[RenderPolygon],
-    segments: &[RenderSegment],
 ) -> Option<SliceOverlayBounds> {
     let mut u_min = f64::INFINITY;
     let mut u_max = f64::NEG_INFINITY;
@@ -388,7 +825,6 @@ fn bounds_for_geometry(
     for point in polygons
         .iter()
         .flat_map(|polygon| polygon.vertices.iter().copied())
-        .chain(segments.iter().flat_map(|segment| [segment.a, segment.b]))
     {
         if !point[0].is_finite() || !point[1].is_finite() {
             continue;
@@ -406,32 +842,6 @@ fn bounds_for_geometry(
         v_min,
         v_max,
     })
-}
-
-fn axis_label(axis: &str) -> String {
-    format!("{axis} (m)")
-}
-
-fn draw_plot_grid(
-    root: &DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
-    transform: &PlotTransform,
-) -> Result<(), ApiError> {
-    for index in 0..=4 {
-        let opacity = if index == 0 || index == 4 { 0.85 } else { 0.45 };
-        let x = transform.left + transform.width * index / 4;
-        root.draw(&PathElement::new(
-            vec![(x, transform.top), (x, transform.bottom())],
-            ShapeStyle::from(&DEFAULT_GRID.mix(opacity)).stroke_width(1),
-        ))
-        .map_err(plotters_error("draw grid"))?;
-        let y = transform.top + transform.height * index / 4;
-        root.draw(&PathElement::new(
-            vec![(transform.left, y), (transform.right(), y)],
-            ShapeStyle::from(&DEFAULT_GRID.mix(opacity)).stroke_width(1),
-        ))
-        .map_err(plotters_error("draw grid"))?;
-    }
-    Ok(())
 }
 
 fn shrink_vertices(vertices: &[[f64; 2]], shrink_factor: f64) -> Vec<(f64, f64)> {
@@ -459,95 +869,106 @@ fn shrink_vertices(vertices: &[[f64; 2]], shrink_factor: f64) -> Vec<(f64, f64)>
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_legend_shapes(
-    root: &DrawingArea<BitMapBackend<'_>, plotters::coord::Shift>,
-    legend_left: i32,
-    image_height: i32,
-    metric: CrossSectionQualityMetric,
-    color_scale: CrossSectionImageColorScale,
-    min: f32,
-    max: f32,
-    total_count: usize,
-    visible_count: usize,
-    labels: &mut Vec<ImageLabel>,
-) -> Result<(), ApiError> {
-    root.draw(&Rectangle::new(
-        [(legend_left, 0), (legend_left + 170, image_height)],
-        ShapeStyle::from(&RGBColor(239, 242, 247)).filled(),
-    ))
-    .map_err(plotters_error("fill legend"))?;
-    root.draw(&PathElement::new(
-        vec![(legend_left, 0), (legend_left, image_height)],
-        ShapeStyle::from(&DEFAULT_GRID).stroke_width(1),
-    ))
-    .map_err(plotters_error("draw legend divider"))?;
+// --- Color scales with 256-entry LUTs ---
 
-    labels.push(ImageLabel {
-        text: "Quality".to_string(),
-        x: legend_left + 16,
-        y: 24,
-        scale: 1,
-        color: rgb_bytes(DEFAULT_FOREGROUND),
-    });
-    labels.push(ImageLabel {
-        text: metric.as_str().to_string(),
-        x: legend_left + 16,
-        y: 46,
-        scale: 1,
-        color: rgb_bytes(DEFAULT_FOREGROUND),
-    });
+fn build_color_lut(scale: CrossSectionImageColorScale) -> [[u8; 4]; 256] {
+    let stops: &[(f64, [f64; 3])] = match scale {
+        CrossSectionImageColorScale::Jet => &[
+            (0.0, [0.0, 0.0, 128.0]),
+            (0.11, [0.0, 0.0, 255.0]),
+            (0.35, [0.0, 180.0, 255.0]),
+            (0.5, [75.0, 255.0, 75.0]),
+            (0.65, [255.0, 255.0, 0.0]),
+            (0.75, [255.0, 220.0, 0.0]),
+            (0.89, [255.0, 0.0, 0.0]),
+            (1.0, [128.0, 0.0, 0.0]),
+        ],
+        CrossSectionImageColorScale::Viridis => &[
+            (0.0, [68.0, 1.0, 84.0]),
+            (0.13, [72.0, 35.0, 116.0]),
+            (0.25, [59.0, 82.0, 139.0]),
+            (0.38, [44.0, 114.0, 142.0]),
+            (0.5, [33.0, 145.0, 140.0]),
+            (0.63, [39.0, 173.0, 129.0]),
+            (0.75, [94.0, 201.0, 98.0]),
+            (0.88, [170.0, 220.0, 50.0]),
+            (1.0, [253.0, 231.0, 37.0]),
+        ],
+        CrossSectionImageColorScale::Hot => &[
+            (0.0, [0.0, 0.0, 0.0]),
+            (0.33, [230.0, 0.0, 0.0]),
+            (0.66, [255.0, 200.0, 0.0]),
+            (1.0, [255.0, 255.0, 230.0]),
+        ],
+        CrossSectionImageColorScale::Coolwarm => &[
+            (0.0, [59.0, 76.0, 192.0]),
+            (0.25, [120.0, 154.0, 227.0]),
+            (0.5, [238.0, 238.0, 238.0]),
+            (0.75, [220.0, 132.0, 107.0]),
+            (1.0, [180.0, 4.0, 38.0]),
+        ],
+        CrossSectionImageColorScale::Plasma => &[
+            (0.0, [13.0, 8.0, 135.0]),
+            (0.13, [75.0, 3.0, 161.0]),
+            (0.25, [125.0, 3.0, 168.0]),
+            (0.38, [168.0, 34.0, 150.0]),
+            (0.5, [203.0, 70.0, 121.0]),
+            (0.63, [229.0, 107.0, 93.0]),
+            (0.75, [248.0, 148.0, 65.0]),
+            (0.88, [253.0, 195.0, 40.0]),
+            (1.0, [240.0, 249.0, 33.0]),
+        ],
+        CrossSectionImageColorScale::Inferno => &[
+            (0.0, [0.0, 0.0, 4.0]),
+            (0.13, [22.0, 11.0, 57.0]),
+            (0.25, [66.0, 10.0, 104.0]),
+            (0.38, [112.0, 25.0, 110.0]),
+            (0.5, [159.0, 48.0, 97.0]),
+            (0.63, [205.0, 75.0, 69.0]),
+            (0.75, [237.0, 121.0, 36.0]),
+            (0.88, [251.0, 185.0, 23.0]),
+            (1.0, [252.0, 255.0, 164.0]),
+        ],
+    };
 
-    let bar_left = legend_left + 24;
-    let bar_right = legend_left + 64;
-    let bar_top = 84;
-    let bar_bottom = image_height.saturating_sub(188).clamp(220, 520);
-    let steps = (bar_bottom - bar_top).max(1);
-    for step in 0..steps {
-        let t = 1.0 - step as f64 / (steps - 1).max(1) as f64;
-        let color = color_for_scale(t, color_scale);
-        root.draw(&Rectangle::new(
-            [(bar_left, bar_top + step), (bar_right, bar_top + step + 1)],
-            ShapeStyle::from(&color).filled(),
-        ))
-        .map_err(plotters_error("draw legend bar"))?;
+    let mut lut = [[0u8; 4]; 256];
+    for (i, entry) in lut.iter_mut().enumerate() {
+        let t = i as f64 / 255.0;
+        let c = interpolate_stops(t, stops);
+        *entry = c;
     }
-    root.draw(&Rectangle::new(
-        [(bar_left, bar_top), (bar_right, bar_bottom)],
-        ShapeStyle::from(&DEFAULT_FOREGROUND).stroke_width(1),
-    ))
-    .map_err(plotters_error("draw legend border"))?;
-
-    let mid = min + (max - min) * 0.5;
-    for (text, y) in [
-        (format_number(max), bar_top),
-        (format_number(mid), (bar_top + bar_bottom) / 2),
-        (format_number(min), bar_bottom),
-    ] {
-        labels.push(ImageLabel {
-            text,
-            x: legend_left + 76,
-            y: y + 2,
-            scale: 1,
-            color: rgb_bytes(DEFAULT_FOREGROUND),
-        });
-    }
-    labels.push(ImageLabel {
-        text: format!("scale: {}", color_scale.as_str()),
-        x: legend_left + 16,
-        y: bar_bottom + 36,
-        scale: 1,
-        color: rgb_bytes(DEFAULT_FOREGROUND),
-    });
-    labels.push(ImageLabel {
-        text: format!("polygons: {visible_count}/{total_count}"),
-        x: legend_left + 16,
-        y: bar_bottom + 56,
-        scale: 1,
-        color: rgb_bytes(DEFAULT_FOREGROUND),
-    });
-    Ok(())
+    lut
 }
+
+fn color_from_lut(lut: &[[u8; 4]; 256], t: f64) -> [u8; 4] {
+    let idx = (t.clamp(0.0, 1.0) * 255.0).round() as usize;
+    lut[idx.min(255)]
+}
+
+fn interpolate_stops(t: f64, stops: &[(f64, [f64; 3])]) -> [u8; 4] {
+    let t = t.clamp(0.0, 1.0);
+    for pair in stops.windows(2) {
+        let (left_t, left_rgb) = pair[0];
+        let (right_t, right_rgb) = pair[1];
+        if t <= right_t {
+            let local = ((t - left_t) / (right_t - left_t)).clamp(0.0, 1.0);
+            return [
+                lerp_u8(left_rgb[0], right_rgb[0], local),
+                lerp_u8(left_rgb[1], right_rgb[1], local),
+                lerp_u8(left_rgb[2], right_rgb[2], local),
+                255,
+            ];
+        }
+    }
+    let last = stops.last().map(|(_, rgb)| *rgb).unwrap_or([0.0, 0.0, 0.0]);
+    [last[0] as u8, last[1] as u8, last[2] as u8, 255]
+}
+
+fn lerp_u8(a: f64, b: f64, t: f64) -> u8 {
+    (a + (b - a) * t).round().clamp(0.0, 255.0) as u8
+}
+
+// --- Number formatting ---
 
 fn format_number(value: f32) -> String {
     if value.abs() >= 1.0e3 || (value != 0.0 && value.abs() < 1.0e-2) {
@@ -556,6 +977,26 @@ fn format_number(value: f32) -> String {
         format!("{value:.4}")
     }
 }
+
+fn format_si_value(value: f64) -> String {
+    let abs = value.abs();
+    if abs < 1.0e-15 {
+        return "0".to_string();
+    }
+    if abs >= 1.0 {
+        format!("{value:.2}")
+    } else if abs >= 1.0e-3 {
+        format!("{:.2}m", value * 1.0e3)
+    } else if abs >= 1.0e-6 {
+        format!("{:.2}μ", value * 1.0e6)
+    } else if abs >= 1.0e-9 {
+        format!("{:.2}n", value * 1.0e9)
+    } else {
+        format!("{value:.2e}")
+    }
+}
+
+// --- Quality filtering ---
 
 fn quality_range(values: &[f32]) -> Option<(f32, f32)> {
     let mut min = f32::INFINITY;
@@ -627,286 +1068,29 @@ fn parse_filter_expression(raw: Option<&str>) -> Result<NumericFilter, ApiError>
     })
 }
 
-fn color_for_scale(t: f64, scale: CrossSectionImageColorScale) -> RGBColor {
-    let t = t.clamp(0.0, 1.0);
-    match scale {
-        CrossSectionImageColorScale::Jet => interpolate_stops(
-            t,
-            &[
-                (0.0, [0.0, 0.0, 128.0]),
-                (0.35, [0.0, 180.0, 255.0]),
-                (0.5, [75.0, 255.0, 75.0]),
-                (0.75, [255.0, 220.0, 0.0]),
-                (1.0, [180.0, 0.0, 0.0]),
-            ],
-        ),
-        CrossSectionImageColorScale::Viridis => interpolate_stops(
-            t,
-            &[
-                (0.0, [68.0, 1.0, 84.0]),
-                (0.25, [59.0, 82.0, 139.0]),
-                (0.5, [33.0, 145.0, 140.0]),
-                (0.75, [94.0, 201.0, 98.0]),
-                (1.0, [253.0, 231.0, 37.0]),
-            ],
-        ),
-        CrossSectionImageColorScale::Hot => interpolate_stops(
-            t,
-            &[
-                (0.0, [0.0, 0.0, 0.0]),
-                (0.35, [230.0, 0.0, 0.0]),
-                (0.7, [255.0, 180.0, 0.0]),
-                (1.0, [255.0, 255.0, 230.0]),
-            ],
-        ),
-        CrossSectionImageColorScale::Coolwarm => interpolate_stops(
-            t,
-            &[
-                (0.0, [59.0, 76.0, 192.0]),
-                (0.5, [238.0, 238.0, 238.0]),
-                (1.0, [180.0, 4.0, 38.0]),
-            ],
-        ),
-    }
-}
+// --- PNG encoding ---
 
-fn interpolate_stops(t: f64, stops: &[(f64, [f64; 3])]) -> RGBColor {
-    for pair in stops.windows(2) {
-        let (left_t, left_rgb) = pair[0];
-        let (right_t, right_rgb) = pair[1];
-        if t <= right_t {
-            let local = ((t - left_t) / (right_t - left_t)).clamp(0.0, 1.0);
-            return RGBColor(
-                lerp_u8(left_rgb[0], right_rgb[0], local),
-                lerp_u8(left_rgb[1], right_rgb[1], local),
-                lerp_u8(left_rgb[2], right_rgb[2], local),
-            );
+fn encode_pixmap_png(pixmap: &tiny_skia::Pixmap) -> Result<Vec<u8>, ApiError> {
+    let width = pixmap.width();
+    let height = pixmap.height();
+    // Convert RGBA premultiplied to straight RGBA, then to RGB for PNG.
+    let pixels = pixmap.pixels();
+    let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+    for pixel in pixels {
+        let a = pixel.alpha() as u16;
+        if a == 0 {
+            rgb.push(255);
+            rgb.push(255);
+            rgb.push(255);
+        } else if a == 255 {
+            rgb.push(pixel.red());
+            rgb.push(pixel.green());
+            rgb.push(pixel.blue());
+        } else {
+            rgb.push(((pixel.red() as u16 * 255) / a).min(255) as u8);
+            rgb.push(((pixel.green() as u16 * 255) / a).min(255) as u8);
+            rgb.push(((pixel.blue() as u16 * 255) / a).min(255) as u8);
         }
-    }
-    let last = stops.last().map(|(_, rgb)| *rgb).unwrap_or([0.0, 0.0, 0.0]);
-    RGBColor(last[0] as u8, last[1] as u8, last[2] as u8)
-}
-
-fn lerp_u8(a: f64, b: f64, t: f64) -> u8 {
-    (a + (b - a) * t).round().clamp(0.0, 255.0) as u8
-}
-
-fn rgb_bytes(color: RGBColor) -> [u8; 3] {
-    [color.0, color.1, color.2]
-}
-
-fn draw_text_5x7(
-    rgb: &mut [u8],
-    width: u32,
-    height: u32,
-    x: i32,
-    y: i32,
-    text: &str,
-    scale: u32,
-    color: [u8; 3],
-) {
-    let scale = scale.max(1) as i32;
-    let mut cursor_x = x;
-    for ch in text.to_ascii_uppercase().chars() {
-        if ch == '\n' {
-            cursor_x = x;
-            continue;
-        }
-        if ch == ' ' {
-            cursor_x += 4 * scale;
-            continue;
-        }
-        let glyph = glyph_5x7(ch);
-        for (row, bits) in glyph.iter().copied().enumerate() {
-            for col in 0..5 {
-                if bits & (1 << (4 - col)) == 0 {
-                    continue;
-                }
-                for dy in 0..scale {
-                    for dx in 0..scale {
-                        set_rgb_pixel(
-                            rgb,
-                            width,
-                            height,
-                            cursor_x + col * scale + dx,
-                            y + row as i32 * scale + dy,
-                            color,
-                        );
-                    }
-                }
-            }
-        }
-        cursor_x += 6 * scale;
-    }
-}
-
-fn set_rgb_pixel(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 3]) {
-    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-        return;
-    }
-    let offset = (y as usize * width as usize + x as usize) * 3;
-    rgb[offset] = color[0];
-    rgb[offset + 1] = color[1];
-    rgb[offset + 2] = color[2];
-}
-
-fn glyph_5x7(ch: char) -> [u8; 7] {
-    match ch {
-        'A' => [
-            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'B' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
-        ],
-        'C' => [
-            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
-        ],
-        'D' => [
-            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
-        ],
-        'E' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-        ],
-        'F' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'G' => [
-            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110,
-        ],
-        'H' => [
-            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ],
-        'I' => [
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
-        ],
-        'J' => [
-            0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100,
-        ],
-        'K' => [
-            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-        ],
-        'L' => [
-            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
-        ],
-        'M' => [
-            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-        ],
-        'N' => [
-            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
-        ],
-        'O' => [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ],
-        'P' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
-        ],
-        'Q' => [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
-        ],
-        'R' => [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
-        ],
-        'S' => [
-            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
-        ],
-        'T' => [
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
-        ],
-        'U' => [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ],
-        'V' => [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
-        ],
-        'W' => [
-            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
-        ],
-        'X' => [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
-        ],
-        'Y' => [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
-        ],
-        'Z' => [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
-        ],
-        '0' => [
-            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
-        ],
-        '1' => [
-            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
-        ],
-        '2' => [
-            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
-        ],
-        '3' => [
-            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
-        ],
-        '4' => [
-            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
-        ],
-        '5' => [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
-        ],
-        '6' => [
-            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
-        ],
-        '7' => [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
-        ],
-        '8' => [
-            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
-        ],
-        '9' => [
-            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
-        ],
-        '-' => [
-            0b00000, 0b00000, 0b00000, 0b11110, 0b00000, 0b00000, 0b00000,
-        ],
-        '_' => [
-            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111,
-        ],
-        '.' => [
-            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100,
-        ],
-        ':' => [
-            0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000,
-        ],
-        '/' => [
-            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
-        ],
-        '%' => [
-            0b11001, 0b11010, 0b00100, 0b01000, 0b10110, 0b00110, 0b00000,
-        ],
-        '(' => [
-            0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010,
-        ],
-        ')' => [
-            0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000,
-        ],
-        '<' => [
-            0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010,
-        ],
-        '>' => [
-            0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000,
-        ],
-        '=' => [
-            0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000,
-        ],
-        '+' => [
-            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
-        ],
-        _ => [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b00100, 0b00000, 0b00100,
-        ],
-    }
-}
-
-fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, ApiError> {
-    if rgb.len() != width as usize * height as usize * 3 {
-        return Err(ApiError::internal(
-            "cross-section image RGB buffer length does not match image size",
-        ));
     }
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, width, height);
@@ -916,14 +1100,10 @@ fn encode_rgb_png(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, ApiErr
         .write_header()
         .map_err(|error| ApiError::internal(format!("cross-section image png: {error}")))?;
     writer
-        .write_image_data(rgb)
+        .write_image_data(&rgb)
         .map_err(|error| ApiError::internal(format!("cross-section image png: {error}")))?;
     drop(writer);
     Ok(bytes)
-}
-
-fn plotters_error<E: std::fmt::Debug>(context: &'static str) -> impl Fn(E) -> ApiError {
-    move |error| ApiError::internal(format!("cross-section image {context}: {error:?}"))
 }
 
 #[cfg(test)]
@@ -961,7 +1141,7 @@ mod tests {
             v_axis: "y",
         };
 
-        let png = render_cross_section_png(
+        let rendered = render_cross_section_png(
             &overlay,
             &[0.5],
             CrossSectionImageRenderOptions {
@@ -972,12 +1152,84 @@ mod tests {
                 rotation_degrees: 0.0,
                 shrink_factor: 1.0,
                 wireframe: true,
+                edge_width: 1.5,
+                dpr: 1.0,
             },
             None,
         )
         .unwrap();
 
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&rendered.png_bytes[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(rendered.width > 0);
+        assert!(rendered.height > 0);
+    }
+
+    #[test]
+    fn validate_rejects_invalid_edge_width() {
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 0.3, 1.0).is_err());
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 5.0, 1.0).is_err());
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 1.5, 1.0).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_dpr() {
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 1.5, 0.5).is_err());
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 1.5, 3.0).is_err());
+        assert!(validate_cross_section_image_query(50.0, 1024, 0.0, 1.0, 1.5, 2.0).is_ok());
+    }
+
+    #[test]
+    fn non_square_image_for_wide_mesh() {
+        let overlay = FemSliceOverlay {
+            bounds: SliceOverlayBounds {
+                u_min: 0.0,
+                u_max: 4.0,
+                v_min: 0.0,
+                v_max: 1.0,
+            },
+            cut_norm: 0.5,
+            cut_world: 0.0,
+            normal_axis: "z",
+            plane: SlicePlane::Xy,
+            polygons: vec![SliceOverlayPolygon {
+                parent_element_id: 0,
+                points: vec![point([0.1, 0.1]), point([3.9, 0.1]), point([2.0, 0.9])],
+                vertices: vec![[0.1, 0.1], [3.9, 0.1], [2.0, 0.9]],
+            }],
+            segments: vec![],
+            u_axis: "x",
+            v_axis: "y",
+        };
+
+        let rendered = render_cross_section_png(
+            &overlay,
+            &[0.7],
+            CrossSectionImageRenderOptions {
+                color_scale: CrossSectionImageColorScale::Jet,
+                legend: false,
+                metric: CrossSectionQualityMetric::Skewness,
+                resolution: 1024,
+                rotation_degrees: 0.0,
+                shrink_factor: 1.0,
+                wireframe: true,
+                edge_width: 1.5,
+                dpr: 1.0,
+            },
+            None,
+        )
+        .unwrap();
+
+        // Wide mesh should produce a wider-than-tall image
+        assert!(rendered.width > rendered.height, "expected w>h, got {}x{}", rendered.width, rendered.height);
+    }
+
+    #[test]
+    fn format_si_value_uses_correct_prefixes() {
+        assert_eq!(format_si_value(0.0), "0");
+        assert_eq!(format_si_value(1.5), "1.50");
+        assert!(format_si_value(0.001).contains("m"));
+        assert!(format_si_value(0.000001).contains("μ"));
+        assert!(format_si_value(0.000000001).contains("n"));
     }
 
     fn point(uv: [f64; 2]) -> SliceOverlayPoint {

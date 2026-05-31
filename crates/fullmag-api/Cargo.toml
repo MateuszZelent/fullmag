@@ -29,7 +29,8 @@ fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }
 fullmag-session = { path = "../fullmag-session" }
 png = "0.17"
-plotters = { version = "0.3", default-features = false, features = ["bitmap_backend"] }
+tiny-skia = "0.11"
+fontdue = "0.9"
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "8", features = ["axum"] }
 uuid = { version = "1", features = ["v4"] }

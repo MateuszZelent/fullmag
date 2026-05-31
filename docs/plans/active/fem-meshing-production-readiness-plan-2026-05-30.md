@@ -1269,11 +1269,12 @@ outside the sandbox and passed:
 just verify-fem-meshing-production
 # python_meshing_tests: passed
 # python_api_mesh_tests: passed
-# cargo test -p fullmag-api router_v2 --no-fail-fast: 249 passed
+# arch_waveguide_materialization_budget: passed
+# cargo test -p fullmag-api router_v2 --no-fail-fast: 253 passed
 # pnpm --dir apps/control-room generate:api: passed
 # pnpm --dir apps/control-room lint: passed
 # pnpm --dir apps/control-room typecheck: passed
-# pnpm --dir apps/control-room test: 173 files, 1004 tests passed
+# pnpm --dir apps/control-room test: 174 files, 1009 tests passed
 # git diff --check: passed
 ```
 
@@ -1586,7 +1587,7 @@ git commit -m "feat: add production mesh diagnostics interactions"
 - Modify: `packages/fullmag-py/tests/test_meshing.py`
 - Modify: `docs/diagnostics/fem-meshing-production-readiness-report-template.md`
 
-- [ ] **Step M1: Define budgets**
+- [x] **Step M1: Define budgets**
 
 Add to the production acceptance note:
 
@@ -1601,7 +1602,7 @@ The default interactive arch-waveguide example must materialize below:
 
 Changing these limits requires a measured explanation in the same commit, including old limit, new limit, fixture, wall time, node count, tetrahedron count, and RAM estimate.
 
-- [ ] **Step M2: Add materialization smoke**
+- [x] **Step M2: Add materialization smoke**
 
 Add a test or script that runs:
 
@@ -1614,7 +1615,7 @@ PYTHONPATH=packages/fullmag-py/src .fullmag/local/python/bin/python \
 
 Parse the output and assert geometry assets include mesh statistics when stages are not stripped. If helper output intentionally strips assets after stage extraction, add a dedicated helper command that materializes and reports mesh stats without solver start.
 
-- [ ] **Step M3: Record actual numbers**
+- [x] **Step M3: Record actual numbers**
 
 After materialization, record:
 
@@ -1633,7 +1634,7 @@ Write this into a dated diagnostic report:
 docs/diagnostics/arch-waveguide-production-mesh-YYYY-MM-DD.md
 ```
 
-- [ ] **Step M4: Run managed headless materialization**
+- [x] **Step M4: Run managed headless materialization**
 
 ```bash
 just run-arch-waveguide-managed-headless script 8
@@ -1645,6 +1646,11 @@ Expected:
 - no fallback crash,
 - no unexpected auto-coarsen before solver gate,
 - mesh counts within budget or documented as intentionally outside interactive default.
+
+Current result: passed on 2026-05-31 after re-exporting the managed FEM runtime
+bundle with OpenMPI/PMIx runtime components and help data. The run reached
+`fem_cpu_native`, materialized the final run mesh with 11,091 nodes and 66,355
+tetrahedra, completed one relaxation step, and reported `status=completed`.
 
 - [ ] **Step M5: Commit**
 
@@ -1663,7 +1669,7 @@ git commit -m "test: validate arch waveguide production mesh budget"
 - Create: `docs/diagnostics/fem-meshing-production-readiness-report-2026-05-30.md`
 - Modify: this plan, marking completed items
 
-- [ ] **Step N1: Run the production verifier**
+- [x] **Step N1: Run the production verifier**
 
 ```bash
 just verify-fem-meshing-production
@@ -1675,7 +1681,7 @@ Expected:
 all checks passed
 ```
 
-- [ ] **Step N2: Run the current example materialization**
+- [x] **Step N2: Run the current example materialization**
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src .fullmag/local/python/bin/python \
@@ -1692,7 +1698,7 @@ Expected:
 - no `edge/corner refinement currently requires component-aware`,
 - no degenerate tetra validation error.
 
-- [ ] **Step N3: Produce the final report**
+- [x] **Step N3: Produce the final report**
 
 Create `docs/diagnostics/fem-meshing-production-readiness-report-2026-05-30.md` from the template and fill every support-matrix row with evidence:
 
@@ -1702,7 +1708,7 @@ Create `docs/diagnostics/fem-meshing-production-readiness-report-2026-05-30.md` 
 
 Use `failed` or `unsupported` for any row that is not proven. Do not write `passed` from inference.
 
-- [ ] **Step N4: Update this plan**
+- [x] **Step N4: Update this plan**
 
 In this plan:
 
@@ -1801,11 +1807,18 @@ This plan intentionally avoids placeholder markers, open-ended "add tests", and 
 
 ## 20. Production Decision
 
-Current decision: **not production-ready**.
+Current decision: **production-ready for support matrix S1-S12**.
 
-This decision can change only after:
+The FEM mesh generation gate now passes for the declared support-matrix
+evidence and the canonical arch-waveguide example materializes within the
+interactive budget. The managed runtime smoke in Task M4 / S12 now also
+passes: after re-exporting the managed FEM runtime bundle with OpenMPI/PMIx
+runtime components and help data, the native FEM runtime reaches
+`fem_cpu_native`, executes one relaxation step, and completes.
 
-1. every task A-N is complete or explicitly superseded by an equivalent implementation,
-2. every support-matrix row S1-S12 is `passed` or explicitly scoped out of the public production claim,
+This decision remains valid only while:
+
+1. Task M4 remains green or is explicitly removed from the production gate,
+2. every support-matrix row S1-S12 remains `passed` or explicitly scoped out of the public production claim,
 3. `just verify-fem-meshing-production` passes on the current worktree,
 4. a filled report exists at `docs/diagnostics/fem-meshing-production-readiness-report-YYYY-MM-DD.md`.

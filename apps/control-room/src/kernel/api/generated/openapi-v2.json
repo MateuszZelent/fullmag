@@ -1583,7 +1583,9 @@
           "jet",
           "viridis",
           "hot",
-          "coolwarm"
+          "coolwarm",
+          "plasma",
+          "inferno"
         ],
         "type": "string"
       },
@@ -14934,6 +14936,24 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "edge_width",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dpr",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           }
         ],

@@ -40,6 +40,9 @@ use crate::preview::{quantity_spatial_domain, quantity_unit};
 use crate::quantity_data_plane::{
     projection_empty_mask_cache_key, scalar_projection_cache_key, slice_cache_key,
 };
+use crate::router_v2::handlers::sessions::status::{
+    field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
+};
 use crate::schemas::fields::*;
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
@@ -188,7 +191,7 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             quantity_unit(qid),
-            snapshot.state_version,
+            field_quantity_revision(snapshot, qid),
             gen_id,
         );
     }
@@ -207,7 +210,7 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             &field.unit,
-            snapshot.state_version,
+            field_quantity_revision(snapshot, qid),
             gen_id,
         );
     }
@@ -217,13 +220,13 @@ pub async fn get_field_catalog(
             &mut quantities,
             "m",
             quantity_unit("m"),
-            snapshot.state_version,
+            field_quantity_revision(snapshot, "m"),
             gen_id,
         );
     }
 
     Ok(Json(FieldCatalog {
-        revision: snapshot.state_version,
+        revision: current_field_catalog_revision(snapshot),
         domain_generation_id: gen_id,
         quantities,
     }))
@@ -287,7 +290,7 @@ pub async fn get_field_meta(
             components: n_comp,
             location,
             unit,
-            field_revision: snapshot.state_version,
+            field_revision: field_quantity_revision(snapshot, quantity_id),
             domain_generation_id: gen_id,
             stats: None,
         }));
@@ -313,7 +316,7 @@ pub async fn get_field_meta(
             components: n_comp,
             location,
             unit,
-            field_revision: snapshot.state_version,
+            field_revision: field_quantity_revision(snapshot, quantity_id),
             domain_generation_id: gen_id,
             stats: None,
         }));
@@ -694,7 +697,7 @@ pub async fn get_field_vector(
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
 
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, quantity_id);
     let gen_id_str = snapshot
         .fem_mesh
         .as_ref()
@@ -1516,7 +1519,7 @@ async fn build_slice_matrix(
         resolve_slice_query(&slice_query_from_matrix(query, resolved_component), n_comp)?;
     resolved.component = component;
 
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -1665,7 +1668,7 @@ async fn build_projection_matrix(
     let spec = quantity_spec(quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&projection_query_from_matrix(query), n_comp)?;
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -1738,7 +1741,7 @@ pub async fn get_field_projection_meta(
     let spec = quantity_spec(&quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -1887,7 +1890,7 @@ pub async fn get_field_projection_scalar(
     let spec = quantity_spec(&quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -1995,7 +1998,7 @@ pub async fn get_field_projection_profile(
     let spec = quantity_spec(&quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_profile_query(&query, n_comp)?;
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -2076,7 +2079,7 @@ pub async fn get_field_projection_empty_mask(
     let spec = quantity_spec(&quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
     let resolved = resolve_projection_query(&query, n_comp)?;
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -2470,7 +2473,7 @@ pub async fn get_field_slice_meta(
         ));
     }
 
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id_str = snapshot
         .fem_mesh
         .as_ref()
@@ -2657,7 +2660,7 @@ pub async fn get_field_slice_scalar(
             "quantity slice requires mesh topology for FEM runtime",
         ));
     }
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()
@@ -2786,7 +2789,7 @@ pub async fn get_field_slice_arrows(
             "quantity slice requires mesh topology for FEM runtime",
         ));
     }
-    let field_revision = snapshot.state_version;
+    let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id: u64 = snapshot
         .fem_mesh
         .as_ref()

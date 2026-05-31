@@ -287,7 +287,36 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
-    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(10);
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+  });
+
+  it("maps semantic field sample invalidations to subscribed field resources without invalidating the catalog", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=magnitude`;
+
+    resources.subscribe(fieldKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            resource: "fields",
+            resource_id: "samples",
+            revision: 11,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+    expect(resources.getRevision(fieldKey)).toBe(11);
   });
 
   it("refreshes mesh build dependents after latest successful build changes", () => {

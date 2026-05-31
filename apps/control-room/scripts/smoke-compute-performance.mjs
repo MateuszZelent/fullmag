@@ -25,11 +25,20 @@ const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
   "fullmag.viewport3d.buildMeshQualityVertexColors",
   "fullmag.viewport3d.buildFdmCuboidInstanceModel",
   "fullmag.viewport3d.buildViewport3DFieldRenderModel",
+  "fullmag.viewport3d.buildVectorGlyphInstances",
+  "fullmag.viewport3d.uploadVectorGlyphColors",
+  "fullmag.viewport3d.uploadVectorGlyphMatrices",
 ];
 const BINARY_RESOURCE_MEASURE_NAMES = [
   "fullmag.api.requestBinaryResource.topology",
+  "fullmag.api.requestBinaryResource.topology.transport",
+  "fullmag.api.requestBinaryResource.topology.decode",
   "fullmag.api.requestBinaryResource.mesh-quality-data",
+  "fullmag.api.requestBinaryResource.mesh-quality-data.transport",
+  "fullmag.api.requestBinaryResource.mesh-quality-data.decode",
   "fullmag.api.requestBinaryResource.field-vector",
+  "fullmag.api.requestBinaryResource.field-vector.transport",
+  "fullmag.api.requestBinaryResource.field-vector.decode",
 ];
 const REACT_RENDER_MEASURE_NAMES = [
   "fullmag.react.render.ExplorerModule.mount",
@@ -131,8 +140,10 @@ async function main() {
       waitUntil: "domcontentloaded",
       timeout: timeoutMs,
     });
-    await page.locator("main").waitFor({ state: "visible", timeout: 30_000 });
-    await page.getByRole("tab", { name: "Study" }).first().click({ timeout: 30_000 });
+    await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
+    await page.getByRole("tab", { name: "Study" }).first().click({ timeout: timeoutMs });
+    await waitForComputeActionReady(page, STRICT_COMPUTE_ACTIONS[0]);
+    await resetComputePerformanceProbe(page);
 
     const actionResults = [];
     for (const action of STRICT_COMPUTE_ACTIONS) {
@@ -165,20 +176,48 @@ async function main() {
 }
 
 async function clickComputeAction(page, action, resultResourceRequests) {
-  const button = page.locator(`[data-action-id="${cssAttributeValue(action.actionId)}"]`).first();
-  await button.waitFor({ state: "visible", timeout: timeoutMs });
-  await waitForEnabledAction(button, action.label);
+  const button = await waitForComputeActionReady(page, action);
 
+  const commandLedgerBefore = await readCommandLedger();
   const resultResourceStartIndex = resultResourceRequests.length;
-  const commandResponsePromise = page.waitForResponse(
+  const commandAcceptancePromise = waitForCommandAcceptanceFromBrowserResponse(
+    page,
+    action,
+  );
+  await button.click({ timeout: timeoutMs });
+  const commandAcceptance = await Promise.race([
+    commandAcceptancePromise,
+    waitForCommandAcceptanceFromLedger(action, commandLedgerBefore),
+  ]);
+  const commandAcceptedAt = Date.now();
+
+  await page.waitForTimeout(ACCEPTANCE_RESOURCE_RELOAD_GRACE_MS);
+  assertNoImmediateResultResourceReloads({
+    action,
+    commandAcceptedAt,
+    requests: resultResourceRequests.slice(resultResourceStartIndex),
+  });
+
+  const detail =
+    action.kind === "solve"
+      ? await waitForSolveExecutionProof(commandAcceptance.commandId)
+      : await waitForCommandSettled(commandAcceptance.commandId, action.kind);
+  return {
+    actionId: action.actionId,
+    commandId: commandAcceptance.commandId,
+    kind: action.kind,
+    resultResourceRequestCount: resultResourceRequests.length - resultResourceStartIndex,
+    status: commandStatus(detail),
+  };
+}
+
+async function waitForCommandAcceptanceFromBrowserResponse(page, action) {
+  const commandResponse = await page.waitForResponse(
     (response) =>
       isSimulationCommandsUrl(response.url()) &&
       response.request().method() === "POST",
     { timeout: timeoutMs },
   );
-  await button.click({ timeout: timeoutMs });
-  const commandResponse = await commandResponsePromise;
-  const commandAcceptedAt = Date.now();
   const responseText = await commandResponse.text();
   if (!commandResponse.ok()) {
     throw new Error(
@@ -194,25 +233,40 @@ async function clickComputeAction(page, action, resultResourceRequests) {
   if (typeof responseBody.command_id !== "string") {
     throw new Error(`${action.label} response did not include command_id.`);
   }
+  return { commandId: responseBody.command_id, source: "browser-response" };
+}
 
-  await page.waitForTimeout(ACCEPTANCE_RESOURCE_RELOAD_GRACE_MS);
-  assertNoImmediateResultResourceReloads({
-    action,
-    commandAcceptedAt,
-    requests: resultResourceRequests.slice(resultResourceStartIndex),
+async function waitForCommandAcceptanceFromLedger(action, previousLedger) {
+  const previousCommandIds = new Set(
+    (previousLedger?.commands ?? [])
+      .map((command) => command.command_id)
+      .filter((commandId) => typeof commandId === "string"),
+  );
+  return poll(`${action.label} command accepted in backend ledger`, async () => {
+    const ledger = await readCommandLedger();
+    const command = (ledger.commands ?? []).find(
+      (entry) =>
+        entry.kind === action.kind &&
+        typeof entry.command_id === "string" &&
+        !previousCommandIds.has(entry.command_id),
+    );
+    if (!command) return null;
+    if (command.status === "rejected" || command.completion_status === "rejected") {
+      throw new Error(
+        `${action.label} was rejected in command ledger: ${
+          command.error ?? command.completion_reason ?? "unknown error"
+        }`,
+      );
+    }
+    return { commandId: command.command_id, source: "command-ledger" };
   });
+}
 
-  const detail =
-    action.kind === "solve"
-      ? await waitForCommandDetail(responseBody.command_id, action.kind)
-      : await waitForCommandSettled(responseBody.command_id, action.kind);
-  return {
-    actionId: action.actionId,
-    commandId: responseBody.command_id,
-    kind: action.kind,
-    resultResourceRequestCount: resultResourceRequests.length - resultResourceStartIndex,
-    status: commandStatus(detail),
-  };
+async function waitForComputeActionReady(page, action) {
+  const button = page.locator(`[data-action-id="${cssAttributeValue(action.actionId)}"]`).first();
+  await button.waitFor({ state: "visible", timeout: timeoutMs });
+  await waitForEnabledAction(button, action.label);
+  return button;
 }
 
 function assertNoImmediateResultResourceReloads({
@@ -251,14 +305,6 @@ async function waitForEnabledAction(button, label) {
   });
 }
 
-async function waitForCommandDetail(commandId, kind) {
-  return waitForJson(
-    `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`,
-    `${kind} command detail`,
-    (value) => value.command_id === commandId && value.kind === kind,
-  );
-}
-
 async function waitForCommandSettled(commandId, kind) {
   return waitForJson(
     `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`,
@@ -270,13 +316,105 @@ async function waitForCommandSettled(commandId, kind) {
   );
 }
 
+async function waitForSolveExecutionProof(commandId) {
+  return poll(`solve command ${commandId} to start solver execution`, async () => {
+    const [command, execution, solverStatus] = await Promise.all([
+      getJson(
+        `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`,
+      ),
+      getJson("/v2/sessions/current/simulation/stages/execution"),
+      getJson("/v2/sessions/current/simulation/solver/status"),
+    ]);
+    if (command.command_id !== commandId || command.kind !== "solve") {
+      return null;
+    }
+
+    assertCommandDidNotFail(command, "Compute Study");
+    if (hasSolveStageExecutionProof(commandId, command, execution, solverStatus)) {
+      return command;
+    }
+    if (isCommandTerminal(command)) {
+      throw new Error(
+        `Compute Study reached terminal status without solver/stage execution proof: ${formatCommandTerminalStatus(command)}`,
+      );
+    }
+    return null;
+  });
+}
+
+function assertCommandDidNotFail(command, label) {
+  const status = commandStatus(command);
+  const completionStatus = commandCompletionStatus(command);
+  if (
+    status === "failed" ||
+    status === "rejected" ||
+    completionStatus === "failed" ||
+    completionStatus === "rejected" ||
+    completionStatus === "cancelled"
+  ) {
+    throw new Error(
+      `${label} did not start successfully: ${formatCommandTerminalStatus(command)}`,
+    );
+  }
+}
+
+function hasSolveStageExecutionProof(commandId, command, execution, solverStatus) {
+  if (command.started_at_unix_ms != null) {
+    return true;
+  }
+
+  const stages = Array.isArray(execution.stages) ? execution.stages : [];
+  const linkedStage = stages.find((stage) => stage.command_id === commandId);
+  if (linkedStage) {
+    if (linkedStage.started_at_unix_ms != null || linkedStage.completed_at_unix_ms != null) {
+      return true;
+    }
+    if (["running", "completed"].includes(String(linkedStage.status ?? ""))) {
+      return true;
+    }
+  }
+
+  const activeIndex = execution.active_stage_index;
+  const activeStage = Number.isInteger(activeIndex)
+    ? stages.find((stage) => stage.index === activeIndex)
+    : null;
+  const activeStageMatchesCommand = activeStage?.command_id === commandId;
+  const executionState = String(execution.runtime_state ?? "");
+  const solverState = String(
+    solverStatus.runtime_state ?? solverStatus.runtime_status_kind ?? "",
+  );
+  return (
+    activeStageMatchesCommand &&
+    (["running", "paused"].includes(executionState) ||
+      ["running", "paused"].includes(solverState))
+  );
+}
+
+function isCommandTerminal(command) {
+  return TERMINAL_COMMAND_STATUSES.has(commandStatus(command));
+}
+
 function commandStatus(detail) {
   return String(detail.status ?? detail.status_kind ?? "");
 }
 
+function commandCompletionStatus(detail) {
+  return String(detail.completion_status ?? "");
+}
+
+function formatCommandTerminalStatus(command) {
+  return [
+    `status=${commandStatus(command) || "unknown"}`,
+    `completion_status=${commandCompletionStatus(command) || "none"}`,
+    command.error ? `error=${command.error}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 async function cleanupSolveCommand(commandId) {
-  const state = await runtimeState().catch(() => "");
-  if (!["running", "paused"].includes(state)) return;
+  const cleanupState = await waitForSolveCleanupState(commandId);
+  if (cleanupState === "terminal") return;
 
   const response = await postJson("/v2/sessions/current/simulation/commands", {
     client_intent_id: `compute-performance-smoke:stop:${commandId}:${Date.now()}`,
@@ -294,6 +432,37 @@ async function cleanupSolveCommand(commandId) {
     (nextState) => !["running", "paused"].includes(nextState),
     "runtime stopped after compute performance smoke",
   );
+}
+
+async function waitForSolveCleanupState(commandId) {
+  return poll(`solve command ${commandId} ready for cleanup`, async () => {
+    const [command, execution] = await Promise.all([
+      getJson(
+        `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`,
+      ),
+      getJson("/v2/sessions/current/simulation/stages/execution"),
+    ]);
+    if (TERMINAL_COMMAND_STATUSES.has(commandStatus(command))) {
+      return "terminal";
+    }
+
+    const runtimeState = String(execution.runtime_state ?? "");
+    const activeStage = activeStageForExecution(execution);
+    if (
+      ["running", "paused"].includes(runtimeState) &&
+      activeStage?.command_id === commandId
+    ) {
+      return "active-stage";
+    }
+    return null;
+  });
+}
+
+function activeStageForExecution(execution) {
+  const activeIndex = execution.active_stage_index;
+  const stages = Array.isArray(execution.stages) ? execution.stages : [];
+  if (!Number.isInteger(activeIndex)) return null;
+  return stages.find((stage) => stage.index === activeIndex) ?? null;
 }
 
 async function assertActiveSession() {
@@ -318,12 +487,15 @@ async function installComputePerformanceProbe(
 ) {
   await page.addInitScript(({ measureNames, responsivenessDelayThresholdMs, responsivenessProbeIntervalMs }) => {
     window.__FULLMAG_REACT_PROFILER__ = true;
+    const now = performance.now();
     const state = {
       longTasks: [],
       measures: [],
+      resetStartTime: now,
       resources: [],
       responsiveness: {
         delayedTickCount: 0,
+        expectedAt: now + responsivenessProbeIntervalMs,
         maxDelayMs: 0,
         sampleCount: 0,
         totalDelayMs: 0,
@@ -334,6 +506,20 @@ async function installComputePerformanceProbe(
           : PerformanceObserver.supportedEntryTypes ?? [],
     };
     window.__FULLMAG_COMPUTE_PERFORMANCE__ = state;
+    window.__FULLMAG_RESET_COMPUTE_PERFORMANCE__ = () => {
+      const resetStartTime = performance.now();
+      state.longTasks = [];
+      state.measures = [];
+      state.resources = [];
+      state.resetStartTime = resetStartTime;
+      state.responsiveness.delayedTickCount = 0;
+      state.responsiveness.expectedAt = resetStartTime + responsivenessProbeIntervalMs;
+      state.responsiveness.maxDelayMs = 0;
+      state.responsiveness.sampleCount = 0;
+      state.responsiveness.totalDelayMs = 0;
+      performance.clearMeasures?.();
+      performance.clearResourceTimings?.();
+    };
     startResponsivenessProbe(
       state,
       responsivenessProbeIntervalMs,
@@ -356,10 +542,9 @@ async function installComputePerformanceProbe(
     }
 
     function startResponsivenessProbe(state, intervalMs, thresholdMs) {
-      let expectedAt = performance.now() + intervalMs;
       function probeTick() {
         const now = performance.now();
-        const delayMs = Math.max(0, now - expectedAt);
+        const delayMs = Math.max(0, now - state.responsiveness.expectedAt);
         state.responsiveness.sampleCount += 1;
         if (delayMs > thresholdMs) {
           state.responsiveness.delayedTickCount += 1;
@@ -369,13 +554,14 @@ async function installComputePerformanceProbe(
           );
           state.responsiveness.totalDelayMs += delayMs;
         }
-        expectedAt = now + intervalMs;
+        state.responsiveness.expectedAt = now + intervalMs;
         setTimeout(probeTick, intervalMs);
       }
       setTimeout(probeTick, intervalMs);
     }
 
     observePerformanceEntries("longtask", (entry) => {
+      if (entry.startTime < state.resetStartTime) return;
       state.longTasks.push({
         duration: entry.duration,
         name: entry.name,
@@ -384,6 +570,7 @@ async function installComputePerformanceProbe(
     });
     observePerformanceEntries("measure", (entry) => {
       if (!measureNames.includes(entry.name)) return;
+      if (entry.startTime < state.resetStartTime) return;
       state.measures.push({
         duration: entry.duration,
         name: entry.name,
@@ -392,6 +579,7 @@ async function installComputePerformanceProbe(
     });
     observePerformanceEntries("resource", (entry) => {
       if (!String(entry.name).includes("/v2/sessions/current/")) return;
+      if (entry.startTime < state.resetStartTime) return;
       state.resources.push({
         duration: entry.duration,
         initiatorType: entry.initiatorType,
@@ -404,6 +592,16 @@ async function installComputePerformanceProbe(
     measureNames: COMPUTE_PERFORMANCE_MEASURE_NAMES,
     responsivenessDelayThresholdMs,
     responsivenessProbeIntervalMs,
+  });
+}
+
+async function resetComputePerformanceProbe(page) {
+  await page.evaluate(() => {
+    const reset = window.__FULLMAG_RESET_COMPUTE_PERFORMANCE__;
+    if (typeof reset !== "function") {
+      throw new Error("Compute performance probe reset hook is not installed.");
+    }
+    reset();
   });
 }
 
@@ -434,7 +632,11 @@ async function collectComputePerformanceProbe(
       };
       const sessionResourceEntries = performance
         .getEntriesByType("resource")
-        .filter((entry) => String(entry.name).includes("/v2/sessions/current/"))
+        .filter(
+          (entry) =>
+            entry.startTime >= (state.resetStartTime ?? 0) &&
+            String(entry.name).includes("/v2/sessions/current/"),
+        )
         .map((entry) => ({
           duration: entry.duration,
           initiatorType: entry.initiatorType,
@@ -444,7 +646,11 @@ async function collectComputePerformanceProbe(
         }));
       const measureEntries = performance
         .getEntriesByType("measure")
-        .filter((entry) => measureNames.includes(entry.name))
+        .filter(
+          (entry) =>
+            entry.startTime >= (state.resetStartTime ?? 0) &&
+            measureNames.includes(entry.name),
+        )
         .map((entry) => ({
           duration: entry.duration,
           name: entry.name,
@@ -568,11 +774,6 @@ async function waitForRuntimeState(predicate, label) {
   );
 }
 
-async function runtimeState() {
-  const value = await getJson("/v2/sessions/current/simulation/solver/status");
-  return String(value.runtime_state ?? value.runtime_status_kind ?? "");
-}
-
 async function waitForJson(path, label, ready) {
   return poll(label, async () => {
     const value = await getJson(path);
@@ -602,6 +803,14 @@ async function getJson(path) {
     headers: { accept: "application/json" },
   });
   return readJsonResponse(response, "GET", path);
+}
+
+async function readCommandLedger() {
+  const ledger = await getJson("/v2/sessions/current/simulation/commands");
+  if (!Array.isArray(ledger.commands)) {
+    throw new Error("Command ledger response did not include commands array.");
+  }
+  return ledger;
 }
 
 async function postJson(path, body) {

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
@@ -13,6 +15,7 @@ const bounds = {
   radius: 50,
   size: [100, 200, 300] as [number, number, number],
 };
+const clipPlaneLayerSourceUrl = new URL("./ClipPlaneLayer.tsx", import.meta.url);
 
 function clip(
   patch: Partial<VisualizationStateResource["clip"]>,
@@ -146,5 +149,22 @@ describe("resolveClipPlaneFrame", () => {
       0.5, 0, 0.5,
       0, 0.5, 0.5,
     ]);
+  });
+
+  it("keeps the cross-section frame preview as an outline-only layer", () => {
+    const source = readFileSync(clipPlaneLayerSourceUrl, "utf8");
+    const previewStart = source.indexOf(
+      "export function ClipPlaneFramePreviewLayer",
+    );
+    const previewEnd = source.indexOf("function resolveClipPlaneFrameQuaternion");
+    const previewBlock = source.slice(previewStart, previewEnd);
+
+    expect(previewStart).toBeGreaterThanOrEqual(0);
+    expect(previewEnd).toBeGreaterThan(previewStart);
+    expect(previewBlock).toContain("ClipPlaneFrameOutline");
+    expect(previewBlock).not.toContain("applyRendererClipping");
+    expect(previewBlock).not.toContain("ClipPlaneIntersectionMarkers");
+    expect(previewBlock).not.toContain("<mesh");
+    expect(previewBlock).not.toContain("<points");
   });
 });

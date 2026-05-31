@@ -69,10 +69,12 @@ export function resolveCrossSectionImageResourceKey(
   params.set("metric", stableQuery.metric);
   params.set("plane", stableQuery.plane);
   params.set("position_percent", String(stableQuery.positionPercent));
-  params.set("resolution", String(stableQuery.resolution ?? 1024));
+  params.set("resolution", String(stableQuery.resolution ?? 4096));
   params.set("rotation_degrees", String(stableQuery.rotationDegrees ?? 0));
   params.set("shrink_factor", String(stableQuery.shrinkFactor ?? 1));
   params.set("wireframe", String(stableQuery.wireframe ?? true));
+  params.set("edge_width", String(stableQuery.edgeWidth ?? 1.5));
+  params.set("dpr", String(stableQuery.dpr ?? 1));
   return `${CROSS_SECTION_IMAGE_RESOURCE_BASE_KEY}?${params.toString()}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
 }
 
@@ -260,12 +262,14 @@ function normalizeCrossSectionImageQuery(
 ): CrossSectionImageQuery {
   return {
     colorScale: query.colorScale ?? "viridis",
+    dpr: query.dpr ?? 1,
+    edgeWidth: query.edgeWidth ?? 1.5,
     filterExpression: query.filterExpression?.trim() || null,
     legend: query.legend ?? true,
     metric: query.metric,
     plane: query.plane,
     positionPercent: query.positionPercent,
-    resolution: query.resolution ?? 1024,
+    resolution: query.resolution ?? 4096,
     rotationDegrees: query.rotationDegrees ?? 0,
     shrinkFactor: query.shrinkFactor ?? 1,
     wireframe: query.wireframe ?? true,

@@ -60,6 +60,23 @@ type SolverProfileCommandRequest = Extract<
   StructuredCommandRequest,
   { kind: "set_solver_profile" }
 >;
+type RuntimeCommandWithPrecondition = StructuredCommandRequest & {
+  precondition?: RuntimeCommandPrecondition | null;
+};
+
+interface RuntimePreconditionRefreshApi {
+  commands?: {
+    list?: () => Promise<CommandQueueStatusResource>;
+  };
+  simulation?: {
+    solver?: {
+      status?: () => Promise<SolverStatusResource>;
+    };
+    stages?: {
+      execution?: () => Promise<StageExecutionResource>;
+    };
+  };
+}
 
 const DEFAULT_RELAX_STAGE: JsonObject = {
   entrypoint_kind: "relax",
@@ -97,6 +114,15 @@ function disabledWithoutApi(context: CommandContext): string | null {
 
 function isApiAvailable(context: CommandContext): boolean {
   return Boolean(context.api);
+}
+
+function isStageControlCommandKind(kind: SimpleStudyRuntimeCommandKind): boolean {
+  return (
+    kind === "pause" ||
+    kind === "resume" ||
+    kind === "skip" ||
+    kind === "stop"
+  );
 }
 
 function runtimeCommandDisabledReason(
@@ -526,6 +552,7 @@ function activeStageTarget(
 
 function runtimeCommandPrecondition(
   context: CommandContext,
+  kind: SimpleStudyRuntimeCommandKind,
   overrides: RuntimeCommandPrecondition = {},
 ): RuntimeCommandPrecondition | undefined {
   const stage = resourceData<StageExecutionResource>(
@@ -536,7 +563,9 @@ function runtimeCommandPrecondition(
   const commandRevision = commandRevisionPrecondition(context);
   const precondition: RuntimeCommandPrecondition = {
     ...(state ? { runtime_state: state } : {}),
-    ...(stage ? { stage_execution_revision: stage.revision } : {}),
+    ...(stage && isStageControlCommandKind(kind)
+      ? { stage_execution_revision: stage.revision }
+      : {}),
     ...(commandRevision === undefined
       ? {}
       : { command_revision: commandRevision }),
@@ -556,7 +585,7 @@ function buildRuntimeCommandFromContext(
   } = {},
 ): StructuredCommandRequest {
   return buildStudyRuntimeCommand(kind, {
-    precondition: runtimeCommandPrecondition(context, options.precondition),
+    precondition: runtimeCommandPrecondition(context, kind, options.precondition),
     reason: options.reason,
     target:
       options.target ??
@@ -755,7 +784,11 @@ async function submitRuntimeCommand(
     return { message: "Control-room API is unavailable.", status: "failed" };
   }
 
-  const response = await context.api.commands.submit(command);
+  const refreshedCommand = await refreshRuntimeCommandPrecondition(
+    context,
+    command,
+  );
+  const response = await context.api.commands.submit(refreshedCommand);
   if (!response.accepted) {
     return {
       message: response.error ?? `${successMessage} rejected.`,
@@ -765,10 +798,60 @@ async function submitRuntimeCommand(
 
   invalidateRuntimeControlResources(
     context,
-    commandRevision(response, `study:${command.kind}`),
+    commandRevision(response, `study:${refreshedCommand.kind}`),
   );
 
   return { message: successMessage, status: "completed" };
+}
+
+async function refreshRuntimeCommandPrecondition(
+  context: CommandContext,
+  command: StructuredCommandRequest,
+): Promise<StructuredCommandRequest> {
+  const commandWithPrecondition = command as RuntimeCommandWithPrecondition;
+  const original = commandWithPrecondition.precondition;
+  if (!original || !context.api) return command;
+
+  const api = context.api as RuntimePreconditionRefreshApi;
+  const [solverResult, stageResult, queueResult] = await Promise.allSettled([
+    api.simulation?.solver?.status?.(),
+    api.simulation?.stages?.execution?.(),
+    api.commands?.list?.(),
+  ]);
+  const precondition: RuntimeCommandPrecondition = { ...original };
+
+  if (solverResult.status === "fulfilled") {
+    const state = solverResult.value?.runtime_state;
+    if (typeof state === "string" && state.length > 0) {
+      precondition.runtime_state = state;
+    }
+  }
+  if (
+    original.stage_execution_revision !== undefined &&
+    stageResult.status === "fulfilled"
+  ) {
+    const revision = stageResult.value?.revision;
+    if (typeof revision === "number" && Number.isFinite(revision)) {
+      precondition.stage_execution_revision = revision;
+    }
+  }
+  if (queueResult.status === "fulfilled") {
+    const queue = queueResult.value;
+    const revision =
+      typeof queue?.revision === "number"
+        ? queue.revision
+        : Array.isArray(queue?.commands)
+          ? queue.commands.length
+          : null;
+    if (revision !== null && Number.isFinite(revision)) {
+      precondition.command_revision = revision;
+    }
+  }
+
+  return {
+    ...command,
+    precondition,
+  } as StructuredCommandRequest;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -1094,29 +1177,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     isActive: (context) => isRuntimeCommandActive(context, "compute_fields"),
     activeResource: (context) =>
       activeRuntimeCommandResource(context, "compute_fields"),
-    run: async (context) => {
-      if (!context.api) {
-        return { message: "Control-room API is unavailable.", status: "failed" };
-      }
-
-      const response = await context.api.commands.submit({
-        ...buildRuntimeCommandFromContext(context, "compute_fields"),
-      });
-      if (!response.accepted) {
-        return {
-          message: response.error ?? "Compute fields command rejected.",
-          status: "failed",
-        };
-      }
-
-      const revision = commandRevision(response, "compute-fields");
-      invalidateRuntimeControlResources(context, revision);
-
-      return {
-        message: "Compute fields command accepted.",
-        status: "completed",
-      };
-    },
+    run: (context) =>
+      submitRuntimeCommand(
+        context,
+        buildRuntimeCommandFromContext(context, "compute_fields"),
+        "Compute fields command accepted.",
+      ),
   },
   {
     id: "study.compute-energies",
@@ -1131,28 +1197,11 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     isActive: (context) => isRuntimeCommandActive(context, "compute_energies"),
     activeResource: (context) =>
       activeRuntimeCommandResource(context, "compute_energies"),
-    run: async (context) => {
-      if (!context.api) {
-        return { message: "Control-room API is unavailable.", status: "failed" };
-      }
-
-      const response = await context.api.commands.submit({
-        ...buildRuntimeCommandFromContext(context, "compute_energies"),
-      });
-      if (!response.accepted) {
-        return {
-          message: response.error ?? "Compute energies command rejected.",
-          status: "failed",
-        };
-      }
-
-      const revision = commandRevision(response, "compute-energies");
-      invalidateRuntimeControlResources(context, revision);
-
-      return {
-        message: "Compute energies command accepted.",
-        status: "completed",
-      };
-    },
+    run: (context) =>
+      submitRuntimeCommand(
+        context,
+        buildRuntimeCommandFromContext(context, "compute_energies"),
+        "Compute energies command accepted.",
+      ),
   },
 ];

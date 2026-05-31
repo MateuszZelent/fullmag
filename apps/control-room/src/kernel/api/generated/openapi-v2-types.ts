@@ -2296,7 +2296,7 @@ export interface components {
             utilization_cpu_percent: number;
         };
         /** @enum {string} */
-        CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm";
+        CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm" | "plasma" | "inferno";
         /** @enum {string} */
         CrossSectionQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
         CurrentRunResource: {
@@ -7036,6 +7036,8 @@ export interface operations {
                 legend?: boolean;
                 shrink_factor?: number;
                 filter_expression?: string;
+                edge_width?: number;
+                dpr?: number;
             };
             header?: never;
             path?: never;

@@ -69,7 +69,9 @@ def _build_shared_domain_build_report(
     # with another OCC tetrahedral algorithm preserves the conformal CAD path.
     non_degrading_fallbacks = {
         "conformal_occ_delaunay_degenerate_retry_frontal",
+        "conformal_occ_delaunay_degenerate_retry_hxt",
         "conformal_occ_hxt_degenerate_retry_delaunay",
+        "conformal_occ_hxt_degenerate_retry_frontal",
     }
     degraded = (
         any(fallback not in non_degrading_fallbacks for fallback in fallbacks_triggered)

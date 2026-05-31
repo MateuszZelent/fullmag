@@ -41,6 +41,15 @@ describe("VectorFieldLayer performance contracts", () => {
     );
     expect(vectorFieldLayerSource).toContain("requestVectorGlyphUploadTask");
     expect(vectorFieldLayerSource).toContain("cancelVectorGlyphUploadTask");
+    expect(vectorFieldLayerSource).toContain(
+      "fullmag.viewport3d.buildVectorGlyphInstances",
+    );
+    expect(vectorFieldLayerSource).toContain(
+      "fullmag.viewport3d.uploadVectorGlyphColors",
+    );
+    expect(vectorFieldLayerSource).toContain(
+      "fullmag.viewport3d.uploadVectorGlyphMatrices",
+    );
     expect(vectorFieldLayerSource).not.toContain(
       "for (let index = 0; index < glyphs.count; index += 1)",
     );

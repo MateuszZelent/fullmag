@@ -28,6 +28,12 @@ const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
 const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
 const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 1024;
+const VECTOR_GLYPH_BUILD_MEASURE =
+  "fullmag.viewport3d.buildVectorGlyphInstances";
+const VECTOR_GLYPH_COLOR_UPLOAD_MEASURE =
+  "fullmag.viewport3d.uploadVectorGlyphColors";
+const VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE =
+  "fullmag.viewport3d.uploadVectorGlyphMatrices";
 
 interface VectorGlyphUploadBatch {
   end: number;
@@ -59,6 +65,45 @@ function requestVectorGlyphUploadTask(
 
 function cancelVectorGlyphUploadTask(handle: VectorGlyphUploadTaskHandle): void {
   clearTimeout(handle);
+}
+
+function markVectorGlyphWork(name: string): string | null {
+  const target = globalThis.performance;
+  if (!target?.mark || !target?.measure) return null;
+
+  const startMark = `${name}:start:${Date.now()}:${Math.random()}`;
+  target.mark(startMark);
+  return startMark;
+}
+
+function measureVectorGlyphWork(name: string, startMark: string | null): void {
+  const target = globalThis.performance;
+  if (!startMark || !target?.mark || !target?.measure) return;
+
+  const endMark = `${name}:end:${Date.now()}:${Math.random()}`;
+  target.mark(endMark);
+  try {
+    target.measure(name, startMark, endMark);
+  } catch {
+    // Gracefully ignore measurement errors
+  } finally {
+    target.clearMarks?.(startMark);
+    target.clearMarks?.(endMark);
+  }
+}
+
+function clearVectorGlyphWorkMark(startMark: string | null): void {
+  if (!startMark) return;
+  globalThis.performance?.clearMarks?.(startMark);
+}
+
+function measureVectorGlyphSyncWork<T>(name: string, task: () => T): T {
+  const startMark = markVectorGlyphWork(name);
+  try {
+    return task();
+  } finally {
+    measureVectorGlyphWork(name, startMark);
+  }
 }
 
 export interface VectorFieldLayerVectorStyle {
@@ -185,11 +230,13 @@ export function VectorFieldLayer({
   const glyphs = useMemo(
     () =>
       segments
-        ? buildVectorGlyphInstances(segments, {
-            colorMode,
-            headRadiusRatio: resolvedStyle.headRadiusRatio,
-            shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
-          })
+        ? measureVectorGlyphSyncWork(VECTOR_GLYPH_BUILD_MEASURE, () =>
+            buildVectorGlyphInstances(segments, {
+              colorMode,
+              headRadiusRatio: resolvedStyle.headRadiusRatio,
+              shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
+            }),
+          )
         : null,
     [
       colorMode,
@@ -331,15 +378,19 @@ export function VectorFieldLayer({
     // Bulk color write instead of per-instance setColorAt.
     const glyphColors = activeGlyphs.colors;
     if (glyphColors) {
-      const colorArray = instanceColorAttr.array as Float32Array;
-      colorArray.set(glyphColors.subarray(0, activeGlyphs.count * 3));
-      instanceColorAttr.needsUpdate = true;
+      measureVectorGlyphSyncWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, () => {
+        const colorArray = instanceColorAttr.array as Float32Array;
+        colorArray.set(glyphColors.subarray(0, activeGlyphs.count * 3));
+        instanceColorAttr.needsUpdate = true;
+      });
     }
 
     const batches = buildVectorGlyphUploadBatches(activeGlyphs.count);
     const { direction, matrix, position, quaternion, scale } = transformScratch;
+    const startMark = markVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE);
     let batchIndex = 0;
     let cancelled = false;
+    let measured = false;
     let task: VectorGlyphUploadTaskHandle | null = null;
 
     function uploadNextBatch(): void {
@@ -392,6 +443,9 @@ export function VectorFieldLayer({
       batchIndex += 1;
       if (batchIndex < batches.length) {
         task = requestVectorGlyphUploadTask(uploadNextBatch);
+      } else {
+        measureVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE, startMark);
+        measured = true;
       }
     }
 
@@ -401,6 +455,9 @@ export function VectorFieldLayer({
       cancelled = true;
       if (task) {
         cancelVectorGlyphUploadTask(task);
+      }
+      if (!measured) {
+        clearVectorGlyphWorkMark(startMark);
       }
     };
   }, [

@@ -49,12 +49,14 @@ export interface CrossSectionQuery {
 }
 export interface CrossSectionImageQuery {
   colorScale?: CrossSectionImageColorScale;
+  dpr?: number;
+  edgeWidth?: number;
   filterExpression?: string | null;
   legend?: boolean;
   metric: CrossSectionQualityMetric;
   plane: CrossSectionPlane;
   positionPercent: number;
-  resolution?: 512 | 1024 | 2048;
+  resolution?: number;
   rotationDegrees?: number;
   shrinkFactor?: number;
   wireframe?: boolean;

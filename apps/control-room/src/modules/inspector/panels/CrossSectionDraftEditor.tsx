@@ -9,7 +9,6 @@ import type {
 import { useKernel } from "@/kernel/KernelContext";
 import {
   commitCrossSectionDraft,
-  crossSectionVisualizationPatchFromDraft,
   updateCrossSectionDraft,
   type CrossSectionDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
@@ -32,12 +31,7 @@ export function CrossSectionDraftEditor({
   }
 
   const updateDraft = (patch: Partial<CrossSectionDraft>) => {
-    const next = updateCrossSectionDraft(patch);
-    if (next && draftPatchAffectsFrame(patch)) {
-      kernel.visualizationSync.queuePatch(
-        crossSectionVisualizationPatchFromDraft(next),
-      );
-    }
+    updateCrossSectionDraft(patch);
   };
   const commitDraft = () => {
     const plot = commitCrossSectionDraft();
@@ -240,6 +234,8 @@ export function CrossSectionDraftEditor({
           <option value="viridis">Viridis</option>
           <option value="hot">Hot</option>
           <option value="coolwarm">Coolwarm</option>
+          <option value="plasma">Plasma</option>
+          <option value="inferno">Inferno</option>
         </FormField>
         <FormField
           label="Element filter"
@@ -255,6 +251,17 @@ export function CrossSectionDraftEditor({
           type="checkbox"
           onChange={(event) =>
             updateDraft({ includeWireframe: event.target.checked })
+          }
+        />
+        <FormField
+          label="Edge width"
+          max={4}
+          min={0.5}
+          step={0.25}
+          type="number"
+          value={draft.edgeWidth}
+          onChange={(event) =>
+            updateDraft({ edgeWidth: Number(event.target.value) })
           }
         />
         <FormField
@@ -275,18 +282,5 @@ export function CrossSectionDraftEditor({
         </div>
       </InspectorSection>
     </div>
-  );
-}
-
-function draftPatchAffectsFrame(patch: Partial<CrossSectionDraft>): boolean {
-  return (
-    "colorScale" in patch ||
-    "filterExpression" in patch ||
-    "frameExtent" in patch ||
-    "includeWireframe" in patch ||
-    "metric" in patch ||
-    "plane" in patch ||
-    "positionPercent" in patch ||
-    "shrinkFactor" in patch
   );
 }

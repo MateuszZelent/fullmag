@@ -231,8 +231,14 @@ const qualityMappingPath = path.join(
 );
 const binaryResourcePerformanceMeasureNames = [
   "fullmag.api.requestBinaryResource.topology",
+  "fullmag.api.requestBinaryResource.topology.transport",
+  "fullmag.api.requestBinaryResource.topology.decode",
   "fullmag.api.requestBinaryResource.mesh-quality-data",
+  "fullmag.api.requestBinaryResource.mesh-quality-data.transport",
+  "fullmag.api.requestBinaryResource.mesh-quality-data.decode",
   "fullmag.api.requestBinaryResource.field-vector",
+  "fullmag.api.requestBinaryResource.field-vector.transport",
+  "fullmag.api.requestBinaryResource.field-vector.decode",
 ];
 
 const failures = [];
@@ -322,7 +328,10 @@ function checkComputeCommandInvalidationScope() {
     ["study.compute-fields", computeFields],
     ["study.compute-energies", computeEnergies],
   ]) {
-    requireTokens(block, label, ["invalidateRuntimeControlResources"]);
+    requireTokens(block, label, [
+      "submitRuntimeCommand(",
+      "buildRuntimeCommandFromContext(",
+    ]);
     forbidTokens(block, label, [
       "invalidateRuntimeResources",
       "invalidateEnergyResources",
@@ -358,8 +367,9 @@ function checkStudyRunCommandInvalidationScope() {
     '"Study compute command accepted."',
   ]);
   requireTokens(submitHelper, "submitRuntimeCommand invalidation scope", [
+    "refreshRuntimeCommandPrecondition",
     "invalidateRuntimeControlResources(",
-    "commandRevision(response, `study:${command.kind}`)",
+    "commandRevision(response, `study:${refreshedCommand.kind}`)",
   ]);
   forbidTokens(submitHelper, "submitRuntimeCommand invalidation scope", [
     "invalidateRuntimeResources",
@@ -479,16 +489,20 @@ function checkControlRoomApiBinaryPerformanceMarks() {
   requireTokens(binaryRequest, "requestBinaryResource performance marks", [
     "measureControlRoomApiPerformance",
     "`fullmag.api.requestBinaryResource.${decoderKind}`",
+    "measureBase",
+    "`${measureBase}.transport`",
+    "`${measureBase}.decode`",
   ]);
 
-  for (const measureName of binaryResourcePerformanceMeasureNames) {
-    const decoderKind = measureName.replace(
-      "fullmag.api.requestBinaryResource.",
-      "",
-    );
+  const decoderKinds = new Set(
+    binaryResourcePerformanceMeasureNames.map((measureName) =>
+      measureName.replace("fullmag.api.requestBinaryResource.", "").split(".")[0],
+    ),
+  );
+  for (const decoderKind of decoderKinds) {
     if (!controlRoomApi.includes(`"${decoderKind}"`)) {
       failures.push(
-        `ControlRoomApi binary performance marks must cover ${measureName}.`,
+        `ControlRoomApi binary performance marks must cover ${decoderKind}.`,
       );
     }
   }
@@ -1385,6 +1399,9 @@ function checkVectorGlyphChunkedUpload() {
     "for (let index = batch.start; index < batch.end; index += 1)",
     "activeShaft.setMatrixAt(index, matrix)",
     "activeHead.setMatrixAt(index, matrix)",
+    "fullmag.viewport3d.buildVectorGlyphInstances",
+    "fullmag.viewport3d.uploadVectorGlyphColors",
+    "fullmag.viewport3d.uploadVectorGlyphMatrices",
   ]);
   forbidTokens(source, "VectorFieldLayer chunked upload", [
     "for (let index = 0; index < glyphs.count; index += 1)",
@@ -1476,6 +1493,9 @@ function checkViewportSmokeComputeMetrics() {
     "fullmag.viewport3d.buildViewport3DTopologyRenderModel",
     "fullmag.viewport3d.buildFdmCuboidInstanceModel",
     "fullmag.viewport3d.buildViewport3DFieldRenderModel",
+    "fullmag.viewport3d.buildVectorGlyphInstances",
+    "fullmag.viewport3d.uploadVectorGlyphColors",
+    "fullmag.viewport3d.uploadVectorGlyphMatrices",
     "compute_metrics",
     "sessionRequestCount",
     "maxLongTaskMs",
@@ -1529,8 +1549,14 @@ function checkComputePerformanceSmokeScript() {
     "reactRenderMeasureTotals",
     "BINARY_RESOURCE_MEASURE_NAMES",
     "fullmag.api.requestBinaryResource.topology",
+    "fullmag.api.requestBinaryResource.topology.transport",
+    "fullmag.api.requestBinaryResource.topology.decode",
     "fullmag.api.requestBinaryResource.mesh-quality-data",
+    "fullmag.api.requestBinaryResource.mesh-quality-data.transport",
+    "fullmag.api.requestBinaryResource.mesh-quality-data.decode",
     "fullmag.api.requestBinaryResource.field-vector",
+    "fullmag.api.requestBinaryResource.field-vector.transport",
+    "fullmag.api.requestBinaryResource.field-vector.decode",
     "binaryResourceMeasureCount",
     "binaryResourceMeasureTotals",
     'startsWith("fullmag.api.requestBinaryResource.")',

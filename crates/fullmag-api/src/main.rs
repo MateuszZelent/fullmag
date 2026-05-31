@@ -78,7 +78,6 @@ pub(crate) struct CurrentLiveRealtimeState {
     pub session_id: String,
     pub run_id: Option<String>,
     pub revisions: RealtimeResourceRevisionMap,
-    pub field_vector_fetches: Vec<String>,
     pub mesh_resource_fetches: Vec<String>,
 }
 
@@ -132,7 +131,6 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
     CurrentLiveRealtimeState {
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
-        field_vector_fetches: current_live_field_vector_fetches(snapshot),
         mesh_resource_fetches: current_live_mesh_resource_fetches(snapshot),
         revisions: RealtimeResourceRevisionMap {
             topology_revision: router_v2::handlers::sessions::status::topology_revision(
@@ -144,7 +142,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             slice_revision,
             artifact_revision,
             command_completion_revision,
-            fields_revision: snapshot.state_version,
+            fields_revision: field_revision,
             scalars_revision: snapshot.scalar_revision,
             domain_generation_id,
             artifacts_revision: snapshot.artifacts.len() as u64,
@@ -156,38 +154,10 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             mesh_revision: snapshot.mesh_revision,
             mesh_build_revision: snapshot.mesh_build_revision,
             commands_revision,
-            stages_revision: snapshot
-                .stage_execution
-                .as_ref()
-                .map(|_| snapshot.state_version)
-                .unwrap_or(0),
+            stages_revision: snapshot.stage_execution_revision,
             scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         },
     }
-}
-
-fn current_live_field_vector_fetches(snapshot: &SessionStateResponse) -> Vec<String> {
-    let mut quantity_ids = BTreeSet::new();
-    for quantity in snapshot
-        .quantities
-        .iter()
-        .filter(|quantity| quantity.available && quantity.supports_preview_3d)
-    {
-        quantity_ids.insert(quantity.id.clone());
-    }
-
-    if quantity_ids.is_empty() && snapshot.live_state.is_some() {
-        quantity_ids.insert("m".to_string());
-    }
-
-    quantity_ids
-        .into_iter()
-        .map(|quantity_id| {
-            format!(
-                "/v2/sessions/current/data/fields/{quantity_id}/samples/vector?component=full&scope_kind=full"
-            )
-        })
-        .collect()
 }
 
 fn current_live_mesh_resource_fetches(snapshot: &SessionStateResponse) -> Vec<String> {
@@ -249,9 +219,16 @@ fn current_live_realtime_changes(
         RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
             revision: realtime_state.revisions.field_catalog_revision,
-            resource_id: None,
+            resource_id: Some("catalog".to_string()),
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/data/fields".to_string()),
+        },
+        RealtimeResourceChange {
+            resource: RealtimeResourceName::Fields,
+            revision: realtime_state.revisions.field_revision,
+            resource_id: Some("samples".to_string()),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: None,
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Scalars,
@@ -296,19 +273,6 @@ fn current_live_realtime_changes(
             resource_id: Some("solver-profile".to_string()),
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/diagnostics/solver-profile".to_string()),
-        });
-    }
-    for recommended_fetch in &realtime_state.field_vector_fetches {
-        changes.push(RealtimeResourceChange {
-            resource: RealtimeResourceName::Fields,
-            revision: realtime_state.revisions.fields_revision,
-            resource_id: recommended_fetch
-                .split("/data/fields/")
-                .nth(1)
-                .and_then(|tail| tail.split('/').next())
-                .map(ToOwned::to_owned),
-            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
-            recommended_fetch: Some(recommended_fetch.clone()),
         });
     }
     if realtime_state.revisions.mesh_revision > 0 {
@@ -397,10 +361,14 @@ fn current_live_realtime_change_revision_changed(
         }
         RealtimeResourceName::Workspace => previous.workspace_revision != change.revision,
         RealtimeResourceName::Fields => {
-            if change.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/fields") {
-                previous.field_catalog_revision != change.revision || domain_generation_changed
-            } else {
-                previous.fields_revision != change.revision || domain_generation_changed
+            match change.resource_id.as_deref() {
+                Some("catalog") => {
+                    previous.field_catalog_revision != change.revision || domain_generation_changed
+                }
+                Some("samples") => {
+                    previous.field_revision != change.revision || domain_generation_changed
+                }
+                _ => previous.fields_revision != change.revision || domain_generation_changed,
             }
         }
         RealtimeResourceName::Scalars => previous.scalars_revision != change.revision,
@@ -456,15 +424,11 @@ mod realtime_change_tests {
     }
 
     #[test]
-    fn realtime_changes_include_exact_viewport_resource_fetches() {
+    fn realtime_changes_include_mesh_and_scene_resource_fetches() {
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
             revisions: revisions(),
-            field_vector_fetches: vec![
-                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-                    .to_string(),
-            ],
             mesh_resource_fetches: vec![
                 "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
@@ -477,26 +441,47 @@ mod realtime_change_tests {
             .collect::<BTreeSet<_>>();
 
         assert!(fetches.contains("/v2/sessions/current/data/domain/topology"));
-        assert!(fetches.contains(
-            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-        ));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(fetches.contains("/v2/sessions/current/model/scene"));
     }
 
     #[test]
+    fn realtime_changes_publish_separate_field_catalog_and_field_sample_changes() {
+        let changes = current_live_realtime_changes(&CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: revisions(),
+            mesh_resource_fetches: Vec::new(),
+        });
+
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("catalog")
+                && change.recommended_fetch.as_deref()
+                    == Some("/v2/sessions/current/data/fields")
+        }));
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples")
+                && change.recommended_fetch.is_none()
+        }));
+        assert!(changes.iter().all(|change| {
+            change
+                .recommended_fetch
+                .as_deref()
+                .is_none_or(|fetch| !fetch.contains("/samples/vector"))
+        }));
+    }
+
+    #[test]
     fn realtime_changes_since_omits_unchanged_static_resources() {
         let mut current_revisions = revisions();
-        current_revisions.fields_revision += 1;
+        current_revisions.field_catalog_revision += 1;
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
             revisions: current_revisions,
-            field_vector_fetches: vec![
-                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-                    .to_string(),
-            ],
             mesh_resource_fetches: vec![
                 "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
                 "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
@@ -509,39 +494,51 @@ mod realtime_change_tests {
             .collect::<BTreeSet<_>>();
 
         assert_eq!(fetches.len(), 1);
-        assert!(fetches.contains(
-            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-        ));
-        assert!(!fetches.contains("/v2/sessions/current/data/fields"));
+        assert!(fetches.contains("/v2/sessions/current/data/fields"));
         assert!(!fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
         assert!(!fetches.contains("/v2/sessions/current/workspace/selection"));
     }
 
     #[test]
-    fn realtime_changes_since_refreshes_field_vectors_when_live_field_data_changes() {
+    fn realtime_changes_since_does_not_refresh_field_vectors_when_only_snapshot_counter_changes() {
+        let previous = revisions();
         let mut current_revisions = revisions();
         current_revisions.fields_revision += 1;
+        current_revisions.field_revision = previous.field_revision;
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
             revisions: current_revisions,
-            field_vector_fetches: vec![
-                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-                    .to_string(),
-            ],
             mesh_resource_fetches: Vec::new(),
         };
 
-        let fetches = current_live_realtime_changes_since(&state, Some(&revisions()))
-            .into_iter()
-            .filter_map(|change| change.recommended_fetch)
-            .collect::<BTreeSet<_>>();
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
 
-        assert_eq!(fetches.len(), 1);
-        assert!(fetches.contains(
-            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
-        ));
-        assert!(!fetches.contains("/v2/sessions/current/data/fields"));
+        assert!(changes
+            .iter()
+            .all(|change| !(matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples"))));
+    }
+
+    #[test]
+    fn realtime_changes_since_refreshes_field_samples_when_live_field_data_changes() {
+        let mut current_revisions = revisions();
+        current_revisions.field_revision += 1;
+        current_revisions.fields_revision = current_revisions.field_revision;
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: current_revisions,
+            mesh_resource_fetches: Vec::new(),
+        };
+
+        let changes = current_live_realtime_changes_since(&state, Some(&revisions()));
+
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples")
+                && change.recommended_fetch.is_none()
+        }));
     }
 
     #[test]

@@ -13,7 +13,7 @@ export type MeshHistogramMetric =
   | "sicn"
   | "volume";
 
-export interface MeshHistogramHover {
+interface MeshHistogramHover {
   binIndex: number;
   meshId: string;
   metric: MeshHistogramMetric;

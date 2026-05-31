@@ -80,9 +80,18 @@ _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 
 
 def _conformal_occ_degenerate_retry(
-    algorithm_3d: int,
+    options: MeshOptions,
+    attempted_algorithms: set[int],
 ) -> tuple[int, str, str] | None:
+    algorithm_3d = int(options.algorithm_3d)
     if int(algorithm_3d) == ALGO_3D_HXT:
+        if ALGO_3D_DELAUNAY in attempted_algorithms:
+            return (
+                ALGO_3D_FRONTAL,
+                "Conformal OCC mesh: HXT produced a degenerate thin-film tetra "
+                "after Delaunay was already attempted; retrying with Frontal",
+                "conformal_occ_hxt_degenerate_retry_frontal",
+            )
         return (
             ALGO_3D_DELAUNAY,
             "Conformal OCC mesh: HXT produced a degenerate thin-film tetra; "
@@ -90,6 +99,13 @@ def _conformal_occ_degenerate_retry(
             "conformal_occ_hxt_degenerate_retry_delaunay",
         )
     if int(algorithm_3d) == ALGO_3D_DELAUNAY:
+        if options.size_fields and ALGO_3D_HXT not in attempted_algorithms:
+            return (
+                ALGO_3D_HXT,
+                "Conformal OCC mesh: Delaunay produced a degenerate thin-film tetra "
+                "with active size fields; retrying with HXT",
+                "conformal_occ_delaunay_degenerate_retry_hxt",
+            )
         return (
             ALGO_3D_FRONTAL,
             "Conformal OCC mesh: Delaunay produced a degenerate thin-film tetra; "
@@ -1242,6 +1258,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 "message": "Generating native OCC-conformal 3D tetrahedral mesh",
                             }
                         )
+                        attempted_algorithms = {int(mesh_options.algorithm_3d)}
                         while True:
                             result = generate_shared_domain_mesh_via_occ(
                                 geometries,
@@ -1257,15 +1274,21 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 break
                             except ValueError as exc:
                                 retry = (
-                                    _conformal_occ_degenerate_retry(mesh_options.algorithm_3d)
+                                    _conformal_occ_degenerate_retry(
+                                        mesh_options,
+                                        attempted_algorithms,
+                                    )
                                     if "degenerate tetra volume" in str(exc)
                                     else None
                                 )
                                 if retry is None:
                                     raise
                                 retry_algorithm, retry_message, retry_marker = retry
+                                if retry_algorithm in attempted_algorithms:
+                                    raise
                                 emit_progress(retry_message)
                                 fallbacks_triggered.append(retry_marker)
+                                attempted_algorithms.add(retry_algorithm)
                                 mesh_options = _dc_replace(
                                     mesh_options,
                                     algorithm_3d=retry_algorithm,

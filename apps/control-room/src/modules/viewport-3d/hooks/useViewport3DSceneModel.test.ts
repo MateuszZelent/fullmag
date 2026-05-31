@@ -5,10 +5,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import {
+  resolveCommittedViewport3DFieldVector,
+  resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
   resolveViewport3DSceneCameraView,
   resolveViewport3DTargetFieldQuery,
 } from "./useViewport3DSceneModel";
+import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   type Viewport3DCommandState,
@@ -107,6 +110,45 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("does not let scoped airbox vectors force a full-domain primary field request", () => {
+    const primaryOptions = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part:__air__", 1024]]),
+        scalarColorModes: new Set(["orientation"]),
+        scalarColorsVisible: true,
+      },
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "m",
+          shaderVisible: true,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 256,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      magneticParts: [
+        {
+          part: { id: "part:arch_waveguide" },
+        },
+      ] as never,
+      quantityId: "h_demag",
+      vectorDomain: "auto",
+    });
+
+    expect(viewport3DFieldRenderOptionsNeedFieldData(primaryOptions)).toBe(false);
+    expect(resolveViewport3DPrimaryFieldQuery({
+      fdmInstanceModelNeedsFieldVector: false,
+      fdmSurfaceColorMode: null,
+      fdmTopographyEnabled: false,
+      fdmVectorsVisible: false,
+      fieldRenderOptions: primaryOptions,
+    })).toEqual({
+      component: "full",
+      scope_kind: "full",
+    });
+  });
+
   it("consumes visualization resources separately from the camera registry", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -152,6 +194,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("airboxSurfaceColorMode");
     expect(source).toContain("useViewport3DAirboxFieldVectors(");
     expect(source).not.toContain("ids.add(airboxSettings.activeQuantityId)");
+  });
+
+  it("keeps cross-section draft previews separate from the canonical clip resource path", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("activeCrossSectionFramePreview");
+    expect(source).toContain("crossSectionFramePreviewToClip");
+    expect(source).toContain("enabled: Boolean(renderingState?.clip?.enabled && topologyCurrent)");
+    expect(source).toContain("crossSectionFrameClip");
+    expect(source).toContain("clipFrameRotationDegrees: 0");
   });
 
   it("uses the local viewport camera for live scene rendering", () => {
@@ -250,6 +302,44 @@ describe("useViewport3DSceneModel", () => {
         commandState,
       }).interactionActive,
     ).toBe(false);
+  });
+
+  it("keeps the committed field vector stable while the camera interaction is active", () => {
+    const current = {
+      quantityId: "m",
+      values: new Float64Array([1, 0, 0]),
+    } as never;
+    const next = {
+      quantityId: "m",
+      values: new Float64Array([0, 1, 0]),
+    } as never;
+
+    expect(
+      resolveCommittedViewport3DFieldVector({
+        current,
+        interactionActive: true,
+        next,
+      }),
+    ).toBe(current);
+  });
+
+  it("adopts the latest field vector once camera interaction stops", () => {
+    const current = {
+      quantityId: "m",
+      values: new Float64Array([1, 0, 0]),
+    } as never;
+    const next = {
+      quantityId: "m",
+      values: new Float64Array([0, 1, 0]),
+    } as never;
+
+    expect(
+      resolveCommittedViewport3DFieldVector({
+        current,
+        interactionActive: false,
+        next,
+      }),
+    ).toBe(next);
   });
 
   it("builds the FDM instance model once in the scene model without coupling solid rendering to field revisions", () => {

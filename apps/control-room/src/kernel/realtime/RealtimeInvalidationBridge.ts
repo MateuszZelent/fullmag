@@ -32,6 +32,8 @@ interface RealtimeResourceEvent {
 }
 
 interface RealtimeBatchChange {
+  resource?: string;
+  resource_id?: string;
   recommended_fetch?: string;
   revision: ResourceRevision;
 }
@@ -105,6 +107,9 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
   }
 
   return {
+    resource: typeof record.resource === "string" ? record.resource : undefined,
+    resource_id:
+      typeof record.resource_id === "string" ? record.resource_id : undefined,
     recommended_fetch:
       typeof record.recommended_fetch === "string"
         ? record.recommended_fetch
@@ -156,6 +161,7 @@ export class RealtimeInvalidationBridge {
   private currentSessionId: string | null = null;
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
+  private pendingPrefixes = new Map<string, ResourceRevision>();
   private pendingStatusRevision: ResourceRevision | null = null;
 
   constructor(
@@ -196,6 +202,11 @@ export class RealtimeInvalidationBridge {
             change.recommended_fetch,
             change.revision,
           );
+        } else if (
+          change.resource === "fields" &&
+          change.resource_id === "samples"
+        ) {
+          this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
         }
         handled = true;
       }
@@ -271,6 +282,16 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private queuePrefixInvalidation(
+    resourceKey: string,
+    revision: ResourceRevision,
+  ): void {
+    this.pendingPrefixes.set(
+      resourceKey,
+      latestRevision(this.pendingPrefixes.get(resourceKey) ?? null, revision),
+    );
+  }
+
   private scheduleFlush(): void {
     if (this.flushCancel) return;
     const scheduleFlush = this.options.scheduleFlush ?? defaultScheduleFlush;
@@ -285,8 +306,10 @@ export class RealtimeInvalidationBridge {
 
   private flushPendingInvalidations(): void {
     const pendingFetches = this.pendingFetches;
+    const pendingPrefixes = this.pendingPrefixes;
     const statusRevision = this.pendingStatusRevision;
     this.pendingFetches = new Map<string, ResourceRevision>();
+    this.pendingPrefixes = new Map<string, ResourceRevision>();
     this.pendingStatusRevision = null;
 
     for (const [resourceKey, revision] of pendingFetches) {
@@ -296,6 +319,9 @@ export class RealtimeInvalidationBridge {
       if (resourceKey === DATA_SCALARS_PATH) {
         this.invalidateSimulationStepResources(revision);
       }
+    }
+    for (const [resourceKey, revision] of pendingPrefixes) {
+      this.resources.invalidatePrefix(resourceKey, revision);
     }
 
     if (statusRevision !== null) {
@@ -350,7 +376,5 @@ export class RealtimeInvalidationBridge {
       resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
       revision,
     );
-    this.resources.invalidate(DATA_FIELDS_PATH, revision);
-    this.resources.invalidatePrefix(DATA_FIELDS_PATH, revision);
   }
 }

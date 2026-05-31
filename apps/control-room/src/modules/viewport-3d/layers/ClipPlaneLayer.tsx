@@ -33,6 +33,14 @@ interface ClipPlaneLayerProps {
   tracker: Viewport3DResourceTracker;
 }
 
+interface ClipPlaneFramePreviewLayerProps {
+  bounds: Viewport3DBounds | null;
+  clip: VisualizationStateResource["clip"] | null;
+  colors: Viewport3DColors;
+  frameRotationDegrees: number;
+  tracker: Viewport3DResourceTracker;
+}
+
 const DEFAULT_PLANE_NORMAL = new Vector3(0, 0, 1);
 
 export function ClipPlaneLayer({
@@ -57,16 +65,7 @@ export function ClipPlaneLayer({
     );
   }, [frame]);
   const planeQuaternion = useMemo(() => {
-    if (!frame) return new Quaternion();
-    const normalQuaternion = new Quaternion().setFromUnitVectors(
-      DEFAULT_PLANE_NORMAL,
-      new Vector3(...frame.normal).normalize(),
-    );
-    const frameQuaternion = new Quaternion().setFromAxisAngle(
-      DEFAULT_PLANE_NORMAL,
-      (frame.rotationDegrees * Math.PI) / 180,
-    );
-    return normalQuaternion.multiply(frameQuaternion);
+    return resolveClipPlaneFrameQuaternion(frame);
   }, [frame]);
 
   useEffect(() => {
@@ -113,6 +112,51 @@ export function ClipPlaneLayer({
       />
     </>
   );
+}
+
+export function ClipPlaneFramePreviewLayer({
+  bounds,
+  clip,
+  colors,
+  frameRotationDegrees,
+  tracker,
+}: ClipPlaneFramePreviewLayerProps) {
+  const invalidate = useThree((state) => state.invalidate);
+  const frame = useMemo(
+    () => resolveClipPlaneFrame(clip, bounds, frameRotationDegrees),
+    [bounds, clip, frameRotationDegrees],
+  );
+  const planeQuaternion = useMemo(
+    () => resolveClipPlaneFrameQuaternion(frame),
+    [frame],
+  );
+
+  useEffect(() => {
+    if (!frame) return;
+    tracker.recordDirtyFrame("cross-section-frame-preview");
+    invalidate();
+  }, [frame, invalidate, tracker]);
+
+  if (!frame) return null;
+
+  return (
+    <group position={frame.center} quaternion={planeQuaternion} renderOrder={31}>
+      <ClipPlaneFrameOutline colors={colors} frame={frame} />
+    </group>
+  );
+}
+
+function resolveClipPlaneFrameQuaternion(frame: ClipPlaneFrame | null): Quaternion {
+  if (!frame) return new Quaternion();
+  const normalQuaternion = new Quaternion().setFromUnitVectors(
+    DEFAULT_PLANE_NORMAL,
+    new Vector3(...frame.normal).normalize(),
+  );
+  const frameQuaternion = new Quaternion().setFromAxisAngle(
+    DEFAULT_PLANE_NORMAL,
+    (frame.rotationDegrees * Math.PI) / 180,
+  );
+  return normalQuaternion.multiply(frameQuaternion);
 }
 
 function ClipPlaneFrameOutline({

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,6 +25,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 
 const draft: CrossSectionDraft = {
   colorScale: "viridis",
+  edgeWidth: 1.5,
   filterExpression: "quality < 0.3",
   frameExtent: "universe",
   id: "draft",
@@ -34,6 +37,10 @@ const draft: CrossSectionDraft = {
   rotationDegrees: 0,
   shrinkFactor: 0.8,
 };
+const crossSectionDraftEditorSourceUrl = new URL(
+  "./CrossSectionDraftEditor.tsx",
+  import.meta.url,
+);
 
 describe("CrossSectionDraftEditor", () => {
   it("renders the editable cut-frame controls without exposing unsupported frame geometry as active choices", () => {
@@ -50,5 +57,13 @@ describe("CrossSectionDraftEditor", () => {
     expect(html).toContain('min="-180"');
     expect(html).not.toContain('aria-label="Rotation" disabled=""');
     expect(html).toContain("Generate Image");
+  });
+
+  it("keeps draft frame edits local instead of patching canonical visualization clip state", () => {
+    const source = readFileSync(crossSectionDraftEditorSourceUrl, "utf8");
+
+    expect(source).toContain("updateCrossSectionDraft(patch);");
+    expect(source).not.toContain("visualizationSync.queuePatch");
+    expect(source).not.toContain("crossSectionVisualizationPatchFromDraft");
   });
 });

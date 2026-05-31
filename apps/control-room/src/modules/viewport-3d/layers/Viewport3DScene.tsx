@@ -65,7 +65,7 @@ import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
-import { ClipPlaneLayer } from "./ClipPlaneLayer";
+import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
   getViewport3DVisualProfile,
@@ -83,6 +83,8 @@ interface Viewport3DSceneProps {
   clip: VisualizationStateResource["clip"] | null;
   clipFrameRotationDegrees: number;
   clipIntersectionMarkers: ClipPlaneIntersectionMarkerBuffers | null;
+  crossSectionFrameClip: VisualizationStateResource["clip"] | null;
+  crossSectionFrameRotationDegrees: number;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
@@ -365,6 +367,8 @@ export function Viewport3DScene({
   clip,
   clipFrameRotationDegrees,
   clipIntersectionMarkers,
+  crossSectionFrameClip,
+  crossSectionFrameRotationDegrees,
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
@@ -513,6 +517,15 @@ export function Viewport3DScene({
           frameRotationDegrees={clipFrameRotationDegrees}
           intersectionMarkers={clipIntersectionMarkers}
           colors={colors}
+          tracker={tracker}
+        />
+      ) : null}
+      {crossSectionFrameClip?.enabled && !clip?.enabled ? (
+        <ClipPlaneFramePreviewLayer
+          bounds={bounds}
+          clip={crossSectionFrameClip}
+          colors={colors}
+          frameRotationDegrees={crossSectionFrameRotationDegrees}
           tracker={tracker}
         />
       ) : null}

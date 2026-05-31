@@ -258,20 +258,12 @@ describe("ribbon structure", () => {
       }),
       "test",
     );
-    expect(selectionSet).toHaveBeenCalledTimes(2);
+    expect(selectionSet).toHaveBeenCalledTimes(1);
     expect(setPanelVisible).toHaveBeenCalledWith("left", true);
     expect(setPanelVisible).toHaveBeenCalledWith("right", true);
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
-    expect(patches).toEqual([
-      expect.objectContaining({
-        clip: expect.objectContaining({
-          axis: "z",
-          enabled: true,
-          position_percent: 62.5,
-        }),
-      }),
-    ]);
-    expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
+    expect(patches).toEqual([]);
+    expect(invalidations).toEqual([]);
     resetCrossSectionWorkspaceForTests();
   });
 

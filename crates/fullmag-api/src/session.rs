@@ -3,10 +3,13 @@
 use crate::artifacts::collect_artifacts;
 use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
+use crate::router_v2::handlers::data::field_resolution::{
+    field_values_match_current_domain, flatten_json_field_values, live_magnetization_values,
+};
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 pub(crate) async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
@@ -452,6 +455,151 @@ fn bump_mesh_build_revision(current: &mut SessionStateResponse) {
     current.mesh_build_revision = next_revision(current.mesh_build_revision);
 }
 
+fn bump_field_catalog_revision(current: &mut SessionStateResponse) {
+    current.field_catalog_revision = next_revision(current.field_catalog_revision);
+}
+
+fn bump_stage_execution_revision(current: &mut SessionStateResponse) {
+    current.stage_execution_revision = next_revision(current.stage_execution_revision);
+}
+
+fn field_payload_revision(value: &Value) -> Option<u64> {
+    value
+        .get("field_revision")
+        .and_then(Value::as_u64)
+        .or_else(|| value.get("revision").and_then(Value::as_u64))
+}
+
+fn bump_field_sample_revision(
+    current: &mut SessionStateResponse,
+    quantity: &str,
+    baseline_revision: Option<u64>,
+) {
+    let entry = current
+        .field_quantity_revisions
+        .entry(quantity.to_string())
+        .or_insert(0);
+    let baseline_revision = baseline_revision.unwrap_or(0);
+    if *entry == 0 {
+        *entry = baseline_revision.max(1);
+    } else if baseline_revision > *entry {
+        *entry = baseline_revision;
+    } else {
+        *entry = next_revision(*entry);
+    }
+    if current.field_samples_revision == 0 {
+        current.field_samples_revision = (*entry).max(1);
+    } else {
+        current.field_samples_revision =
+            next_revision(current.field_samples_revision.max(*entry));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum EffectiveFieldSource {
+    Latest(Value),
+    Preview(LivePreviewField),
+    LiveMagnetization { len: usize, hash: u64 },
+}
+
+impl EffectiveFieldSource {
+    fn baseline_revision(&self) -> Option<u64> {
+        match self {
+            Self::Latest(value) => field_payload_revision(value),
+            Self::Preview(_) | Self::LiveMagnetization { .. } => None,
+        }
+    }
+}
+
+fn live_magnetization_hash(values: &[f64]) -> u64 {
+    values.iter().fold(1469598103934665603_u64, |hash, value| {
+        hash.wrapping_mul(1099511628211)
+            .wrapping_add(value.to_bits())
+    })
+}
+
+fn effective_field_source(
+    snapshot: &SessionStateResponse,
+    quantity: &str,
+) -> Option<EffectiveFieldSource> {
+    let n_comp = fullmag_quantities::quantity_spec(quantity)
+        .map(|spec| spec.n_comp as usize)
+        .unwrap_or(3);
+    if let Some(value) = snapshot.latest_fields.get(quantity) {
+        let values = flatten_json_field_values(value);
+        if field_values_match_current_domain(snapshot, quantity, n_comp, &values) {
+            return Some(EffectiveFieldSource::Latest(value.clone()));
+        }
+    }
+    if let Some(field) = snapshot.preview_cache.get(quantity) {
+        if field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
+        {
+            return Some(EffectiveFieldSource::Preview(field.clone()));
+        }
+    }
+    if quantity == "m" {
+        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
+            return Some(EffectiveFieldSource::LiveMagnetization {
+                len: values.len(),
+                hash: live_magnetization_hash(&values),
+            });
+        }
+    }
+    None
+}
+
+fn capture_effective_field_sources(
+    snapshot: &SessionStateResponse,
+    quantities: &BTreeSet<String>,
+) -> BTreeMap<String, Option<EffectiveFieldSource>> {
+    quantities
+        .iter()
+        .map(|quantity| {
+            (
+                quantity.clone(),
+                effective_field_source(snapshot, quantity.as_str()),
+            )
+        })
+        .collect()
+}
+
+fn apply_effective_field_source_delta(
+    current: &mut SessionStateResponse,
+    previous_sources: BTreeMap<String, Option<EffectiveFieldSource>>,
+) {
+    let mut catalog_changed = false;
+    for (quantity, previous_source) in previous_sources {
+        let next_source = effective_field_source(current, quantity.as_str());
+        if previous_source == next_source {
+            continue;
+        }
+        if previous_source.is_some() != next_source.is_some() {
+            catalog_changed = true;
+        }
+        if previous_source.is_some() || next_source.is_some() {
+            let baseline_revision = next_source
+                .as_ref()
+                .and_then(EffectiveFieldSource::baseline_revision)
+                .or_else(|| {
+                    previous_source
+                        .as_ref()
+                        .and_then(EffectiveFieldSource::baseline_revision)
+                });
+            bump_field_sample_revision(current, quantity.as_str(), baseline_revision);
+        }
+    }
+    if catalog_changed {
+        bump_field_catalog_revision(current);
+    }
+}
+
+fn stage_execution_changed(
+    previous: Option<&StageExecutionState>,
+    next: Option<&StageExecutionState>,
+) -> bool {
+    serde_json::to_value(previous).ok() != serde_json::to_value(next).ok()
+}
+
 fn mesh_statistics_signature(mesh_workspace: &Value) -> Value {
     mesh_workspace
         .get("mesh_statistics")
@@ -671,6 +819,10 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
+        field_catalog_revision: 0,
+        field_samples_revision: 0,
+        field_quantity_revisions: BTreeMap::new(),
+        stage_execution_revision: 0,
     }
 }
 
@@ -778,6 +930,30 @@ pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
+    let mut affected_field_quantities = BTreeSet::new();
+    if let Some(latest_fields) = req.latest_fields.as_ref() {
+        affected_field_quantities.extend(latest_fields.entries().map(|(quantity, _)| quantity.clone()));
+    }
+    if req.clear_preview_cache {
+        affected_field_quantities.extend(
+            current
+                .preview_cache
+                .iter()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
+    if let Some(preview_fields) = req.preview_fields.as_ref() {
+        affected_field_quantities.extend(
+            preview_fields
+                .iter()
+                .map(|field| field.quantity.clone()),
+        );
+    }
+    if req.live_state.is_some() || req.fem_mesh.is_some() {
+        affected_field_quantities.insert("m".to_string());
+    }
+    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
+    let previous_stage_execution = current.stage_execution.clone();
     let flags = CurrentLiveApplyFlags {
         has_metadata: req.metadata.is_some(),
         has_latest_fields: req.latest_fields.is_some(),
@@ -804,6 +980,9 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(mut stage_execution) = req.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
+        if stage_execution_changed(previous_stage_execution.as_ref(), current.stage_execution.as_ref()) {
+            bump_stage_execution_revision(current);
+        }
     }
     if let Some(run) = req.run {
         current.session.run_id = run.run_id.clone();
@@ -842,6 +1021,7 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(solver_profile) = req.solver_profile {
         current.solver_profile = solver_profile;
     }
+    apply_effective_field_source_delta(current, previous_field_sources);
 
     finalize_current_live_apply(current, flags)
 }
@@ -850,6 +1030,7 @@ pub(crate) fn apply_current_live_session_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveSessionFrameRequest,
 ) -> Result<(), ApiError> {
+    let previous_stage_execution = current.stage_execution.clone();
     let flags = CurrentLiveApplyFlags {
         has_metadata: frame.metadata.is_some(),
         has_run: frame.run.is_some(),
@@ -873,6 +1054,9 @@ pub(crate) fn apply_current_live_session_frame(
     if let Some(mut stage_execution) = frame.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
+        if stage_execution_changed(previous_stage_execution.as_ref(), current.stage_execution.as_ref()) {
+            bump_stage_execution_revision(current);
+        }
     }
     if let Some(run) = frame.run {
         current.session.run_id = run.run_id.clone();
@@ -887,6 +1071,11 @@ pub(crate) fn apply_current_live_runtime_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveRuntimeFrameRequest,
 ) -> Result<(), ApiError> {
+    let mut affected_field_quantities = BTreeSet::new();
+    if frame.live_state.is_some() || frame.fem_mesh.is_some() {
+        affected_field_quantities.insert("m".to_string());
+    }
+    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
     if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
@@ -923,6 +1112,7 @@ pub(crate) fn apply_current_live_runtime_frame(
     if let Some(solver_profile) = frame.solver_profile {
         current.solver_profile = solver_profile;
     }
+    apply_effective_field_source_delta(current, previous_field_sources);
 
     finalize_current_live_apply(current, CurrentLiveApplyFlags::default())
 }
@@ -950,6 +1140,26 @@ pub(crate) fn apply_current_live_field_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
+    let mut affected_field_quantities = BTreeSet::new();
+    if let Some(latest_fields) = frame.latest_fields.as_ref() {
+        affected_field_quantities.extend(latest_fields.entries().map(|(quantity, _)| quantity.clone()));
+    }
+    if frame.clear_preview_cache {
+        affected_field_quantities.extend(
+            current
+                .preview_cache
+                .iter()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
+    if let Some(preview_fields) = frame.preview_fields.as_ref() {
+        affected_field_quantities.extend(
+            preview_fields
+                .iter()
+                .map(|field| field.quantity.clone()),
+        );
+    }
+    let previous_field_sources = capture_effective_field_sources(current, &affected_field_quantities);
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
     if let Some(latest_fields) = frame.latest_fields {
@@ -961,6 +1171,7 @@ pub(crate) fn apply_current_live_field_frame(
     if let Some(preview_fields) = frame.preview_fields {
         merge_cached_preview_fields(&mut current.preview_cache, preview_fields);
     }
+    apply_effective_field_source_delta(current, previous_field_sources);
 
     finalize_current_live_apply(
         current,
@@ -1014,7 +1225,9 @@ pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bo
 }
 
 pub(crate) fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFields) {
-    current.extend(incoming);
+    for (quantity, value) in incoming.into_inner() {
+        current.insert(quantity, value);
+    }
 }
 
 pub(crate) fn merge_cached_preview_fields(

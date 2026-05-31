@@ -9,10 +9,7 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import {
-  beginCrossSectionDraft,
-  crossSectionVisualizationPatchFromDraft,
-} from "@/kernel/workspace/crossSectionWorkspace";
+import { beginCrossSectionDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
@@ -344,24 +341,15 @@ function focusAirboxFromCommand(context: CommandContext): CommandResult {
   return { status: "completed" };
 }
 
-async function beginCrossSectionDraftFromCommand(
+function beginCrossSectionDraftFromCommand(
   context: CommandContext,
-): Promise<CommandResult> {
+): CommandResult {
   const draft = beginCrossSectionDraft(visualizationStateFromContext(context));
   const nodeId = "model:visualizations-2d:draft";
   selectCrossSectionDraft(context, draft.name, nodeId);
   context.layout?.setPanelVisible("left", true);
   context.layout?.setPanelVisible("right", true);
   context.layout?.setFocusedSlot("viewport-main");
-
-  if (context.visualizationSync || context.api) {
-    await patchVisualizationState(
-      context,
-      crossSectionVisualizationPatchFromDraft(draft),
-      { flush: true },
-    );
-  }
-  selectCrossSectionDraft(context, draft.name, nodeId);
 
   return { status: "completed" };
 }

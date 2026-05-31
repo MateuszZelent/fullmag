@@ -92,10 +92,11 @@ export default function CrossSectionImageModule() {
           <Image
             alt={`${plot.name} cross-section`}
             className="fm-cross-section-image__img"
-            height={imageQuery.resolution ?? 1024}
+            height={imageQuery.resolution ?? 4096}
             src={imageUrl}
+            style={{ width: "100%", height: "auto" }}
             unoptimized
-            width={imageQuery.resolution ?? 1024}
+            width={imageQuery.resolution ?? 4096}
           />
         ) : null}
       </div>
@@ -106,14 +107,17 @@ export default function CrossSectionImageModule() {
 function crossSectionImageQueryFromPlot(
   plot: NonNullable<ReturnType<typeof activeCrossSectionPlot>>,
 ): CrossSectionImageQuery {
+  const dpr = typeof window !== "undefined" ? Math.min(window.devicePixelRatio ?? 1, 2) : 1;
   return {
     colorScale: plot.renderOptions.colorScale,
+    dpr,
+    edgeWidth: plot.renderOptions.edgeWidth ?? 1.5,
     filterExpression: plot.renderOptions.filterExpression,
     legend: true,
     metric: plot.metric,
     plane: plot.plane,
     positionPercent: plot.positionPercent,
-    resolution: 1024,
+    resolution: 4096,
     rotationDegrees: plot.rotationDegrees,
     shrinkFactor: plot.renderOptions.shrinkFactor,
     wireframe: plot.renderOptions.wireframeVisible,

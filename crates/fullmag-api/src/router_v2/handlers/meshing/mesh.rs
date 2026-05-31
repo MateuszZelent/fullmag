@@ -78,6 +78,8 @@ pub struct MeshSharedDomainCrossSectionImageQuery {
     pub legend: Option<bool>,
     pub shrink_factor: Option<f64>,
     pub filter_expression: Option<String>,
+    pub edge_width: Option<f64>,
+    pub dpr: Option<f64>,
 }
 
 #[utoipa::path(
@@ -648,11 +650,15 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     let wireframe = query.wireframe.unwrap_or(true);
     let legend = query.legend.unwrap_or(true);
     let shrink_factor = query.shrink_factor.unwrap_or(1.0);
+    let edge_width = query.edge_width.unwrap_or(1.5);
+    let dpr = query.dpr.unwrap_or(1.0);
     validate_cross_section_image_query(
         query.position_percent,
         resolution,
         rotation_degrees,
         shrink_factor,
+        edge_width,
+        dpr,
     )?;
 
     let snapshot = current_snapshot(&state).await?;
@@ -718,7 +724,7 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
-    let png = render_cross_section_png(
+    let rendered = render_cross_section_png(
         &overlay,
         &values,
         CrossSectionImageRenderOptions {
@@ -729,13 +735,15 @@ pub async fn get_mesh_shared_domain_cross_section_image(
             rotation_degrees,
             shrink_factor,
             wireframe,
+            edge_width,
+            dpr,
         },
         query.filter_expression.as_deref(),
     )?;
     let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
     let filter = query.filter_expression.as_deref().unwrap_or("");
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "mesh-shared-domain-cross-section-image:{}:{generation_id}:{}:{:.17e}:{}:{}:{}:{:.17e}:{}:{:.17e}:{}:{}:{}:png-v2",
+        "mesh-shared-domain-cross-section-image:{}:{generation_id}:{}:{:.17e}:{}:{}:{}:{:.17e}:{}:{:.17e}:{}:{}:{}:{:.17e}:{:.17e}:png-v3",
         snapshot.mesh_revision,
         overlay.plane.as_str(),
         overlay.cut_norm,
@@ -748,12 +756,14 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         legend,
         filter,
         quality_source,
+        edge_width,
+        dpr,
     ));
     let mut response =
         crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
             &headers,
             &etag,
-            png,
+            rendered.png_bytes,
             HeaderValue::from_static("image/png"),
         );
     response.headers_mut().insert(
@@ -762,8 +772,14 @@ pub async fn get_mesh_shared_domain_cross_section_image(
     );
     response.headers_mut().insert(
         "x-fullmag-renderer",
-        HeaderValue::from_static("cross-section-image-v1"),
+        HeaderValue::from_static("cross-section-image-v2"),
     );
+    if let Ok(w) = HeaderValue::from_str(&rendered.width.to_string()) {
+        response.headers_mut().insert("x-fullmag-image-width", w);
+    }
+    if let Ok(h) = HeaderValue::from_str(&rendered.height.to_string()) {
+        response.headers_mut().insert("x-fullmag-image-height", h);
+    }
     Ok(response)
 }
 

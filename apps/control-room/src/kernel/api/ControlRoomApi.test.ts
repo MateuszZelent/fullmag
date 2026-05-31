@@ -1137,9 +1137,9 @@ describe("ControlRoomApi", () => {
     for (const path of [
       "/v2/sessions/current/data/domain/topology",
       "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
-      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section",
-      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality",
-      "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
+      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section?plane=xy&position_percent=50",
+      "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality?metric=gamma&plane=xy&position_percent=50",
+      "/v2/sessions/current/data/fields/m/samples/vector",
     ]) {
       expect(diagnostics.list()).toContainEqual(
         expect.objectContaining({
@@ -1212,16 +1212,50 @@ describe("ControlRoomApi", () => {
       expect(markSpy).toHaveBeenCalledWith(
         "fullmag.api.requestBinaryResource.topology:end",
       );
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.transport:start",
+      );
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.transport:end",
+      );
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.decode:start",
+      );
+      expect(markSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.decode:end",
+      );
       expect(measureSpy).toHaveBeenCalledWith(
         "fullmag.api.requestBinaryResource.topology",
         "fullmag.api.requestBinaryResource.topology:start",
         "fullmag.api.requestBinaryResource.topology:end",
       );
+      expect(measureSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.transport",
+        "fullmag.api.requestBinaryResource.topology.transport:start",
+        "fullmag.api.requestBinaryResource.topology.transport:end",
+      );
+      expect(measureSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.decode",
+        "fullmag.api.requestBinaryResource.topology.decode:start",
+        "fullmag.api.requestBinaryResource.topology.decode:end",
+      );
       expect(clearMarksSpy).toHaveBeenCalledWith(
         "fullmag.api.requestBinaryResource.topology:start",
       );
       expect(clearMarksSpy).toHaveBeenCalledWith(
         "fullmag.api.requestBinaryResource.topology:end",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.transport:start",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.transport:end",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.decode:start",
+      );
+      expect(clearMarksSpy).toHaveBeenCalledWith(
+        "fullmag.api.requestBinaryResource.topology.decode:end",
       );
     } finally {
       markSpy.mockRestore();

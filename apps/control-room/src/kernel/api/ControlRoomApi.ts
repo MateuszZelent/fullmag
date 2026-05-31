@@ -1182,6 +1182,8 @@ export class ControlRoomApi {
   ): Promise<BinaryResourceResult<ArrayBuffer>> {
     return this.requestBinaryBytes(path, options, undefined, {
       color_scale: query.colorScale,
+      dpr: query.dpr,
+      edge_width: query.edgeWidth,
       filter_expression: query.filterExpression,
       legend: query.legend,
       metric: query.metric,
@@ -1249,7 +1251,11 @@ export class ControlRoomApi {
           headers.range = options.range;
         }
 
-        const requestState: { lastResponse: Response | null } = {
+        const requestState: {
+          lastRequestPath: string;
+          lastResponse: Response | null;
+        } = {
+          lastRequestPath: path as string,
           lastResponse: null,
         };
         let result: BinaryOpenApiTransportResult | null = null;
@@ -1260,6 +1266,13 @@ export class ControlRoomApi {
               this.transport.GET(path as never, {
                 cache: "no-store",
                 fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                  requestState.lastRequestPath = pathFromUrl(
+                    typeof input === "string"
+                      ? input
+                      : input instanceof Request
+                        ? input.url
+                        : String(input),
+                  );
                   const resp = await this.executeBinaryOpenApiFetch(input, init);
                   requestState.lastResponse = resp;
                   return resp;
@@ -1317,7 +1330,7 @@ export class ControlRoomApi {
                   buffer,
                   decodeInline: decode,
                   kind: decoderKind,
-                  path: path as string,
+                  path: requestState.lastRequestPath,
                 }),
         );
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
@@ -1331,7 +1344,7 @@ export class ControlRoomApi {
           durationMs: decodeDurationMs,
           method: "GET",
           outcome: "ok",
-          path: path as string,
+          path: requestState.lastRequestPath,
           requestId: response.headers.get("x-request-id") ?? "binary-payload",
           status: response.status,
         });
@@ -1539,7 +1552,8 @@ async function normalizeFetchInput(
 
 function pathFromUrl(url: string): string {
   try {
-    return new URL(url).pathname;
+    const parsed = new URL(url);
+    return `${parsed.pathname}${parsed.search}`;
   } catch {
     return url;
   }

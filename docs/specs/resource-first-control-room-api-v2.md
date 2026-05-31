@@ -1,7 +1,7 @@
 # Resource-first Control Room API v2
 
 - Status: canonical control-room API contract
-- Last updated: 2026-05-14
+- Last updated: 2026-05-31
 - Compatibility reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -62,6 +62,46 @@ The default frontend base path is `/v2/sessions/current`.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
+## 3.1 Realtime invalidation rules
+
+The canonical websocket remains an invalidation bus, not a payload stream. That
+contract has stricter ownership rules than the HTTP routes:
+
+- `resource.batch_changed` may only announce resources whose underlying payload
+  freshness actually changed.
+- UI-plane revisions and data-plane revisions must stay independent even when
+  they share one websocket envelope.
+- `visualization/display`, `visualization/state`, and `workspace/*` are
+  UI-plane resources. Their mutations must not advance `field_revision`,
+  `fields_revision`, `scalars_revision`, `mesh_revision`, `mesh_build_revision`,
+  or `domain_generation_id`.
+- `fields_revision` is a field-family freshness signal, not a generic snapshot
+  counter. It must advance only when materialized field payloads can change.
+- `field_revision` owns binary field sample freshness
+  (`/data/fields/{quantity_id}/samples/vector`, slice, projection, and related
+  derivative resources). A camera-only patch must never cause a
+  `field_revision`-equivalent invalidation.
+- `scalars_revision` owns scalar-history freshness only. Scalar appends may
+  trigger downstream field invalidation only when the backend also proves that
+  the materialized field payload changed.
+- `recommended_fetch` must be derived from resources that actually changed. The
+  backend must not emit blanket fetch hints for every possible viewport field
+  vector just because a session snapshot was rebuilt.
+- `recommended_fetch` must preserve the real query identity of the resource,
+  including scope and component. If the backend cannot name the exact affected
+  field query, it must omit the fetch hint rather than over-invalidate with a
+  made-up full-domain/full-vector request.
+- `data/fields/*` HTTP freshness validators such as `revision`, `field_revision`,
+  and response ETags must be derived from field payload freshness plus query
+  scope, not from generic publish counters such as `snapshot.state_version`.
+- Family-level field sample invalidation must remain distinct from field catalog
+  invalidation. When the backend knows only that some field payload changed, it
+  should emit a semantic field-samples change instead of fabricating an exact
+  catalog fetch or blanket full-vector fetch list.
+- Realtime coalescing may merge many changes into one envelope, but coalescing
+  must not widen scope. A coalesced camera/display update must still remain a
+  camera/display update.
+
 ## 3.1 Single-owner read-model rules
 
 Each field must have one owning resource. Other resources may expose ids, revision pointers, links,
@@ -90,6 +130,11 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 Transitional duplicate fields in meshing schemas are allowed only for current frontend adapters and
 must be documented as transitional in OpenAPI schema descriptions. New consumers should read from the
 owning resource above.
+
+Realtime invalidation follows the same single-owner rule. `visualization/state`
+may project the current active quantity, camera, and layer policy, but it does
+not own field payload freshness; `data/fields/*` does. Conversely,
+`data/fields/*` does not own camera or workspace-shell freshness.
 
 ## 3.2 Capability ownership
 
@@ -207,6 +252,12 @@ Required field sample scopes:
 Scope resolution is a backend contract. The frontend may request a selected scope, but it must not
 download full-domain data just to filter large FEM payloads client-side.
 
+The same rule applies to realtime fetch hints. If the active viewport consumes
+`component=magnitude&scope_kind=airbox&scope_id=part:__air__`, the invalidation
+system must prefer that scoped query. It must not fall back to
+`component=full&scope_kind=full` unless that exact resource changed and the
+frontend explicitly depends on it.
+
 Primitive geometry displayed before a mesh build is not scoped mesh topology. Object topology routes may return no content or not found until a mesh exists for the requested object. The frontend must distinguish primitive authoring display, stale previous topology, and current solver topology.
 
 ## 5. Frontend client policy
@@ -218,6 +269,8 @@ The frontend should use:
 - generated OpenAPI types/client for low-level transport,
 - `ControlRoomApi` as the session-scoped API facade,
 - resource hooks for caching and invalidation,
+- realtime invalidations as hints that preserve resource ownership boundaries,
+  not as permission to refetch unrelated heavy resources,
 - domain adapters for FDM/FEM interpretation,
 - binary codecs for FMVP/FMMT payloads.
 

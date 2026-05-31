@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -579,6 +579,10 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
+        field_catalog_revision: 0,
+        field_samples_revision: 0,
+        field_quantity_revisions: BTreeMap::new(),
+        stage_execution_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1059,6 +1063,10 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
         scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
+        field_catalog_revision: 0,
+        field_samples_revision: 0,
+        field_quantity_revisions: BTreeMap::new(),
+        stage_execution_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1196,6 +1204,10 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
+        field_catalog_revision: 0,
+        field_samples_revision: 0,
+        field_quantity_revisions: BTreeMap::new(),
+        stage_execution_revision: 0,
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -4909,8 +4921,10 @@ async fn mesh_shared_domain_cross_section_image_returns_png_payload() {
             .headers()
             .get("x-fullmag-renderer")
             .and_then(|value| value.to_str().ok()),
-        Some("cross-section-image-v1"),
+        Some("cross-section-image-v2"),
     );
+    assert!(response.headers().contains_key("x-fullmag-image-width"));
+    assert!(response.headers().contains_key("x-fullmag-image-height"));
     let body = body_bytes(response).await;
     assert_eq!(&body[..8], b"\x89PNG\r\n\x1a\n");
 }
@@ -4964,7 +4978,7 @@ async fn mesh_shared_domain_cross_section_image_rejects_invalid_resolution() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=777")
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image?plane=xy&position_percent=50&metric=volume&resolution=128")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -7849,6 +7863,52 @@ async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_validates_runtime_precondition_against_effective_status() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: Vec::new(),
+            stage_statuses: Vec::new(),
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Cancelled,
+        });
+        snapshot.state_version = 9;
+        crate::session::refresh_runtime_status(snapshot);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "compute_fields",
+                        "target": { "kind": "study" },
+                        "precondition": {
+                            "runtime_state": "awaiting_command",
+                            "stage_execution_revision": 9
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["accepted"], true);
+}
+
+#[tokio::test]
 async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -9943,6 +10003,60 @@ async fn field_vector_cached_projection_reports_point_and_value_counts_separatel
             Some("1")
         );
     }
+}
+
+#[tokio::test]
+async fn field_vector_etag_stays_stable_when_only_snapshot_state_version_changes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 11;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 2.0, 2.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 2, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let uri = "/v2/sessions/current/data/fields/m/samples/vector?component=magnitude";
+
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = snapshot.state_version.wrapping_add(1);
+    }
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", etag.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
 }
 
 #[tokio::test]

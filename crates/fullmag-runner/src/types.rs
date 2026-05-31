@@ -732,7 +732,7 @@ impl Default for LivePreviewRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LivePreviewField {
     pub config_revision: u64,
     pub quantity: String,

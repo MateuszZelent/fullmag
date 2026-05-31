@@ -16,7 +16,9 @@ const requireGeometryFlow =
 const cameraOnlySmoke = process.env.CONTROL_ROOM_SMOKE_CAMERA_ONLY === "1";
 const keepGeometrySmokeObjects =
   process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
-const CANVAS_SCREENSHOT_TIMEOUT_MS = 15_000;
+const CANVAS_SCREENSHOT_TIMEOUT_MS = Number(
+  process.env.CONTROL_ROOM_CANVAS_SCREENSHOT_TIMEOUT_MS ?? 60_000,
+);
 const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
 const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
 const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
@@ -24,6 +26,9 @@ const VIEWPORT_3D_COMPUTE_MEASURE_NAMES = [
   "fullmag.viewport3d.buildMeshQualityVertexColors",
   "fullmag.viewport3d.buildFdmCuboidInstanceModel",
   "fullmag.viewport3d.buildViewport3DFieldRenderModel",
+  "fullmag.viewport3d.buildVectorGlyphInstances",
+  "fullmag.viewport3d.uploadVectorGlyphColors",
+  "fullmag.viewport3d.uploadVectorGlyphMatrices",
 ];
 const REACT_RENDER_MEASURE_NAMES = [
   "fullmag.react.render.ExplorerModule.mount",
@@ -1056,6 +1061,9 @@ async function sampleCanvasComposite(page) {
 
   const background = await readCanvasBackground(page);
   const backgroundRgb = parseCssRgb(background);
+  const webglSample = await sampleCanvasWebGLPixels(page, backgroundRgb);
+  if (webglSample?.nonBlank) return webglSample;
+
   const png = await withTimeout(
     page.screenshot({
       clip: {
@@ -1101,6 +1109,66 @@ async function sampleCanvasComposite(page) {
     signature,
     variedPixels,
   };
+}
+
+async function sampleCanvasWebGLPixels(page, backgroundRgb) {
+  return page.evaluate(
+    ({ backgroundRgb, selector }) => {
+      const node = document.querySelector(selector);
+      if (!(node instanceof HTMLCanvasElement)) return null;
+      const context = node.getContext("webgl2") ?? node.getContext("webgl");
+      if (!context || context.isContextLost()) return null;
+
+      const width = context.drawingBufferWidth;
+      const height = context.drawingBufferHeight;
+      if (width <= 0 || height <= 0) return null;
+
+      const rgba = new Uint8Array(width * height * 4);
+      context.readPixels(
+        0,
+        0,
+        width,
+        height,
+        context.RGBA,
+        context.UNSIGNED_BYTE,
+        rgba,
+      );
+
+      const stride = Math.max(1, Math.floor(Math.min(width, height) / 64));
+      const signature = [];
+      let sampledPixels = 0;
+      let variedPixels = 0;
+
+      for (let y = 0; y < height; y += stride) {
+        for (let x = 0; x < width; x += stride) {
+          sampledPixels += 1;
+          const offset = (y * width + x) * 4;
+          const alpha = rgba[offset + 3] / 255;
+          const rgb = [
+            Math.round(rgba[offset] * alpha + backgroundRgb[0] * (1 - alpha)),
+            Math.round(rgba[offset + 1] * alpha + backgroundRgb[1] * (1 - alpha)),
+            Math.round(rgba[offset + 2] * alpha + backgroundRgb[2] * (1 - alpha)),
+          ];
+          signature.push(...rgb);
+          if (
+            rgb.some(
+              (channel, index) => Math.abs(channel - backgroundRgb[index]) > 8,
+            )
+          ) {
+            variedPixels += 1;
+          }
+        }
+      }
+
+      return {
+        nonBlank: variedPixels > 0,
+        sampledPixels,
+        signature,
+        variedPixels,
+      };
+    },
+    { backgroundRgb, selector: VIEWPORT_3D_CANVAS_SELECTOR },
+  );
 }
 
 function canvasCompositeDifference(before, after, options = {}) {

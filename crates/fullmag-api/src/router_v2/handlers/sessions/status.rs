@@ -6,6 +6,7 @@ use axum::extract::State;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::data::field_resolution::live_magnetization_available;
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
 use crate::schemas::status::*;
 use crate::types::{
@@ -140,7 +141,7 @@ pub(crate) fn build_live_status(
         slice_revision: slice_revision(field_revision, display_sel.revision),
         artifact_revision,
         command_completion_revision,
-        fields_revision: snapshot.state_version,
+        fields_revision: field_revision,
         scalars_revision: snapshot.scalar_revision,
         domain_generation_id: domain.generation_id,
         artifacts_revision: snapshot.artifacts.len() as u64,
@@ -155,11 +156,7 @@ pub(crate) fn build_live_status(
         mesh_revision: snapshot.mesh_revision,
         mesh_build_revision: snapshot.mesh_build_revision,
         commands_revision,
-        stages_revision: snapshot
-            .stage_execution
-            .as_ref()
-            .map(|_| snapshot.state_version)
-            .unwrap_or(0),
+        stages_revision: snapshot.stage_execution_revision,
         scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
     };
 
@@ -231,6 +228,9 @@ pub(crate) fn topology_revision(snapshot: &SessionStateResponse, domain_generati
 }
 
 pub(crate) fn field_catalog_revision(snapshot: &SessionStateResponse) -> u64 {
+    if snapshot.field_catalog_revision > 0 {
+        return snapshot.field_catalog_revision;
+    }
     let mut revision = snapshot.latest_fields.len() as u64;
     for (quantity, value) in snapshot.latest_fields.entries() {
         revision = revision
@@ -273,13 +273,15 @@ pub(crate) fn field_catalog_revision(snapshot: &SessionStateResponse) -> u64 {
     {
         revision = revision
             .wrapping_mul(16777619)
-            .wrapping_add(1)
-            .wrapping_add(snapshot.state_version);
+            .wrapping_add(1);
     }
     revision
 }
 
 pub(crate) fn field_revision(snapshot: &SessionStateResponse) -> u64 {
+    if snapshot.field_samples_revision > 0 {
+        return snapshot.field_samples_revision;
+    }
     snapshot
         .latest_fields
         .entries()
@@ -290,7 +292,41 @@ pub(crate) fn field_revision(snapshot: &SessionStateResponse) -> u64 {
                 .or_else(|| value.get("revision").and_then(serde_json::Value::as_u64))
         })
         .max()
-        .unwrap_or(snapshot.state_version)
+        .or_else(|| (!snapshot.preview_cache.is_empty()).then_some(1))
+        .or_else(|| {
+            (snapshot.latest_fields.get("m").is_none()
+                && snapshot.preview_cache.get("m").is_none()
+                && live_magnetization_available(snapshot))
+            .then_some(1)
+        })
+        .unwrap_or(0)
+}
+
+pub(crate) fn field_quantity_revision(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+) -> u64 {
+    snapshot
+        .field_quantity_revisions
+        .get(quantity_id)
+        .copied()
+        .or_else(|| {
+            snapshot.latest_fields.get(quantity_id).and_then(|value| {
+                value
+                    .get("field_revision")
+                    .and_then(serde_json::Value::as_u64)
+                    .or_else(|| value.get("revision").and_then(serde_json::Value::as_u64))
+            })
+        })
+        .or_else(|| {
+            (snapshot.preview_cache.get(quantity_id).is_some()
+                || (quantity_id == "m"
+                    && snapshot.latest_fields.get("m").is_none()
+                    && snapshot.preview_cache.get("m").is_none()
+                    && live_magnetization_available(snapshot)))
+            .then(|| field_revision(snapshot).max(1))
+        })
+        .unwrap_or(0)
 }
 
 pub(crate) fn slice_revision(field_revision: u64, display_revision: u64) -> u64 {

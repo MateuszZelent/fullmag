@@ -1192,6 +1192,129 @@ describe("study runtime command contributions", () => {
     );
   });
 
+  it("refreshes runtime command preconditions before submit", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-run",
+      error: null,
+    }));
+    const list = vi.fn(async () => ({
+      accepted_count: 0,
+      can_accept_commands: true,
+      commands: [],
+      completed_count: 0,
+      dispatched_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 12,
+      running_count: 0,
+      runtime_controls: [],
+    }));
+    const status = vi.fn(async () => ({
+      revision: 31,
+      runtime_state: "awaiting_command",
+    }));
+    const execution = vi.fn(async () => ({
+      active_stage_index: 0,
+      revision: 14,
+      runtime_state: "awaiting_command",
+      stages: [{ stage_id: "stage-000" }],
+    }));
+
+    const result = await registry.execute("study.run", {
+      api: {
+        commands: { list, submit },
+        simulation: {
+          solver: { status },
+          stages: { execution },
+        },
+      } as never,
+      resourceData: runtimeResourceData({
+        commandCount: 3,
+        runtimeState: "cancelled",
+        stageRevision: 9,
+      }),
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Study compute command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "solve",
+        precondition: {
+          command_revision: 12,
+          runtime_state: "awaiting_command",
+        },
+      }),
+    );
+  });
+
+  it("does not attach stage revision preconditions to study-level compute commands", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-energies",
+      error: null,
+    }));
+    const list = vi.fn(async () => ({
+      accepted_count: 0,
+      can_accept_commands: true,
+      commands: [],
+      completed_count: 0,
+      dispatched_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 8,
+      running_count: 0,
+      runtime_controls: [],
+    }));
+    const status = vi.fn(async () => ({
+      revision: 19,
+      runtime_state: "awaiting_command",
+    }));
+    const execution = vi.fn(async () => ({
+      active_stage_index: null,
+      revision: 22,
+      runtime_state: "awaiting_command",
+      stages: [],
+    }));
+
+    const result = await registry.execute("study.compute-energies", {
+      api: {
+        commands: { list, submit },
+        simulation: {
+          solver: { status },
+          stages: { execution },
+        },
+      } as never,
+      resourceData: runtimeResourceData({
+        commandCount: 7,
+        runtimeState: "awaiting_command",
+        stageRevision: 18,
+      }),
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Compute energies command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    const [request] = submit.mock.calls[0] as unknown as [
+      { precondition?: Record<string, unknown> },
+    ];
+    expect(request.precondition).toEqual({
+      command_revision: 8,
+      runtime_state: "awaiting_command",
+    });
+  });
+
   it("gates checkpoint saving on resource-backed runtime state", () => {
     const registry = registryWithStudyRuntimeCommands();
     const api = {} as never;

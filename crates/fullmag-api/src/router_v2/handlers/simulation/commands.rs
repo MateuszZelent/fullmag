@@ -3,18 +3,19 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, StructuredCommandRequest,
 };
+use crate::session::effective_runtime_status_code;
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
-    geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
-    GeometryRealizationSnapshot, SceneDocument, SceneObject,
+    GeometryBackendTarget, GeometryRealizationSnapshot, SceneDocument, SceneObject,
+    geometry_blocks_solver_run, realize_geometry_scene,
 };
 use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, RegionIR};
 
@@ -74,7 +75,7 @@ async fn validate_runtime_command_contract(
         if precondition
             .runtime_state
             .as_deref()
-            .is_some_and(|expected| expected != runtime_state)
+            .is_some_and(|expected| expected != runtime_state.as_str())
         {
             return Err(ApiError::conflict(format!(
                 "runtime_state precondition failed: expected {}, got {}",
@@ -244,18 +245,8 @@ fn active_stage_index(snapshot: &crate::types::SessionStateResponse) -> Option<u
         .and_then(|stage| stage.active_stage_index)
 }
 
-fn runtime_state_for_command_validation(snapshot: &crate::types::SessionStateResponse) -> &str {
-    snapshot
-        .stage_execution
-        .as_ref()
-        .map(|stage| stage.runtime_state.as_str())
-        .or_else(|| {
-            snapshot
-                .live_state
-                .as_ref()
-                .map(|state| state.status.as_str())
-        })
-        .unwrap_or(snapshot.session.status.as_str())
+fn runtime_state_for_command_validation(snapshot: &crate::types::SessionStateResponse) -> String {
+    effective_runtime_status_code(snapshot)
 }
 
 fn stage_id_for_command_validation(index: usize) -> String {
