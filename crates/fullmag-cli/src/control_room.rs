@@ -874,14 +874,22 @@ pub(crate) fn sync_current_live_delta(
 /// server's `DisplayPresentationState` before the first control-room frame is painted.
 /// Errors are non-fatal — the control room opens with defaults if the PATCH fails.
 pub(crate) fn sync_initial_visualization_overrides(overrides: serde_json::Value) -> Result<()> {
+    sync_initial_visualization_state(serde_json::json!({ "overrides": overrides }))
+}
+
+/// Send a full `VisualizationStatePatch` JSON body to the visualization state endpoint before
+/// the first control-room frame is painted.  Accepts the complete patch object (may include
+/// `overrides`, `quantity`, `clip`, `vector_style`, `layers`, etc.).
+/// Errors are non-fatal — the control room opens with defaults if the PATCH fails.
+pub(crate) fn sync_initial_visualization_state(patch: serde_json::Value) -> Result<()> {
     current_live_api_client()
         .patch(format!(
             "{}/v2/sessions/current/visualization/state",
             api_base_url()
         ))
-        .json(&serde_json::json!({ "overrides": overrides }))
+        .json(&patch)
         .send()
-        .context("failed to apply initial visualization overrides")?
+        .context("failed to apply initial visualization state")?
         .error_for_status()
         .context("visualization state patch endpoint returned error")?;
     Ok(())

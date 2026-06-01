@@ -104,6 +104,9 @@ def _component_aware_mocks(mesh, *, side_effect=None, return_value=None):
     stack.enter_context(
         patch("fullmag.meshing.asset_pipeline._geometry_to_trimesh", return_value=_FakeSurface())
     )
+    stack.enter_context(
+        patch("fullmag.meshing._gmsh_occ.is_occ_compatible", return_value=False)
+    )
     if side_effect is not None:
         stack.enter_context(
             patch(
@@ -212,6 +215,9 @@ class BuildReportTests(unittest.TestCase):
         mesh = _make_mesh_3elem()
 
         with patch(
+            "fullmag.meshing._gmsh_occ.is_occ_compatible",
+            return_value=False,
+        ), patch(
             "fullmag.meshing.asset_pipeline._import_trimesh",
             return_value=_FAKE_TRIMESH,
         ), patch(

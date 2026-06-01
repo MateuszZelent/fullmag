@@ -441,10 +441,12 @@ export class RealtimeInvalidationBridge {
   private invalidateSimulationStepResources(revision: ResourceRevision): void {
     this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
     this.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+    this.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
     this.resources.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
     this.resources.invalidatePrefix(
       resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
       revision,
     );
+    this.resources.invalidatePrefix(DATA_FIELDS_PATH, revision);
   }
 }

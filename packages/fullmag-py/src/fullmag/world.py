@@ -335,6 +335,19 @@ class MagnetHandle:
         show: bool = True,
         mode: str | None = None,
         active_quantity_id: str | None = None,
+        wireframe: bool | None = None,
+        bounds: bool | None = None,
+        points: bool | None = None,
+        opacity: float | None = None,
+        surface_color_source: str | None = None,
+        geometry_scope: str | None = None,
+        vector_density: int | None = None,
+        vector_domain: str | None = None,
+        vector_length_scale: float | None = None,
+        vector_thickness: float | None = None,
+        vector_alpha: float | None = None,
+        vector_color_mode: str | None = None,
+        field_component: str | None = None,
     ) -> "MagnetHandle":
         """Declare an initial viewport display hint for this geometry.
 
@@ -343,12 +356,49 @@ class MagnetHandle:
         show:
             Whether the geometry should be visible when the session opens.
         mode:
-            Display mode, e.g. ``"surface"``, ``"vectors"``, ``"wireframe"``.
-            ``None`` leaves the control room at its own default.
+            Display mode preset: ``"surface"``, ``"vectors"``, ``"wireframe"``,
+            ``"surface+edges"``, ``"points"``.
         active_quantity_id:
-            Per-object quantity to display when the session opens.  ``None``
-            inherits the study/global quantity.
+            Per-object quantity to display.  ``None`` inherits the global quantity.
+        wireframe:
+            Wireframe layer on/off.
+        bounds:
+            Bounding-box frame on/off.
+        points:
+            Points layer on/off.
+        opacity:
+            Surface opacity, 0–100 %.
+        surface_color_source:
+            Surface coloring: ``"solid"``, ``"orientation"``, ``"component_x"``,
+            ``"component_y"``, ``"component_z"``, ``"magnitude"``, ``"colormap"``.
+        geometry_scope:
+            Arrow/wireframe extent: ``"surface"`` or ``"full"``.
+        vector_density:
+            Vector glyph budget (every-N limit).
+        vector_domain:
+            Vector render domain: ``"auto"``, ``"magnetic_only"``,
+            ``"full_domain"``, ``"airbox_only"``.
+        vector_length_scale:
+            Arrow length scale multiplier.
+        vector_thickness:
+            Arrow shaft thickness multiplier.
+        vector_alpha:
+            Arrow opacity, 0–1.
+        vector_color_mode:
+            Arrow coloring: ``"orientation"``, ``"x"``, ``"y"``, ``"z"``,
+            ``"magnitude"``, ``"monochrome"``.
+        field_component:
+            Field component to display: ``"x"``, ``"y"``, ``"z"``, ``"magnitude"``.
         """
+        _VALID_SURFACE_COLOR_SOURCE = {
+            "solid", "orientation", "component_x", "component_y",
+            "component_z", "magnitude", "colormap",
+        }
+        _VALID_GEOMETRY_SCOPE = {"surface", "full"}
+        _VALID_VECTOR_DOMAIN = {"auto", "magnetic_only", "full_domain", "airbox_only"}
+        _VALID_VECTOR_COLOR_MODE = {"orientation", "x", "y", "z", "magnitude", "monochrome"}
+        _VALID_FIELD_COMPONENT = {"x", "y", "z", "magnitude"}
+
         hint: dict[str, object] = {"show": bool(show)}
         if mode is not None:
             if not isinstance(mode, str) or not mode.strip():
@@ -360,6 +410,53 @@ class MagnetHandle:
             if not active_quantity_id.strip():
                 raise ValueError("active_quantity_id must not be empty")
             hint["active_quantity_id"] = active_quantity_id
+        if wireframe is not None:
+            hint["wireframe"] = bool(wireframe)
+        if bounds is not None:
+            hint["bounds"] = bool(bounds)
+        if points is not None:
+            hint["points"] = bool(points)
+        if opacity is not None:
+            opacity = float(opacity)
+            if not 0.0 <= opacity <= 100.0:
+                raise ValueError("opacity must be between 0 and 100")
+            hint["opacity"] = opacity
+        if surface_color_source is not None:
+            if surface_color_source not in _VALID_SURFACE_COLOR_SOURCE:
+                raise ValueError(
+                    f"surface_color_source must be one of {sorted(_VALID_SURFACE_COLOR_SOURCE)}"
+                )
+            hint["surface_color_source"] = surface_color_source
+        if geometry_scope is not None:
+            if geometry_scope not in _VALID_GEOMETRY_SCOPE:
+                raise ValueError(f"geometry_scope must be one of {sorted(_VALID_GEOMETRY_SCOPE)}")
+            hint["geometry_scope"] = geometry_scope
+        if vector_density is not None:
+            vector_density = int(vector_density)
+            if vector_density < 1:
+                raise ValueError("vector_density must be a positive integer")
+            hint["vector_density"] = vector_density
+        if vector_domain is not None:
+            if vector_domain not in _VALID_VECTOR_DOMAIN:
+                raise ValueError(f"vector_domain must be one of {sorted(_VALID_VECTOR_DOMAIN)}")
+            hint["vector_domain"] = vector_domain
+        if vector_length_scale is not None:
+            hint["vector_length_scale"] = float(vector_length_scale)
+        if vector_thickness is not None:
+            hint["vector_thickness"] = float(vector_thickness)
+        if vector_alpha is not None:
+            hint["vector_alpha"] = float(vector_alpha)
+        if vector_color_mode is not None:
+            if vector_color_mode not in _VALID_VECTOR_COLOR_MODE:
+                raise ValueError(
+                    f"vector_color_mode must be one of {sorted(_VALID_VECTOR_COLOR_MODE)}"
+                )
+            hint["vector_color_mode"] = vector_color_mode
+        if field_component is not None:
+            fc = field_component.lower()
+            if fc not in _VALID_FIELD_COMPONENT:
+                raise ValueError(f"field_component must be one of {sorted(_VALID_FIELD_COMPONENT)}")
+            hint["field_component"] = fc
         self._visualization = hint
         _state._register_geometry_visualization_hint(self._name, hint)
         return self
@@ -2548,6 +2645,17 @@ class StudyAirboxVisualizationHandle:
         show: bool = True,
         mode: str | None = None,
         active_quantity_id: str | None = None,
+        wireframe: bool | None = None,
+        shaded: bool | None = None,
+        bounds: bool | None = None,
+        points: bool | None = None,
+        opacity: float | None = None,
+        geometry_scope: str | None = None,
+        vector_density: int | None = None,
+        vector_length_scale: float | None = None,
+        vector_thickness: float | None = None,
+        vector_alpha: float | None = None,
+        vector_color_mode: str | None = None,
     ) -> "StudyBuilder":
         """Declare an initial viewport display hint for the airbox.
 
@@ -2556,11 +2664,37 @@ class StudyAirboxVisualizationHandle:
         show:
             Whether the airbox should be visible when the session opens.
         mode:
-            Display mode, e.g. ``\"vectors\"``, ``\"surface\"``, ``\"wireframe\"``.\n            ``None`` leaves the control room at its own default.
+            Display mode preset: ``"vectors"``, ``"surface"``, ``"wireframe"``,
+            ``"surface+edges"``.  ``None`` leaves the control room at its own default.
         active_quantity_id:
-            Per-airbox quantity to display when the session opens.  ``None``
-            inherits the study/global quantity.
+            Per-airbox quantity.  ``None`` inherits the study/global quantity.
+        wireframe:
+            Wireframe layer on/off.
+        shaded:
+            Shaded surface layer on/off.
+        bounds:
+            Bounding-box frame on/off.
+        points:
+            Points layer on/off.
+        opacity:
+            Airbox opacity, 0–100 %.
+        geometry_scope:
+            Arrow/wireframe extent: ``"surface"`` or ``"full"``.
+        vector_density:
+            Vector glyph budget (every-N limit).
+        vector_length_scale:
+            Arrow length scale multiplier.
+        vector_thickness:
+            Arrow shaft thickness multiplier.
+        vector_alpha:
+            Arrow opacity, 0–1.
+        vector_color_mode:
+            Arrow coloring: ``"orientation"``, ``"x"``, ``"y"``, ``"z"``,
+            ``"magnitude"``, ``"monochrome"``.
         """
+        _VALID_GEOMETRY_SCOPE = {"surface", "full"}
+        _VALID_VECTOR_COLOR_MODE = {"orientation", "x", "y", "z", "magnitude", "monochrome"}
+
         hint: dict[str, object] = {"show": bool(show)}
         if mode is not None:
             if not isinstance(mode, str) or not mode.strip():
@@ -2572,6 +2706,40 @@ class StudyAirboxVisualizationHandle:
             if not active_quantity_id.strip():
                 raise ValueError("active_quantity_id must not be empty")
             hint["active_quantity_id"] = active_quantity_id
+        if wireframe is not None:
+            hint["wireframe"] = bool(wireframe)
+        if shaded is not None:
+            hint["shaded"] = bool(shaded)
+        if bounds is not None:
+            hint["bounds"] = bool(bounds)
+        if points is not None:
+            hint["points"] = bool(points)
+        if opacity is not None:
+            opacity = float(opacity)
+            if not 0.0 <= opacity <= 100.0:
+                raise ValueError("opacity must be between 0 and 100")
+            hint["opacity"] = opacity
+        if geometry_scope is not None:
+            if geometry_scope not in _VALID_GEOMETRY_SCOPE:
+                raise ValueError(f"geometry_scope must be one of {sorted(_VALID_GEOMETRY_SCOPE)}")
+            hint["geometry_scope"] = geometry_scope
+        if vector_density is not None:
+            vector_density = int(vector_density)
+            if vector_density < 1:
+                raise ValueError("vector_density must be a positive integer")
+            hint["vector_density"] = vector_density
+        if vector_length_scale is not None:
+            hint["vector_length_scale"] = float(vector_length_scale)
+        if vector_thickness is not None:
+            hint["vector_thickness"] = float(vector_thickness)
+        if vector_alpha is not None:
+            hint["vector_alpha"] = float(vector_alpha)
+        if vector_color_mode is not None:
+            if vector_color_mode not in _VALID_VECTOR_COLOR_MODE:
+                raise ValueError(
+                    f"vector_color_mode must be one of {sorted(_VALID_VECTOR_COLOR_MODE)}"
+                )
+            hint["vector_color_mode"] = vector_color_mode
         _state._register_airbox_visualization_hint(hint)
         return self._owner
 
@@ -2816,8 +2984,38 @@ class StudyBuilder:
         )
         return self
 
-    def visualization(self, active_quantity_id: str | None = None) -> "StudyBuilder":
-        visualization(active_quantity_id)
+    def visualization(
+        self,
+        active_quantity_id: str | None = None,
+        *,
+        colormap: str | None = None,
+        auto_contrast: bool | None = None,
+        field_component: str | None = None,
+        clip_enabled: bool | None = None,
+        clip_axis: str | None = None,
+        clip_position: float | None = None,
+        render_mode: str | None = None,
+        vector_density: int | None = None,
+        vector_length_scale: float | None = None,
+        vector_thickness: float | None = None,
+        vector_alpha: float | None = None,
+        vector_color_mode: str | None = None,
+    ) -> "StudyBuilder":
+        visualization(
+            active_quantity_id,
+            colormap=colormap,
+            auto_contrast=auto_contrast,
+            field_component=field_component,
+            clip_enabled=clip_enabled,
+            clip_axis=clip_axis,
+            clip_position=clip_position,
+            render_mode=render_mode,
+            vector_density=vector_density,
+            vector_length_scale=vector_length_scale,
+            vector_thickness=vector_thickness,
+            vector_alpha=vector_alpha,
+            vector_color_mode=vector_color_mode,
+        )
         return self
 
     def demag(
@@ -3660,34 +3858,121 @@ def adaptive_mesh(
     }
 
 
-def visualization(active_quantity_id: str | None = None) -> None:
-    """Declare the initial visualization quantity for the control room.
-
-    When a session is started interactively, the control room will switch
-    to this quantity immediately, before the user interacts.
+def visualization(
+    active_quantity_id: str | None = None,
+    *,
+    colormap: str | None = None,
+    auto_contrast: bool | None = None,
+    field_component: str | None = None,
+    clip_enabled: bool | None = None,
+    clip_axis: str | None = None,
+    clip_position: float | None = None,
+    render_mode: str | None = None,
+    vector_density: int | None = None,
+    vector_length_scale: float | None = None,
+    vector_thickness: float | None = None,
+    vector_alpha: float | None = None,
+    vector_color_mode: str | None = None,
+) -> None:
+    """Declare initial global visualization settings for the control room.
 
     Parameters
     ----------
     active_quantity_id:
-        The quantity to display on session open, e.g. ``"m"``, ``"h_eff"``,
-        ``"h_demag"``, ``"exchange_field"``.  Pass ``None`` (the default) to
-        leave the control room at its own default (usually ``"m"``).
+        Quantity to display on session open, e.g. ``"m"``, ``"h_eff"``.
+    colormap:
+        Colormap name: ``"viridis"``, ``"inferno"``, ``"magma"``,
+        ``"coolwarm"``, ``"jet"``.
+    auto_contrast:
+        Enable automatic contrast/range scaling.
+    field_component:
+        Field component to show as surface colour: ``"x"``, ``"y"``, ``"z"``,
+        ``"magnitude"``.
+    clip_enabled:
+        Enable the global clip plane.
+    clip_axis:
+        Clip plane normal axis: ``"x"``, ``"y"``, ``"z"``.
+    clip_position:
+        Clip plane position along the axis, 0–100 %.
+    render_mode:
+        Global mesh render preset: ``"surface"``, ``"wireframe"``,
+        ``"surface+edges"``, ``"points"``.
+    vector_density:
+        Global vector glyph budget.
+    vector_length_scale:
+        Arrow length scale multiplier.
+    vector_thickness:
+        Arrow shaft thickness multiplier.
+    vector_alpha:
+        Arrow opacity, 0–1.
+    vector_color_mode:
+        Arrow coloring: ``"orientation"``, ``"x"``, ``"y"``, ``"z"``,
+        ``"magnitude"``, ``"monochrome"``.
     """
+    _VALID_CLIP_AXIS = {"x", "y", "z"}
+    _VALID_RENDER_MODE = {"surface", "wireframe", "surface+edges", "points"}
+    _VALID_VECTOR_COLOR_MODE = {"orientation", "x", "y", "z", "magnitude", "monochrome"}
+    _VALID_FIELD_COMPONENT = {"x", "y", "z", "magnitude"}
+
     if active_quantity_id is not None and not isinstance(active_quantity_id, str):
         raise TypeError("active_quantity_id must be a string or None")
     if active_quantity_id is not None and not active_quantity_id.strip():
         raise ValueError("active_quantity_id must not be empty")
-    # Preserve existing sub-keys (airbox, geometry_hints) when updating active_quantity_id.
-    if active_quantity_id is not None:
+
+    def _set(key: str, value: object) -> None:
         if _state._visualization_hint is None:
             _state._visualization_hint = {}
-        _state._visualization_hint["active_quantity_id"] = active_quantity_id
+        _state._visualization_hint[key] = value
+
+    # Preserve existing sub-keys (airbox, geometry_hints) when updating.
+    if active_quantity_id is not None:
+        _set("active_quantity_id", active_quantity_id)
     else:
-        # Only clear active_quantity_id, leave other sub-keys intact.
         if _state._visualization_hint is not None:
             _state._visualization_hint.pop("active_quantity_id", None)
             if not _state._visualization_hint:
                 _state._visualization_hint = None
+    if colormap is not None:
+        _set("colormap", str(colormap))
+    if auto_contrast is not None:
+        _set("auto_contrast", bool(auto_contrast))
+    if field_component is not None:
+        fc = field_component.lower()
+        if fc not in _VALID_FIELD_COMPONENT:
+            raise ValueError(f"field_component must be one of {sorted(_VALID_FIELD_COMPONENT)}")
+        _set("field_component", fc)
+    if clip_enabled is not None:
+        _set("clip_enabled", bool(clip_enabled))
+    if clip_axis is not None:
+        if clip_axis not in _VALID_CLIP_AXIS:
+            raise ValueError(f"clip_axis must be one of {sorted(_VALID_CLIP_AXIS)}")
+        _set("clip_axis", clip_axis)
+    if clip_position is not None:
+        pos = float(clip_position)
+        if not 0.0 <= pos <= 100.0:
+            raise ValueError("clip_position must be between 0 and 100")
+        _set("clip_position", pos)
+    if render_mode is not None:
+        if render_mode not in _VALID_RENDER_MODE:
+            raise ValueError(f"render_mode must be one of {sorted(_VALID_RENDER_MODE)}")
+        _set("render_mode", render_mode)
+    if vector_density is not None:
+        vd = int(vector_density)
+        if vd < 1:
+            raise ValueError("vector_density must be a positive integer")
+        _set("vector_density", vd)
+    if vector_length_scale is not None:
+        _set("vector_length_scale", float(vector_length_scale))
+    if vector_thickness is not None:
+        _set("vector_thickness", float(vector_thickness))
+    if vector_alpha is not None:
+        _set("vector_alpha", float(vector_alpha))
+    if vector_color_mode is not None:
+        if vector_color_mode not in _VALID_VECTOR_COLOR_MODE:
+            raise ValueError(
+                f"vector_color_mode must be one of {sorted(_VALID_VECTOR_COLOR_MODE)}"
+            )
+        _set("vector_color_mode", vector_color_mode)
 
 
 def _mesh_source_root() -> Path:

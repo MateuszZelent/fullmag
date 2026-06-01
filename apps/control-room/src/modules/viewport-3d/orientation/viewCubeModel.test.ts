@@ -4,6 +4,7 @@ import {
   buildViewCubeFaces,
   buildViewCubeTargetMap,
   getViewCubeAxisLabels,
+  resolveViewCubeBoxHitDirection,
   resolveViewCubeTargetCell,
 } from "./viewCubeModel";
 
@@ -83,5 +84,20 @@ describe("view cube model", () => {
       x: 0,
       y: 0,
     });
+  });
+
+  it("maps fallback box hits to face, edge, and corner snap directions", () => {
+    expect(resolveViewCubeBoxHitDirection([-31, 0, 0], 62, 10)).toEqual([
+      -1, 0, 0,
+    ]);
+    expect(resolveViewCubeBoxHitDirection([-31, 31, 31], 62, 10)).toEqual([
+      -1, 1, 1,
+    ]);
+    expect(resolveViewCubeBoxHitDirection([0, 0, 31], 62, 10)).toEqual([
+      0, 0, 1,
+    ]);
+    expect(resolveViewCubeBoxHitDirection([31, -31, -31], 62, 10)).toEqual([
+      1, -1, -1,
+    ]);
   });
 });

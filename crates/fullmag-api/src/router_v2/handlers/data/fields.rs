@@ -658,7 +658,7 @@ fn apply_field_scope(
 
 fn resolve_field_vector_sample_limit(
     query: &FieldVectorQuery,
-    scope: Option<&ResolvedFieldScope>,
+    _scope: Option<&ResolvedFieldScope>,
 ) -> Result<Option<usize>, ApiError> {
     let Some(max_samples) = query.max_samples else {
         return Ok(None);
@@ -666,11 +666,6 @@ fn resolve_field_vector_sample_limit(
     if max_samples == 0 {
         return Err(ApiError::bad_request(
             "max_samples must be greater than zero",
-        ));
-    }
-    if scope.is_none() {
-        return Err(ApiError::bad_request(
-            "max_samples requires a scoped FEM field query",
         ));
     }
     Ok(Some(max_samples as usize))
@@ -699,6 +694,32 @@ fn field_vector_sample_cache_token(max_samples: Option<usize>) -> String {
     max_samples
         .map(|value| format!(":max_samples={value}"))
         .unwrap_or_default()
+}
+
+fn sample_unscoped_field_values(
+    raw_values: Vec<f64>,
+    grid: [u32; 3],
+    n_comp: usize,
+    max_samples: Option<usize>,
+) -> (Vec<f64>, [u32; 3]) {
+    let Some(max_samples) = max_samples else {
+        return (raw_values, grid);
+    };
+    let n_comp = n_comp.max(1);
+    let point_count = raw_values.len() / n_comp;
+    if max_samples >= point_count {
+        return (raw_values, grid);
+    }
+
+    let sample_count = max_samples.max(1);
+    let start = point_count.saturating_sub(sample_count) / 2;
+    let mut sampled = Vec::with_capacity(sample_count * n_comp);
+    for point_index in start..start + sample_count {
+        let offset = point_index * n_comp;
+        sampled.extend_from_slice(&raw_values[offset..offset + n_comp]);
+    }
+
+    (sampled, [sample_count as u32, 1, 1])
 }
 
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
@@ -824,7 +845,14 @@ pub async fn get_field_vector(
         .as_ref()
         .map(|scope| [scope.node_indices.len() as u32, 1, 1])
         .unwrap_or(grid);
-    let raw_values = apply_field_scope(raw_values, grid, n_comp, resolved_scope.as_ref());
+    let (raw_values, scoped_grid) = if resolved_scope.is_some() {
+        (
+            apply_field_scope(raw_values, grid, n_comp, resolved_scope.as_ref()),
+            scoped_grid,
+        )
+    } else {
+        sample_unscoped_field_values(raw_values, scoped_grid, n_comp, sample_limit)
+    };
 
     // P4: check projection cache before doing heavy projection work
     let comp_key = match &component {

@@ -1,9 +1,20 @@
 "use client";
 
 import { Line, Text } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { CanvasTexture, Color, Matrix4, Vector3, type Group } from "three";
+import {
+  CanvasTexture,
+  Color,
+  DoubleSide,
+  Raycaster,
+  Matrix4,
+  Vector2,
+  Vector3,
+  type Intersection,
+  type Group,
+  type Object3D,
+} from "three";
 
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Direction3 } from "./cameraOrientation";
@@ -20,6 +31,7 @@ import {
 import {
   buildViewCubeFaces,
   getViewCubeAxisLabels,
+  resolveViewCubeBoxHitDirection,
   resolveViewCubeTargetCell,
   type ViewCubeFaceModel,
   type ViewCubeTargetKind,
@@ -109,6 +121,10 @@ export function ViewCube3DBox({
   onSnap: (direction: Direction3) => void;
 }) {
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+  const camera = useThree((state) => state.camera);
+  const gl = useThree((state) => state.gl);
+  const cubeGroupRef = useRef<Group>(null);
+  const onSnapRef = useLatestRef(onSnap);
   const axisLabels = getViewCubeAxisLabels();
   const faces = useMemo(() => buildViewCubeFaces(), []);
   const faceTextures = useMemo(
@@ -117,6 +133,13 @@ export function ViewCube3DBox({
       normal: buildViewCubeFaceTexture(colors, false),
     }),
     [colors],
+  );
+  const raycastState = useMemo(
+    () => ({
+      pointer: new Vector2(),
+      raycaster: new Raycaster(),
+    }),
+    [],
   );
 
   useEffect(
@@ -127,52 +150,111 @@ export function ViewCube3DBox({
     [faceTextures],
   );
 
+  useEffect(() => {
+    const element = gl.domElement;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const group = cubeGroupRef.current;
+      if (!group) return;
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      if (x < 0 || x > rect.width || y < 0 || y > rect.height) return;
+
+      const { pointer, raycaster } = raycastState;
+      pointer.set((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
+      camera.updateMatrixWorld(true);
+      group.updateMatrixWorld(true);
+      raycaster.setFromCamera(pointer, camera);
+
+      const direction = resolveViewCubeNativeHitDirection(
+        raycaster.intersectObject(group, true),
+      );
+      if (!direction) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onSnapRef.current(direction);
+    };
+
+    element.addEventListener("pointerdown", handlePointerDown, {
+      capture: true,
+    });
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDown, {
+        capture: true,
+      });
+    };
+  }, [camera, gl, onSnapRef, raycastState]);
+
   return (
     <group>
-      <mesh renderOrder={WIDGET_RENDER_ORDER}>
-        <boxGeometry
-          args={[
-            VIEW_CUBE_FACE_SIZE - 0.2,
-            VIEW_CUBE_FACE_SIZE - 0.2,
-            VIEW_CUBE_FACE_SIZE - 0.2,
-          ]}
-        />
-        <meshBasicMaterial
-          color={String(colors.panelRaised ?? colors.panel ?? colors.mesh)}
-          depthTest={false}
-          depthWrite={false}
-          opacity={0.97}
-          toneMapped={false}
-          transparent
-        />
-      </mesh>
-      {faces.map((face) => {
-        const faceHovered = hoveredTargetId?.startsWith(`${face.id}:`) ?? false;
-        return (
-          <ViewCubeFacePanel
-            key={face.id}
-            colors={colors}
-            face={face}
-            faceHovered={faceHovered}
-            hoveredTargetId={hoveredTargetId}
-            onHoverChange={setHoveredTargetId}
-            onSnap={onSnap}
-            textures={faceTextures}
+      <group ref={cubeGroupRef}>
+        <mesh
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            event.nativeEvent.preventDefault();
+            event.nativeEvent.stopImmediatePropagation();
+            const point = event.object.worldToLocal(event.point.clone());
+            onSnap(
+              resolveViewCubeBoxHitDirection(
+                point.toArray() as Direction3,
+                VIEW_CUBE_FACE_SIZE,
+                VIEW_CUBE_EDGE_SIZE,
+              ),
+            );
+          }}
+          renderOrder={WIDGET_RENDER_ORDER}
+          userData={{ viewCubeFallbackBox: true }}
+        >
+          <boxGeometry
+            args={[
+              VIEW_CUBE_FACE_SIZE - 0.2,
+              VIEW_CUBE_FACE_SIZE - 0.2,
+              VIEW_CUBE_FACE_SIZE - 0.2,
+            ]}
           />
-        );
-      })}
-      {VIEW_CUBE_EDGE_LINES.map((edge) => (
-        <Line
-          key={viewCubeSegmentKey(edge.points)}
-          color={String(colors.wire)}
-          depthTest={false}
-          lineWidth={1.8}
-          opacity={0.55}
-          points={edge.points}
-          renderOrder={WIDGET_RENDER_ORDER + 2}
-          transparent
-        />
-      ))}
+          <meshBasicMaterial
+            color={String(colors.panelRaised ?? colors.panel ?? colors.mesh)}
+            depthTest={false}
+            depthWrite={false}
+            opacity={0.97}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+        {faces.map((face) => {
+          const faceHovered = hoveredTargetId?.startsWith(`${face.id}:`) ?? false;
+          return (
+            <ViewCubeFacePanel
+              key={face.id}
+              colors={colors}
+              face={face}
+              faceHovered={faceHovered}
+              hoveredTargetId={hoveredTargetId}
+              onHoverChange={setHoveredTargetId}
+              onSnap={onSnap}
+              textures={faceTextures}
+            />
+          );
+        })}
+        {VIEW_CUBE_EDGE_LINES.map((edge) => (
+          <Line
+            key={viewCubeSegmentKey(edge.points)}
+            color={String(colors.wire)}
+            depthTest={false}
+            lineWidth={1.8}
+            opacity={0.55}
+            points={edge.points}
+            renderOrder={WIDGET_RENDER_ORDER + 2}
+            transparent
+          />
+        ))}
+      </group>
       <group position={[0, 0, -VIEW_CUBE_HALF]}>
         <OrbitRing3D
           colors={colors}
@@ -336,6 +418,56 @@ function useLatestRef<T>(value: T): MutableRefObject<T> {
   return ref;
 }
 
+function resolveViewCubeNativeHitDirection(
+  intersections: Array<Intersection<Object3D>>,
+): Direction3 | null {
+  for (const intersection of intersections) {
+    const explicitDirection = viewCubeTargetDirectionFromObject(
+      intersection.object,
+    );
+    if (explicitDirection) return explicitDirection;
+
+    if (viewCubeObjectUserData(intersection.object).viewCubeFallbackBox) {
+      const point = intersection.object.worldToLocal(intersection.point.clone());
+      return resolveViewCubeBoxHitDirection(
+        point.toArray() as Direction3,
+        VIEW_CUBE_FACE_SIZE,
+        VIEW_CUBE_EDGE_SIZE,
+      );
+    }
+  }
+
+  return null;
+}
+
+function viewCubeTargetDirectionFromObject(object: Object3D): Direction3 | null {
+  let current: Object3D | null = object;
+  while (current) {
+    const direction = viewCubeObjectUserData(current).viewCubeTargetDirection;
+    if (isDirection3(direction)) return direction;
+    current = current.parent;
+  }
+  return null;
+}
+
+function viewCubeObjectUserData(object: Object3D): {
+  viewCubeFallbackBox?: unknown;
+  viewCubeTargetDirection?: unknown;
+} {
+  return object.userData as {
+    viewCubeFallbackBox?: unknown;
+    viewCubeTargetDirection?: unknown;
+  };
+}
+
+function isDirection3(value: unknown): value is Direction3 {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => typeof item === "number")
+  );
+}
+
 function ViewCubeFacePanel({
   colors,
   face,
@@ -389,6 +521,7 @@ function ViewCubeFacePanel({
             }}
             position={[cell.x, cell.y, 0.24]}
             renderOrder={WIDGET_RENDER_ORDER + 3}
+            userData={{ viewCubeTargetDirection: target.direction }}
           >
             <planeGeometry
               args={[
@@ -408,6 +541,7 @@ function ViewCubeFacePanel({
                   : null
               }
               opacity={cellMaterial.opacity}
+              side={DoubleSide}
               toneMapped={false}
               transparent
             />

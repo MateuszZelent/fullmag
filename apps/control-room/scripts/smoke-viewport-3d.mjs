@@ -82,8 +82,10 @@ const errors = [];
 const sceneResponses = [];
 const realtimeMessages = [];
 const cameraGestureRequests = [];
+const activeInitialForbiddenResourceRequests = new Map();
 const viewport3DPerformancePhases = [];
 let sceneResponseSequence = 0;
+let lastInitialForbiddenResourceRequestAt = 0;
 let recordCameraGestureRequests = false;
 
 await page.addInitScript(({ allowMissingSessionSmoke, baseUrl }) => {
@@ -107,14 +109,21 @@ page.on("pageerror", (error) => {
   errors.push(error.message);
 });
 page.on("request", (request) => {
-  if (!recordCameraGestureRequests) return;
   const path = pathnameFromUrl(request.url());
   if (!path.startsWith("/v2/sessions/current/")) return;
+  const method = request.method();
+  if (isCameraGestureForbiddenRequestPath(path)) {
+    activeInitialForbiddenResourceRequests.set(request, { method, path });
+    lastInitialForbiddenResourceRequestAt = Date.now();
+  }
+  if (!recordCameraGestureRequests) return;
   cameraGestureRequests.push({
-    method: request.method(),
+    method,
     path,
   });
 });
+page.on("requestfinished", markInitialForbiddenResourceRequestSettled);
+page.on("requestfailed", markInitialForbiddenResourceRequestSettled);
 page.on("websocket", (websocket) => {
   if (!isRealtimeWebsocketUrl(websocket.url())) {
     return;
@@ -192,6 +201,7 @@ try {
   viewport3DPerformancePhases.push(
     await collectViewport3DPerformancePhase(page, "startup-to-canvas"),
   );
+  await waitForInitialViewport3DResourceQuiet(page);
   viewport3DPerformancePhases.push(
     ...(await verifyCameraGesturesStayLocal({ page })),
   );
@@ -360,9 +370,48 @@ async function assertCameraGestureDoesNotFetch(page, gestureName, gesture) {
 
 function unexpectedCameraGestureRequests(gestureRequests) {
   return gestureRequests.filter((request) =>
-    CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
-      request.path.startsWith(prefix),
-    ),
+    isCameraGestureForbiddenRequestPath(request.path),
+  );
+}
+
+function markInitialForbiddenResourceRequestSettled(request) {
+  if (!activeInitialForbiddenResourceRequests.delete(request)) return;
+  lastInitialForbiddenResourceRequestAt = Date.now();
+}
+
+function isCameraGestureForbiddenRequestPath(path) {
+  return CAMERA_GESTURE_FORBIDDEN_REQUEST_PREFIXES.some((prefix) =>
+    path.startsWith(prefix),
+  );
+}
+
+async function waitForInitialViewport3DResourceQuiet(page) {
+  const quietStartedAt = Date.now();
+  const quietWindowMs = 1_000;
+  const timeoutMs = 20_000;
+  const deadline = quietStartedAt + timeoutMs;
+
+  while (Date.now() <= deadline) {
+    await waitForBrowserPaint(page);
+    const now = Date.now();
+    const quietElapsed =
+      lastInitialForbiddenResourceRequestAt > 0
+        ? now - lastInitialForbiddenResourceRequestAt
+        : now - quietStartedAt;
+    if (
+      activeInitialForbiddenResourceRequests.size === 0 &&
+      quietElapsed >= quietWindowMs
+    ) {
+      return;
+    }
+    await delay(50);
+  }
+
+  const active = [...activeInitialForbiddenResourceRequests.values()]
+    .map((request) => `${request.method} ${request.path}`)
+    .join(", ");
+  throw new Error(
+    `Timed out waiting for initial viewport 3D resource requests to settle: ${active || "none active"}.`,
   );
 }
 

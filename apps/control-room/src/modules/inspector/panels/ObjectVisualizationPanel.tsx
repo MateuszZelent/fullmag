@@ -66,6 +66,7 @@ import {
   colorPickerInputValue,
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationRenderResolution,
+  shouldLoadObjectVisualizationFieldCatalog,
   SURFACE_COLOR_SOURCE_ITEMS,
   geometryScopeDisplayPatch,
   surfaceDisplayPassPatch,
@@ -378,6 +379,7 @@ function VisualizationSurfaceColoringSection({
   pending,
   sectionDisabled,
   fieldCatalog,
+  onFieldCatalogRequest,
   settings,
 }: {
   patch: PatchVisualizationTarget;
@@ -388,6 +390,7 @@ function VisualizationSurfaceColoringSection({
   pending: boolean;
   sectionDisabled: SectionDisabled;
   fieldCatalog: ReturnType<typeof useFieldCatalogResource>;
+  onFieldCatalogRequest: () => void;
   settings: VisualizationTargetSettings;
 }) {
   return (
@@ -397,9 +400,13 @@ function VisualizationSurfaceColoringSection({
         label="Color source"
         type="select"
         value={settings.surfaceColorSource}
-        onChange={(event) =>
-          void patch({ surfaceColorSource: event.target.value as SurfaceColorSource })
-        }
+        onChange={(event) => {
+          const surfaceColorSource = event.target.value as SurfaceColorSource;
+          if (surfaceColorSource !== "solid") {
+            onFieldCatalogRequest();
+          }
+          void patch({ surfaceColorSource });
+        }}
       >
         {SURFACE_COLOR_SOURCE_ITEMS.map((source) => (
           <option key={source.value} value={source.value}>
@@ -723,6 +730,8 @@ function useObjectVisualizationPanelState(
     },
   );
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
+    useState<string | null>(null);
   const pending = false;
   const scene = useSceneResource({ enabled: Boolean(target) });
   const manifest = useMeshSharedDomainManifestResource({
@@ -762,11 +771,15 @@ function useObjectVisualizationPanelState(
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
+  const targetKey = target ? visualizationTargetKey(target) : null;
+  const fieldCatalogRequested =
+    targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
-    enabled:
-      Boolean(target) &&
-      settings?.surfaceColorSource !== undefined &&
-      settings.surfaceColorSource !== "solid",
+    enabled: shouldLoadObjectVisualizationFieldCatalog({
+      requested: fieldCatalogRequested,
+      surfaceColorSource: settings?.surfaceColorSource,
+      targetActive: Boolean(target),
+    }),
   });
   const topologyFreshness =
     scene.data && manifest.data
@@ -974,6 +987,7 @@ function useObjectVisualizationPanelState(
     effectiveSettings,
     feedback,
     fieldCatalog,
+    onFieldCatalogRequest: () => setFieldCatalogRequestedTargetKey(targetKey),
     onTogglePartVectors,
     passControlsDisabled,
     patch,
@@ -1034,6 +1048,7 @@ function ObjectVisualizationPanelView({
     displaySettings,
     feedback,
     fieldCatalog,
+    onFieldCatalogRequest,
     onTogglePartVectors,
     passControlsDisabled,
     patch,
@@ -1093,6 +1108,7 @@ function ObjectVisualizationPanelView({
         pending={pending}
         sectionDisabled={sectionDisabled}
         fieldCatalog={fieldCatalog}
+        onFieldCatalogRequest={onFieldCatalogRequest}
         settings={settings}
       />
       <VisualizationPointsSection

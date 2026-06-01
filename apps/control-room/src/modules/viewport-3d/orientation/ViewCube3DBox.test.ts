@@ -21,4 +21,25 @@ describe("ViewCube3DBox", () => {
     expect(source).toContain('window.addEventListener("pointercancel", handleUp');
     expect(source).not.toContain('canvas.addEventListener("pointermove", handleMove');
   });
+
+  it("uses double-sided hit panels so hidden-side wall, edge, and corner snaps remain clickable", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+    const panelBlock = source.slice(
+      source.indexOf("function ViewCubeFacePanel"),
+      source.indexOf("function AutoOrientText"),
+    );
+
+    expect(source).toContain("DoubleSide");
+    expect(panelBlock).toContain("side={DoubleSide}");
+  });
+
+  it("uses a native raycast fallback for screen-space box clicks", () => {
+    const source = readFileSync(sourceUrl, "utf8");
+
+    expect(source).toContain('addEventListener("pointerdown", handlePointerDown');
+    expect(source).toContain("capture: true");
+    expect(source).toContain("raycaster.intersectObject(group, true)");
+    expect(source).toContain("viewCubeTargetDirection");
+    expect(source).toContain("viewCubeFallbackBox");
+  });
 });

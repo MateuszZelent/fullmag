@@ -115,6 +115,37 @@ describe("pickViewport3DEventHandlers", () => {
     expect(isViewport3DImmediatePointerDownRegion(event)).toBe(true);
   });
 
+  it("blocks native camera controls after dispatching ViewCube HUD pointer-down", () => {
+    const state = {
+      internal: {
+        initialClick: [0, 0],
+        initialHits: [] as unknown[],
+      },
+    };
+    const store = ({
+      getState: () => state,
+    } as unknown) as Parameters<typeof createViewport3DPointerDownHandler>[0];
+    const pointerDownHandler = vi.fn();
+    const stopImmediatePropagation = vi.fn();
+    const preventDefault = vi.fn();
+    const handler = createViewport3DPointerDownHandler(store, pointerDownHandler);
+
+    handler({
+      currentTarget: {
+        clientHeight: 600,
+        clientWidth: 800,
+      },
+      offsetX: 720,
+      offsetY: 80,
+      preventDefault,
+      stopImmediatePropagation,
+    } as unknown as MouseEvent);
+
+    expect(pointerDownHandler).toHaveBeenCalledTimes(1);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(stopImmediatePropagation).toHaveBeenCalledTimes(1);
+  });
+
   it("does not replay selection raycasts for camera drags", () => {
     const store = ({
       getState: () => ({

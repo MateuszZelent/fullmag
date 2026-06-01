@@ -106,4 +106,15 @@ describe("app menu command model", () => {
       label: "Thread Manager",
     });
   });
+
+  it("exposes the field data preview from the Tools menu", () => {
+    const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
+    const dataPreviewItem = toolsMenu?.children?.find(
+      (item) => item.id === "tools.data-preview",
+    );
+
+    expect(dataPreviewItem).toMatchObject({
+      label: "Data Preview",
+    });
+  });
 });

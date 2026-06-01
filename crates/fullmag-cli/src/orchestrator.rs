@@ -4277,70 +4277,312 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let mut overrides: Vec<serde_json::Value> = Vec::new();
 
         if let Some(airbox_hint) = viz_hint.get("airbox") {
-            let show = airbox_hint
-                .get("show")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let mode = airbox_hint
-                .get("mode")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let show = airbox_hint.get("show").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mode = airbox_hint.get("mode").and_then(|v| v.as_str()).unwrap_or("");
             let active_quantity_id = airbox_hint
                 .get("active_quantity_id")
                 .and_then(|v| v.as_str())
-                .filter(|value| !value.is_empty());
+                .filter(|v| !v.is_empty());
+
             let mut display = serde_json::json!({ "visible": show });
-            if mode == "vectors" {
-                display["vectors"] = serde_json::json!({ "visible": true });
+
+            // mode-derived layer defaults
+            match mode {
+                "vectors" => {
+                    display["vectors"] =
+                        serde_json::json!({ "visible": true, "domain": "airbox_only" });
+                }
+                "surface" => {
+                    display["surface"] = serde_json::json!({ "visible": true });
+                }
+                "wireframe" => {
+                    display["wireframe"] = serde_json::json!({ "visible": true });
+                }
+                "surface+edges" => {
+                    display["surface"] = serde_json::json!({ "visible": true });
+                    display["wireframe"] = serde_json::json!({ "visible": true });
+                }
+                _ => {}
             }
+
+            // explicit per-layer overrides
+            if let Some(v) = airbox_hint.get("shaded").and_then(|v| v.as_bool()) {
+                display["surface"] = serde_json::json!({ "visible": v });
+            }
+            if let Some(v) = airbox_hint.get("wireframe").and_then(|v| v.as_bool()) {
+                display["wireframe"] = serde_json::json!({ "visible": v });
+            }
+            if let Some(v) = airbox_hint.get("bounds").and_then(|v| v.as_bool()) {
+                display["bounds"] = serde_json::json!({ "visible": v });
+            }
+            if let Some(v) = airbox_hint.get("points").and_then(|v| v.as_bool()) {
+                display["points"] = serde_json::json!({ "visible": v });
+            }
+            if let Some(v) = airbox_hint.get("opacity").and_then(|v| v.as_f64()) {
+                display["opacity"] = serde_json::json!(v / 100.0);
+            }
+            if let Some(v) = airbox_hint.get("geometry_scope").and_then(|v| v.as_str()) {
+                display["geometry_scope"] = serde_json::json!(v);
+            }
+            if let Some(density) = airbox_hint.get("vector_density").and_then(|v| v.as_u64()) {
+                if display["vectors"].is_object() {
+                    display["vectors"]["density"] = serde_json::json!(density);
+                    display["vectors"]["domain"] = serde_json::json!("airbox_only");
+                } else {
+                    display["vectors"] =
+                        serde_json::json!({ "visible": true, "density": density, "domain": "airbox_only" });
+                }
+            }
+
+            // style overrides
+            let mut style = serde_json::Map::new();
+            if let Some(v) = airbox_hint.get("vector_length_scale").and_then(|v| v.as_f64()) {
+                style.insert("vector_length_scale".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = airbox_hint.get("vector_thickness").and_then(|v| v.as_f64()) {
+                style.insert("vector_thickness".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = airbox_hint.get("vector_alpha").and_then(|v| v.as_f64()) {
+                style.insert("vector_alpha".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = airbox_hint.get("vector_color_mode").and_then(|v| v.as_str()) {
+                style.insert("vector_color_mode".to_string(), serde_json::json!(v));
+            }
+
             let mut target_override = serde_json::json!({
                 "scope": "airbox",
                 "scope_id": "airbox",
                 "visible": show,
                 "display": display,
             });
-            if let Some(active_quantity_id) = active_quantity_id {
-                target_override["quantity"] =
-                    serde_json::json!({ "active_quantity_id": active_quantity_id });
+            if !style.is_empty() {
+                target_override["style"] = serde_json::Value::Object(style);
+            }
+            if let Some(qty) = active_quantity_id {
+                target_override["quantity"] = serde_json::json!({ "active_quantity_id": qty });
             }
             overrides.push(target_override);
         }
 
         if let Some(geom_hints) = viz_hint.get("geometry_hints").and_then(|v| v.as_object()) {
             for (geom_name, geom_hint) in geom_hints {
-                let show = geom_hint
-                    .get("show")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
+                let show = geom_hint.get("show").and_then(|v| v.as_bool()).unwrap_or(true);
                 let mode = geom_hint.get("mode").and_then(|v| v.as_str()).unwrap_or("");
                 let active_quantity_id = geom_hint
                     .get("active_quantity_id")
                     .and_then(|v| v.as_str())
-                    .filter(|value| !value.is_empty());
+                    .filter(|v| !v.is_empty());
+
                 let mut display = serde_json::json!({ "visible": show });
-                if mode == "vectors" {
-                    display["vectors"] = serde_json::json!({ "visible": true });
+
+                // mode-derived layer defaults
+                match mode {
+                    "vectors" => {
+                        display["vectors"] =
+                            serde_json::json!({ "visible": true, "domain": "object" });
+                    }
+                    "surface" => {
+                        display["surface"] = serde_json::json!({ "visible": true });
+                        display["wireframe"] = serde_json::json!({ "visible": false });
+                    }
+                    "wireframe" => {
+                        display["surface"] = serde_json::json!({ "visible": false });
+                        display["wireframe"] = serde_json::json!({ "visible": true });
+                    }
+                    "surface+edges" => {
+                        display["surface"] = serde_json::json!({ "visible": true });
+                        display["wireframe"] = serde_json::json!({ "visible": true });
+                    }
+                    "points" => {
+                        display["surface"] = serde_json::json!({ "visible": false });
+                        display["wireframe"] = serde_json::json!({ "visible": false });
+                        display["points"] = serde_json::json!({ "visible": true });
+                    }
+                    _ => {}
                 }
+
+                // explicit per-layer overrides
+                if let Some(v) = geom_hint.get("wireframe").and_then(|v| v.as_bool()) {
+                    display["wireframe"] = serde_json::json!({ "visible": v });
+                }
+                if let Some(v) = geom_hint.get("bounds").and_then(|v| v.as_bool()) {
+                    display["bounds"] = serde_json::json!({ "visible": v });
+                }
+                if let Some(v) = geom_hint.get("points").and_then(|v| v.as_bool()) {
+                    display["points"] = serde_json::json!({ "visible": v });
+                }
+                if let Some(v) = geom_hint.get("opacity").and_then(|v| v.as_f64()) {
+                    display["opacity"] = serde_json::json!(v / 100.0);
+                }
+                if let Some(v) = geom_hint.get("geometry_scope").and_then(|v| v.as_str()) {
+                    display["geometry_scope"] = serde_json::json!(v);
+                }
+                if let Some(density) = geom_hint.get("vector_density").and_then(|v| v.as_u64()) {
+                    let domain = geom_hint
+                        .get("vector_domain")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("object");
+                    if display["vectors"].is_object() {
+                        display["vectors"]["density"] = serde_json::json!(density);
+                        display["vectors"]["domain"] = serde_json::json!(domain);
+                    } else {
+                        display["vectors"] =
+                            serde_json::json!({ "visible": true, "density": density, "domain": domain });
+                    }
+                } else if let Some(domain) =
+                    geom_hint.get("vector_domain").and_then(|v| v.as_str())
+                {
+                    if display["vectors"].is_object() {
+                        display["vectors"]["domain"] = serde_json::json!(domain);
+                    }
+                }
+
+                // style overrides
+                let mut style = serde_json::Map::new();
+                if let Some(v) = geom_hint.get("surface_color_source").and_then(|v| v.as_str()) {
+                    style.insert("surface_color_source".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = geom_hint.get("vector_length_scale").and_then(|v| v.as_f64()) {
+                    style.insert("vector_length_scale".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = geom_hint.get("vector_thickness").and_then(|v| v.as_f64()) {
+                    style.insert("vector_thickness".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = geom_hint.get("vector_alpha").and_then(|v| v.as_f64()) {
+                    style.insert("vector_alpha".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = geom_hint.get("vector_color_mode").and_then(|v| v.as_str()) {
+                    style.insert("vector_color_mode".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = geom_hint.get("vector_density").and_then(|v| v.as_u64()) {
+                    style.insert("vector_budget".to_string(), serde_json::json!(v));
+                }
+
                 let mut target_override = serde_json::json!({
                     "scope": "object",
                     "scope_id": geom_name,
                     "visible": show,
                     "display": display,
                 });
-                if let Some(active_quantity_id) = active_quantity_id {
+                if !style.is_empty() {
+                    target_override["style"] = serde_json::Value::Object(style);
+                }
+                if let Some(qty) = active_quantity_id {
                     target_override["quantity"] =
-                        serde_json::json!({ "active_quantity_id": active_quantity_id });
+                        serde_json::json!({ "active_quantity_id": qty });
                 }
                 overrides.push(target_override);
             }
         }
 
-        if !args.headless && !overrides.is_empty() {
-            if let Err(e) =
-                sync_initial_visualization_overrides(serde_json::Value::Array(overrides))
-            {
+        // Build global state patch from top-level visualization hint fields.
+        let mut state_patch = serde_json::json!({});
+        if !overrides.is_empty() {
+            state_patch["overrides"] = serde_json::Value::Array(overrides);
+        }
+
+        // quantity patch (colormap, auto_contrast, field_component)
+        {
+            let mut qty_patch = serde_json::Map::new();
+            if let Some(qty) = viz_hint.get("active_quantity_id").and_then(|v| v.as_str()) {
+                if !qty.is_empty() {
+                    qty_patch.insert("active_quantity_id".to_string(), serde_json::json!(qty));
+                }
+            }
+            if let Some(v) = viz_hint.get("colormap").and_then(|v| v.as_str()) {
+                qty_patch.insert("colormap".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = viz_hint.get("auto_contrast").and_then(|v| v.as_bool()) {
+                qty_patch.insert("auto_contrast".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = viz_hint.get("field_component").and_then(|v| v.as_str()) {
+                qty_patch.insert("field_component".to_string(), serde_json::json!(v));
+            }
+            if !qty_patch.is_empty() {
+                state_patch["quantity"] = serde_json::Value::Object(qty_patch);
+            }
+        }
+
+        // clip patch
+        {
+            let clip_enabled = viz_hint.get("clip_enabled").and_then(|v| v.as_bool());
+            let clip_axis = viz_hint.get("clip_axis").and_then(|v| v.as_str());
+            let clip_position = viz_hint.get("clip_position").and_then(|v| v.as_f64());
+            if clip_enabled.is_some() || clip_axis.is_some() || clip_position.is_some() {
+                let mut clip = serde_json::Map::new();
+                if let Some(v) = clip_enabled {
+                    clip.insert("enabled".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = clip_axis {
+                    clip.insert("axis".to_string(), serde_json::json!(v));
+                }
+                if let Some(v) = clip_position {
+                    clip.insert("position_percent".to_string(), serde_json::json!(v));
+                }
+                state_patch["clip"] = serde_json::Value::Object(clip);
+            }
+        }
+
+        // vector_style patch
+        {
+            let mut vs = serde_json::Map::new();
+            if let Some(v) = viz_hint.get("vector_length_scale").and_then(|v| v.as_f64()) {
+                vs.insert("length_scale".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = viz_hint.get("vector_thickness").and_then(|v| v.as_f64()) {
+                vs.insert("thickness".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = viz_hint.get("vector_alpha").and_then(|v| v.as_f64()) {
+                vs.insert("alpha".to_string(), serde_json::json!(v));
+            }
+            if let Some(v) = viz_hint.get("vector_color_mode").and_then(|v| v.as_str()) {
+                vs.insert("color_mode".to_string(), serde_json::json!(v));
+            }
+            if !vs.is_empty() {
+                state_patch["vector_style"] = serde_json::Value::Object(vs);
+            }
+        }
+
+        // layers patch (from global render_mode and vector_density)
+        {
+            let mut layers = serde_json::Map::new();
+            if let Some(rm) = viz_hint.get("render_mode").and_then(|v| v.as_str()) {
+                let (surf, wire, pts) = match rm {
+                    "surface" => (true, false, false),
+                    "wireframe" => (false, true, false),
+                    "surface+edges" => (true, true, false),
+                    "points" => (false, false, true),
+                    _ => (true, false, false),
+                };
+                layers.insert(
+                    "surface".to_string(),
+                    serde_json::json!({ "visible": surf }),
+                );
+                layers.insert(
+                    "wireframe".to_string(),
+                    serde_json::json!({ "visible": wire }),
+                );
+                layers.insert(
+                    "points".to_string(),
+                    serde_json::json!({ "visible": pts }),
+                );
+            }
+            if let Some(density) = viz_hint.get("vector_density").and_then(|v| v.as_u64()) {
+                layers.insert(
+                    "vectors".to_string(),
+                    serde_json::json!({ "density": density }),
+                );
+            }
+            if !layers.is_empty() {
+                state_patch["layers"] = serde_json::Value::Object(layers);
+            }
+        }
+
+        let has_patch = state_patch.as_object().map(|o| !o.is_empty()).unwrap_or(false);
+        if !args.headless && has_patch {
+            if let Err(e) = sync_initial_visualization_state(state_patch) {
                 eprintln!(
-                    "[fullmag-host] failed to apply initial visualization overrides: {}",
+                    "[fullmag-host] failed to apply initial visualization state: {}",
                     e
                 );
             }

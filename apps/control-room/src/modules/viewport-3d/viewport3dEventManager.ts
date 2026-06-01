@@ -70,6 +70,10 @@ export function createViewport3DPointerDownHandler(
   return (event) => {
     if (pointerDownHandler && isViewport3DImmediatePointerDownRegion(event)) {
       pointerDownHandler(event);
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      (event as Event & { stopImmediatePropagation?: () => void })
+        .stopImmediatePropagation?.();
       return;
     }
 

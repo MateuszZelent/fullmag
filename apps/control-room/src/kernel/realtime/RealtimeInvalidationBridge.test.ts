@@ -502,6 +502,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(10);
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(10);
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
   });
 

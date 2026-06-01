@@ -10869,13 +10869,19 @@ async fn v2_field_vector_applies_max_samples_to_part_scope() {
 }
 
 #[tokio::test]
-async fn v2_field_vector_rejects_max_samples_without_scope() {
+async fn v2_field_vector_applies_max_samples_to_unscoped_center_window() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "H_demag": {
-                "values": [[0.0, 0.1, 0.2], [1.0, 1.1, 1.2]],
-                "layout": { "grid_cells": [2, 1, 1] }
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2]
+                ],
+                "layout": { "grid_cells": [5, 1, 1] }
             }
         }))
         .expect("latest_fields should deserialize");
@@ -10885,14 +10891,30 @@ async fn v2_field_vector_rejects_max_samples_without_scope() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?max_samples=1")
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?max_samples=3")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("3")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(&bytes[12..16], &(9u32).to_le_bytes(), "3 vector points");
+    assert_eq!(&bytes[16..20], &(3u32).to_le_bytes(), "sampled grid x-size");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![1.0, 1.1, 1.2, 2.0, 2.1, 2.2, 3.0, 3.1, 3.2]);
 }
 
 #[tokio::test]

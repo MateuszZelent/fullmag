@@ -171,6 +171,38 @@ export function resolveViewCubeTargetCell(
   return { col, height, row, width, x, y };
 }
 
+export function resolveViewCubeBoxHitDirection(
+  point: readonly [number, number, number],
+  faceSize: number,
+  edgeSize: number,
+): [number, number, number] {
+  const half = faceSize / 2;
+  const edgeThreshold = Math.max(0, half - edgeSize);
+  const direction: [number, number, number] = [0, 0, 0];
+  let faceAxis = 0;
+  let faceAxisAbs = Math.abs(point[0]);
+
+  for (let axis = 1; axis < 3; axis += 1) {
+    const abs = Math.abs(point[axis]);
+    if (abs > faceAxisAbs) {
+      faceAxis = axis;
+      faceAxisAbs = abs;
+    }
+  }
+
+  direction[faceAxis] = point[faceAxis] < 0 ? -1 : 1;
+  for (let axis = 0; axis < 3; axis += 1) {
+    if (axis === faceAxis) continue;
+    if (point[axis] >= edgeThreshold) {
+      direction[axis] = 1;
+    } else if (point[axis] <= -edgeThreshold) {
+      direction[axis] = -1;
+    }
+  }
+
+  return direction;
+}
+
 function buildFaceTargets(
   normal: [number, number, number],
   up: [number, number, number],

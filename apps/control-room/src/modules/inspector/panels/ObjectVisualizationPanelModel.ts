@@ -142,6 +142,24 @@ export function visualizationQuantityItems(
   ];
 }
 
+export function shouldLoadObjectVisualizationFieldCatalog({
+  requested,
+  surfaceColorSource,
+  targetActive,
+}: {
+  requested: boolean;
+  surfaceColorSource: SurfaceColorSource | null | undefined;
+  targetActive: boolean;
+}): boolean {
+  return Boolean(
+    requested &&
+      targetActive &&
+      surfaceColorSource !== undefined &&
+      surfaceColorSource !== null &&
+      surfaceColorSource !== "solid",
+  );
+}
+
 export function colorPickerInputValue(value: string): string {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : rgbToHex(255, 255, 255);
 }

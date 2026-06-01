@@ -7,6 +7,7 @@ import type { ComponentRef } from "react";
 import { MathUtils, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { isViewport3DImmediatePointerDownRegion } from "../viewport3dEventManager";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import {
@@ -577,6 +578,7 @@ function useOrbitCameraControlsModel({
   tracker,
 }: OrbitCameraControlsProps) {
   const { camera, invalidate, size } = useThree();
+  const gl = useThree((state) => state.gl);
   const controlsRef = useRef<ArcballControlsHandle>(null);
   const options = resolveViewport3DCameraInteractionOptions();
   const handledOrbitDebugRevisionRef = useRef(orbitDebugRevision);
@@ -587,6 +589,7 @@ function useOrbitCameraControlsModel({
     normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
   );
   const controlsSyncingRef = useRef(false);
+  const previousHudControlsEnabledRef = useRef<boolean | null>(null);
   const suppressNextRestCommitRef = useRef(false);
   const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
     typeof setTimeout
@@ -620,6 +623,46 @@ function useOrbitCameraControlsModel({
     invalidate();
     tracker.recordDirtyFrame("camera-control-target");
   }, [camera, cameraGestureRef, cameraState, invalidate, tracker]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    const restoreControls = () => {
+      window.removeEventListener("pointerup", restoreControls, { capture: true });
+      window.removeEventListener("pointercancel", restoreControls, { capture: true });
+      const previousEnabled = previousHudControlsEnabledRef.current;
+      previousHudControlsEnabledRef.current = null;
+      const controls = controlsRef.current;
+      if (!controls || previousEnabled === null) return;
+      controls.enabled = previousEnabled;
+    };
+
+    const handlePointerDownCapture = (event: PointerEvent) => {
+      if (!isViewport3DImmediatePointerDownRegion(event)) return;
+      const controls = controlsRef.current;
+      if (!controls || previousHudControlsEnabledRef.current !== null) return;
+      previousHudControlsEnabledRef.current = Boolean(controls.enabled);
+      controls.enabled = false;
+      window.addEventListener("pointerup", restoreControls, {
+        capture: true,
+        once: true,
+      });
+      window.addEventListener("pointercancel", restoreControls, {
+        capture: true,
+        once: true,
+      });
+    };
+
+    element.addEventListener("pointerdown", handlePointerDownCapture, {
+      capture: true,
+    });
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDownCapture, {
+        capture: true,
+      });
+      restoreControls();
+    };
+  }, [gl]);
 
   useEffect(() => {
     const controls = controlsRef.current;

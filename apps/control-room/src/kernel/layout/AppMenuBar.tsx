@@ -58,6 +58,7 @@ import {
   type AppMenuNode,
   type HeaderQuickAction,
 } from "./appMenuModel";
+import { DataPreviewDialog } from "./DataPreviewDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { ThreadManagerDialog } from "./ThreadManagerDialog";
 
@@ -456,6 +457,7 @@ export function AppMenuBar() {
     hydrated,
   );
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
+  const [dataPreviewOpen, setDataPreviewOpen] = useState(false);
   const [registryOpen, setRegistryOpen] = useState(false);
   const [threadManagerOpen, setThreadManagerOpen] = useState(false);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
@@ -505,6 +507,10 @@ export function AppMenuBar() {
     }
     if (commandId === "tools.thread-manager") {
       setThreadManagerOpen(true);
+      return;
+    }
+    if (commandId === "tools.data-preview") {
+      setDataPreviewOpen(true);
       return;
     }
     if (kernel.commands.get(commandId)) {
@@ -635,6 +641,11 @@ export function AppMenuBar() {
         kernel={kernel}
         onOpenChange={setThreadManagerOpen}
         open={threadManagerOpen}
+      />
+
+      <DataPreviewDialog
+        onOpenChange={setDataPreviewOpen}
+        open={dataPreviewOpen}
       />
 
       <div className="fm-header__separator" />

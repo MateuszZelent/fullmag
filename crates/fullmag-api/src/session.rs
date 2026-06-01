@@ -562,6 +562,14 @@ fn effective_field_source(
     let n_comp = fullmag_quantities::quantity_spec(quantity)
         .map(|spec| spec.n_comp as usize)
         .unwrap_or(3);
+    if quantity == "m" {
+        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
+            return Some(EffectiveFieldSource::LiveMagnetization {
+                len: values.len(),
+                hash: live_magnetization_hash(&values),
+            });
+        }
+    }
     if let Some(value) = snapshot.latest_fields.get(quantity) {
         let values = flatten_json_field_values(value);
         if field_values_match_current_domain(snapshot, quantity, n_comp, &values) {
@@ -572,14 +580,6 @@ fn effective_field_source(
         if field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
         {
             return Some(EffectiveFieldSource::Preview(field.clone()));
-        }
-    }
-    if quantity == "m" {
-        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
-            return Some(EffectiveFieldSource::LiveMagnetization {
-                len: values.len(),
-                hash: live_magnetization_hash(&values),
-            });
         }
     }
     None
@@ -1357,6 +1357,36 @@ mod tests {
         }
     }
 
+    fn live_state_with_magnetization(step: u64, magnetization: Vec<f64>) -> LiveState {
+        LiveState {
+            status: "running".to_string(),
+            updated_at_unix_ms: 1_700_000_000_000 + step as u128,
+            latest_step: StepUpdateView {
+                step,
+                time: step as f64 * 1e-12,
+                dt: 1e-12,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(magnetization),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        }
+    }
+
     #[test]
     fn upsert_scalar_row_replaces_latest_sample() {
         let mut rows = vec![scalar_row(1, 1.0), scalar_row(2, 2.0)];
@@ -1487,6 +1517,88 @@ mod tests {
         assert_eq!(current.scalar_revision, 2);
         assert_eq!(current.scalar_rows.len(), 1);
         assert_eq!(current.scalar_rows[0].step, 2);
+    }
+
+    #[test]
+    fn live_magnetization_revision_tracks_runtime_values_when_latest_field_exists() {
+        let mut current = test_current_snapshot();
+        let stale_latest_fields: LatestFields = serde_json::from_value(json!({
+            "m": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+
+        apply_current_live_snapshot(
+            &mut current,
+            CurrentLiveSnapshotRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: Some(live_state_with_magnetization(
+                    1,
+                    vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                )),
+                latest_scalar_row: None,
+                latest_fields: Some(stale_latest_fields),
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("initial live frame should apply");
+        let first_quantity_revision = current
+            .field_quantity_revisions
+            .get("m")
+            .copied()
+            .expect("live magnetization should publish a quantity revision");
+        let first_sample_revision = current.field_samples_revision;
+
+        apply_current_live_snapshot(
+            &mut current,
+            CurrentLiveSnapshotRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                run: None,
+                live_state: Some(live_state_with_magnetization(
+                    10,
+                    vec![0.0, 1.0, 0.0, -1.0, 0.0, 0.0],
+                )),
+                latest_scalar_row: None,
+                latest_fields: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("updated live frame should apply");
+
+        assert!(
+            current.field_quantity_revisions["m"] > first_quantity_revision,
+            "live magnetization must bump the m field revision even when stale latest_fields.m remains"
+        );
+        assert!(
+            current.field_samples_revision > first_sample_revision,
+            "field samples revision must advance so realtime emits fields:samples and field-vector ETags change"
+        );
     }
 
     #[test]

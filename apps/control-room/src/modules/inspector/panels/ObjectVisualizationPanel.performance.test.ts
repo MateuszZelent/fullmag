@@ -19,6 +19,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("uses the field catalog resource instead of session status field revisions", () => {
     expect(panelSource).toContain("useFieldCatalogResource");
+    expect(panelSource).toContain("fieldCatalogRequested");
+    expect(panelSource).toContain("shouldLoadObjectVisualizationFieldCatalog");
     expect(panelSource).toContain("fieldCatalog");
     expect(panelSource).not.toContain("status?.resources.field_revision");
     expect(panelSource).not.toContain("status?.resources.fields_revision");

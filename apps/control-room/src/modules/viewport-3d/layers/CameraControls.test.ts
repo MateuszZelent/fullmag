@@ -33,7 +33,6 @@ describe("CameraControls", () => {
     expect(source).toContain("<DreiArcballControls");
     expect(source).not.toContain("<DreiCameraControls");
     expect(source).not.toContain("<OrbitControls");
-    expect(source).not.toContain('addEventListener("pointerdown"');
     expect(source).not.toContain('addEventListener("pointermove"');
     expect(source).not.toContain('addEventListener("wheel"');
     expect(source).not.toContain("lockPointer");
@@ -213,6 +212,21 @@ describe("CameraControls", () => {
 
     expect(changeBlock).toContain('tracker.recordDirtyFrame("camera-control")');
     expect(changeBlock).not.toContain("invalidate();");
+  });
+
+  it("disables native arcball handling before ViewCube HUD pointer-down bubbles", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("isViewport3DImmediatePointerDownRegion");
+    expect(source).toContain("handlePointerDownCapture");
+    expect(source).toContain('addEventListener("pointerdown", handlePointerDownCapture');
+    expect(source).toContain("capture: true");
+    expect(source).toContain("controls.enabled = false");
+    expect(source).toContain('addEventListener("pointerup", restoreControls');
+    expect(source).toContain('addEventListener("pointercancel", restoreControls');
   });
 
   it("does not regress Canvas DPR during arcball interactions", () => {

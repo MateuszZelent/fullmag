@@ -45,7 +45,7 @@ MS = 7.7e5
 AEX = 1e-11
 ALPHA = 0.1
 KU1 = 470e3
-DIND = -1e-3
+DIND = 0
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
@@ -59,8 +59,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
-study.visualization(active_quantity_id="h_eff")
-study.airbox.visualization(show=True, mode="vectors")
+study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
 
 study.universe(
     mode="auto",
@@ -110,7 +109,7 @@ waveguide.anisU = ANIS_U
 waveguide.dind = DIND
 waveguide.m = fm.texture.uniform(0.4, 1e-4, 0.4)
 waveguide.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
-waveguide.visualization(show=True, mode="surface")
+waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
 # waveguide.m = fm.texture.random(1)
 # Exchange length lex = sqrt(2*Aex/(μ0·Ms²)) ≈ 5.2 nm.
 # Interactive preset: keep a local skyrmion-resolution patch while avoiding a

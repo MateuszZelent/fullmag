@@ -166,6 +166,9 @@ describe("viewport smoke projection round-trip", () => {
     );
     expect(smokeScript).toContain(JSON.stringify(VISUALIZATION_STATE_PATH));
     expect(smokeScript).toContain("recordCameraGestureRequests = true");
+    expect(smokeScript).toContain("waitForInitialViewport3DResourceQuiet(page)");
+    expect(smokeScript).toContain("activeInitialForbiddenResourceRequests");
+    expect(smokeScript).toContain("lastInitialForbiddenResourceRequestAt");
     expect(smokeScript).toContain('request.method === "PATCH"');
     expect(smokeScript).toContain("request.path === VISUALIZATION_STATE_PATH");
     expect(smokeScript).toContain("visualization_state_patches=0");

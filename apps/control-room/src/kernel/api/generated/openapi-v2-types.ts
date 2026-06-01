@@ -2835,10 +2835,10 @@ export interface components {
             component?: string | null;
             /**
              * Format: int32
-             * @description Optional hard cap for scoped vector samples returned by the binary payload.
+             * @description Optional hard cap for vector samples returned by the binary payload.
              *
-             *     This is intended for renderer glyph payloads. It requires a scoped FEM
-             *     query so the consumer can map sampled values back to topology nodes.
+             *     Scoped FEM queries are sampled by scope node index. Unscoped queries
+             *     return a contiguous center window for lightweight diagnostics.
              */
             max_samples?: number | null;
             /** @description Scope identifier for `object` and `part` scopes. */
@@ -6294,10 +6294,10 @@ export interface operations {
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
                 /**
-                 * @description Optional hard cap for scoped vector samples returned by the binary payload.
+                 * @description Optional hard cap for vector samples returned by the binary payload.
                  *
-                 *     This is intended for renderer glyph payloads. It requires a scoped FEM
-                 *     query so the consumer can map sampled values back to topology nodes.
+                 *     Scoped FEM queries are sampled by scope node index. Unscoped queries
+                 *     return a contiguous center window for lightweight diagnostics.
                  */
                 max_samples?: number | null;
             };

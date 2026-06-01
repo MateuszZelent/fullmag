@@ -16,6 +16,7 @@ import {
   colorPickerInputValue,
   geometryScopeDisplayPatch,
   resolveVisualizationVectorBudgetRange,
+  shouldLoadObjectVisualizationFieldCatalog,
   SURFACE_COLOR_SOURCE_ITEMS,
   surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
@@ -68,6 +69,37 @@ describe("ObjectVisualizationPanelModel", () => {
       label: "exchange_field",
       value: "exchange_field",
     });
+  });
+
+  it("does not load the field catalog on object selection until surface coloring requests it", () => {
+    expect(
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: false,
+        surfaceColorSource: "orientation",
+        targetActive: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: true,
+        surfaceColorSource: "orientation",
+        targetActive: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: true,
+        surfaceColorSource: "solid",
+        targetActive: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: true,
+        surfaceColorSource: "orientation",
+        targetActive: false,
+      }),
+    ).toBe(false);
   });
 
   it("keeps color picker input compatible with CSS token defaults", () => {
