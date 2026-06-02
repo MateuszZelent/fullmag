@@ -234,6 +234,16 @@ void gpu_state_audit04_memory_contracts_are_source_visible() {
         runtime.find("ctx.demag.enabled") != std::string::npos,
         "GPU-state runtime bootstrap must pass ctx.demag.enabled into gpu_state_initialize");
     check(
+        runtime.find("ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON") !=
+            std::string::npos,
+        "GPU-state runtime must explicitly guard strict GPU Poisson demag bootstrap");
+    check(
+        runtime.find("!ctx.gpu_state.device.lifecycle.allocated") != std::string::npos,
+        "strict GPU Poisson demag bootstrap must fail before using missing FemGpuState buffers");
+    check(
+        runtime.find("strict FEM GPU demag requires an MFEM GPU device") != std::string::npos,
+        "strict GPU Poisson demag bootstrap failure must identify the MFEM device mismatch");
+    check(
         initialize_body.find("if (allocate_demag_workspace") != std::string::npos,
         "GPU-state initialization must conditionally allocate dead demag Poisson buffers");
 

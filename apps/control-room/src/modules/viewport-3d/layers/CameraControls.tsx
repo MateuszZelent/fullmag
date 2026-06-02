@@ -3,8 +3,8 @@
 import { OrbitControls as DreiOrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
-import type { ComponentRef } from "react";
-import { MathUtils, type Camera } from "three";
+import type { ComponentRef, RefObject } from "react";
+import { MathUtils, Vector3, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { isViewport3DImmediatePointerDownRegion } from "../viewport3dEventManager";
@@ -90,6 +90,9 @@ const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;
 const ORBIT_DEBUG_TWO_PI = Math.PI * 2;
+const VIEWPORT_3D_WHEEL_ZOOM_DAMPING = 18;
+const VIEWPORT_3D_WHEEL_ZOOM_EPSILON = 1e-4;
+const VIEWPORT_3D_MIN_WHEEL_ZOOM_VALUE = 1e-12;
 const VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS = 180;
 export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
   azimuthMax: ORBIT_DEBUG_TWO_PI,
@@ -220,6 +223,58 @@ export function resolveViewport3DOrbitDebugStep({
   return shouldApplyViewport3DOrbitDebugAngles(nextAngles, targetAngles)
     ? nextAngles
     : targetAngles;
+}
+
+export function resolveViewport3DWheelZoomScale({
+  ctrlKey = false,
+  deltaMode = 0,
+  deltaY,
+  zoomSpeed,
+}: {
+  ctrlKey?: boolean;
+  deltaMode?: number;
+  deltaY: number;
+  zoomSpeed: number;
+}): number {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return 1;
+  let normalizedDelta = deltaY;
+  if (deltaMode === 1) {
+    normalizedDelta *= 16;
+  } else if (deltaMode === 2) {
+    normalizedDelta *= 100;
+  }
+  if (ctrlKey) {
+    normalizedDelta *= 10;
+  }
+  const zoomScale = Math.pow(
+    0.95,
+    Math.max(zoomSpeed, 0) * Math.abs(normalizedDelta * 0.01),
+  );
+  return normalizedDelta < 0 ? zoomScale : 1 / zoomScale;
+}
+
+export function resolveViewport3DSmoothWheelZoomStep({
+  current,
+  deltaSeconds,
+  target,
+}: {
+  current: number;
+  deltaSeconds: number;
+  target: number;
+}): number {
+  if (!Number.isFinite(current) || !Number.isFinite(target)) return target;
+  if (current <= 0 || target <= 0) return target;
+  const safeDelta = Math.min(Math.max(deltaSeconds, 0), 0.05);
+  const next = MathUtils.damp(
+    current,
+    target,
+    VIEWPORT_3D_WHEEL_ZOOM_DAMPING,
+    safeDelta,
+  );
+  const tolerance =
+    Math.max(Math.abs(target), VIEWPORT_3D_MIN_WHEEL_ZOOM_VALUE) *
+    VIEWPORT_3D_WHEEL_ZOOM_EPSILON;
+  return Math.abs(next - target) <= tolerance ? target : next;
 }
 
 export function resolveViewport3DOrbitDebugControlDeltas({
@@ -667,6 +722,213 @@ interface OrbitCameraControlsProps {
   tracker: Viewport3DResourceTracker;
 }
 
+function useSmoothViewport3DWheelZoom({
+  camera,
+  cameraGestureRef,
+  cameraOrthographicScale,
+  cameraProjection,
+  clearCameraControlsPoseCommit,
+  controlsRef,
+  domElement,
+  invalidate,
+  onCameraChange,
+  onOrbitDebugAnglesChange,
+  options,
+  sizeHeight,
+  tracker,
+}: {
+  camera: Camera;
+  cameraGestureRef: Viewport3DCameraGestureRef;
+  cameraOrthographicScale: number | null;
+  cameraProjection: Viewport3DCameraProjection;
+  clearCameraControlsPoseCommit: () => void;
+  controlsRef: RefObject<OrbitControlsHandle | null>;
+  domElement: HTMLElement;
+  invalidate: () => void;
+  onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
+  onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
+  options: Viewport3DCameraInteractionOptions;
+  sizeHeight: number;
+  tracker: Viewport3DResourceTracker;
+}): void {
+  const wheelZoomAnimatingRef = useRef(false);
+  const wheelZoomOffsetRef = useRef(new Vector3());
+  const wheelZoomTargetDistanceRef = useRef<number | null>(null);
+  const wheelZoomTargetOrthographicZoomRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const handleWheel = (event: WheelEvent) => {
+      const controls = controlsRef.current;
+      const controlsState = controls as
+        | (OrbitControlsHandle & { enabled?: boolean; state?: number })
+        | null;
+      if (
+        !controls ||
+        controlsState?.enabled === false ||
+        options.enableZoom === false ||
+        (typeof controlsState?.state === "number" && controlsState.state !== -1)
+      ) {
+        return;
+      }
+
+      const scale = resolveViewport3DWheelZoomScale({
+        ctrlKey: event.ctrlKey,
+        deltaMode: event.deltaMode,
+        deltaY: event.deltaY,
+        zoomSpeed: options.zoomSpeed,
+      });
+      if (scale === 1) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      clearCameraControlsPoseCommit();
+      beginViewport3DCameraGesture(cameraGestureRef);
+
+      const orthographicCamera = camera as Camera & {
+        isOrthographicCamera?: boolean;
+        zoom?: number;
+      };
+      if (
+        cameraProjection === "orthographic" &&
+        orthographicCamera.isOrthographicCamera &&
+        typeof orthographicCamera.zoom === "number" &&
+        Number.isFinite(orthographicCamera.zoom) &&
+        orthographicCamera.zoom > 0
+      ) {
+        const currentTarget =
+          wheelZoomTargetOrthographicZoomRef.current ?? orthographicCamera.zoom;
+        wheelZoomTargetOrthographicZoomRef.current = Math.max(
+          currentTarget / scale,
+          VIEWPORT_3D_MIN_WHEEL_ZOOM_VALUE,
+        );
+        wheelZoomTargetDistanceRef.current = null;
+      } else {
+        const target = controls.target;
+        const currentDistance =
+          wheelZoomTargetDistanceRef.current ??
+          camera.position.distanceTo(target);
+        if (!Number.isFinite(currentDistance) || currentDistance <= 0) return;
+        wheelZoomTargetDistanceRef.current = Math.max(
+          currentDistance * scale,
+          VIEWPORT_3D_MIN_WHEEL_ZOOM_VALUE,
+        );
+        wheelZoomTargetOrthographicZoomRef.current = null;
+      }
+
+      wheelZoomAnimatingRef.current = true;
+      invalidate();
+      tracker.recordDirtyFrame("camera-wheel-zoom-request");
+    };
+
+    domElement.addEventListener("wheel", handleWheel, {
+      capture: true,
+      passive: false,
+    });
+    return () => {
+      domElement.removeEventListener("wheel", handleWheel, { capture: true });
+    };
+  }, [
+    camera,
+    cameraGestureRef,
+    cameraProjection,
+    clearCameraControlsPoseCommit,
+    controlsRef,
+    domElement,
+    invalidate,
+    options.enableZoom,
+    options.zoomSpeed,
+    tracker,
+  ]);
+
+  useFrame((_, deltaSeconds) => {
+    if (!wheelZoomAnimatingRef.current) return;
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const orthographicCamera = camera as Camera & {
+      isOrthographicCamera?: boolean;
+      zoom?: number;
+      updateProjectionMatrix?: () => void;
+    };
+    let settled = false;
+
+    if (
+      cameraProjection === "orthographic" &&
+      orthographicCamera.isOrthographicCamera &&
+      typeof orthographicCamera.zoom === "number" &&
+      wheelZoomTargetOrthographicZoomRef.current !== null
+    ) {
+      const targetZoom = wheelZoomTargetOrthographicZoomRef.current;
+      const nextZoom = resolveViewport3DSmoothWheelZoomStep({
+        current: orthographicCamera.zoom,
+        deltaSeconds,
+        target: targetZoom,
+      });
+      orthographicCamera.zoom = nextZoom;
+      orthographicCamera.updateProjectionMatrix?.();
+      settled = nextZoom === targetZoom;
+    } else if (wheelZoomTargetDistanceRef.current !== null) {
+      const target = controls.target;
+      const offset = wheelZoomOffsetRef.current.subVectors(
+        camera.position,
+        target,
+      );
+      const currentDistance = offset.length();
+      if (!Number.isFinite(currentDistance) || currentDistance <= 0) {
+        wheelZoomAnimatingRef.current = false;
+        wheelZoomTargetDistanceRef.current = null;
+        endViewport3DCameraGesture(cameraGestureRef);
+        return;
+      }
+      const targetDistance = wheelZoomTargetDistanceRef.current;
+      const nextDistance = resolveViewport3DSmoothWheelZoomStep({
+        current: currentDistance,
+        deltaSeconds,
+        target: targetDistance,
+      });
+      offset.normalize().multiplyScalar(nextDistance);
+      camera.position.copy(target).add(offset);
+      applyCameraLookAt(camera, tuple3(target.toArray()));
+      settled = nextDistance === targetDistance;
+    } else {
+      wheelZoomAnimatingRef.current = false;
+      endViewport3DCameraGesture(cameraGestureRef);
+      return;
+    }
+
+    if (settled) {
+      wheelZoomAnimatingRef.current = false;
+      wheelZoomTargetDistanceRef.current = null;
+      wheelZoomTargetOrthographicZoomRef.current = null;
+      commitOrbitCameraEnd({
+        cameraPosition: tuple3(camera.position.toArray()),
+        controlTarget: controls.target.toArray(),
+        onCameraChange,
+        orthographicScale:
+          cameraProjection === "orthographic"
+            ? resolveViewport3DCurrentOrthographicScale({
+                camera,
+                fallbackScale: cameraOrthographicScale,
+                viewportHeightPixels: sizeHeight,
+              })
+            : undefined,
+        projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
+        syncStore: false,
+      });
+      const currentAngles = readViewport3DOrbitDebugAngles(controls, camera);
+      if (currentAngles) {
+        onOrbitDebugAnglesChange?.(currentAngles);
+      }
+      endViewport3DCameraGesture(cameraGestureRef);
+    }
+
+    invalidate();
+    tracker.recordDirtyFrame("camera-wheel-zoom");
+  });
+}
+
 function useOrbitCameraControlsModel({
   cameraGestureRef,
   cameraOrthographicScale,
@@ -971,6 +1233,22 @@ function useOrbitCameraControlsModel({
   const handleEnd = useCallback(() => {
     scheduleCameraControlsPoseCommit();
   }, [scheduleCameraControlsPoseCommit]);
+
+  useSmoothViewport3DWheelZoom({
+    camera,
+    cameraGestureRef,
+    cameraOrthographicScale,
+    cameraProjection,
+    clearCameraControlsPoseCommit,
+    controlsRef,
+    domElement: gl.domElement,
+    invalidate,
+    onCameraChange,
+    onOrbitDebugAnglesChange,
+    options,
+    sizeHeight: size.height,
+    tracker,
+  });
 
   return {
     controlsRef,

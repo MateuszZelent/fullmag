@@ -320,7 +320,7 @@ impl NativeFemGpuRkPlanInfo {
 
 #[cfg(feature = "fem-gpu")]
 fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
-    if plan.mfem_device_string.as_deref() == Some("cpu") {
+    if !native_fem_plan_requests_gpu_mfem_device(plan) {
         "MFEM/libCEED/hypre CPU FEM backend currently supports only double precision; single precision is not implemented"
     } else {
         "native FEM GPU backend requires double precision; single-precision CUDA kernels are not yet implemented"
@@ -329,7 +329,7 @@ fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
 
 #[cfg(feature = "fem-gpu")]
 fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
-    if plan.mfem_device_string.as_deref() == Some("cpu") || !plan.enable_demag {
+    if !native_fem_plan_requests_gpu_mfem_device(plan) || !plan.enable_demag {
         return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32;
     }
     match std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
@@ -342,6 +342,53 @@ fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
         }
         _ => ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON as i32,
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> bool {
+    if let Some(device) = plan
+        .mfem_device_string
+        .as_deref()
+        .map(str::trim)
+        .filter(|device| !device.is_empty())
+    {
+        return native_fem_mfem_device_string_requests_gpu(device);
+    }
+
+    match std::env::var("FULLMAG_FEM_MFEM_DEVICE") {
+        Ok(device) => native_fem_mfem_device_string_requests_gpu(device.trim()),
+        Err(_) => false,
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_mfem_device_string_requests_gpu(device: &str) -> bool {
+    let device = device.trim().to_ascii_lowercase();
+    if device.is_empty() {
+        return false;
+    }
+    if device == "cuda"
+        || device == "hip"
+        || device.starts_with("raja-cuda")
+        || device.starts_with("raja-hip")
+        || device.starts_with("occa-cuda")
+        || device.starts_with("ceed-cuda")
+        || device.starts_with("ceed/cuda")
+        || device.contains("/gpu/")
+    {
+        return true;
+    }
+    if device == "cpu"
+        || device == "omp"
+        || device.starts_with("ceed-cpu")
+        || device.starts_with("ceed/cpu")
+        || device.starts_with("ceed-omp")
+        || device.starts_with("ceed/omp")
+        || device.starts_with("raja-omp")
+    {
+        return false;
+    }
+    true
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2725,6 +2772,20 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_single_precision_rejection_treats_cpu_mfem_variants_as_cpu() {
+        let mut plan = make_exchange_only_plan();
+        plan.precision = ExecutionPrecision::Single;
+        plan.mfem_device_string = Some("ceed-cpu".to_string());
+
+        let err = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("CPU libCEED single precision should fail"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("CPU FEM backend"));
+        assert!(err.message.contains("double precision"));
+    }
+
+    #[test]
     fn native_fem_single_precision_rejection_is_gpu_specific() {
         let mut plan = make_exchange_only_plan();
         plan.precision = ExecutionPrecision::Single;
@@ -2736,6 +2797,21 @@ mod tests {
         };
         assert!(err.message.contains("GPU backend"));
         assert!(err.message.contains("single-precision CUDA kernels"));
+    }
+
+    #[test]
+    fn native_fem_mfem_cpu_device_strings_do_not_request_gpu_demag() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+
+        for device in ["cpu", "omp", "ceed-cpu", "ceed/cpu", "ceed-omp", "ceed/omp", "raja-omp"] {
+            plan.mfem_device_string = Some(device.to_string());
+            assert_eq!(
+                native_fem_gpu_demag_mode(&plan),
+                ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32,
+                "MFEM device string {device:?} must not request strict GPU demag"
+            );
+        }
     }
 
     #[test]

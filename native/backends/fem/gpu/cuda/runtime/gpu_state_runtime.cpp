@@ -46,6 +46,14 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
+#if FULLMAG_HAS_MFEM_STACK
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        !ctx.gpu_state.device.lifecycle.allocated) {
+        error =
+            "strict FEM GPU demag requires an MFEM GPU device before FemGpuState demag buffers can be allocated";
+        return gpu_bootstrap_failed(ctx);
+    }
+#endif
     if (!gpu_state_upload_runtime_coefficients(
             ctx.gpu_state.device,
             ctx.mesh.node_volumes.data(),

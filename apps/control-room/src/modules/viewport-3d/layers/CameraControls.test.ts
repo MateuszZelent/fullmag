@@ -9,6 +9,8 @@ import {
   resolveViewport3DOrbitDebugStep,
   resolveViewport3DCameraFit,
   resolveViewport3DCameraInteractionOptions,
+  resolveViewport3DSmoothWheelZoomStep,
+  resolveViewport3DWheelZoomScale,
   shouldApplyViewport3DOrbitDebugAngles,
   shouldApplyViewport3DCameraState,
   shouldAutoFitViewport3DBoundsChange,
@@ -34,11 +36,9 @@ describe("CameraControls", () => {
     expect(source).not.toContain("<DreiCameraControls");
     expect(source).not.toContain("<DreiArcballControls");
     expect(source).not.toContain('addEventListener("pointermove"');
-    expect(source).not.toContain('addEventListener("wheel"');
     expect(source).not.toContain("lockPointer");
     expect(source).not.toContain("unlockPointer");
     expect(source).not.toContain("useNativeCameraGestures");
-    expect(source).not.toContain("useWheelZoom");
   });
 
   it("configures orbit controls with unrestricted yaw and damped native interaction", () => {
@@ -51,6 +51,57 @@ describe("CameraControls", () => {
     expect(options.enableZoom).toBe(true);
     expect(options.rotateSpeed).toBeGreaterThan(0);
     expect(options.zoomSpeed).toBeGreaterThan(0);
+  });
+
+  it("handles wheel zoom with a damped viewport-owned interaction path", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const wheelHookStart = source.indexOf("function useSmoothViewport3DWheelZoom");
+    const wheelHookBlock = source.slice(
+      wheelHookStart,
+      source.indexOf("function useOrbitCameraControlsModel"),
+    );
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
+    const orbitControlsBlock = source.slice(
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
+    );
+
+    expect(wheelHookStart).toBeGreaterThan(-1);
+    expect(wheelHookBlock).toContain('addEventListener("wheel", handleWheel');
+    expect(wheelHookBlock).toContain("capture: true");
+    expect(wheelHookBlock).toContain("passive: false");
+    expect(wheelHookBlock).toContain("stopImmediatePropagation");
+    expect(wheelHookBlock).toContain("resolveViewport3DSmoothWheelZoomStep");
+    expect(wheelHookBlock).toContain('tracker.recordDirtyFrame("camera-wheel-zoom")');
+    expect(orbitControlsBlock).toContain("enableZoom={options.enableZoom}");
+  });
+
+  it("resolves wheel zoom targets and smooth intermediate steps", () => {
+    const zoomInScale = resolveViewport3DWheelZoomScale({
+      deltaY: -240,
+      zoomSpeed: 1,
+    });
+    const zoomOutScale = resolveViewport3DWheelZoomScale({
+      deltaY: 240,
+      zoomSpeed: 1,
+    });
+
+    expect(zoomInScale).toBeGreaterThan(0);
+    expect(zoomInScale).toBeLessThan(1);
+    expect(zoomOutScale).toBeGreaterThan(1);
+    expect(zoomInScale * zoomOutScale).toBeCloseTo(1);
+
+    const next = resolveViewport3DSmoothWheelZoomStep({
+      current: 10,
+      deltaSeconds: 1 / 60,
+      target: 5,
+    });
+
+    expect(next).toBeLessThan(10);
+    expect(next).toBeGreaterThan(5);
   });
 
   it("keeps temporary orbit debug isolated from direct orbit pointer rotation", () => {
