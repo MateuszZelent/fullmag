@@ -791,7 +791,7 @@ function checkObjectVisualizationPanelNumberFieldDebounce() {
     'label="Vector thickness"',
     'label="Arrow length"',
     'label="Arrow budget"',
-    'label="Surface lift amount"',
+    'label="Extra surface gap"',
     'patchNumber("vectorAlphaPercent"',
     'patchNumber("vectorThickness"',
     'patchNumber("vectorLengthScale"',

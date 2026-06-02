@@ -130,6 +130,8 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_step_updated_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "max_torque_T")]
     pub max_torque_t: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

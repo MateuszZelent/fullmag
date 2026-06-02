@@ -170,6 +170,18 @@ export function resolveViewport3DFieldVectorResourceKey(
   return suffix ? `${path}?${suffix}` : path;
 }
 
+export function resolveViewport3DAirboxFieldVectorQuery(
+  fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+): FieldVectorQuery {
+  const query: FieldVectorQuery = {
+    ...fieldQuery,
+    component: fieldQuery.component ?? "full",
+    scope_kind: "airbox",
+  };
+  delete query.scope_id;
+  return query;
+}
+
 export function resolveViewport3DAirboxFieldVectorResourceKeys(
   quantityId: string,
   airboxParts: readonly { id: string }[],
@@ -178,15 +190,11 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   if (isMagneticOnlyQuantityId(quantityId)) {
     return new Map();
   }
+  const query = resolveViewport3DAirboxFieldVectorQuery(fieldQuery);
   return new Map(
     airboxParts.map((part) => [
       part.id,
-      resolveViewport3DFieldVectorResourceKey(quantityId, {
-        ...fieldQuery,
-        component: fieldQuery.component ?? "full",
-        scope_id: part.id,
-        scope_kind: "airbox",
-      }),
+      resolveViewport3DFieldVectorResourceKey(quantityId, query),
     ]),
   );
 }
@@ -376,33 +384,32 @@ export function useViewport3DAirboxFieldVectors(
   }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const entries = await Promise.all(
-        Array.from(requestKeys, async ([partId, key]) => {
-          const data = await loadCachedBinaryResource(
-            fieldVectorCache,
-            key,
-            (etag) =>
-              api.data.fields.vector(
-                quantityId,
-                {
-                  ...fieldQuery,
-                  component: fieldQuery.component ?? "full",
-                  scope_id: partId,
-                  scope_kind: "airbox",
-                },
-                { etag, signal },
-              ),
-            {
-              preferCached: cachedBinaryResourceMatchesRevision(
-                fieldVectorCache,
-                key,
-                resources.getRevision(key),
-              ),
-            },
-          );
-          return [partId, data] as const;
-        }),
+      const query = resolveViewport3DAirboxFieldVectorQuery(fieldQuery);
+      const uniqueKeys = Array.from(new Set(requestKeys.values()));
+      const dataByKey = new Map(
+        await Promise.all(
+          uniqueKeys.map(async (key) => {
+            const data = await loadCachedBinaryResource(
+              fieldVectorCache,
+              key,
+              (etag) =>
+                api.data.fields.vector(quantityId, query, { etag, signal }),
+              {
+                preferCached: cachedBinaryResourceMatchesRevision(
+                  fieldVectorCache,
+                  key,
+                  resources.getRevision(key),
+                ),
+              },
+            );
+            return [key, data] as const;
+          }),
+        ),
       );
+      const entries = Array.from(requestKeys, ([partId, key]) => [
+        partId,
+        dataByKey.get(key) ?? null,
+      ] as const);
 
       return new Map(
         entries.filter(

@@ -74,6 +74,7 @@ import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
   CameraController,
   OrbitCameraControls,
+  VIEWPORT_3D_WORLD_UP,
   resolveViewport3DCameraFit,
   type Viewport3DCameraChange,
   type Viewport3DOrbitDebugAngles,
@@ -422,6 +423,7 @@ function Viewport3DProjectionStack({
         far={cameraClip.far}
         right={orthographicCameraFrame.right}
         top={orthographicCameraFrame.top}
+        up={VIEWPORT_3D_WORLD_UP}
         zoom={orthographicCameraFrame.zoom}
       />
       <PerspectiveCamera
@@ -430,6 +432,7 @@ function Viewport3DProjectionStack({
         far={cameraClip.far}
         fov={PERSPECTIVE_CAMERA_FOV_DEGREES}
         near={cameraClip.near}
+        up={VIEWPORT_3D_WORLD_UP}
       />
       <CameraController
         bounds={bounds}

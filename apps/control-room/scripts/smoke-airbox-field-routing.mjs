@@ -35,7 +35,7 @@ async function main() {
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
   );
   const objectPartId = resolveObjectPartId(manifest, objectId);
-  const airboxPartId = resolveAirboxPartId(manifest);
+  resolveAirboxPartId(manifest);
 
   await ensureComputeFieldsReady();
   await assertBinaryVectorEndpointReady(objectQuantityId, {
@@ -47,7 +47,6 @@ async function main() {
   await assertBinaryVectorEndpointReady(airboxQuantityId, {
     component: "full",
     max_samples: vectorBudget,
-    scope_id: airboxPartId,
     scope_kind: "airbox",
   });
 
@@ -114,7 +113,6 @@ async function main() {
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
     await ensureViewport3DActive(page);
     const proof = await waitForFieldRoutingProof({
-      airboxPartId,
       fieldRequests,
       fieldResponses,
       objectPartId,
@@ -235,7 +233,6 @@ function assertVisualizationRoutingState(state) {
 }
 
 async function waitForFieldRoutingProof({
-  airboxPartId,
   fieldRequests,
   fieldResponses,
   objectPartId,
@@ -253,7 +250,7 @@ async function waitForFieldRoutingProof({
       (entry) =>
         normalizeQuantityId(entry.quantityId) === "h_demag" &&
         entry.params.scope_kind === "airbox" &&
-        entry.params.scope_id === airboxPartId,
+        !entry.params.scope_id,
     );
     const forbiddenHdemagRequests = fieldRequests.filter(
       (entry) =>

@@ -191,6 +191,8 @@ describe("viewport smoke projection round-trip", () => {
       "Viewport camera state did not change after right-button free-camera pan",
     );
     expect(smokeScript).toContain("readViewportCameraSignature");
+    expect(smokeScript).toContain('node?.getAttribute("data-camera-up")');
+    expect(smokeScript).toContain("assertViewportCameraUpIsWorldUp");
   });
 
   it("does not add fixed settle delays to measured camera gesture phases", () => {

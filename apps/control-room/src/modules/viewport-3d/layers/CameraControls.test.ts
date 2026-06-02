@@ -21,18 +21,18 @@ import {
 } from "../viewport3dStore";
 
 describe("CameraControls", () => {
-  it("uses Drei ArcballControls for unrestricted 3ds-style rotation", () => {
+  it("uses Drei OrbitControls for stable fixed-up orbit rotation", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
 
     expect(source).toContain(
-      'import { ArcballControls as DreiArcballControls } from "@react-three/drei"',
+      'import { OrbitControls as DreiOrbitControls } from "@react-three/drei"',
     );
-    expect(source).toContain("<DreiArcballControls");
+    expect(source).toContain("<DreiOrbitControls");
     expect(source).not.toContain("<DreiCameraControls");
-    expect(source).not.toContain("<OrbitControls");
+    expect(source).not.toContain("<DreiArcballControls");
     expect(source).not.toContain('addEventListener("pointermove"');
     expect(source).not.toContain('addEventListener("wheel"');
     expect(source).not.toContain("lockPointer");
@@ -41,19 +41,19 @@ describe("CameraControls", () => {
     expect(source).not.toContain("useWheelZoom");
   });
 
-  it("configures arcball controls with unrestricted rotation and smooth native interaction", () => {
+  it("configures orbit controls with unrestricted yaw and damped native interaction", () => {
     const options = resolveViewport3DCameraInteractionOptions();
 
     expect(options.dampingFactor).toBeGreaterThan(0);
-    expect(options.enableAnimations).toBe(true);
+    expect(options.enableDamping).toBe(true);
     expect(options.enablePan).toBe(true);
     expect(options.enableRotate).toBe(true);
     expect(options.enableZoom).toBe(true);
-    expect(options.scaleFactor).toBeGreaterThan(1);
-    expect(options.scaleFactor).toBeLessThanOrEqual(1.12);
+    expect(options.rotateSpeed).toBeGreaterThan(0);
+    expect(options.zoomSpeed).toBeGreaterThan(0);
   });
 
-  it("keeps temporary orbit debug isolated from direct arcball pointer rotation", () => {
+  it("keeps temporary orbit debug isolated from direct orbit pointer rotation", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -168,7 +168,7 @@ describe("CameraControls", () => {
     expect(changeBlock).not.toContain("onOrbitDebugAnglesChange");
   });
 
-  it("treats arcball transitions as active gestures and commits them after updates settle", () => {
+  it("treats orbit transitions as active gestures and commits them after updates settle", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -185,7 +185,7 @@ describe("CameraControls", () => {
       source.indexOf("const handleEnd = useCallback"),
       source.indexOf("return {", source.indexOf("const handleEnd = useCallback")),
     );
-    const controlsStart = source.indexOf("<DreiArcballControls");
+    const controlsStart = source.indexOf("<DreiOrbitControls");
     const controlsBlock = source.slice(
       controlsStart,
       source.indexOf("/>", controlsStart),
@@ -200,7 +200,7 @@ describe("CameraControls", () => {
     expect(controlsBlock).toContain("onEnd={handleEnd}");
   });
 
-  it("does not duplicate Drei ArcballControls invalidation on every change event", () => {
+  it("does not duplicate Drei OrbitControls invalidation on every change event", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -214,7 +214,7 @@ describe("CameraControls", () => {
     expect(changeBlock).not.toContain("invalidate();");
   });
 
-  it("disables native arcball handling before ViewCube HUD pointer-down bubbles", () => {
+  it("disables native orbit handling before ViewCube HUD pointer-down bubbles", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -229,12 +229,12 @@ describe("CameraControls", () => {
     expect(source).toContain('addEventListener("pointercancel", restoreControls');
   });
 
-  it("does not regress Canvas DPR during arcball interactions", () => {
+  it("does not regress Canvas DPR during orbit interactions", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
-    const orbitControlsStart = source.indexOf("<DreiArcballControls");
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
     const orbitControlsBlock = source.slice(
       orbitControlsStart,
       source.indexOf("/>", orbitControlsStart),
@@ -246,12 +246,12 @@ describe("CameraControls", () => {
     expect(orbitControlsBlock).not.toContain("onEnd={onCameraInteractionEnd}");
   });
 
-  it("does not clamp arcball rotation or zoom distance so users can inspect freely", () => {
+  it("does not clamp orbit yaw or zoom distance so users can inspect freely", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
     );
-    const orbitControlsStart = source.indexOf("<DreiArcballControls");
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
     const orbitControlsBlock = source.slice(
       orbitControlsStart,
       source.indexOf("/>", orbitControlsStart),
@@ -265,7 +265,7 @@ describe("CameraControls", () => {
     expect(orbitControlsBlock).not.toContain("maxDistance");
   });
 
-  it("does not feed a stale declarative pose back into arcball controls during gestures", () => {
+  it("does not feed a stale declarative pose back into orbit controls during gestures", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -274,7 +274,7 @@ describe("CameraControls", () => {
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') - 1200,
       source.indexOf('tracker.recordDirtyFrame("camera-control-target")') + 90,
     );
-    const orbitControlsStart = source.indexOf("<DreiArcballControls");
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
     const orbitControlsBlock = source.slice(
       orbitControlsStart,
       source.indexOf("/>", orbitControlsStart),
@@ -287,7 +287,28 @@ describe("CameraControls", () => {
     expect(targetSyncBlock).toContain(".target.set(");
   });
 
-  it("skips arcball pose updates for reference-only camera changes", () => {
+  it("connects OrbitControls directly to the viewport canvas element", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const hookStart = source.indexOf("function useOrbitCameraControlsModel");
+    const hookReturn = source.indexOf("return {", hookStart);
+    const hookReturnBlock = source.slice(
+      hookReturn,
+      source.indexOf("};", hookReturn),
+    );
+    const orbitControlsStart = source.indexOf("<DreiOrbitControls");
+    const orbitControlsBlock = source.slice(
+      orbitControlsStart,
+      source.indexOf("/>", orbitControlsStart),
+    );
+
+    expect(hookReturnBlock).toContain("domElement: gl.domElement");
+    expect(orbitControlsBlock).toContain("domElement={domElement}");
+  });
+
+  it("skips orbit pose updates for reference-only camera changes", () => {
     expect(
       shouldSyncCameraControlsPose({
         currentPosition: [1, 1, 1],
@@ -312,7 +333,7 @@ describe("CameraControls", () => {
     ).toBe(true);
   });
 
-  it("does not passively apply resource camera state while arcball controls are active", () => {
+  it("does not passively apply resource camera state while orbit controls are active", () => {
     const source = readFileSync(
       new URL("./CameraControls.tsx", import.meta.url),
       "utf8",
@@ -429,7 +450,7 @@ describe("CameraControls", () => {
     ).toBe(true);
   });
 
-  it("writes arcball camera commits into the module store", () => {
+  it("writes orbit camera commits into the module store", () => {
     viewport3dStore.resetForTest();
     const onCameraChange = vi.fn();
 
@@ -454,5 +475,48 @@ describe("CameraControls", () => {
       target: [0.5, 0.25, 0],
       up: [0, 0, 1],
     });
+  });
+
+  it("does not persist rolled camera up vectors from pointer controls", () => {
+    viewport3dStore.resetForTest();
+    const onCameraChange = vi.fn();
+
+    commitOrbitCameraEnd({
+      cameraPosition: [3, 2, 1],
+      controlTarget: [0.5, 0.25, 0],
+      onCameraChange,
+    });
+
+    expect(viewport3dStore.getSnapshot().camera.up).toEqual([0, 0, 1]);
+    expect(onCameraChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        up: [0, 0, 1],
+      }),
+    );
+  });
+
+  it("does not accept camera up from orbit-control commit call sites", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const commitFunctionBlock = source.slice(
+      source.indexOf("export function commitOrbitCameraEnd"),
+      source.indexOf("export function applyViewport3DWorldUp"),
+    );
+    const orbitDebugFrameStart = source.indexOf("useFrame((_, deltaSeconds) => {");
+    const orbitDebugCommitBlock = source.slice(
+      source.indexOf("commitOrbitCameraEnd({", orbitDebugFrameStart),
+      source.indexOf("endViewport3DCameraGesture(cameraGestureRef);"),
+    );
+    const pointerCommitStart = source.indexOf("const commitCameraControlsPose");
+    const pointerCommitBlock = source.slice(
+      source.indexOf("commitOrbitCameraEnd({", pointerCommitStart),
+      source.indexOf("const currentAngles = readViewport3DOrbitDebugAngles"),
+    );
+
+    expect(commitFunctionBlock).not.toContain("cameraUp");
+    expect(orbitDebugCommitBlock).not.toContain("cameraUp");
+    expect(pointerCommitBlock).not.toContain("cameraUp");
   });
 });

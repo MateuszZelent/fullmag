@@ -4190,6 +4190,8 @@ export interface components {
             integrator?: string | null;
             is_busy: boolean;
             last_error?: string | null;
+            /** Format: int64 */
+            last_step_updated_at_unix_ms?: number | null;
             /** Format: double */
             max_torque?: number | null;
             /** Format: double */
@@ -6321,6 +6323,13 @@ export interface operations {
                 content: {
                     "application/octet-stream": unknown;
                 };
+            };
+            /** @description Recognized field quantity is not available yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not modified — ETag matched */
             304: {
@@ -9405,7 +9414,14 @@ export interface operations {
                     "application/json": components["schemas"]["StageExecutionResource"];
                 };
             };
-            /** @description No stage execution data */
+            /** @description Stage execution read-model is not available yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;

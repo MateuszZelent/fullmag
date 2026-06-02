@@ -10,11 +10,13 @@ import {
 } from "react";
 
 import { useDataPreviewFieldVector } from "@/kernel/resources/dataPreviewResources";
+import { useSolverStatusResource } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
 
 import {
   buildDataPreviewRows,
   buildDataPreviewSignature,
+  buildDataPreviewStepSignature,
   normalizeDataPreviewSampleCount,
 } from "./dataPreviewModel";
 
@@ -43,6 +45,7 @@ export function DataPreviewDialog({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const sampleCount = normalizeDataPreviewSampleCount(sampleCountInput);
   const resolvedQuantityId = quantityId.trim() || "m";
+  const solverStatus = useSolverStatusResource({ enabled: open });
   const { resource, resourceKey, resourceRevision } = useDataPreviewFieldVector({
     component,
     enabled: open,
@@ -56,6 +59,10 @@ export function DataPreviewDialog({
   const signature = useMemo(
     () => buildDataPreviewSignature(resource.data, sampleCount),
     [resource.data, sampleCount],
+  );
+  const stepSignature = useMemo(
+    () => buildDataPreviewStepSignature(solverStatus.data),
+    [solverStatus.data],
   );
 
   useEffect(() => {
@@ -180,6 +187,10 @@ export function DataPreviewDialog({
 
       <dl className="fm-data-preview__meta">
         <div>
+          <dt>Step</dt>
+          <dd>{stepSignature}</dd>
+        </div>
+        <div>
           <dt>Revision</dt>
           <dd>{String(resource.revision ?? resourceRevision ?? "none")}</dd>
         </div>
@@ -193,6 +204,12 @@ export function DataPreviewDialog({
             {resource.data
               ? `${resource.data.pointCount} points x ${resource.data.nComp}`
               : "no data"}
+          </dd>
+        </div>
+        <div>
+          <dt>Visible</dt>
+          <dd>
+            {resource.data ? `${rows.length} non-zero rows` : "no data"}
           </dd>
         </div>
         <div>

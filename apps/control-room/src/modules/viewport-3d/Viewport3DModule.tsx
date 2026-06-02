@@ -483,6 +483,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-camera-position={sceneProps.cameraState.position.join(" ")}
       data-camera-projection={sceneProps.cameraProjection}
       data-camera-target={sceneProps.cameraState.target.join(" ")}
+      data-camera-up={sceneProps.cameraState.up.join(" ")}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
       data-topology-freshness={sceneProps.topologyFreshness}

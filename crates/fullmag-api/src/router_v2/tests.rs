@@ -1986,6 +1986,23 @@ async fn domain_slice_mesh_overlay_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn field_vector_returns_204_for_known_field_that_is_not_available_yet() {
+    let app = test_v2_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test]
 async fn field_vector_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -8633,6 +8650,24 @@ async fn run_by_id_endpoint_returns_404_for_unknown_run() {
 }
 
 #[tokio::test]
+async fn stage_execution_endpoint_returns_204_before_stage_tree_exists() {
+    let app = test_v2_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test]
 async fn stage_execution_endpoint_returns_current_stage_tree() {
     let app = test_router_with_runtime_read_models().await;
     let response = app
@@ -8770,6 +8805,7 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["integrator"], "rk45");
     assert_eq!(json["step_index"], 42);
+    assert_eq!(json["last_step_updated_at_unix_ms"], 1_700_000_000_123u64);
     assert_eq!(json["max_torque_T"], 14.0);
     assert_eq!(json["max_torque_Apm"], 13.0);
     assert_eq!(json["max_torque"], 14.0);

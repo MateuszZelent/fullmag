@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
@@ -734,6 +735,7 @@ fn sample_unscoped_field_values(
     ),
     responses(
         (status = 200, description = "Binary FMVP v2 field vector", content_type = "application/octet-stream"),
+        (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component parameter"),
         (status = 404, description = "Field not found"),
@@ -811,10 +813,27 @@ pub async fn get_field_vector(
     } else {
         latest_field_values().or_else(preview_field_values)
     };
+    let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
+        || snapshot.preview_cache.get(quantity_id).is_some()
+        || (quantity_id == "m"
+            && snapshot
+                .live_state
+                .as_ref()
+                .and_then(|state| state.latest_step.magnetization.as_ref())
+                .is_some());
 
-    let (raw_values, grid) = raw_values_opt.ok_or_else(|| {
-        ApiError::not_found(format!("field '{}' not available in memory", quantity_id))
-    })?;
+    let (raw_values, grid) = match raw_values_opt {
+        Some(values) => values,
+        None if spec.is_some() && !has_field_source => {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        }
+        None => {
+            return Err(ApiError::not_found(format!(
+                "field '{}' not available in memory",
+                quantity_id
+            )));
+        }
+    };
     let raw_point_count = if n_comp > 0 {
         raw_values.len() / n_comp
     } else {

@@ -64,6 +64,23 @@ function fieldVectorFixture(): DecodedFieldVector {
   };
 }
 
+function inwardSurfaceNormalFieldVectorFixture(): DecodedFieldVector {
+  return {
+    dtype: "float64",
+    grid: [4, 1, 1],
+    nComp: 3,
+    pointCount: 4,
+    quantityId: "m",
+    valueCount: 12,
+    values: new Float64Array([
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+      0, 0, -1,
+    ]),
+  };
+}
+
 describe("viewport3dRenderModel performance contracts", () => {
   it("caches averaged surface normals used by vector surface offsets", () => {
     expect(viewport3dRenderModelSource).toContain(
@@ -317,11 +334,45 @@ describe("viewport3dRenderModel", () => {
       { nodeIndices: [0] },
       0.5,
       1,
-      { surfaceOffsetScale: 0.1 },
+      { surfaceOffsetEnabled: true, surfaceOffsetScale: 0.1 },
     );
 
     expect(Array.from(segments ?? [])).toEqual([
-      -0.25, 0, expect.closeTo(0.05), 0.25, 0, expect.closeTo(0.05), 1,
+      -0.25, 0, expect.closeTo(0.3), 0.25, 0, expect.closeTo(0.3), 1,
+    ]);
+  });
+
+  it("keeps centered surface-normal arrows above the surface with zero extra gap", () => {
+    const segments = buildVectorLineSegmentsForNodeSelection(
+      topologyFixture(),
+      inwardSurfaceNormalFieldVectorFixture(),
+      { nodeIndices: [0] },
+      0.5,
+      1,
+      { surfaceOffsetEnabled: true, surfaceOffsetScale: 0 },
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      0, 0, expect.closeTo(0.5), 0, 0, expect.closeTo(0), 1,
+    ]);
+  });
+
+  it("keeps tail-anchored inward surface-normal arrows above the surface", () => {
+    const segments = buildVectorLineSegmentsForNodeSelection(
+      topologyFixture(),
+      inwardSurfaceNormalFieldVectorFixture(),
+      { nodeIndices: [0] },
+      0.5,
+      1,
+      {
+        anchorMode: "tail",
+        surfaceOffsetEnabled: true,
+        surfaceOffsetScale: 0,
+      },
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      0, 0, expect.closeTo(0.5), 0, 0, expect.closeTo(0), 1,
     ]);
   });
 

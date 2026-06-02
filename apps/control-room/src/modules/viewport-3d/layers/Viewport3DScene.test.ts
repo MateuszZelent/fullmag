@@ -214,6 +214,25 @@ describe("Viewport3DScene scale helpers", () => {
     expect(perspectiveBlock).not.toContain("onUpdate=");
   });
 
+  it("initializes projection cameras with the same world-up used by OrbitControls", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const orthographicBlock = source.slice(
+      source.indexOf("<OrthographicCamera"),
+      source.indexOf("/>", source.indexOf("<OrthographicCamera")),
+    );
+    const perspectiveBlock = source.slice(
+      source.indexOf("<PerspectiveCamera"),
+      source.indexOf("/>", source.indexOf("<PerspectiveCamera")),
+    );
+
+    expect(source).toContain("VIEWPORT_3D_WORLD_UP");
+    expect(orthographicBlock).toContain("up={VIEWPORT_3D_WORLD_UP}");
+    expect(perspectiveBlock).toContain("up={VIEWPORT_3D_WORLD_UP}");
+  });
+
   it("keeps camera gesture state local to Canvas controls", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

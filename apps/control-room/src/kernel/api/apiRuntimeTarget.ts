@@ -1,6 +1,10 @@
 const DEFAULT_NODE_API_BASE = "http://localhost";
 const DEFAULT_DEVELOPMENT_API_BASE = "http://localhost:8081";
 
+const PUBLIC_DEV_PROXY_HOSTS = new Set([
+  "fullmag.amucontainers.orion.zfns.eu.org",
+]);
+
 const API_BASE_ENV_KEYS = [
   "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL",
   "NEXT_PUBLIC_RUNTIME_HTTP_BASE",
@@ -108,6 +112,25 @@ function configuredDevelopmentBase(
   return env?.NODE_ENV === "development" ? DEFAULT_DEVELOPMENT_API_BASE : null;
 }
 
+function configuredPublicDevProxyBase(
+  location: WindowLocationLike | undefined,
+): string | null {
+  if (!location) {
+    return null;
+  }
+
+  try {
+    const url = new URL(location.origin);
+    if (!PUBLIC_DEV_PROXY_HOSTS.has(url.hostname)) {
+      return null;
+    }
+
+    return normalizeApiBase(url.origin);
+  } catch {
+    return null;
+  }
+}
+
 function configuredLocalStandaloneFrontendBase(
   location: WindowLocationLike | undefined,
 ): string | null {
@@ -138,6 +161,7 @@ export function resolveControlRoomApiBase(
 ): string {
   return (
     configuredBaseFromWindow(source.windowConfig) ??
+    configuredPublicDevProxyBase(source.windowLocation) ??
     configuredBaseFromEnv(source.env) ??
     configuredDevelopmentBase(source.env) ??
     configuredLocalStandaloneFrontendBase(source.windowLocation) ??

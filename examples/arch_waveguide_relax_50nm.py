@@ -48,8 +48,8 @@ KU1 = 470e3
 DIND = 0
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
-ADAPTIVE_MAX_ERROR = 1e-4
-ADAPTIVE_DT_MIN = float(os.environ.get("FULLMAG_ARCH_ADAPTIVE_DT_MIN", "1e-17"))
+ADAPTIVE_MAX_ERROR = 1e-3
+ADAPTIVE_DT_MIN = 1e-15
 RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_ARCH_RELAX_MAX_STEPS", "5000"))
 
 study = fm.study("arch_waveguide_relax_50nm")

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArcballControls as DreiArcballControls } from "@react-three/drei";
+import { OrbitControls as DreiOrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
 import type { ComponentRef } from "react";
@@ -40,15 +40,43 @@ export interface Viewport3DOrbitDebugAngles {
   polar: number;
 }
 
-type ArcballControlsHandle = ComponentRef<typeof DreiArcballControls>;
+type OrbitControlsHandle = ComponentRef<typeof DreiOrbitControls>;
+
+interface Viewport3DCameraControlsDiagnostics {
+  cameraPosition: [number, number, number];
+  cameraUp: [number, number, number];
+  controlTarget: [number, number, number] | null;
+  controlsConnectedToCanvas: boolean;
+  controlsEnabled: boolean | null;
+  controlsObjectIsCamera: boolean;
+  enablePan: boolean | null;
+  enableRotate: boolean | null;
+  enableZoom: boolean | null;
+  maxAzimuthAngle: number | null;
+  maxDistance: number | null;
+  maxPolarAngle: number | null;
+  minAzimuthAngle: number | null;
+  minDistance: number | null;
+  minPolarAngle: number | null;
+  mouseButtons: Record<string, number> | null;
+  state: number | null;
+}
+
+declare global {
+  interface Window {
+    __FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__?:
+      () => Viewport3DCameraControlsDiagnostics;
+  }
+}
 
 interface Viewport3DCameraInteractionOptions {
   dampingFactor: number;
-  enableAnimations: boolean;
+  enableDamping: boolean;
   enablePan: boolean;
   enableRotate: boolean;
   enableZoom: boolean;
-  scaleFactor: number;
+  rotateSpeed: number;
+  zoomSpeed: number;
 }
 
 const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
@@ -71,12 +99,13 @@ export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
 } as const;
 
 const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
-  dampingFactor: 25,
-  enableAnimations: true,
+  dampingFactor: 0.08,
+  enableDamping: true,
   enablePan: true,
   enableRotate: true,
   enableZoom: true,
-  scaleFactor: 1.08,
+  rotateSpeed: 1,
+  zoomSpeed: 1,
 } satisfies Viewport3DCameraInteractionOptions;
 
 export function resolveViewport3DCameraInteractionOptions(): Viewport3DCameraInteractionOptions {
@@ -139,7 +168,7 @@ export function shouldApplyViewport3DOrbitDebugAngles(
 }
 
 function readViewport3DOrbitDebugAngles(
-  controls: ArcballControlsHandle | null,
+  controls: OrbitControlsHandle | null,
   camera: Camera,
 ): Viewport3DOrbitDebugAngles | null {
   const target = controls?.target;
@@ -215,7 +244,7 @@ function applyViewport3DOrbitDebugCameraAngles({
   targetAngles,
 }: {
   camera: Camera;
-  controls: ArcballControlsHandle;
+  controls: OrbitControlsHandle;
   targetAngles: Viewport3DOrbitDebugAngles;
 }): boolean {
   const target = controls.target;
@@ -243,7 +272,6 @@ function applyViewport3DOrbitDebugCameraAngles({
 
 export function commitOrbitCameraEnd({
   cameraPosition,
-  cameraUp = VIEWPORT_3D_WORLD_UP,
   controlTarget,
   onCameraChange,
   orthographicScale,
@@ -251,7 +279,6 @@ export function commitOrbitCameraEnd({
   syncStore = true,
 }: {
   cameraPosition: [number, number, number];
-  cameraUp?: [number, number, number];
   controlTarget: number[];
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   orthographicScale?: number | null;
@@ -263,7 +290,7 @@ export function commitOrbitCameraEnd({
   const nextCamera: Viewport3DCameraChange = {
     position: cameraPosition,
     target: tuple3(controlTarget),
-    up: cameraUp,
+    up: VIEWPORT_3D_WORLD_UP,
     ...(orthographicScale === undefined ? {} : { orthographicScale }),
     ...(projection === undefined ? {} : { projection }),
   };
@@ -552,6 +579,81 @@ function resolveViewport3DCurrentOrthographicScale({
   return fallbackScale;
 }
 
+function readViewport3DCameraControlsDiagnostics({
+  camera,
+  controls,
+  domElement,
+}: {
+  camera: Camera;
+  controls: OrbitControlsHandle | null;
+  domElement: HTMLElement;
+}): Viewport3DCameraControlsDiagnostics {
+  const controlsState = controls as
+    | (OrbitControlsHandle & {
+        domElement?: HTMLElement;
+        enablePan?: boolean;
+        enableRotate?: boolean;
+        enableZoom?: boolean;
+        maxAzimuthAngle?: number;
+        maxDistance?: number;
+        maxPolarAngle?: number;
+        minAzimuthAngle?: number;
+        minDistance?: number;
+        minPolarAngle?: number;
+        mouseButtons?: Record<string, number>;
+        object?: Camera;
+        state?: number;
+      })
+    | null;
+  return {
+    cameraPosition: tuple3(camera.position.toArray()),
+    cameraUp: tuple3(camera.up.toArray()),
+    controlTarget: controls?.target ? tuple3(controls.target.toArray()) : null,
+    controlsConnectedToCanvas: controlsState?.domElement === domElement,
+    controlsEnabled:
+      typeof controlsState?.enabled === "boolean" ? controlsState.enabled : null,
+    controlsObjectIsCamera: controlsState?.object === camera,
+    enablePan:
+      typeof controlsState?.enablePan === "boolean"
+        ? controlsState.enablePan
+        : null,
+    enableRotate:
+      typeof controlsState?.enableRotate === "boolean"
+        ? controlsState.enableRotate
+        : null,
+    enableZoom:
+      typeof controlsState?.enableZoom === "boolean"
+        ? controlsState.enableZoom
+        : null,
+    maxAzimuthAngle:
+      typeof controlsState?.maxAzimuthAngle === "number"
+        ? controlsState.maxAzimuthAngle
+        : null,
+    maxDistance:
+      typeof controlsState?.maxDistance === "number"
+        ? controlsState.maxDistance
+        : null,
+    maxPolarAngle:
+      typeof controlsState?.maxPolarAngle === "number"
+        ? controlsState.maxPolarAngle
+        : null,
+    minAzimuthAngle:
+      typeof controlsState?.minAzimuthAngle === "number"
+        ? controlsState.minAzimuthAngle
+        : null,
+    minDistance:
+      typeof controlsState?.minDistance === "number"
+        ? controlsState.minDistance
+        : null,
+    minPolarAngle:
+      typeof controlsState?.minPolarAngle === "number"
+        ? controlsState.minPolarAngle
+        : null,
+    mouseButtons: controlsState?.mouseButtons ?? null,
+    state: typeof controlsState?.state === "number" ? controlsState.state : null,
+  };
+}
+
 interface OrbitCameraControlsProps {
   cameraGestureRef: Viewport3DCameraGestureRef;
   cameraOrthographicScale: number | null;
@@ -579,7 +681,7 @@ function useOrbitCameraControlsModel({
 }: OrbitCameraControlsProps) {
   const { camera, invalidate, size } = useThree();
   const gl = useThree((state) => state.gl);
-  const controlsRef = useRef<ArcballControlsHandle>(null);
+  const controlsRef = useRef<OrbitControlsHandle>(null);
   const options = resolveViewport3DCameraInteractionOptions();
   const handledOrbitDebugRevisionRef = useRef(orbitDebugRevision);
   const handledOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
@@ -665,6 +767,23 @@ function useOrbitCameraControlsModel({
   }, [gl]);
 
   useEffect(() => {
+    const readDiagnostics = () =>
+      readViewport3DCameraControlsDiagnostics({
+        camera,
+        controls: controlsRef.current,
+        domElement: gl.domElement,
+      });
+    window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__ = readDiagnostics;
+    return () => {
+      if (
+        window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__ === readDiagnostics
+      ) {
+        delete window.__FULLMAG_READ_VIEWPORT_3D_CAMERA_CONTROLS__;
+      }
+    };
+  }, [camera, gl]);
+
+  useEffect(() => {
     const controls = controlsRef.current;
     const currentAngles = controls
       ? readViewport3DOrbitDebugAngles(controls, camera)
@@ -744,7 +863,6 @@ function useOrbitCameraControlsModel({
       const controlTarget = controls.target.toArray();
       commitOrbitCameraEnd({
         cameraPosition: tuple3(controlPosition),
-        cameraUp: tuple3(camera.up.toArray()),
         controlTarget,
         onCameraChange,
         orthographicScale:
@@ -790,7 +908,6 @@ function useOrbitCameraControlsModel({
         : undefined;
     commitOrbitCameraEnd({
       cameraPosition: tuple3(controlPosition),
-      cameraUp: tuple3(camera.up.toArray()),
       controlTarget,
       onCameraChange,
       orthographicScale,
@@ -857,6 +974,7 @@ function useOrbitCameraControlsModel({
 
   return {
     controlsRef,
+    domElement: gl.domElement,
     handleEnd,
     handleTransitionStart,
     options,
@@ -867,6 +985,7 @@ function useOrbitCameraControlsModel({
 export function OrbitCameraControls(props: OrbitCameraControlsProps) {
   const {
     controlsRef,
+    domElement,
     handleEnd,
     handleTransitionStart,
     options,
@@ -874,15 +993,18 @@ export function OrbitCameraControls(props: OrbitCameraControlsProps) {
   } = useOrbitCameraControlsModel(props);
 
   return (
-    <DreiArcballControls
+    <DreiOrbitControls
       ref={controlsRef}
       makeDefault
+      domElement={domElement}
       dampingFactor={options.dampingFactor}
-      enableAnimations={options.enableAnimations}
+      enableDamping={options.enableDamping}
       enablePan={options.enablePan}
       enableRotate={options.enableRotate}
       enableZoom={options.enableZoom}
-      scaleFactor={options.scaleFactor}
+      rotateSpeed={options.rotateSpeed}
+      screenSpacePanning
+      zoomSpeed={options.zoomSpeed}
       onChange={recordOrbitControlFrame}
       onEnd={handleEnd}
       onStart={handleTransitionStart}

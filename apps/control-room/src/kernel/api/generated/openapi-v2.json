@@ -8863,6 +8863,14 @@
               "null"
             ]
           },
+          "last_step_updated_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "max_torque": {
             "format": "double",
             "type": [
@@ -14159,6 +14167,9 @@
             },
             "description": "Binary FMVP v2 field vector"
           },
+          "204": {
+            "description": "Recognized field quantity is not available yet"
+          },
           "304": {
             "description": "Not modified — ETag matched"
           },
@@ -17274,8 +17285,11 @@
             },
             "description": "Current stage execution read-model"
           },
+          "204": {
+            "description": "Stage execution read-model is not available yet"
+          },
           "404": {
-            "description": "No stage execution data"
+            "description": "No active workspace"
           }
         },
         "tags": [

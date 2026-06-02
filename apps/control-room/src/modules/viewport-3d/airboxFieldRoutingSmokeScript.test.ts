@@ -25,6 +25,7 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("compute_fields");
     expect(smokeScript).toContain("scope_kind: \"part\"");
     expect(smokeScript).toContain("scope_kind: \"airbox\"");
+    expect(smokeScript).toContain("!entry.params.scope_id");
     expect(smokeScript).toContain("domain: \"airbox_only\"");
     expect(smokeScript).toContain("forbiddenHdemagFullDomainRequestCount");
     expect(smokeScript).toContain("H_demag used full-domain field-vector requests");

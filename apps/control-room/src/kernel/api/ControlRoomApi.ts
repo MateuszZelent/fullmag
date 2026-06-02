@@ -802,7 +802,7 @@ export class ControlRoomApi {
       ),
     stages: {
       execution: (options?: RequestOptions) =>
-        this.requestJson<StageExecutionResource>(
+        this.requestOptionalJson<StageExecutionResource>(
           SIMULATION_STAGES_EXECUTION_PATH,
           options,
         ),

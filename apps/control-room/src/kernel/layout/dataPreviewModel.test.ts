@@ -5,6 +5,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import {
   buildDataPreviewRows,
   buildDataPreviewSignature,
+  buildDataPreviewStepSignature,
   normalizeDataPreviewSampleCount,
 } from "./dataPreviewModel";
 
@@ -46,6 +47,25 @@ describe("dataPreviewModel", () => {
     ]);
   });
 
+  it("skips zero-valued points and expands around the center sample", () => {
+    const rows = buildDataPreviewRows(
+      fieldVector([
+        9, 9, 9,
+        0, 0, 0,
+        2, 2, 2,
+        0, 0, 0,
+        4, 4, 4,
+      ]),
+      3,
+    );
+
+    expect(rows).toEqual([
+      { index: 0, sourceIndex: 2, values: ["2", "2", "2"] },
+      { index: 1, sourceIndex: 0, values: ["9", "9", "9"] },
+      { index: 2, sourceIndex: 4, values: ["4", "4", "4"] },
+    ]);
+  });
+
   it("builds a short signature from the visible sample values", () => {
     expect(
       buildDataPreviewSignature(
@@ -53,5 +73,19 @@ describe("dataPreviewModel", () => {
         3,
       ),
     ).toMatch(/^3x3:/);
+  });
+
+  it("builds a live step signature from solver status", () => {
+    expect(
+      buildDataPreviewStepSignature({
+        last_step_updated_at_unix_ms: Date.UTC(2026, 4, 31, 10, 20, 30, 123),
+        revision: 44,
+        runtime_state: "running",
+        sim_time_seconds: 2.5e-9,
+        step_index: 42,
+      }),
+    ).toBe(
+      "step 42 | t=2.5000e-9 s | updated 2026-05-31T10:20:30.123Z | rev 44",
+    );
   });
 });

@@ -469,7 +469,7 @@
 
 .fm-data-preview__meta {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--fm-space-2);
   margin: 0;
   padding: 0 var(--fm-space-3) var(--fm-space-3);

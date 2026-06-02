@@ -8,6 +8,7 @@ import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import {
   cachedBinaryResourceMatchesRevision,
   loadCachedBinaryResource,
+  resolveViewport3DAirboxFieldVectorQuery,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DPartFieldVectorResourceRequests,
@@ -34,7 +35,7 @@ describe("viewport3dResources", () => {
     );
   });
 
-  it("builds scoped airbox field vector resource keys per mesh part", () => {
+  it("omits unstable airbox mesh part ids from field vector resource keys", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_demag", [
         { id: "airbox" },
@@ -48,14 +49,29 @@ describe("viewport3dResources", () => {
       new Map([
         [
           "airbox",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_kind=airbox`,
         ],
         [
           "airbox-shell",
-          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_id=airbox-shell&scope_kind=airbox`,
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_demag")}?component=full&max_samples=384&scope_kind=airbox`,
         ],
       ]),
     );
+  });
+
+  it("keeps airbox field vector queries canonical even when a part id is supplied", () => {
+    expect(
+      resolveViewport3DAirboxFieldVectorQuery({
+        component: "full",
+        max_samples: 384,
+        scope_id: "part:__air__:1",
+        scope_kind: "full",
+      }),
+    ).toEqual({
+      component: "full",
+      max_samples: 384,
+      scope_kind: "airbox",
+    });
   });
 
   it("does not build airbox field vector resource keys for magnetic-only quantities", () => {

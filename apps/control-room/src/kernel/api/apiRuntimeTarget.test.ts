@@ -75,6 +75,22 @@ describe("control-room API runtime target", () => {
     ).toBe("http://localhost:8091");
   });
 
+  it("uses the public dev proxy origin instead of a loopback API env", () => {
+    expect(
+      resolveControlRoomApiBase({
+        env: {
+          NODE_ENV: "development",
+          NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: "http://localhost:8081",
+        },
+        windowLocation: {
+          host: "fullmag.amucontainers.orion.zfns.eu.org",
+          origin: "https://fullmag.amucontainers.orion.zfns.eu.org",
+          protocol: "https:",
+        },
+      }),
+    ).toBe("https://fullmag.amucontainers.orion.zfns.eu.org");
+  });
+
   it("defaults local development to the local control-room API port", () => {
     expect(
       resolveControlRoomApiBase({
@@ -122,5 +138,16 @@ describe("control-room API runtime target", () => {
         "http://localhost:3000",
       ),
     ).toBe("ws://localhost:8081/v2/sessions/current/events/ws");
+  });
+
+  it("builds realtime websocket URLs from the public dev proxy origin", () => {
+    expect(
+      resolveControlRoomWebSocketUrl(
+        "https://fullmag.amucontainers.orion.zfns.eu.org",
+        "/v2/sessions/current/events/ws",
+      ),
+    ).toBe(
+      "wss://fullmag.amucontainers.orion.zfns.eu.org/v2/sessions/current/events/ws",
+    );
   });
 });

@@ -110,6 +110,9 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain(
       'data-camera-target={sceneProps.cameraState.target.join(" ")}',
     );
+    expect(source).toContain(
+      'data-camera-up={sceneProps.cameraState.up.join(" ")}',
+    );
   });
 
   it("mounts an explicit field-data issue dialog for missing shader or vector data", () => {

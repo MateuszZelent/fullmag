@@ -90,7 +90,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("Vector thickness");
     expect(auditScript).toContain("Arrow length");
     expect(auditScript).toContain("Arrow budget");
-    expect(auditScript).toContain("Surface lift amount");
+    expect(auditScript).toContain("Extra surface gap");
     expect(auditScript).toContain("label=\"Opacity\"");
     expect(auditScript).toContain('patchNumber("vectorBudget"');
     expect(auditScript).toContain('patchNumber("vectorThickness"');

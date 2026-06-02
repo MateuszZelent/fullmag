@@ -74,12 +74,14 @@ export interface Viewport3DFieldRenderModel {
 export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   fullVectorAnchorMode?: Viewport3DVectorAnchorMode;
+  fullVectorSurfaceOffsetEnabled?: boolean;
   fullVectorSurfaceOffsetScale?: number;
   partFieldVectors?: ReadonlyMap<string, DecodedFieldVector>;
   partVectorAnchorModes?: ReadonlyMap<string, Viewport3DVectorAnchorMode>;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScales?: ReadonlyMap<string, number>;
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
+  partVectorSurfaceOffsetEnabled?: ReadonlySet<string>;
   partVectorSurfaceOffsetScales?: ReadonlyMap<string, number>;
   scalarColorModes?: ReadonlySet<string>;
   scalarColorPalette?: string;
@@ -91,6 +93,7 @@ export type Viewport3DVectorAnchorMode = "center" | "tail";
 
 export interface Viewport3DVectorSegmentOptions {
   anchorMode?: Viewport3DVectorAnchorMode;
+  surfaceOffsetEnabled?: boolean;
   surfaceOffsetScale?: number;
   surfaceTriangleIndices?: ArrayLike<number> | null;
 }
@@ -383,6 +386,8 @@ export function buildViewport3DFieldRenderModel(
         ? partModel.surfaceNodeSelection ?? partModel.part
         : partModel.part;
     const partScale = options.partVectorScales?.get(partId) ?? 1;
+    const surfaceOffsetEnabled =
+      options.partVectorSurfaceOffsetEnabled?.has(partId) ?? false;
     const surfaceOffsetScale =
       options.partVectorSurfaceOffsetScales?.get(partId) ?? 0;
     const explicitPartFieldVector =
@@ -441,9 +446,10 @@ export function buildViewport3DFieldRenderModel(
         partBudget,
         {
           anchorMode: options.partVectorAnchorModes?.get(partId) ?? "center",
+          surfaceOffsetEnabled,
           surfaceOffsetScale,
           surfaceTriangleIndices:
-            surfaceOffsetScale > 0 ? partModel.surfaceIndices : null,
+            surfaceOffsetEnabled ? partModel.surfaceIndices : null,
         },
         fieldValueResolver,
       ),
@@ -461,8 +467,12 @@ export function buildViewport3DFieldRenderModel(
       fullVectorBudget,
       {
         anchorMode: options.fullVectorAnchorMode ?? "center",
+        surfaceOffsetEnabled: options.fullVectorSurfaceOffsetEnabled ?? false,
         surfaceOffsetScale: options.fullVectorSurfaceOffsetScale ?? 0,
-        surfaceTriangleIndices: topology.fallbackSurfaceIndices,
+        surfaceTriangleIndices:
+          options.fullVectorSurfaceOffsetEnabled === true
+            ? topology.fallbackSurfaceIndices
+            : null,
       },
     ),
     partVectorSegments,
@@ -643,12 +653,13 @@ function buildCachedFullVectorSegments(
   if (!fieldVector || budget <= 0) return null;
 
   const anchorMode = vectorOptions.anchorMode ?? "center";
+  const surfaceOffsetEnabled = vectorOptions.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = vectorOptions.surfaceOffsetScale ?? 0;
   return getCachedNestedFieldValue(
     fullVectorSegmentCache,
     topology,
     fieldVector,
-    `${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
+    `${scale}:${budget}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsFromPositions(
         topology,
@@ -674,13 +685,14 @@ function buildCachedPartVectorSegments(
   if (!fieldVector || budget <= 0) return null;
 
   const anchorMode = vectorOptions.anchorMode ?? "center";
+  const surfaceOffsetEnabled = vectorOptions.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = vectorOptions.surfaceOffsetScale ?? 0;
   const fieldValueMode = fieldValueResolver ? "scoped" : "full";
   return getCachedNestedFieldValue(
     partVectorSegmentCache,
     partModel,
     fieldVector,
-    `${vectorScope}:${fieldValueMode}:${scale}:${budget}:${anchorMode}:${surfaceOffsetScale}`,
+    `${vectorScope}:${fieldValueMode}:${scale}:${budget}:${anchorMode}:${surfaceOffsetEnabled}:${surfaceOffsetScale}`,
     () =>
       buildVectorLineSegmentsForNodeSelectionFromPositions(
         topology,
@@ -1377,15 +1389,21 @@ function buildVectorLineSegmentsFromPositions(
   const scaleMag = Math.max(maxMag, 1e-12);
   const effectiveScale = resolveViewport3DVectorSegmentScale(topology, scale);
   const anchorMode = options.anchorMode ?? "center";
+  const surfaceOffsetEnabled = options.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
   const surfaceNormals =
-    surfaceOffsetScale > 0
+    surfaceOffsetEnabled
       ? cachedAveragedSurfaceNodeNormals(
           topology,
           options.surfaceTriangleIndices,
         )
       : null;
-  const surfaceOffsetDistance = effectiveScale * surfaceOffsetScale;
+  const surfaceOffsetDistance = resolveVectorSurfaceOffsetDistance(
+    effectiveScale,
+    anchorMode,
+    surfaceOffsetEnabled,
+    surfaceOffsetScale,
+  );
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
@@ -1531,15 +1549,21 @@ function buildVectorLineSegmentsForNodeSelectionFromPositions(
     nodeSelection,
   );
   const anchorMode = options.anchorMode ?? "center";
+  const surfaceOffsetEnabled = options.surfaceOffsetEnabled === true;
   const surfaceOffsetScale = Math.max(options.surfaceOffsetScale ?? 0, 0);
   const surfaceNormals =
-    surfaceOffsetScale > 0
+    surfaceOffsetEnabled
       ? cachedAveragedSurfaceNodeNormals(
           topology,
           options.surfaceTriangleIndices,
         )
       : null;
-  const surfaceOffsetDistance = effectiveScale * surfaceOffsetScale;
+  const surfaceOffsetDistance = resolveVectorSurfaceOffsetDistance(
+    effectiveScale,
+    anchorMode,
+    surfaceOffsetEnabled,
+    surfaceOffsetScale,
+  );
 
   const segments = new Float32Array(samples.length * VECTOR_SEGMENT_STRIDE);
 
@@ -1699,6 +1723,18 @@ function offsetVectorAnchor(
     y + (surfaceNormals[offset + 1] ?? 0) * surfaceOffsetDistance,
     z + (surfaceNormals[offset + 2] ?? 0) * surfaceOffsetDistance,
   ];
+}
+
+function resolveVectorSurfaceOffsetDistance(
+  effectiveScale: number,
+  anchorMode: Viewport3DVectorAnchorMode,
+  surfaceOffsetEnabled: boolean,
+  extraSurfaceOffsetScale: number,
+): number {
+  if (!surfaceOffsetEnabled) return 0;
+  const baseClearance =
+    anchorMode === "tail" ? effectiveScale : effectiveScale / 2;
+  return baseClearance + effectiveScale * Math.max(extraSurfaceOffsetScale, 0);
 }
 
 function boundsFromMinMax(

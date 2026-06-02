@@ -54,9 +54,9 @@ describe("camera orientation math", () => {
     });
   });
 
-  it("uses a non-collinear camera up vector for top and bottom free-camera snaps", () => {
-    expect(resolveCameraUpForDirection([0, 0, 1])).toEqual([0, 1, 0]);
-    expect(resolveCameraUpForDirection([0, 0, -1])).toEqual([0, 1, 0]);
+  it("keeps ViewCube snaps on the same world-up convention as OrbitControls", () => {
+    expect(resolveCameraUpForDirection([0, 0, 1])).toEqual([0, 0, 1]);
+    expect(resolveCameraUpForDirection([0, 0, -1])).toEqual([0, 0, 1]);
     expect(resolveCameraUpForDirection([1, 0, 0])).toEqual([0, 0, 1]);
   });
 

@@ -2,6 +2,8 @@ import type { Viewport3DCameraState } from "../viewport3dStore";
 
 export type Direction3 = [number, number, number];
 
+const VIEWPORT_3D_ORIENTATION_WORLD_UP: Direction3 = [0, 0, 1];
+
 export function resolveViewCubeCurrentCameraState({
   cameraPosition,
   cameraState,
@@ -169,6 +171,6 @@ export function normalizeDirection(direction: Direction3): Direction3 {
 }
 
 export function resolveCameraUpForDirection(direction: Direction3): Direction3 {
-  const normalized = normalizeDirection(direction);
-  return Math.abs(normalized[2]) > 0.98 ? [0, 1, 0] : [0, 0, 1];
+  void direction;
+  return [...VIEWPORT_3D_ORIENTATION_WORLD_UP];
 }

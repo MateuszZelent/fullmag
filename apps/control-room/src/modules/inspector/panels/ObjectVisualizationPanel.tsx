@@ -595,7 +595,7 @@ function VisualizationVectorsSection({
         <ToggleButton
           active={settings.vectorSurfaceOffsetEnabled}
           disabled={pending || sectionDisabled("vectors")}
-          label="Surface lift"
+          label="Lift above surface"
           onClick={() =>
             void patch({
               vectorSurfaceOffsetEnabled:
@@ -605,7 +605,7 @@ function VisualizationVectorsSection({
         />
       </div>
       {settings.vectorSurfaceOffsetEnabled ? (
-        <NumberField disabled={pending || sectionDisabled("vectors")} label="Surface lift amount" max={1} min={0.01} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
+        <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
       <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
         {GEOMETRY_SCOPES.map((scope) => (

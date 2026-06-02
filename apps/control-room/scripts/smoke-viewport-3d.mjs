@@ -275,6 +275,7 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "left-button orbit rotate changes the viewport camera state",
     "Viewport camera state did not change after left-button orbit rotate",
   );
+  await assertViewportCameraUpIsWorldUp(page, "left-button orbit rotate");
   gesturePerformancePhases.push(
     await collectViewport3DPerformancePhase(page, "camera-orbit-rotate"),
   );
@@ -291,6 +292,7 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "camera wheel changes the viewport camera state",
     "Viewport camera state did not change after camera wheel",
   );
+  await assertViewportCameraUpIsWorldUp(page, "camera wheel zoom");
   gesturePerformancePhases.push(
     await collectViewport3DPerformancePhase(page, "camera-wheel-zoom"),
   );
@@ -306,6 +308,7 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "right-button free-camera pan changes the viewport camera state",
     "Viewport camera state did not change after right-button free-camera pan",
   );
+  await assertViewportCameraUpIsWorldUp(page, "right-button orbit pan");
   gesturePerformancePhases.push(
     await collectViewport3DPerformancePhase(page, "camera-right-pan"),
   );
@@ -426,9 +429,36 @@ async function readViewportCameraSignature(page) {
     return [
       node?.getAttribute("data-camera-position") ?? "",
       node?.getAttribute("data-camera-target") ?? "",
+      node?.getAttribute("data-camera-up") ?? "",
       node?.getAttribute("data-camera-projection") ?? "",
     ].join("|");
   }, VIEWPORT_3D_SELECTOR);
+}
+
+async function assertViewportCameraUpIsWorldUp(page, label) {
+  const up = await page.evaluate((selector) => {
+    const raw = document
+      .querySelector(selector)
+      ?.getAttribute("data-camera-up");
+    return String(raw ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((value) => Number(value));
+  }, VIEWPORT_3D_SELECTOR);
+  const expected = [0, 0, 1];
+  const matchesWorldUp =
+    up.length === expected.length &&
+    up.every(
+      (value, index) =>
+        Number.isFinite(value) && Math.abs(value - expected[index]) < 1e-9,
+    );
+  if (!matchesWorldUp) {
+    throw new Error(
+      `${label} changed viewport camera up vector: expected ${expected.join(
+        " ",
+      )}, got ${up.join(" ") || "missing"}.`,
+    );
+  }
 }
 
 async function readCanvasContextState(page) {

@@ -276,6 +276,8 @@ describe("ObjectVisualizationPanelModel", () => {
       "vectorMonoColor",
       "vectorAlphaPercent",
       "vectorThickness",
+      "vectorSurfaceOffsetEnabled",
+      "vectorSurfaceOffsetScale",
     ]));
   });
 

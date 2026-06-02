@@ -125,7 +125,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
   vectorSurfaceOffsetEnabled: false,
-  vectorSurfaceOffsetScale: 0.1,
+  vectorSurfaceOffsetScale: 0,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -154,7 +154,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-info)",
   vectorSurfaceOffsetEnabled: false,
-  vectorSurfaceOffsetScale: 0.1,
+  vectorSurfaceOffsetScale: 0,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -1116,6 +1116,12 @@ function normalizePatch(
   }
   if (normalized.vectorLengthScale !== undefined) {
     normalized.vectorLengthScale = Math.max(0.1, Math.min(5, normalized.vectorLengthScale));
+  }
+  if (normalized.vectorSurfaceOffsetScale !== undefined) {
+    normalized.vectorSurfaceOffsetScale = Math.max(
+      0,
+      Math.min(1, normalized.vectorSurfaceOffsetScale),
+    );
   }
   if (normalized.shaderColorMode !== undefined) {
     normalized.shaderColorMode =

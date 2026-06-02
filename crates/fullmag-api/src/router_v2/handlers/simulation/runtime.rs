@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use fullmag_authoring::{MagnetizationAsset, SceneDocument, SceneObject};
 use fullmag_runner::RuntimeStatus;
@@ -116,21 +118,21 @@ pub async fn get_run_by_id(
     path = "/v2/sessions/current/simulation/stages/execution",
     responses(
         (status = 200, description = "Current stage execution read-model", body = StageExecutionResource),
-        (status = 404, description = "No stage execution data"),
+        (status = 204, description = "Stage execution read-model is not available yet"),
+        (status = 404, description = "No active workspace"),
     ),
     tag = "simulation"
 )]
 pub async fn get_stage_execution(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<StageExecutionResource>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    let stage = snapshot
-        .stage_execution
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no stage execution data"))?;
+    let Some(stage) = snapshot.stage_execution.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
 
     Ok(Json(StageExecutionResource {
         revision: snapshot.state_version,
@@ -179,7 +181,8 @@ pub async fn get_stage_execution(
                 threshold: record.threshold,
             })
             .collect(),
-    }))
+    })
+    .into_response())
 }
 
 #[utoipa::path(
@@ -225,6 +228,10 @@ pub async fn get_solver_status(
         dt_seconds: latest.map(|value| value.dt),
         sim_time_seconds: latest.map(|value| value.time),
         step_index: latest.map(|value| value.step),
+        last_step_updated_at_unix_ms: snapshot
+            .live_state
+            .as_ref()
+            .map(|value| value.updated_at_unix_ms.min(u64::MAX as u128) as u64),
         max_torque_t: latest.map(|value| value.max_torque_T),
         max_torque_apm: latest.map(|value| value.max_torque_Apm),
         max_torque: latest.map(|value| value.max_torque_T),

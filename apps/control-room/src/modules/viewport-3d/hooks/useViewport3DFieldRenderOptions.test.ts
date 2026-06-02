@@ -69,6 +69,25 @@ describe("sameViewport3DFieldRenderOptions", () => {
     ).toBe(false);
   });
 
+  it("detects changed surface lift enablement independently from extra gap", () => {
+    expect(
+      sameViewport3DFieldRenderOptions(
+        {
+          fullVectorSurfaceOffsetEnabled: true,
+          fullVectorSurfaceOffsetScale: 0,
+          partVectorSurfaceOffsetEnabled: new Set(["part-a"]),
+          partVectorSurfaceOffsetScales: new Map([["part-a", 0]]),
+        },
+        {
+          fullVectorSurfaceOffsetEnabled: false,
+          fullVectorSurfaceOffsetScale: 0,
+          partVectorSurfaceOffsetEnabled: new Set(),
+          partVectorSurfaceOffsetScales: new Map([["part-a", 0]]),
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("does not request airbox vector fields when the airbox target is hidden", () => {
     expect(
       viewport3DAirboxVectorsVisible(
