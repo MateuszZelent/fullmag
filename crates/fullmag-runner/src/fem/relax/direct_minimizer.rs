@@ -7,7 +7,7 @@
 use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::dispatch::{ensure_fem_object_scalars, flatten_vectors};
+use crate::dispatch::flatten_vectors;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
@@ -23,6 +23,7 @@ use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 use super::preview::build_fem_cached_preview_fields;
+use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
     pub(crate) latest_stats: Option<StepStats>,

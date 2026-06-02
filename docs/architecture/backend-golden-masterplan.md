@@ -36,7 +36,7 @@ implementation details.
 4. Forced GPU must fail clearly when GPU requirements are not met. Silent CPU
    fallback is allowed only for explicitly non-forced modes and must be recorded
    in provenance.
-5. Public semantics live above native backends. Native backends execute
+5. Public semantics live above compiled backends. Compiled backends execute
    semantics; they must not invent product behavior that is invisible to IR,
    planner, API, or documentation.
 6. Runtime validation is separate from local contract validation. A local unit
@@ -44,19 +44,18 @@ implementation details.
 7. New solver code must not be added to `dispatch.rs`. Until it is split,
    `dispatch.rs` is a compatibility facade and migration queue.
 8. Fullmag is not building a standalone in-house FEM numerical stack beyond the
-   MFEM/hypre/libCEED line. Repository names such as `native_fem` and
-   `native/backends/fem` mean our ABI, runtime, provenance, memory-residency,
-   operator-contract, and packaging layer around MFEM/hypre/libCEED for CPU and
-   GPU. They do not define a separate FEM solver family.
+   MFEM/hypre/libCEED line. Historical repository names must not define the
+   architecture. FEM means MFEM/hypre/libCEED integration with CPU and GPU
+   execution lanes.
 
 ## 3. Four solver lanes
 
 | Lane | Discretization | Device | Current primary ownership | Current selection surface | Canonical role |
 |---|---|---|---|---|---|
-| FDM CPU | finite-difference grid | CPU | `crates/fullmag-engine/src/fdm/cpu/*`, `crates/fullmag-runner/src/fdm/cpu/*` | `FdmEngine::CpuReference`, `FULLMAG_FDM_EXECUTION=cpu` | CPU reference/validation lane and CPU execution baseline for FDM |
-| FDM GPU | finite-difference grid | CUDA GPU | `crates/fullmag-runner/src/fdm/gpu/*`, `native/backends/fdm/*`, `crates/fullmag-fdm-sys/*` | `FdmEngine::CudaFdm`, `FULLMAG_FDM_EXECUTION=cuda/gpu/auto` | production GPU lane for structured-grid FDM |
-| FEM CPU | finite-element mesh | CPU | `crates/fullmag-runner/src/fem/*`, `crates/fullmag-runner/src/native_fem.rs`, `native/backends/fem/core/*`, `native/backends/fem/src/*`, `crates/fullmag-fem-sys/*` | `FemEngine::CpuNative`, `FULLMAG_FEM_EXECUTION=cpu/auto` | production CPU lane backed by MFEM/hypre/libCEED through the native FEM ABI |
-| FEM GPU | finite-element mesh | CUDA GPU | `native/backends/fem/gpu/cuda/*`, `native/backends/fem/core/*`, `crates/fullmag-runner/src/native_fem.rs`, `crates/fullmag-fem-sys/*` | `FemEngine::NativeGpu`, `FULLMAG_FEM_EXECUTION=gpu/all_in_gpu`, `FULLMAG_FEM_ALL_IN_GPU=1` | production GPU lane backed by MFEM/hypre/libCEED/CUDA through the native FEM ABI |
+| FDM CPU | finite-difference grid | CPU | target: `crates/fullmag-runner/src/solvers/fdm/cpu/*` and `crates/fullmag-engine/src/solvers/fdm/cpu/*` | `FdmEngine::CpuReference`, `FULLMAG_FDM_EXECUTION=cpu` | CPU reference/validation lane and CPU execution baseline for FDM |
+| FDM GPU | finite-difference grid | CUDA GPU | target: `backends/solvers/fdm/gpu/cuda/*` plus Rust lane facade | `FdmEngine::CudaFdm`, `FULLMAG_FDM_EXECUTION=cuda/gpu/auto` | production GPU lane for structured-grid FDM |
+| FEM CPU | finite-element mesh | CPU | target: `backends/solvers/fem/mfem/cpu/*` plus Rust lane facade | target: `FemEngine::MfemCpu`, `FULLMAG_FEM_EXECUTION=cpu/auto` | production CPU lane backed by MFEM/hypre/libCEED |
+| FEM GPU | finite-element mesh | CUDA GPU | target: `backends/solvers/fem/mfem/gpu/*` plus Rust lane facade | target: `FemEngine::MfemGpu`, `FULLMAG_FEM_EXECUTION=gpu/all_in_gpu`, `FULLMAG_FEM_ALL_IN_GPU=1` | production GPU lane backed by MFEM/hypre/libCEED/CUDA |
 
 Rust FEM reference code, for example `crates/fullmag-engine/src/fem.rs` and
 `crates/fullmag-runner/src/fem_reference.rs`, remains a validation and debug
@@ -70,25 +69,25 @@ The allowed dependency direction is:
 ```text
 Python DSL / examples
   -> ProblemIR and planning
-  -> runner runtime selection
-  -> solver lane execution
-  -> native/sys backend boundary where needed
+  -> solver_runtime selection
+  -> solvers/{fdm,fem} lane facade
+  -> backends/solvers/* compiled implementation where needed
   -> artifacts, telemetry, provenance
   -> API resources
   -> control-room clients and views
 ```
 
-Current source ownership:
+Target source ownership:
 
-| Layer | Current paths | Responsibility |
+| Layer | Target paths | Responsibility |
 |---|---|---|
 | Authoring surface | `packages/fullmag-py/src/fullmag/*`, `examples/*` | public problem description, solver hints, mesh hints, study setup |
 | IR and planning | `crates/fullmag-ir/*`, `crates/fullmag-plan/*` | backend-neutral problem model, validation, capability planning |
-| Runner orchestration | `crates/fullmag-runner/src/*` | runtime selection, lane dispatch, preview, artifacts, telemetry, provenance |
-| Rust engine/reference numerics | `crates/fullmag-engine/src/*` | CPU/reference algorithms, shared FDM types, FEM support utilities, validation baselines |
-| Native FDM | `native/backends/fdm/*`, `crates/fullmag-fdm-sys/*` | CUDA FDM C ABI, native context, kernels, native FDM contract tests |
-| FEM/MFEM integration | `native/backends/fem/*`, `crates/fullmag-fem-sys/*` | C ABI, runtime, provenance, and memory-residency layer around MFEM/hypre/libCEED CPU and GPU paths |
-| Runtime bundle/export | `docker/fem-gpu/*`, `scripts/export_fem_gpu_runtime.sh`, `.fullmag/runtimes/*`, `just ensure-managed-fem-runtime` | reproducible native runtime packaging and freshness |
+| Solver runtime | `crates/fullmag-runner/src/solver_runtime/*` | requested/resolved engine IDs, availability, fallback, provenance, managed runtime discovery |
+| Rust solver facades | `crates/fullmag-runner/src/solvers/*` | lane routing, plan normalization, preview, artifacts, API-facing result contracts |
+| Rust reference numerics | `crates/fullmag-engine/src/solvers/*` | CPU/reference numerics, shared contracts, validation baselines |
+| Compiled solver backends | `backends/solvers/*` | CUDA FDM and MFEM/hypre/libCEED FEM implementations |
+| Runtime bundle/export | `docker/fem-gpu/*`, `scripts/export_fem_gpu_runtime.sh`, `.fullmag/runtimes/*`, `just ensure-managed-fem-runtime` | reproducible backend packaging and freshness |
 | Session/API | `crates/fullmag-api/*`, generated OpenAPI, handwritten `ControlRoomApi` | resource contracts, session state, artifact access, status/provenance exposure |
 | Control room | `apps/control-room/*` | generated/handwritten API consumption, resource hooks, visualization, smoke validation |
 
@@ -96,7 +95,198 @@ Backend contract changes that touch API-visible behavior must flow through
 backend resource code, generated OpenAPI artifacts, handwritten client code, and
 focused control-room resource or smoke checks.
 
-## 5. Current monolith and target split
+## 5. Canonical target solver tree
+
+This is the intended source tree after the masterplan refactor. It is the
+navigation model humans should use when looking for a solver, interaction,
+integrator, observable, backend adapter, or validation fixture.
+
+```text
+crates/fullmag-runner/src/
+  solver_runtime/
+    engine.rs              requested/resolved engine IDs
+    selection.rs           env/user-hint parsing and lane selection
+    availability.rs        CPU/GPU/MFEM/CUDA availability records
+    registry.rs            managed runtime discovery and freshness
+    provenance.rs          shared requested/resolved/fallback records
+
+  solvers/
+    mod.rs
+    shared/
+      units.rs             lane-independent unit assertions
+      quantities.rs        public quantity and artifact IDs
+      validation.rs        common validation report types
+      state_transfer.rs    explicit FDM<->FEM transfer contracts
+
+    fdm/
+      mod.rs
+      contract.rs          FDM public lane contract
+      plan.rs              FDM plan normalization
+      execute.rs           FDM execution facade
+      preview.rs           FDM preview/data extraction
+      artifacts.rs         FDM artifact persistence
+      observables.rs       FDM energy/field/average read models
+      interactions/
+        exchange.rs
+        demag.rs
+        zeeman.rs
+        anisotropy.rs
+        dmi.rs
+        thermal.rs
+        stt.rs
+      cpu/
+        mod.rs
+        engine.rs          CPU reference lane adapter
+        integrators/
+        interactions/
+        observables/
+      gpu/
+        mod.rs
+        cuda/
+          engine.rs        CUDA FDM lane adapter
+          residency.rs
+          integrators/
+          interactions/
+          demag_fft/
+          observables/
+
+    fem/
+      mod.rs
+      contract.rs          FEM public lane contract
+      plan.rs              FEM plan normalization
+      pbc.rs               FEM periodic and capability preprocessing
+      execute.rs           FEM time-domain facade
+      eigen_execute.rs     FEM eigen facade
+      preview.rs           FEM preview/data extraction
+      artifacts.rs         FEM artifact persistence
+      observables.rs       FEM energy/field/average read models
+      mfem/
+        mod.rs
+        common/
+          abi.rs           Fullmag <-> MFEM C ABI descriptors
+          mesh.rs          mesh import, markers, FE space setup contract
+          materials.rs     material fields and coefficient import
+          fields.rs        magnetization and effective-field buffers
+          interactions/
+            exchange.rs
+            demag.rs
+            zeeman.rs
+            anisotropy.rs
+            dmi.rs
+            thermal.rs
+            stt.rs
+            oersted.rs
+            magnetoelastic.rs
+          observables/
+          validation/
+        cpu/
+          engine.rs        MFEM CPU lane adapter
+          spaces/
+          operators/
+          hypre/
+          integrators/
+          demag/
+          interactions/
+          observables/
+        gpu/
+          engine.rs        MFEM GPU lane adapter
+          cuda/
+          libceed/
+          hypre_device/
+          transfer/
+          integrators/
+          demag/
+          interactions/
+          observables/
+```
+
+Compiled implementation target:
+
+```text
+backends/solvers/
+  fdm/
+    cuda/
+      abi/
+      runtime/
+      interactions/
+        exchange/
+        demag/
+        zeeman/
+        anisotropy/
+        dmi/
+        thermal/
+        stt/
+      integrators/
+      observables/
+      tests/
+
+  fem/
+    mfem/
+      abi/
+      runtime/
+      common/
+        mesh/
+        spaces/
+        materials/
+        fields/
+        interactions/
+        observables/
+        validation/
+      cpu/
+        operators/
+        hypre/
+        integrators/
+        demag/
+        interactions/
+        observables/
+      gpu/
+        cuda/
+        libceed/
+        hypre_device/
+        transfer/
+        integrators/
+        demag/
+        interactions/
+        observables/
+      tests/
+```
+
+Rules for this tree:
+
+1. A new interaction must appear under `interactions/<name>/` for every lane
+   that implements it, and under `common/interactions/<name>/` for shared
+   contract code.
+2. CPU and GPU implementations may share descriptors and validation, but they
+   must not hide device-specific behavior in a common hot-loop module.
+3. FDM code never lives under `fem/`; FEM code never lives under `fdm/`.
+4. MFEM common code is allowed only for FEM descriptors, mesh/spaces/material
+   import, shared observables, validation, and ABI descriptors.
+5. `dispatch.rs`, `Context`, and `mfem_bridge.cpp` are compatibility migration
+   files, not target homes for new code.
+
+## 6. Legacy migration map
+
+Current paths are implementation history. They must migrate into the target tree
+above:
+
+| Current path | Target path |
+|---|---|
+| `crates/fullmag-runner/src/dispatch.rs` | delete or reduce to a tiny compatibility shim after `solver_runtime/*` and `solvers/*` exist |
+| `crates/fullmag-runner/src/fdm/*` | `crates/fullmag-runner/src/solvers/fdm/*` |
+| `crates/fullmag-runner/src/fem/*` | `crates/fullmag-runner/src/solvers/fem/*` |
+| `crates/fullmag-runner/src/native_fem.rs` | `crates/fullmag-runner/src/solvers/fem/mfem/common/abi.rs` plus CPU/GPU lane adapters |
+| `crates/fullmag-engine/src/fdm/*` | `crates/fullmag-engine/src/solvers/fdm/*` |
+| `crates/fullmag-engine/src/fem*.rs` | validation/reference helpers under `crates/fullmag-engine/src/solvers/fem/*`; not a production lane |
+| legacy FDM compiled backend path | `backends/solvers/fdm/cuda/*` |
+| legacy FEM compiled backend path | `backends/solvers/fem/mfem/{common,cpu,gpu}/*` |
+| `crates/fullmag-fdm-sys/*` | `crates/fullmag-fdm-sys/*` remains the sys crate, but binds to `backends/solvers/fdm/cuda/abi/*` |
+| `crates/fullmag-fem-sys/*` | `crates/fullmag-fem-sys/*` remains the sys crate, but binds to `backends/solvers/fem/mfem/abi/*` |
+
+The word "legacy" here does not mean broken. It means "not the target
+navigation model". New code should target `solver_runtime`, `solvers`, and
+`backends/solvers`.
+
+## 7. Monolith elimination plan
 
 `crates/fullmag-runner/src/dispatch.rs` currently owns too many concerns:
 
@@ -113,116 +303,26 @@ Target ownership:
 
 | Target module | Responsibility |
 |---|---|
-| `crates/fullmag-runner/src/runtime/engine.rs` | backend-neutral engine IDs and requested/resolved execution records |
-| `crates/fullmag-runner/src/runtime/selection.rs` | parsing env/user hints and selecting FDM/FEM CPU/GPU lanes |
-| `crates/fullmag-runner/src/runtime/registry.rs` | runtime availability records and managed runtime discovery |
-| `crates/fullmag-runner/src/fdm/execute.rs` | FDM execution facade after lane selection |
-| `crates/fullmag-runner/src/fdm/preview.rs` | FDM preview/export concerns |
-| `crates/fullmag-runner/src/fdm/artifacts.rs` | FDM-specific artifact persistence |
-| `crates/fullmag-runner/src/fem/plan.rs` | FEM execution-plan normalization before native calls |
-| `crates/fullmag-runner/src/fem/pbc.rs` | FEM periodic/PBC preprocessing and capability rejection |
-| `crates/fullmag-runner/src/fem/execute.rs` | FEM time-domain execution facade after lane selection |
-| `crates/fullmag-runner/src/fem/eigen_execute.rs` | FEM eigen execution facade |
-| `crates/fullmag-runner/src/fem/preview.rs` | FEM preview/export concerns |
-| `crates/fullmag-runner/src/fem/provenance.rs` | FEM requested/resolved execution, fallback, residency, and device metadata |
+| `crates/fullmag-runner/src/solver_runtime/engine.rs` | backend-neutral engine IDs and requested/resolved execution records |
+| `crates/fullmag-runner/src/solver_runtime/selection.rs` | parsing env/user hints and selecting FDM/FEM CPU/GPU lanes |
+| `crates/fullmag-runner/src/solver_runtime/availability.rs` | FDM CUDA and FEM MFEM CPU/GPU availability records |
+| `crates/fullmag-runner/src/solver_runtime/registry.rs` | managed runtime discovery and freshness |
+| `crates/fullmag-runner/src/solvers/fdm/execute.rs` | FDM execution facade after lane selection |
+| `crates/fullmag-runner/src/solvers/fdm/preview.rs` | FDM preview/export concerns |
+| `crates/fullmag-runner/src/solvers/fdm/artifacts.rs` | FDM-specific artifact persistence |
+| `crates/fullmag-runner/src/solvers/fem/plan.rs` | FEM execution-plan normalization before MFEM calls |
+| `crates/fullmag-runner/src/solvers/fem/pbc.rs` | FEM periodic/PBC preprocessing and capability rejection |
+| `crates/fullmag-runner/src/solvers/fem/execute.rs` | FEM time-domain execution facade after lane selection |
+| `crates/fullmag-runner/src/solvers/fem/eigen_execute.rs` | FEM eigen execution facade |
+| `crates/fullmag-runner/src/solvers/fem/preview.rs` | FEM preview/export concerns |
+| `crates/fullmag-runner/src/solvers/fem/artifacts.rs` | FEM-specific artifact persistence |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/abi.rs` | Fullmag-to-MFEM descriptors and ABI translation |
 
 `dispatch.rs` should shrink to a temporary compatibility facade, then disappear
-or become a small public routing shim.
+or become a small public routing shim. Any remaining function over 250 lines in
+the target solver tree needs an explicit reason and an extraction task.
 
-## 6. Native FDM and FEM/MFEM backend boundaries
-
-### FDM native boundary
-
-Current native FDM code lives under:
-
-```text
-native/backends/fdm/api/*
-native/backends/fdm/include/*
-native/backends/fdm/tests/*
-crates/fullmag-fdm-sys/*
-```
-
-The FDM CPU lane remains Rust-owned unless a future ADR creates a native CPU FDM
-lane. Native FDM must therefore be treated as the CUDA execution boundary, not
-as the owner of all FDM semantics.
-
-Target FDM shape:
-
-```text
-native/backends/fdm/
-  api/              C ABI facade
-  include/          public native FDM ABI and context contracts
-  gpu/cuda/         CUDA kernels, residency, integrators, FFT/demag workspace
-  tests/            ABI, parity, source-layout, and runtime contract tests
-```
-
-### FEM/MFEM integration boundary
-
-Current FEM/MFEM integration code is physically located under the historical
-native path:
-
-```text
-native/backends/fem/core/*
-native/backends/fem/include/*
-native/backends/fem/src/*
-native/backends/fem/gpu/cuda/*
-native/backends/fem/tests/*
-crates/fullmag-fem-sys/*
-```
-
-The path name is not the architecture. The architecture is:
-
-```text
-FEM solver lane
-  -> Fullmag FEM ABI and runtime contract
-  -> MFEM mesh/spaces/operators
-  -> hypre linear solvers and preconditioners
-  -> libCEED operator backend where enabled
-  -> CPU or CUDA device policy
-```
-
-FEM core is backend-neutral inside the MFEM/hypre/libCEED integration layer.
-MFEM/hypre/libCEED CPU and MFEM/hypre/libCEED/CUDA GPU are implementations of
-the same FEM contracts, not separate physics engines. Fullmag must not grow a
-parallel custom FEM assembly/solver stack under the "native FEM" name. Native
-FEM code may own descriptors, validation, material import, field buffers,
-transfer audit, runtime selection, telemetry, provenance, packaging, and
-backend-specific glue; numerical FEM solve ownership stays with
-MFEM/hypre/libCEED.
-
-Target FEM/MFEM shape:
-
-```text
-native/backends/fem/
-  abi/                    stable C ABI facade and public descriptors
-  runtime/                requested/resolved mode, profiler, interruption, provenance
-  mfem/
-    common/               mesh import, FE spaces, material fields, field buffers,
-                          interaction descriptors, observables, shared validation
-    cpu/
-      spaces/             CPU MFEM spaces and assembly policy
-      operators/          CPU MFEM/libCEED operator realization
-      hypre/              CPU hypre solvers, preconditioners, residual telemetry
-      integrators/        CPU LLG/RK/adaptive stepping glue
-      demag/              CPU Poisson/BEM/FEM demag realization
-    gpu/
-      cuda/               CUDA device policy, streams, residency, kernels
-      libceed/            libCEED CUDA backend selection and operator realization
-      hypre_device/       hypre device execution, preconditioners, residual telemetry
-      transfer/           host-device transfer audit and component transfer
-      integrators/        GPU LLG/RK/adaptive stepping glue
-      demag/              device Poisson demag and recovery
-  tests/                  ABI, MFEM CPU/GPU availability, operator, transfer,
-                          residency, source-layout, profiler contracts
-```
-
-The current `native/backends/fem/src/mfem_bridge.cpp` and `Context` are migration
-targets, not acceptable long-term ownership boundaries. Every file that remains
-under `native/backends/fem/` must eventually be classifiable as ABI/runtime,
-MFEM common, MFEM CPU, MFEM GPU, or tests. A generic "native FEM" bucket is not
-an acceptable target category.
-
-## 7. Shared contracts
+## 8. Shared contracts
 
 All four lanes must agree on:
 
@@ -246,7 +346,7 @@ They may differ in:
 - performance telemetry details;
 - allowed precision tiers, as long as precision is explicit and qualified.
 
-## 8. Forbidden coupling
+## 9. Forbidden coupling
 
 These are architecture violations:
 
@@ -261,7 +361,7 @@ These are architecture violations:
   `mfem_bridge.cpp`.
 - Exposing backend-only toggles as normal user semantics.
 
-## 9. Cross-lane transfer
+## 10. Cross-lane transfer
 
 FDM-to-FEM and FEM-to-FDM movement is a state-transfer operation, not a hybrid
 solver. The transfer contract must define:
@@ -278,7 +378,7 @@ After transfer, the target solver recomputes its own fields and observables.
 For example, an FEM-to-FDM transferred magnetization does not mean the FDM lane
 inherits FEM demag, FEM mesh state, or FEM boundary conditions.
 
-## 10. Runtime selection contract
+## 11. Runtime selection contract
 
 Selection belongs in a runtime-selection module, not inside solver loops.
 
@@ -303,7 +403,7 @@ Rules:
 7. Runtime selection must not change physics legality. Capability checks remain
    planner/domain decisions.
 
-## 11. Verification matrix
+## 12. Verification matrix
 
 The verification target is convergence of contracts, not accidental bit identity
 across unrelated discretizations.
@@ -322,16 +422,17 @@ Recommended gates:
 
 - Rust contract tests: `cargo test -p fullmag-runner` and
   `cargo test -p fullmag-engine`.
-- Native source/layout/contract tests: CTest from `native/build`.
+- Compiled backend source/layout/contract tests: CTest from the current CMake
+  backend build tree.
 - FEM GPU live proof: `scripts/verify_fem_gpu_enablement.sh` or the managed
   runtime path produced by `just ensure-managed-fem-runtime`.
 - Control-room smoke: only for API/resource/visual workflow validation; it is
   not solver-correctness proof.
 
-`native/build` is the canonical local native build tree for this workspace.
-Generated or historical build trees must not be documented as source ownership.
+The current CMake backend build tree is a validation artifact only. Generated
+or historical build trees must not be documented as source ownership.
 
-## 12. Production physics validation program
+## 13. Production physics validation program
 
 The architecture is not production-ready until it can repeatedly prove the
 physics. Source layout, ABI tests, smoke runs, and GPU visibility are necessary
@@ -339,7 +440,7 @@ but insufficient. Production promotion requires automated physics validation
 against standard micromagnetic problems, analytical cases, and cross-lane
 convergence studies.
 
-### 12.1 Validation sources
+### 13.1 Validation sources
 
 Fullmag must use primary, versioned validation sources:
 
@@ -357,7 +458,7 @@ definition, units, boundary conditions, material conventions, discretization,
 and convergence before declaring a Fullmag bug or accepting another solver as
 truth.
 
-### 12.2 Validation levels
+### 13.2 Validation levels
 
 Every production solver lane must climb the same validation ladder:
 
@@ -372,7 +473,7 @@ Every production solver lane must climb the same validation ladder:
 
 No lane may skip L1/L2 just because a larger benchmark appears to pass.
 
-### 12.3 Required benchmark families
+### 13.3 Required benchmark families
 
 The validation suite must include these families before production claims:
 
@@ -393,7 +494,7 @@ Zeeman energy when present, anisotropy energy when present, DMI energy when
 present, average magnetization, final state hash/checksum, mesh/grid resolution,
 and solver/provenance metadata.
 
-### 12.4 Harness and artifact ownership
+### 13.4 Harness and artifact ownership
 
 Target ownership for the automated physics suite:
 
@@ -422,7 +523,7 @@ Baseline artifacts must be reproducible and reviewable:
 - baseline updates require a short physics rationale, not just regenerated
   numbers.
 
-### 12.5 Tolerances and convergence
+### 13.5 Tolerances and convergence
 
 Validation tolerances must be owned by the benchmark specification, not buried
 in test code. Each benchmark must state:
@@ -441,7 +542,7 @@ boundary conditions, material fields, and observables are actually the same.
 Otherwise the suite must report "not comparable" rather than forcing a false
 parity target.
 
-### 12.6 Promotion gate
+### 13.6 Promotion gate
 
 A solver lane is production-ready only when its validation report can answer:
 
@@ -459,7 +560,7 @@ A solver lane is production-ready only when its validation report can answer:
 
 The answer must be generated by automation, not assembled manually from logs.
 
-## 13. Documentation hierarchy
+## 14. Documentation hierarchy
 
 This document governs backend structure. Lower-level documents keep their
 specialized authority:
@@ -467,7 +568,7 @@ specialized authority:
 | Document | Role under this masterplan |
 |---|---|
 | `docs/adr/0014-native-fem-backend-modularization.md` | FEM-only modularization decision |
-| `docs/specs/native-fem-backend-architecture-v1.md` | target architecture for the MFEM/hypre/libCEED native FEM integration layer |
+| `docs/specs/native-fem-backend-architecture-v1.md` | legacy-named target architecture for the MFEM/hypre/libCEED integration layer |
 | `docs/physics/0900-native-fem-operator-contracts-and-validation.md` | FEM operator contract standard |
 | `docs/physics/0560-all-in-gpu-fem-runtime.md` | strict FEM GPU residency contract |
 | `docs/physics/0816-native-fem-cpu-availability-contract.md` | FEM CPU availability split from GPU availability |
@@ -480,7 +581,7 @@ specialized authority:
 When these documents conflict, update the lower-level document or write a new
 ADR that explicitly supersedes this masterplan section.
 
-## 14. AGENTS and skills update plan
+## 15. AGENTS and skills update plan
 
 After this document is accepted:
 
@@ -491,7 +592,7 @@ After this document is accepted:
 3. Create or update a Fullmag backend skill that says:
    - identify the lane before editing;
    - keep FDM/FEM and CPU/GPU separate;
-   - update physics docs before adding native operators;
+   - update physics docs before adding compiled-backend operators;
    - run lane-specific verification;
    - distinguish contract tests, runtime smoke, and production physics
      validation;
@@ -503,7 +604,7 @@ After this document is accepted:
 5. Add source-layout contract tests only where the layout itself is now a
    maintained boundary.
 
-## 15. Refactor roadmap
+## 16. Refactor roadmap
 
 ### Phase 0: Freeze new monolith growth
 
@@ -514,7 +615,7 @@ After this document is accepted:
 
 ### Phase 1: Extract runtime selection
 
-- Create `crates/fullmag-runner/src/runtime/*`.
+- Create `crates/fullmag-runner/src/solver_runtime/*`.
 - Move FDM/FEM requested/resolved engine enums and env parsing out of
   `dispatch.rs`.
 - Add focused tests for forced GPU failure, auto fallback, and independent
@@ -522,17 +623,17 @@ After this document is accepted:
 
 ### Phase 2: Extract FDM execution ownership
 
-- Move FDM execution routing to `crates/fullmag-runner/src/fdm/execute.rs`.
-- Move FDM preview concerns to `crates/fullmag-runner/src/fdm/preview.rs`.
+- Move FDM execution routing to `crates/fullmag-runner/src/solvers/fdm/execute.rs`.
+- Move FDM preview concerns to `crates/fullmag-runner/src/solvers/fdm/preview.rs`.
 - Keep FDM CPU and FDM GPU lane code separate below the facade.
 
 ### Phase 3: Extract FEM execution ownership
 
-- Move FEM plan normalization to `crates/fullmag-runner/src/fem/plan.rs`.
-- Move FEM PBC/capability preprocessing to `crates/fullmag-runner/src/fem/pbc.rs`.
-- Move FEM time-domain execution to `crates/fullmag-runner/src/fem/execute.rs`.
-- Move FEM eigen execution to `crates/fullmag-runner/src/fem/eigen_execute.rs`.
-- Move FEM preview concerns to `crates/fullmag-runner/src/fem/preview.rs`.
+- Move FEM plan normalization to `crates/fullmag-runner/src/solvers/fem/plan.rs`.
+- Move FEM PBC/capability preprocessing to `crates/fullmag-runner/src/solvers/fem/pbc.rs`.
+- Move FEM time-domain execution to `crates/fullmag-runner/src/solvers/fem/execute.rs`.
+- Move FEM eigen execution to `crates/fullmag-runner/src/solvers/fem/eigen_execute.rs`.
+- Move FEM preview concerns to `crates/fullmag-runner/src/solvers/fem/preview.rs`.
 
 ### Phase 4: Align FEM/MFEM layout
 
@@ -563,7 +664,7 @@ After this document is accepted:
 - Generate a machine-readable validation report per lane.
 - Make production solver claims depend on those reports, not on smoke logs.
 
-## 16. Completion definition
+## 17. Completion definition
 
 This masterplan is operationally complete when:
 

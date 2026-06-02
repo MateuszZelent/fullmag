@@ -7,9 +7,7 @@
 use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::dispatch::{
-    apply_native_fem_runtime_contract, ensure_fem_object_scalars, fem_poisson_demag_provenance,
-};
+use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{infer_stage_completion, llg_overdamped_uses_pure_damping};
 use crate::schedules::OutputSchedule;
@@ -19,6 +17,7 @@ use crate::types::{
 };
 
 use super::preview::build_fem_cached_preview_fields;
+use super::scalars::ensure_fem_object_scalars;
 use super::snapshots::copy_native_fem_field_snapshot;
 
 pub(crate) struct NativeFemRelaxationFinalization {

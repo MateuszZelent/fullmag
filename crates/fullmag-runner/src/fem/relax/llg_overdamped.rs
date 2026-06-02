@@ -17,7 +17,7 @@ use fullmag_ir::{FemPlanIR, IntegratorChoice, RelaxationAlgorithmIR, RelaxationC
 #[cfg(feature = "fem-gpu")]
 use crate::artifact_pipeline::ArtifactRecorder;
 #[cfg(feature = "fem-gpu")]
-use crate::dispatch::{ensure_fem_object_scalars, flatten_vectors};
+use crate::dispatch::flatten_vectors;
 #[cfg(feature = "fem-gpu")]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "fem-gpu")]
@@ -31,6 +31,8 @@ use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepS
 
 #[cfg(feature = "fem-gpu")]
 use super::preview::build_fem_cached_preview_fields;
+#[cfg(feature = "fem-gpu")]
+use super::scalars::ensure_fem_object_scalars;
 
 // ── Algorithm predicate ───────────────────────────────────────────────────────
 
