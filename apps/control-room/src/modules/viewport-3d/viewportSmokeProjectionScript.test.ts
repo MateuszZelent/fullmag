@@ -104,6 +104,11 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('"camera-orbit-rotate"');
     expect(smokeScript).toContain('"camera-wheel-zoom"');
     expect(smokeScript).toContain('"camera-right-pan"');
+    expect(smokeScript).toContain("assertSmoothCameraWheelZoomPhase");
+    expect(smokeScript).toContain("viewportFrameDelta < 2");
+    expect(smokeScript).toContain("assertResponsiveCameraRightPanPhase");
+    expect(smokeScript).toContain("longAnimationFrameCount > 0");
+    expect(smokeScript).toContain("viewportMeasureCount > 0");
     expect(smokeScript).toContain("const gesturePerformancePhases = []");
     expect(smokeScript).toContain("return gesturePerformancePhases");
     expect(smokeScript).toContain('"projection-round-trip"');

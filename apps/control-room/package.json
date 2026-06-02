@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "dev:binary": "node dev-server.mjs",
     "audit:idle-performance": "node scripts/audit-idle-performance.mjs",
     "audit:compute-performance": "node scripts/audit-compute-performance.mjs",
@@ -21,6 +21,7 @@
     "lint": "eslint . --max-warnings=0",
     "smoke:cross-section-workflow": "node scripts/smoke-cross-section-workflow.mjs",
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
+    "smoke:study-authoring-ui": "node scripts/smoke-study-authoring-ui.mjs",
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",

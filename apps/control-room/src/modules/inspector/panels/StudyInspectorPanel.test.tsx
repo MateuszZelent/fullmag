@@ -19,9 +19,35 @@ import {
   CommandDetailDialog,
   ImportStateDialog,
   RestoreCheckpointDialog,
+  StudyBoundarySection,
   StudyCommandButton,
   StudySelectedStageSection,
 } from "./StudyInspectorPanel";
+import { StudyPipelineSection } from "./StudyPipelineSection";
+import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
+
+function testBoundary(overrides: Record<string, string> = {}) {
+  return {
+    demagEnabled: "enabled",
+    demagRealization: "default",
+    exchangeEnabled: "enabled",
+    externalField: "0, 0, 0 T",
+    femDemagSolverPolicy: "default",
+    solver: "default",
+    ...overrides,
+  };
+}
+
+function testRequested(overrides: Record<string, string> = {}) {
+  return {
+    backend: "auto",
+    cpuThreads: "auto",
+    device: "auto",
+    mode: "strict",
+    precision: "double",
+    ...overrides,
+  };
+}
 
 describe("StudyInspectorPanel", () => {
   it("renders command detail provenance in the dialog", () => {
@@ -243,8 +269,8 @@ describe("StudyInspectorPanel", () => {
         <StudySelectedStageSection
           stageExecutionRevision={13}
           model={{
-            boundary: { demagRealization: "default", externalField: "0, 0, 0 T" },
-            requested: { backend: "auto", device: "auto", mode: "strict", precision: "double" },
+            boundary: testBoundary(),
+            requested: testRequested(),
             runtime: {
               activeStageLabel: "No active stage",
               commandBadge: "idle",
@@ -298,5 +324,220 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("max_torque_apm");
     expect(html).toContain("simulation/stages/execution@13");
     expect(html).toContain("runs/run-1/stages/stage-relax");
+  });
+
+  it("renders editable stage pipeline controls for relaxation authoring", () => {
+    const draft = createDefaultStudyStageDraft("relax", 0);
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={0}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Relax 1",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [
+              {
+                algorithm: "llg_overdamped",
+                artifactRefs: [],
+                checkpointRef: null,
+                commandId: null,
+                completedAtIso: null,
+                completedAtUnixMs: null,
+                energyTolerance: null,
+                index: 0,
+                kind: "relax",
+                label: "Relax 1",
+                maxSteps: "50000",
+                progressPercent: 0,
+                runtimeMetric: null,
+                stageId: "relax-1",
+                status: "queued",
+                stopReason: null,
+                torqueTolerance: "1e-6",
+                torqueToleranceFormatted: null,
+                torqueToleranceShortFormatted: null,
+                untilSeconds: null,
+              },
+            ],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Stage Pipeline");
+    expect(html).toContain("Save stages");
+    expect(html).toContain("Duplicate");
+    expect(html).toContain("Remove");
+    expect(html).toContain("Eigenmodes");
+    expect(html).toContain("Frequency");
+    expect(html).toContain("Save");
+    expect(html).toContain("Torque tol");
+    expect(html).toContain("Max steps");
+    expect(html).toContain("Field every");
+    expect(html).toContain("RK45");
+    expect(html).toContain("Nonlinear CG");
+    expect(html).toContain("Tangent-plane implicit");
+  });
+
+  it("renders editable global study settings", () => {
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["boundary"]}>
+        <StudyBoundarySection
+          authoringBusy={false}
+          authoringFeedback={null}
+          draft={{
+            demagEnabled: true,
+            demagRealization: "poisson_robin",
+            exchangeEnabled: true,
+            externalField: "1e-3, 0, 0",
+            femDemagSolverPolicy: '{"linear_solver":"cg"}',
+            requestedBackend: "fem",
+            requestedCpuThreads: "8",
+            requestedDevice: "gpu",
+            requestedMode: "strict",
+            requestedPrecision: "double",
+            solver: '{"integrator":"rk45"}',
+          }}
+          model={{
+            boundary: testBoundary({
+              demagRealization: "poisson_robin",
+              externalField: "0.001, 0, 0 T",
+              femDemagSolverPolicy: '{"linear_solver":"cg"}',
+              solver: '{"integrator":"rk45"}',
+            }),
+            requested: testRequested({
+              backend: "fem",
+              cpuThreads: "8",
+              device: "gpu",
+            }),
+            runtime: {
+              activeStageLabel: "No active stage",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [],
+          }}
+          snapshot={{
+            boundary: testBoundary({
+              demagRealization: "poisson_robin",
+              externalField: "0.001, 0, 0 T",
+              femDemagSolverPolicy: '{"linear_solver":"cg"}',
+              solver: '{"integrator":"rk45"}',
+            }),
+            requested: testRequested({
+              backend: "fem",
+              cpuThreads: "8",
+              device: "gpu",
+            }),
+            stages: [],
+          }}
+          onCommit={() => undefined}
+          onUpdate={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Global Study Settings");
+    expect(html).toContain("Backend");
+    expect(html).toContain("CPU threads");
+    expect(html).toContain("Exchange enabled");
+    expect(html).toContain("Demag enabled");
+    expect(html).toContain("Poisson Robin");
+    expect(html).toContain("External field");
+    expect(html).toContain("Solver");
+    expect(html).toContain("FEM demag policy");
+    expect(html).toContain("Current CPU threads");
+    expect(html).toContain("Save globals");
+  });
+
+  it("renders spectral stage authoring fields", () => {
+    const draft = createDefaultStudyStageDraft("frequency_response", 0);
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={0}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Frequency 1",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Frequency Response");
+    expect(html).toContain("Frequencies");
+    expect(html).toContain("Excitation");
+    expect(html).toContain("Include demag");
+    expect(html).toContain("k sampling");
+    expect(html).toContain("BC");
   });
 });

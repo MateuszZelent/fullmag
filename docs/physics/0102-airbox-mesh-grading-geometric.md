@@ -1,7 +1,7 @@
 # Airbox mesh grading: geometric vs linear
 
 - Status: draft
-- Last updated: 2026-05-30
+- Last updated: 2026-06-02
 - Related specs: `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
 - Related code:
   - `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py`
@@ -115,6 +115,11 @@ all airbox paths on the same grading contract:
   the surface `transition_distance`
 - `corner_transition_distance`: optional endpoint/corner grading span, distinct
   from both the surface and edge transition spans
+- `transition_distance="airbox_boundary"`: resolve the surface grading span
+  from the magnetic-object bounds to the explicit or effective airbox boundary
+- `edge_transition_distance="airbox_boundary"` and
+  `corner_transition_distance="airbox_boundary"`: resolve perimeter plume spans
+  from the object edge/endpoint shell to the relevant side/corner airbox span
 
 ## 3.1 Legacy implementation (problematic)
 
@@ -201,6 +206,27 @@ to control. For rectangular airboxes, using only the largest axis gap can leave
 far corners outside the intended transition span. The fallback `DistMax` should
 therefore be conservative with respect to the farthest outer-boundary point from
 the magnetic-object bounds.
+
+Public scripts may request this behavior explicitly with
+`transition_distance="airbox_boundary"`. The planner resolves the token during
+shared-domain mesh planning, where both object bounds and airbox bounds are
+available. For rectangular airboxes:
+
+- the surface transition field resolves `DistMax` to the largest face-normal
+  clearance from the object bounds to the airbox bounds;
+- the edge transition field resolves `DistMax` to the same side clearance
+  unless explicitly overridden, so air next to object edges grows to the
+  far-field airbox target instead of stopping in a short local halo;
+- the corner transition field resolves `DistMax` to the Euclidean clearance
+  from the object bounds to the farthest airbox corner, so diagonal/corner
+  regions remain covered by the same gradient contract.
+
+The token is preserved as requested intent in `runtime_metadata.mesh_workflow`.
+The resolved numeric `DistMax` lives in the generated size-field descriptors and
+is used by Gmsh. Without the token, the planner keeps the existing explicit
+numeric behavior or the local `3 * h_body` transition default. If the token is
+requested without rectangular airbox bounds, the planner must raise an error
+instead of silently inventing an airbox boundary.
 
 For explicit rectangular airboxes, the implementation combines the local
 surface-distance grading with a rectangular bbox envelope. Both fields start at

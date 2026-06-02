@@ -293,15 +293,24 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "Viewport camera state did not change after camera wheel",
   );
   await assertViewportCameraUpIsWorldUp(page, "camera wheel zoom");
-  gesturePerformancePhases.push(
-    await collectViewport3DPerformancePhase(page, "camera-wheel-zoom"),
+  const wheelZoomPhase = await collectViewport3DPerformancePhase(
+    page,
+    "camera-wheel-zoom",
   );
+  assertSmoothCameraWheelZoomPhase(wheelZoomPhase);
+  gesturePerformancePhases.push(wheelZoomPhase);
 
   await assertCameraGestureDoesNotFetch(page, "orbit pan", async () => {
     await page.mouse.down({ button: "right" });
     await page.mouse.move(x + 80, y + 36, { steps: 8 });
     await page.mouse.up({ button: "right" });
   });
+  const rightPanPhase = await collectViewport3DPerformancePhase(
+    page,
+    "camera-right-pan",
+  );
+  assertResponsiveCameraRightPanPhase(rightPanPhase);
+  gesturePerformancePhases.push(rightPanPhase);
   await waitForCameraSignatureChange(
     page,
     wheelCameraSignature,
@@ -309,9 +318,6 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "Viewport camera state did not change after right-button free-camera pan",
   );
   await assertViewportCameraUpIsWorldUp(page, "right-button orbit pan");
-  gesturePerformancePhases.push(
-    await collectViewport3DPerformancePhase(page, "camera-right-pan"),
-  );
 
   const gestureRequests = cameraGestureRequests.slice(startIndex);
   const visualizationStatePatches = gestureRequests.filter(
@@ -375,6 +381,30 @@ function unexpectedCameraGestureRequests(gestureRequests) {
   return gestureRequests.filter((request) =>
     isCameraGestureForbiddenRequestPath(request.path),
   );
+}
+
+function assertSmoothCameraWheelZoomPhase(phase) {
+  const viewportFrameDelta = phase.viewportFrameDelta ?? 0;
+  if (viewportFrameDelta < 2) {
+    throw new Error(
+      `Camera wheel zoom was applied in too few viewport frames: viewportFrameDelta=${viewportFrameDelta}.`,
+    );
+  }
+}
+
+function assertResponsiveCameraRightPanPhase(phase) {
+  const longAnimationFrameCount = phase.longAnimationFrameCount ?? 0;
+  if (longAnimationFrameCount > 0) {
+    throw new Error(
+      `Camera right-button pan produced long animation frames: longAnimationFrameCount=${longAnimationFrameCount}, maxLongAnimationFrameMs=${phase.maxLongAnimationFrameMs ?? 0}, topInvokers=${JSON.stringify(phase.longAnimationFrameTopInvokers ?? [])}.`,
+    );
+  }
+  const viewportMeasureCount = phase.viewportMeasureCount ?? 0;
+  if (viewportMeasureCount > 0) {
+    throw new Error(
+      `Camera right-button pan rebuilt viewport data during interaction: viewportMeasureCount=${viewportMeasureCount}.`,
+    );
+  }
 }
 
 function markInitialForbiddenResourceRequestSettled(request) {

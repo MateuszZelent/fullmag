@@ -1291,9 +1291,11 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if interface_thickness_value is not None:
         kwargs.append(f"interface_thickness={_py_number(interface_thickness_value)}")
 
-    transition_distance_value = _number_or_none(mesh_config.get("transition_distance"))
+    transition_distance_value = _py_transition_distance_literal(
+        mesh_config.get("transition_distance")
+    )
     if transition_distance_value is not None:
-        kwargs.append(f"transition_distance={_py_number(transition_distance_value)}")
+        kwargs.append(f"transition_distance={transition_distance_value}")
 
     transition_growth_value = _number_or_none(mesh_config.get("transition_growth"))
     if transition_growth_value is not None:
@@ -1311,12 +1313,12 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if edge_thickness_value is not None:
         kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
 
-    edge_transition_distance_value = _number_or_none(
+    edge_transition_distance_value = _py_transition_distance_literal(
         mesh_config.get("edge_transition_distance")
     )
     if edge_transition_distance_value is not None:
         kwargs.append(
-            f"edge_transition_distance={_py_number(edge_transition_distance_value)}"
+            f"edge_transition_distance={edge_transition_distance_value}"
         )
 
     corner_hmax_value = _number_or_none(
@@ -1331,12 +1333,12 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if corner_extent_value is not None:
         kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
 
-    corner_transition_distance_value = _number_or_none(
+    corner_transition_distance_value = _py_transition_distance_literal(
         mesh_config.get("corner_transition_distance")
     )
     if corner_transition_distance_value is not None:
         kwargs.append(
-            f"corner_transition_distance={_py_number(corner_transition_distance_value)}"
+            f"corner_transition_distance={corner_transition_distance_value}"
         )
 
     boundary_layer_count_value = mesh_config.get("boundary_layer_count")
@@ -1495,9 +1497,11 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
     if interface_thickness_value is not None:
         kwargs.append(f"interface_thickness={_py_number(interface_thickness_value)}")
 
-    transition_distance_value = _number_or_none(mesh_config.get("transition_distance"))
+    transition_distance_value = _py_transition_distance_literal(
+        mesh_config.get("transition_distance")
+    )
     if transition_distance_value is not None:
-        kwargs.append(f"transition_distance={_py_number(transition_distance_value)}")
+        kwargs.append(f"transition_distance={transition_distance_value}")
 
     edge_hmax_value = _number_or_none(
         mesh_config.get("edge_maximum_element_size")
@@ -1511,12 +1515,12 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
     if edge_thickness_value is not None:
         kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
 
-    edge_transition_distance_value = _number_or_none(
+    edge_transition_distance_value = _py_transition_distance_literal(
         mesh_config.get("edge_transition_distance")
     )
     if edge_transition_distance_value is not None:
         kwargs.append(
-            f"edge_transition_distance={_py_number(edge_transition_distance_value)}"
+            f"edge_transition_distance={edge_transition_distance_value}"
         )
 
     corner_hmax_value = _number_or_none(
@@ -1531,12 +1535,12 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
     if corner_extent_value is not None:
         kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
 
-    corner_transition_distance_value = _number_or_none(
+    corner_transition_distance_value = _py_transition_distance_literal(
         mesh_config.get("corner_transition_distance")
     )
     if corner_transition_distance_value is not None:
         kwargs.append(
-            f"corner_transition_distance={_py_number(corner_transition_distance_value)}"
+            f"corner_transition_distance={corner_transition_distance_value}"
         )
 
     layers_value = mesh_config.get("through_thickness_elements")
@@ -2745,21 +2749,21 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "interface_thickness": _text_number(
             _number_or_none(mesh_options.get("interface_thickness"))
         ),
-        "transition_distance": _text_number(
-            _number_or_none(mesh_options.get("transition_distance"))
+        "transition_distance": _text_transition_distance(
+            mesh_options.get("transition_distance")
         ),
         "transition_growth": _text_number(
             _number_or_none(mesh_options.get("transition_growth"))
         ),
         "edge_maximum_element_size": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
         "edge_thickness": _text_number(_number_or_none(mesh_options.get("edge_thickness"))),
-        "edge_transition_distance": _text_number(
-            _number_or_none(mesh_options.get("edge_transition_distance"))
+        "edge_transition_distance": _text_transition_distance(
+            mesh_options.get("edge_transition_distance")
         ),
         "corner_maximum_element_size": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
         "corner_extent": _text_number(_number_or_none(mesh_options.get("corner_extent"))),
-        "corner_transition_distance": _text_number(
-            _number_or_none(mesh_options.get("corner_transition_distance"))
+        "corner_transition_distance": _text_transition_distance(
+            mesh_options.get("corner_transition_distance")
         ),
         "boundary_layer_count": (
             int(mesh_options.get("boundary_layer_count"))
@@ -2888,19 +2892,19 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "interface_thickness": _text_number(
                 _number_or_none(mesh_entry.get("interface_thickness"))
             ),
-            "transition_distance": _text_number(
-                _number_or_none(mesh_entry.get("transition_distance"))
+            "transition_distance": _text_transition_distance(
+                mesh_entry.get("transition_distance")
             ),
             "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
             "edge_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
             "edge_thickness": _text_number(_number_or_none(mesh_entry.get("edge_thickness"))),
-            "edge_transition_distance": _text_number(
-                _number_or_none(mesh_entry.get("edge_transition_distance"))
+            "edge_transition_distance": _text_transition_distance(
+                mesh_entry.get("edge_transition_distance")
             ),
             "corner_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
             "corner_extent": _text_number(_number_or_none(mesh_entry.get("corner_extent"))),
-            "corner_transition_distance": _text_number(
-                _number_or_none(mesh_entry.get("corner_transition_distance"))
+            "corner_transition_distance": _text_transition_distance(
+                mesh_entry.get("corner_transition_distance")
             ),
             "boundary_layer_count": (
                 int(mesh_entry["boundary_layer_count"])
@@ -3655,6 +3659,15 @@ def _text_number(value: float | None) -> str:
     return "" if value is None else _py_number(value)
 
 
+def _text_transition_distance(value: object) -> str:
+    numeric = _number_or_none(value)
+    if numeric is not None:
+        return _py_number(numeric)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
 def _text_value(value: object) -> str:
     if value is None:
         return ""
@@ -3722,6 +3735,15 @@ def _text_mesh_size(value: object) -> str:
     if rendered.startswith('"') and rendered.endswith('"'):
         return rendered[1:-1]
     return rendered
+
+
+def _py_transition_distance_literal(value: object) -> str | None:
+    numeric = _number_or_none(value)
+    if numeric is not None:
+        return _py_number(numeric)
+    if isinstance(value, str) and value.strip():
+        return _py_repr(value.strip())
+    return None
 
 
 def _py_repr(value: str) -> str:

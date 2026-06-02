@@ -1314,12 +1314,30 @@ button.fm-mesh-detail-list__item:focus-visible {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-sm);
   background: var(--fm-bg-canvas);
+  color: inherit;
   padding: var(--fm-space-2);
+  text-align: left;
+}
+
+button.fm-study-stage-card {
+  cursor: pointer;
+}
+
+button.fm-study-stage-card:hover,
+button.fm-study-stage-card:focus-visible {
+  border-color: var(--fm-border-default);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 78%, transparent);
+  outline: none;
 }
 
 .fm-study-stage-card[data-active="true"] {
   border-color: color-mix(in srgb, var(--fm-accent) 55%, var(--fm-border-subtle));
   box-shadow: inset 2px 0 0 var(--fm-accent);
+}
+
+.fm-study-stage-card[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 72%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 7%, var(--fm-bg-canvas));
 }
 
 .fm-study-stage-card[data-status="completed"] {
@@ -1367,6 +1385,51 @@ button.fm-mesh-detail-list__item:focus-visible {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
   padding: 1px var(--fm-space-1);
+}
+
+.fm-study-stage-empty {
+  margin: var(--fm-space-1);
+  border: 1px dashed var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-3);
+  text-align: center;
+}
+
+.fm-study-stage-editor {
+  display: grid;
+  gap: 1px;
+  margin: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 74%, transparent);
+  padding-block: var(--fm-space-1);
+}
+
+.fm-study-stage-editor__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-study-stage-editor__header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-study-stage-editor__header span {
+  flex-shrink: 0;
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: 10px;
 }
 
 .fm-study-checkpoint-list {

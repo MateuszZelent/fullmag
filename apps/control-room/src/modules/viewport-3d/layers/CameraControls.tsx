@@ -752,9 +752,14 @@ function useSmoothViewport3DWheelZoom({
   tracker: Viewport3DResourceTracker;
 }): void {
   const wheelZoomAnimatingRef = useRef(false);
+  const cameraRef = useRef(camera);
   const wheelZoomOffsetRef = useRef(new Vector3());
   const wheelZoomTargetDistanceRef = useRef<number | null>(null);
   const wheelZoomTargetOrthographicZoomRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
 
   useEffect(() => {
     const handleWheel = (event: WheelEvent) => {
@@ -846,8 +851,9 @@ function useSmoothViewport3DWheelZoom({
     if (!wheelZoomAnimatingRef.current) return;
     const controls = controlsRef.current;
     if (!controls) return;
+    const frameCamera = cameraRef.current;
 
-    const orthographicCamera = camera as Camera & {
+    const orthographicCamera = frameCamera as Camera & {
       isOrthographicCamera?: boolean;
       zoom?: number;
       updateProjectionMatrix?: () => void;
@@ -872,7 +878,7 @@ function useSmoothViewport3DWheelZoom({
     } else if (wheelZoomTargetDistanceRef.current !== null) {
       const target = controls.target;
       const offset = wheelZoomOffsetRef.current.subVectors(
-        camera.position,
+        frameCamera.position,
         target,
       );
       const currentDistance = offset.length();
@@ -889,8 +895,8 @@ function useSmoothViewport3DWheelZoom({
         target: targetDistance,
       });
       offset.normalize().multiplyScalar(nextDistance);
-      camera.position.copy(target).add(offset);
-      applyCameraLookAt(camera, tuple3(target.toArray()));
+      frameCamera.position.copy(target).add(offset);
+      applyCameraLookAt(frameCamera, tuple3(target.toArray()));
       settled = nextDistance === targetDistance;
     } else {
       wheelZoomAnimatingRef.current = false;
@@ -903,13 +909,13 @@ function useSmoothViewport3DWheelZoom({
       wheelZoomTargetDistanceRef.current = null;
       wheelZoomTargetOrthographicZoomRef.current = null;
       commitOrbitCameraEnd({
-        cameraPosition: tuple3(camera.position.toArray()),
+        cameraPosition: tuple3(frameCamera.position.toArray()),
         controlTarget: controls.target.toArray(),
         onCameraChange,
         orthographicScale:
           cameraProjection === "orthographic"
             ? resolveViewport3DCurrentOrthographicScale({
-                camera,
+                camera: frameCamera,
                 fallbackScale: cameraOrthographicScale,
                 viewportHeightPixels: sizeHeight,
               })
@@ -917,7 +923,10 @@ function useSmoothViewport3DWheelZoom({
         projection: cameraProjection === "orthographic" ? "orthographic" : undefined,
         syncStore: false,
       });
-      const currentAngles = readViewport3DOrbitDebugAngles(controls, camera);
+      const currentAngles = readViewport3DOrbitDebugAngles(
+        controls,
+        frameCamera,
+      );
       if (currentAngles) {
         onOrbitDebugAnglesChange?.(currentAngles);
       }
@@ -1197,7 +1206,9 @@ function useOrbitCameraControlsModel({
     cameraControlsPoseCommitTimeoutRef.current = null;
   }, []);
 
-  const scheduleCameraControlsPoseCommit = useCallback(() => {
+  const scheduleCameraControlsPoseCommit = useCallback(({
+    restart = false,
+  }: { restart?: boolean } = {}) => {
     if (
       controlsSyncingRef.current ||
       orbitDebugAnimatingRef.current ||
@@ -1205,7 +1216,10 @@ function useOrbitCameraControlsModel({
     ) {
       return;
     }
-    clearCameraControlsPoseCommit();
+    if (cameraControlsPoseCommitTimeoutRef.current !== null) {
+      if (!restart) return;
+      clearCameraControlsPoseCommit();
+    }
     cameraControlsPoseCommitTimeoutRef.current = setTimeout(() => {
       cameraControlsPoseCommitTimeoutRef.current = null;
       commitCameraControlsPose();
@@ -1231,7 +1245,7 @@ function useOrbitCameraControlsModel({
   }, [cameraGestureRef, clearCameraControlsPoseCommit]);
 
   const handleEnd = useCallback(() => {
-    scheduleCameraControlsPoseCommit();
+    scheduleCameraControlsPoseCommit({ restart: true });
   }, [scheduleCameraControlsPoseCommit]);
 
   useSmoothViewport3DWheelZoom({

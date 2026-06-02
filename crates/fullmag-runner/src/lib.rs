@@ -6,6 +6,7 @@
 //! - `artifacts`     — metadata, CSV, field file writing
 //! - `fdm/cpu`       — CPU reference execution path (calibration baseline)
 //! - `fdm/gpu/cuda`  — native CUDA execution path
+//! - `fem/`          — FEM engine selection, relaxation orchestration, integrators
 //! - `dispatch`      — engine selection (CPU now, CUDA in Phase 2)
 
 /// Vacuum permeability μ₀ in T·m/A.
@@ -19,6 +20,8 @@ mod derived_fields;
 mod dispatch;
 pub mod eigen;
 mod fdm;
+#[allow(dead_code)]
+pub(crate) mod fem;
 #[path = "fem_reference.rs"]
 mod fem_baseline;
 mod fem_eigen;
@@ -28,6 +31,10 @@ mod native_fem;
 mod preview;
 pub mod quantities;
 mod relaxation;
+#[path = "relaxation/direct_minimizer.rs"]
+mod relaxation_direct_minimizer;
+#[path = "relaxation/vector_math.rs"]
+mod relaxation_vector_math;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
@@ -250,6 +257,13 @@ pub fn is_native_fem_time_domain_available() -> bool {
     native_fem::is_cpu_available()
 }
 
+fn fem_engine_kind(engine: dispatch::FemEngine) -> fem::engine::FemEngineKind {
+    match engine {
+        dispatch::FemEngine::CpuNative => fem::engine::FemEngineKind::CpuNative,
+        dispatch::FemEngine::NativeGpu => fem::engine::FemEngineKind::NativeGpu,
+    }
+}
+
 /// Plan and run a problem, writing artifacts to `output_dir`.
 ///
 /// This is the top-level entry point: ProblemIR → plan → execute → artifacts.
@@ -292,14 +306,25 @@ pub fn run_problem(
         }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine;
-            dispatch::execute_fem(
-                engine,
-                fem,
-                until_seconds,
-                &plan.output_plan.outputs,
-                None,
-                artifact_writer.clone(),
-            )
+            if fem.relaxation.is_some() {
+                fem::relax::execute_fem_relax(
+                    fem_engine_kind(engine),
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    None,
+                    artifact_writer.clone(),
+                )
+            } else {
+                dispatch::execute_fem(
+                    engine,
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    None,
+                    artifact_writer.clone(),
+                )
+            }
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -403,21 +428,33 @@ pub fn run_problem_with_callback(
         }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine;
-            dispatch::execute_fem(
-                engine,
-                fem,
-                until_seconds,
-                &plan.output_plan.outputs,
-                Some(types::LiveStepConsumer {
-                    grid: [0, 0, 0],
-                    field_every_n,
-                    initial_snapshot: false,
-                    display_selection: None,
-                    interrupt_requested: None,
-                    on_step: &mut on_step,
-                }),
-                artifact_writer.clone(),
-            )
+            let live = Some(types::LiveStepConsumer {
+                grid: [0, 0, 0],
+                field_every_n,
+                initial_snapshot: false,
+                display_selection: None,
+                interrupt_requested: None,
+                on_step: &mut on_step,
+            });
+            if fem.relaxation.is_some() {
+                fem::relax::execute_fem_relax(
+                    fem_engine_kind(engine),
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    live,
+                    artifact_writer.clone(),
+                )
+            } else {
+                dispatch::execute_fem(
+                    engine,
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    live,
+                    artifact_writer.clone(),
+                )
+            }
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -606,21 +643,33 @@ pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
                 dispatch::fem_engine_label(resolution.engine),
                 resolution.fallback.as_ref().map(|f| &f.reason),
             );
-            dispatch::execute_fem(
-                resolution.engine,
-                fem,
-                until_seconds,
-                &plan.output_plan.outputs,
-                Some(types::LiveStepConsumer {
-                    grid: [0, 0, 0],
-                    field_every_n,
-                    initial_snapshot,
-                    display_selection: Some(display_selection),
-                    interrupt_requested,
-                    on_step: &mut on_step,
-                }),
-                artifact_writer.clone(),
-            )
+            let live = Some(types::LiveStepConsumer {
+                grid: [0, 0, 0],
+                field_every_n,
+                initial_snapshot,
+                display_selection: Some(display_selection),
+                interrupt_requested,
+                on_step: &mut on_step,
+            });
+            if fem.relaxation.is_some() {
+                fem::relax::execute_fem_relax(
+                    fem_engine_kind(resolution.engine),
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    live,
+                    artifact_writer.clone(),
+                )
+            } else {
+                dispatch::execute_fem(
+                    resolution.engine,
+                    fem,
+                    until_seconds,
+                    &plan.output_plan.outputs,
+                    live,
+                    artifact_writer.clone(),
+                )
+            }
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -1478,6 +1527,527 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+        assert!(
+            route_count >= 3,
+            "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
+        );
+    }
+
+    #[test]
+    fn fem_relaxation_vector_math_is_owned_by_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("fn tangent_gradient_from_field("),
+            "dispatch.rs must not own FEM direct-minimizer tangent-gradient math"
+        );
+        assert!(
+            !dispatch.contains("fn project_tangent("),
+            "dispatch.rs must not own FEM direct-minimizer tangent projection"
+        );
+        assert!(
+            !dispatch.contains("fn max_torque_from_field("),
+            "dispatch.rs must not own FEM direct-minimizer torque math"
+        );
+        assert!(
+            !dispatch.contains("use crate::fem::relax::vector_math"),
+            "dispatch.rs must not route shared FDM/FEM direct-minimizer math through the FEM module"
+        );
+
+        let vector_math = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/vector_math.rs"
+        ))
+        .expect("read relaxation/vector_math.rs");
+        for symbol in [
+            "pub(crate) fn tangent_gradient_from_field(",
+            "pub(crate) fn project_tangent(",
+            "pub(crate) fn max_torque_from_field(",
+        ] {
+            assert!(
+                vector_math.contains(symbol),
+                "relaxation_vector_math.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_algorithm_policy_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("let direct_minimization_relax = plan.relaxation.as_ref().filter"),
+            "dispatch.rs must not own direct-minimizer algorithm classification"
+        );
+        assert!(
+            !dispatch.contains("let lambda_min: f64 = 1e-15;"),
+            "dispatch.rs must not own shared direct-minimizer step-size constants"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn direct_minimizer_control(",
+            "pub(crate) fn initial_search_direction(",
+            "pub(crate) const DEFAULT_STEP_SIZE",
+            "pub(crate) const MIN_STEP_SIZE",
+            "pub(crate) const MAX_STEP_SIZE",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_state_update_math_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("let scale_factor = 1e-6;"),
+            "dispatch.rs must not own Barzilai-Borwein direct-minimizer scaling policy"
+        );
+        assert!(
+            !dispatch.contains("NONLINEAR_CG_RESTART_INTERVAL"),
+            "dispatch.rs must not own nonlinear-CG restart policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn projected_gradient_step_size_update(",
+            "pub(crate) fn nonlinear_cg_initial_step_size(",
+            "pub(crate) fn nonlinear_cg_next_direction(",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_step_metrics_are_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("accepted_stats.max_dm_dt = 0.0"),
+            "dispatch.rs must not stamp direct-minimizer dm/dt metrics in backend branches"
+        );
+        assert!(
+            !dispatch.contains("accepted_stats.max_h_eff = h_eff"),
+            "dispatch.rs must not duplicate direct-minimizer effective-field metrics"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        assert!(
+            module.contains("pub(crate) fn apply_direct_minimizer_step_metrics("),
+            "relaxation_direct_minimizer.rs must own direct-minimizer StepStats metric stamping"
+        );
+    }
+
+    #[test]
+    fn direct_minimizer_trial_projection_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("normalized_vec3(sub_vec3("),
+            "dispatch.rs must not own projected-gradient trial magnetization projection"
+        );
+        assert!(
+            !dispatch.contains("normalized_vec3(add_vec3("),
+            "dispatch.rs must not own nonlinear-CG trial magnetization projection"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn projected_gradient_trial_magnetization(",
+            "pub(crate) fn nonlinear_cg_trial_magnetization(",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_armijo_policy_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("energy - ARMIJO_COEFFICIENT"),
+            "dispatch.rs must not own projected-gradient Armijo acceptance policy"
+        );
+        assert!(
+            !dispatch.contains("energy + ARMIJO_COEFFICIENT"),
+            "dispatch.rs must not own nonlinear-CG Armijo acceptance policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn projected_gradient_armijo_accepts(",
+            "pub(crate) fn nonlinear_cg_armijo_accepts(",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_backtracking_policy_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("trial_lambda *= 0.5"),
+            "dispatch.rs must not own direct-minimizer backtrack step-size reduction"
+        );
+        assert!(
+            !dispatch.contains("PROJECTED_GRADIENT_MAX_BACKTRACK"),
+            "dispatch.rs must not own projected-gradient max-backtrack policy"
+        );
+        assert!(
+            !dispatch.contains("NONLINEAR_CG_MAX_BACKTRACK"),
+            "dispatch.rs must not own nonlinear-CG max-backtrack policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn backtracked_step_size(",
+            "pub(crate) fn direct_minimizer_backtrack_exhausted(",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_nonlinear_cg_descent_reset_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("p_dot_g >= 0.0"),
+            "dispatch.rs must not own nonlinear-CG descent-direction reset policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        assert!(
+            module.contains("pub(crate) fn nonlinear_cg_descent_direction_dot("),
+            "relaxation_direct_minimizer.rs must own nonlinear-CG descent-direction reset policy"
+        );
+    }
+
+    #[test]
+    fn direct_minimizer_gradient_degeneracy_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("g_norm_sq < 1e-30"),
+            "dispatch.rs must not own direct-minimizer gradient-degeneracy policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn direct_minimizer_gradient_norm_sq(",
+            "pub(crate) fn direct_minimizer_gradient_degenerate(",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation_direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_step_budget_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("direct_step < control.stop.max_steps.unwrap_or(u64::MAX)"),
+            "dispatch.rs must not own direct-minimizer step-budget fallback policy"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        assert!(
+            module.contains("pub(crate) fn direct_minimizer_step_budget("),
+            "relaxation_direct_minimizer.rs must own direct-minimizer step-budget fallback policy"
+        );
+    }
+
+    #[test]
+    fn direct_minimizer_line_search_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("let (trial_stats, m_trial) = loop"),
+            "dispatch.rs must not own direct-minimizer trial line-search loops"
+        );
+        assert!(
+            !dispatch.contains("backtracked_step_size(trial_lambda)"),
+            "dispatch.rs must not own direct-minimizer trial backtracking updates"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        for symbol in [
+            "pub(crate) fn projected_gradient_line_search<",
+            "pub(crate) fn nonlinear_cg_line_search<",
+        ] {
+            assert!(
+                module.contains(symbol),
+                "relaxation/direct_minimizer.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_minimizer_iteration_state_is_owned_by_relaxation_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("let mut p = initial_search_direction(&g);"),
+            "dispatch.rs must not own direct-minimizer initial search-direction state"
+        );
+        assert!(
+            !dispatch.contains("let mut use_bb1 = true;"),
+            "dispatch.rs must not own projected-gradient BB toggle initialization"
+        );
+        assert!(
+            !dispatch.contains("let mut reset_consecutive: u64 = 0;"),
+            "dispatch.rs must not own projected-gradient reset counter initialization"
+        );
+        assert!(
+            !dispatch.contains("let mut direct_step: u64 = 0;"),
+            "dispatch.rs must not own direct-minimizer accepted-step initialization"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer.rs"
+        ))
+        .expect("read relaxation/direct_minimizer.rs");
+        assert!(
+            module.contains("pub(crate) struct DirectMinimizerState"),
+            "relaxation/direct_minimizer.rs must own direct-minimizer iteration state"
+        );
+        assert!(
+            module.contains("impl DirectMinimizerState"),
+            "DirectMinimizerState must own its initialization behavior"
+        );
+    }
+
+    #[test]
+    fn fem_direct_minimizer_loop_is_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch
+                .contains("DirectMinimizerState::new(\n            backend.copy_m(node_count)?"),
+            "dispatch.rs must not own the native FEM direct-minimizer execution loop"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/direct_minimizer.rs"
+        ))
+        .expect("read fem/relax/direct_minimizer.rs");
+        assert!(
+            module.contains("pub(crate) fn execute_direct_minimizer"),
+            "fem/relax/direct_minimizer.rs must own FEM direct-minimizer execution"
+        );
+    }
+
+    #[test]
+    fn fem_llg_loop_is_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("[fullmag-runner] native-fem LLG loop:"),
+            "dispatch.rs must not own the native FEM LLG time-stepping loop"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/llg_overdamped.rs"
+        ))
+        .expect("read fem/relax/llg_overdamped.rs");
+        assert!(
+            module.contains("pub(crate) fn execute_llg_overdamped"),
+            "fem/relax/llg_overdamped.rs must own FEM LLG time-stepping execution"
+        );
+    }
+
+    #[test]
+    fn fem_relaxation_finalization_is_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("Flush a final cached-preview update"),
+            "dispatch.rs must not own native FEM relaxation final cached-preview flushing"
+        );
+        assert!(
+            !dispatch.contains("let completion = if let Some(mut completion) = backend_completion"),
+            "dispatch.rs must not own native FEM relaxation completion inference"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/finalize.rs"
+        ))
+        .expect("read fem/relax/finalize.rs");
+        assert!(
+            module.contains("pub(crate) fn finalize_native_fem_relaxation"),
+            "fem/relax/finalize.rs must own native FEM relaxation finalization"
+        );
+    }
+
+    #[test]
+    fn fem_cached_preview_helpers_are_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("pub(crate) fn build_fem_cached_preview_fields"),
+            "dispatch.rs must not own native FEM relaxation cached-preview helpers"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        assert!(
+            module.contains("pub(crate) fn build_fem_cached_preview_fields"),
+            "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
+        );
+    }
+
+    #[test]
+    fn fem_field_snapshot_helpers_are_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("pub(crate) fn copy_native_fem_field_snapshot"),
+            "dispatch.rs must not own native FEM relaxation field snapshot helpers"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/snapshots.rs"
+        ))
+        .expect("read fem/relax/snapshots.rs");
+        assert!(
+            module.contains("pub(crate) fn copy_native_fem_field_snapshot"),
+            "fem/relax/snapshots.rs must own native FEM relaxation field snapshot helpers"
+        );
+    }
+
+    #[test]
+    fn fem_object_scalar_helpers_are_owned_by_fem_relax_module() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("pub(crate) fn ensure_fem_object_scalars"),
+            "dispatch.rs must not own native FEM relaxation object-scalar helpers"
+        );
+
+        let module = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/scalars.rs"
+        ))
+        .expect("read fem/relax/scalars.rs");
+        assert!(
+            module.contains("pub(crate) fn ensure_fem_object_scalars"),
+            "fem/relax/scalars.rs must own native FEM relaxation object-scalar helpers"
+        );
+    }
+
+    #[test]
+    fn shared_relaxation_helpers_live_under_relaxation_module_directory() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let root_direct_minimizer =
+            std::path::Path::new(manifest_dir).join("src/relaxation_direct_minimizer.rs");
+        let root_vector_math =
+            std::path::Path::new(manifest_dir).join("src/relaxation_vector_math.rs");
+        assert!(
+            !root_direct_minimizer.exists(),
+            "shared direct-minimizer policy must live under src/relaxation/"
+        );
+        assert!(
+            !root_vector_math.exists(),
+            "shared relaxation vector math must live under src/relaxation/"
+        );
+        assert!(
+            std::path::Path::new(manifest_dir)
+                .join("src/relaxation/direct_minimizer.rs")
+                .exists(),
+            "src/relaxation/direct_minimizer.rs must own shared direct-minimizer policy"
+        );
+        assert!(
+            std::path::Path::new(manifest_dir)
+                .join("src/relaxation/vector_math.rs")
+                .exists(),
+            "src/relaxation/vector_math.rs must own shared relaxation vector math"
+        );
+
+        let lib = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        assert!(
+            lib.contains("#[path = \"relaxation/direct_minimizer.rs\"]"),
+            "lib.rs must keep the shared direct-minimizer alias pointed at src/relaxation/"
+        );
+        assert!(
+            lib.contains("#[path = \"relaxation/vector_math.rs\"]"),
+            "lib.rs must keep the shared vector-math alias pointed at src/relaxation/"
+        );
+    }
 
     fn make_test_plan() -> FdmPlanIR {
         FdmPlanIR {

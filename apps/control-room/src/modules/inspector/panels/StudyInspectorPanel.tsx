@@ -1,22 +1,18 @@
 "use client";
 
 import {
-  Activity,
   Download,
   Info,
   Pause,
   Play,
-  Plus,
   RotateCcw,
   Save,
   Scissors,
-  Sigma,
   SkipForward,
   Square,
   Upload,
-  Zap,
 } from "lucide-react";
-import { useReducer, type ReactNode } from "react";
+import { useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -26,6 +22,7 @@ import {
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
+  MODEL_STUDY_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
@@ -81,77 +78,46 @@ import {
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 
+import {
+  buildStudyGlobalMergePatch,
+  createStudyGlobalDraft,
+  validateStudyGlobalDraft,
+  type StudyGlobalDraft,
+} from "./StudyGlobalAuthoringModel";
+import {
+  buildStudyStagesMergePatch,
+  createDefaultStudyStageDraft,
+  createStudyStageDraft,
+  validateStudyStageDraft,
+  type StudyStageDraft,
+  type StudyStageDraftKind,
+} from "./StudyStageAuthoringModel";
 import {
   resolveStudyInspectorModel,
   studySnapshotFromScene,
   type StudyInspectorModel,
   type StudyInspectorSnapshot,
-  type StudyStageModel,
 } from "./StudyInspectorPanelModel";
+import { StudyPipelineSection } from "./StudyPipelineSection";
+import { StudyProgressBar } from "./StudyProgressBar";
 
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 
-function ProgressBar({
-  label,
-  value,
-}: {
-  label: string;
-  value: number | null;
-}) {
-  const pct = value ?? 0;
-  return (
-    <div
-      className="fm-study-progress"
-      aria-label={label}
-      aria-valuemax={100}
-      aria-valuemin={0}
-      aria-valuenow={value ?? undefined}
-      role="progressbar"
-    >
-      <span className="fm-study-progress__bar" style={{ width: `${pct}%` }} />
-      <span className="fm-study-progress__label">
-        {value == null ? "pending" : `${pct}%`}
-      </span>
-    </div>
-  );
-}
-
-function StageCard({
-  active,
-  stage,
-}: {
-  active: boolean;
-  stage: StudyStageModel;
-}) {
-  return (
-    <div
-      className="fm-study-stage-card"
-      data-active={active ? "true" : undefined}
-      data-status={stage.status}
-    >
-      <div className="fm-study-stage-card__header">
-        <span>{stage.label}</span>
-        <small>{stage.status}</small>
-      </div>
-      <ProgressBar
-        label={`${stage.label} progress`}
-        value={stage.progressPercent}
-      />
-      <div className="fm-study-stage-card__meta">
-        {stage.torqueToleranceShortFormatted ? (
-          <span>tau {stage.torqueToleranceShortFormatted}</span>
-        ) : null}
-        {stage.energyTolerance ? <span>E {stage.energyTolerance}</span> : null}
-        {stage.maxSteps ? <span>{stage.maxSteps} steps</span> : null}
-        {stage.untilSeconds ? <span>{stage.untilSeconds} s</span> : null}
-      </div>
-    </div>
-  );
-}
-
 interface StudyInspectorPanelState {
+  authoringBusy: boolean;
+  authoringDraftsInitialized: boolean;
+  authoringFeedback: {
+    kind: "error" | "success" | "warning";
+    message: string;
+  } | null;
+  authoringFeedbackScope: "global" | "stages" | null;
+  draftSceneRevision: number | string | null;
+  draftSceneSignature: string;
+  globalDraft: StudyGlobalDraft;
   importDialogOpen: boolean;
   importError: string | null;
   importFileName: string | null;
@@ -160,11 +126,41 @@ interface StudyInspectorPanelState {
   importInspecting: boolean;
   importRestoreMode: string;
   restoreDialogOpen: boolean;
+  selectedDraftIndex: number;
   selectedCommandId: string | null;
   selectedRestoreCheckpointId: string | null;
+  stageDrafts: StudyStageDraft[];
 }
 
 type StudyInspectorPanelAction =
+  | {
+      type: "resetStageDrafts";
+      drafts: StudyStageDraft[];
+      globalDraft: StudyGlobalDraft;
+      revision: number | string | null;
+      selectedIndex: number;
+      signature: string;
+    }
+  | {
+      type: "updateGlobalDraft";
+      patch: Partial<StudyGlobalDraft>;
+    }
+  | { type: "selectStageDraft"; index: number }
+  | {
+      type: "updateStageDraft";
+      index: number;
+      patch: Partial<StudyStageDraft>;
+    }
+  | { type: "addStageDraft"; kind: StudyStageDraftKind }
+  | { type: "duplicateStageDraft"; index: number }
+  | { type: "removeStageDraft"; index: number }
+  | { type: "moveStageDraft"; direction: -1 | 1; index: number }
+  | { type: "setAuthoringBusy"; busy: boolean }
+  | {
+      type: "setAuthoringFeedback";
+      feedback: StudyInspectorPanelState["authoringFeedback"];
+      scope: StudyInspectorPanelState["authoringFeedbackScope"];
+    }
   | { type: "setImportDialogOpen"; open: boolean }
   | { type: "setImportRestoreMode"; mode: string }
   | { type: "setRestoreDialogOpen"; open: boolean }
@@ -179,6 +175,13 @@ type StudyInspectorPanelAction =
   | { type: "importInspectFailure"; message: string };
 
 const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
+  authoringBusy: false,
+  authoringDraftsInitialized: false,
+  authoringFeedback: null,
+  authoringFeedbackScope: null,
+  draftSceneRevision: null,
+  draftSceneSignature: "",
+  globalDraft: createStudyGlobalDraft(null),
   importDialogOpen: false,
   importError: null,
   importFileName: null,
@@ -187,8 +190,10 @@ const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   importInspecting: false,
   importRestoreMode: "resume",
   restoreDialogOpen: false,
+  selectedDraftIndex: 0,
   selectedCommandId: null,
   selectedRestoreCheckpointId: null,
+  stageDrafts: [],
 };
 
 function studyInspectorPanelReducer(
@@ -196,6 +201,118 @@ function studyInspectorPanelReducer(
   action: StudyInspectorPanelAction,
 ): StudyInspectorPanelState {
   switch (action.type) {
+    case "resetStageDrafts":
+      if (
+        state.authoringDraftsInitialized &&
+        state.draftSceneRevision === action.revision &&
+        state.draftSceneSignature === action.signature
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        authoringBusy: false,
+        authoringDraftsInitialized: true,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        draftSceneRevision: action.revision,
+        draftSceneSignature: action.signature,
+        globalDraft: action.globalDraft,
+        selectedDraftIndex: action.selectedIndex,
+        stageDrafts: action.drafts,
+      };
+    case "updateGlobalDraft":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        globalDraft: { ...state.globalDraft, ...action.patch },
+      };
+    case "selectStageDraft":
+      return {
+        ...state,
+        selectedDraftIndex: clampIndex(action.index, state.stageDrafts),
+      };
+    case "updateStageDraft":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        stageDrafts: state.stageDrafts.map((draft, index) =>
+          index === action.index ? { ...draft, ...action.patch } : draft,
+        ),
+      };
+    case "addStageDraft": {
+      const draft = createDefaultStudyStageDraft(
+        action.kind,
+        state.stageDrafts.length,
+      );
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: state.stageDrafts.length,
+        stageDrafts: [...state.stageDrafts, draft],
+      };
+    }
+    case "duplicateStageDraft": {
+      const source = state.stageDrafts[action.index];
+      if (!source) return state;
+      const draft = {
+        ...source,
+        stageId: `${source.stageId || source.kind}-copy`,
+      };
+      const stageDrafts = [...state.stageDrafts];
+      stageDrafts.splice(action.index + 1, 0, draft);
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: action.index + 1,
+        stageDrafts,
+      };
+    }
+    case "removeStageDraft": {
+      const stageDrafts = state.stageDrafts.filter(
+        (_, index) => index !== action.index,
+      );
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: clampIndex(action.index, stageDrafts),
+        stageDrafts,
+      };
+    }
+    case "moveStageDraft": {
+      const targetIndex = action.index + action.direction;
+      if (
+        action.index < 0 ||
+        targetIndex < 0 ||
+        action.index >= state.stageDrafts.length ||
+        targetIndex >= state.stageDrafts.length
+      ) {
+        return state;
+      }
+      const stageDrafts = [...state.stageDrafts];
+      const [draft] = stageDrafts.splice(action.index, 1);
+      stageDrafts.splice(targetIndex, 0, draft);
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: targetIndex,
+        stageDrafts,
+      };
+    }
+    case "setAuthoringBusy":
+      return { ...state, authoringBusy: action.busy };
+    case "setAuthoringFeedback":
+      return {
+        ...state,
+        authoringFeedback: action.feedback,
+        authoringFeedbackScope: action.scope,
+      };
     case "setImportDialogOpen":
       return { ...state, importDialogOpen: action.open };
     case "setImportRestoreMode":
@@ -234,6 +351,48 @@ function studyInspectorPanelReducer(
         importInspecting: false,
       };
   }
+}
+
+function clampIndex(index: number, drafts: readonly StudyStageDraft[]): number {
+  if (drafts.length === 0) return 0;
+  return Math.max(0, Math.min(index, drafts.length - 1));
+}
+
+function rawStudyStages(scene: unknown): unknown[] {
+  const sceneRecord = asRecord(scene);
+  const study = asRecord(sceneRecord?.study);
+  return Array.isArray(study?.stages) ? study.stages : [];
+}
+
+function sceneRevisionValue(scene: unknown): number | string | null {
+  const revision = asRecord(scene)?.revision;
+  return typeof revision === "number" || typeof revision === "string"
+    ? revision
+    : null;
+}
+
+function studyAuthoringSignature(scene: unknown): string {
+  return JSON.stringify(asRecord(scene)?.study ?? null);
+}
+
+function sceneHasAuthoringPayload(scene: unknown): boolean {
+  const record = asRecord(scene);
+  return Boolean(
+    record &&
+      ("study" in record ||
+        "objects" in record ||
+        "materials" in record ||
+        "universe" in record ||
+        "scene" in record ||
+        "version" in record ||
+        "current_modules" in record),
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 type StudyInspectorRuntimeStatus = {
@@ -390,6 +549,27 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     solverStatus: solverStatus.data,
     stageExecution: stageExecution.data,
   });
+  const selectedStageIndex = model.selectedStage?.index ?? 0;
+  const sceneRevision = sceneRevisionValue(scene.data);
+  const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
+  const sceneStageCount = rawStudyStages(scene.data).length;
+  const studySignature = studyAuthoringSignature(scene.data);
+  useEffect(() => {
+    if (!scene.data) return;
+    if (!sceneHasAuthoringPayload(scene.data)) return;
+    const rawStages = rawStudyStages(scene.data);
+    dispatch({
+      type: "resetStageDrafts",
+      drafts: rawStages.map(createStudyStageDraft),
+      globalDraft: createStudyGlobalDraft(scene.data),
+      revision: sceneRevision,
+      selectedIndex:
+        rawStages.length === 0
+          ? 0
+          : Math.min(selectedStageIndex, rawStages.length - 1),
+      signature: studySignature,
+    });
+  }, [scene.data, sceneRevision, selectedStageIndex, studySignature]);
   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
@@ -443,11 +623,122 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       ? null
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
+  const commitStageDrafts = async () => {
+    const issues = state.stageDrafts.flatMap((draft, index) =>
+      validateStudyStageDraft(draft).map((issue) => ({
+        ...issue,
+        message: `Stage ${index + 1}: ${issue.message}`,
+      })),
+    );
+    const errors = issues.filter((issue) => issue.severity === "error");
+    if (errors.length > 0) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: {
+          kind: "error",
+          message: errors.map((issue) => issue.message).join(" "),
+        },
+      });
+      return;
+    }
+
+    dispatch({ type: "setAuthoringBusy", busy: true });
+    try {
+      const response = await kernel.api.model.commitTransaction(
+        buildStudyStagesMergePatch(state.stageDrafts),
+      );
+      const revision = response.scene_revision;
+      kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
+      kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
+      kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+      kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+      kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: {
+          kind: "success",
+          message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
+        },
+      });
+    } catch (error) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: {
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to commit study stages.",
+        },
+      });
+    } finally {
+      dispatch({ type: "setAuthoringBusy", busy: false });
+    }
+  };
+  const commitGlobalDraft = async () => {
+    const errors = validateStudyGlobalDraft(state.globalDraft).filter(
+      (issue) => issue.severity === "error",
+    );
+    if (errors.length > 0) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "global",
+        feedback: {
+          kind: "error",
+          message: errors.map((issue) => issue.message).join(" "),
+        },
+      });
+      return;
+    }
+
+    dispatch({ type: "setAuthoringBusy", busy: true });
+    try {
+      const response = await kernel.api.model.commitTransaction(
+        buildStudyGlobalMergePatch(state.globalDraft),
+      );
+      const revision = response.scene_revision;
+      kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
+      kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
+      kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+      kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+      kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "global",
+        feedback: {
+          kind: "success",
+          message: "Committed global study settings.",
+        },
+      });
+    } catch (error) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "global",
+        feedback: {
+          kind: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to commit global study settings.",
+        },
+      });
+    } finally {
+      dispatch({ type: "setAuthoringBusy", busy: false });
+    }
+  };
 
   return (
     <>
       <Accordion
         className="fm-inspector-panel"
+        data-scene-has-payload={sceneHasPayload}
+        data-scene-revision={sceneRevision ?? ""}
+        data-scene-stage-count={sceneStageCount}
+        data-scene-status={scene.status}
+        data-stage-draft-count={state.stageDrafts.length}
         type="multiple"
         defaultValue={[
           "runtime",
@@ -475,12 +766,48 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           stageExecutionRevision={stageExecution.data?.revision ?? null}
         />
 
-        <StudyBoundarySection model={model} snapshot={snapshot} />
+        <StudyBoundarySection
+          authoringBusy={state.authoringBusy}
+          authoringFeedback={
+            state.authoringFeedbackScope === "global"
+              ? state.authoringFeedback
+              : null
+          }
+          draft={state.globalDraft}
+          model={model}
+          snapshot={snapshot}
+          onCommit={() => void commitGlobalDraft()}
+          onUpdate={(patch) =>
+            dispatch({ type: "updateGlobalDraft", patch })
+          }
+        />
 
         <StudyPipelineSection
           activeStageIndex={activeStageIndex}
+          authoringBusy={state.authoringBusy}
+          authoringFeedback={
+            state.authoringFeedbackScope === "stages"
+              ? state.authoringFeedback
+              : null
+          }
           commandDisabledReason={commandDisabledReason}
+          draft={state.stageDrafts[state.selectedDraftIndex] ?? null}
+          draftIndex={state.selectedDraftIndex}
+          drafts={state.stageDrafts}
           model={model}
+          onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}
+          onCommit={() => void commitStageDrafts()}
+          onDuplicateStage={(index) =>
+            dispatch({ type: "duplicateStageDraft", index })
+          }
+          onMoveStage={(index, direction) =>
+            dispatch({ type: "moveStageDraft", index, direction })
+          }
+          onRemoveStage={(index) => dispatch({ type: "removeStageDraft", index })}
+          onSelectDraft={(index) => dispatch({ type: "selectStageDraft", index })}
+          onUpdateDraft={(index, patch) =>
+            dispatch({ type: "updateStageDraft", index, patch })
+          }
           runCommand={runCommand}
         />
 
@@ -661,7 +988,7 @@ function StudyRuntimeSection({
         </>
       ) : null}
       <FieldRow label="Step" value={stepValue} />
-      <ProgressBar
+      <StudyProgressBar
         label="Current study progress"
         value={model.runtime.progressPercent}
       />
@@ -790,7 +1117,7 @@ export function StudySelectedStageSection({
             : `simulation/stages/execution@${stageExecutionRevision}`
         }
       />
-      <ProgressBar
+      <StudyProgressBar
         label="Selected stage progress"
         value={model.selectedStage?.progressPercent ?? null}
       />
@@ -798,90 +1125,178 @@ export function StudySelectedStageSection({
   );
 }
 
-function StudyBoundarySection({
+export function StudyBoundarySection({
+  authoringBusy,
+  authoringFeedback,
+  draft,
   model,
+  onCommit,
+  onUpdate,
   snapshot,
 }: {
+  authoringBusy: boolean;
+  authoringFeedback: {
+    kind: "error" | "success" | "warning";
+    message: string;
+  } | null;
+  draft: StudyGlobalDraft;
   model: StudyInspectorModel;
+  onCommit: () => void;
+  onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
   snapshot: StudyInspectorSnapshot;
 }) {
+  const validation = validateStudyGlobalDraft(draft);
+  const hasErrors = validation.some((issue) => issue.severity === "error");
   return (
     <InspectorSection
       value="boundary"
-      title="Boundary Conditions"
+      title="Global Study Settings"
       badge={snapshot.requested.backend}
     >
+      <FieldRow label="Current exchange" value={model.boundary.exchangeEnabled} />
+      <FieldRow label="Current demag term" value={model.boundary.demagEnabled} />
+      <FieldRow label="Current demag" value={model.boundary.demagRealization} />
+      <FieldRow label="Current field" value={model.boundary.externalField} />
+      <FieldRow label="Current solver" value={model.boundary.solver} />
       <FieldRow
-        label="Demag realization"
-        value={model.boundary.demagRealization}
+        label="Current FEM demag policy"
+        value={model.boundary.femDemagSolverPolicy}
       />
-      <FieldRow label="External field" value={model.boundary.externalField} />
-      <FieldRow label="Device" value={snapshot.requested.device} />
-      <FieldRow label="Precision" value={snapshot.requested.precision} />
-      <FieldRow label="Mode" value={snapshot.requested.mode} />
-    </InspectorSection>
-  );
-}
-
-function StudyPipelineSection({
-  activeStageIndex,
-  commandDisabledReason,
-  model,
-  runCommand,
-}: {
-  activeStageIndex: number | null;
-  commandDisabledReason: StudyCommandDisabledReason;
-  model: StudyInspectorModel;
-  runCommand: StudyCommandRunner;
-}) {
-  return (
-    <InspectorSection
-      value="pipeline"
-      title="Stage Pipeline"
-      badge={`${model.stages.length}`}
-    >
-      <div className="fm-study-stage-list">
-        {model.stages.map((stage) => (
-          <StageCard
-            key={stage.index}
-            active={activeStageIndex === stage.index}
-            stage={stage}
-          />
-        ))}
-      </div>
+      <FieldRow label="Current CPU threads" value={model.requested.cpuThreads} />
+      <FormField
+        label="Backend"
+        type="select"
+        value={draft.requestedBackend}
+        onChange={(event) =>
+          onUpdate({ requestedBackend: event.target.value })
+        }
+      >
+        <option value="auto">Auto</option>
+        <option value="fdm">FDM</option>
+        <option value="fem">FEM</option>
+        <option value="hybrid">Hybrid</option>
+      </FormField>
+      <FormField
+        label="Device"
+        type="select"
+        value={draft.requestedDevice}
+        onChange={(event) => onUpdate({ requestedDevice: event.target.value })}
+      >
+        <option value="auto">Auto</option>
+        <option value="cpu">CPU</option>
+        <option value="gpu">GPU</option>
+      </FormField>
+      <FormField
+        label="Precision"
+        type="select"
+        value={draft.requestedPrecision}
+        onChange={(event) =>
+          onUpdate({ requestedPrecision: event.target.value })
+        }
+      >
+        <option value="double">Double</option>
+        <option value="single">Single</option>
+      </FormField>
+      <FormField
+        label="Mode"
+        type="select"
+        value={draft.requestedMode}
+        onChange={(event) => onUpdate({ requestedMode: event.target.value })}
+      >
+        <option value="strict">Strict</option>
+        <option value="extended">Extended</option>
+        <option value="hybrid">Hybrid</option>
+      </FormField>
+      <FormField
+        label="CPU threads"
+        hint="Blank keeps automatic runtime thread selection."
+        value={draft.requestedCpuThreads}
+        onChange={(event) =>
+          onUpdate({ requestedCpuThreads: event.target.value })
+        }
+      />
+      <FormField
+        label="Exchange enabled"
+        checked={draft.exchangeEnabled}
+        type="checkbox"
+        onChange={(event) => onUpdate({ exchangeEnabled: event.target.checked })}
+      />
+      <FormField
+        label="Demag enabled"
+        checked={draft.demagEnabled}
+        type="checkbox"
+        onChange={(event) => onUpdate({ demagEnabled: event.target.checked })}
+      />
+      <FormField
+        label="Demag"
+        type="select"
+        value={draft.demagRealization}
+        onChange={(event) => onUpdate({ demagRealization: event.target.value })}
+      >
+        <option value="auto">Auto</option>
+        <option value="poisson_robin">Poisson Robin</option>
+        <option value="poisson_dirichlet">Poisson Dirichlet</option>
+        <option value="fredkin_koehler">Fredkin Koehler</option>
+        <option value="bem">BEM</option>
+        <option value="fmm">FMM</option>
+        <option value="airbox_robin">Airbox Robin</option>
+      </FormField>
+      <FormField
+        label="External field"
+        hint="B_ext vector in T. Leave blank to remove the global field."
+        unit="T"
+        value={draft.externalField}
+        onChange={(event) => onUpdate({ externalField: event.target.value })}
+      />
+      <FormField
+        label="Solver"
+        hint="Study solver override JSON object."
+        rows={4}
+        type="textarea"
+        value={draft.solver}
+        onChange={(event) => onUpdate({ solver: event.target.value })}
+      />
+      <FormField
+        label="FEM demag policy"
+        hint="FEM demag solver policy JSON object."
+        rows={4}
+        type="textarea"
+        value={draft.femDemagSolverPolicy}
+        onChange={(event) =>
+          onUpdate({ femDemagSolverPolicy: event.target.value })
+        }
+      />
+      {validation.length > 0 ? (
+        <ul className="fm-inspector-validation-list">
+          {validation.map((issue) => (
+            <li key={`${issue.severity}:${issue.message}`}>
+              {issue.severity}: {issue.message}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {authoringFeedback ? (
+        <FeedbackBanner
+          kind={authoringFeedback.kind}
+          message={authoringFeedback.message}
+        />
+      ) : null}
       <div className="fm-inspector-toolbar">
-        <StudyCommandButton
-          commandId="study.add-relax-stage"
-          disabledReason={commandDisabledReason("study.add-relax-stage")}
-          icon={<Plus size={13} />}
-          label="Relax"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.add-run-stage"
-          disabledReason={commandDisabledReason("study.add-run-stage")}
-          icon={<Zap size={13} />}
-          label="Run"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.compute-fields"
-          disabledReason={commandDisabledReason("study.compute-fields")}
-          icon={<Activity size={13} />}
-          label="Fields"
-          onRun={runCommand}
-          variant="ghost"
-        />
-        <StudyCommandButton
-          commandId="study.compute-energies"
-          disabledReason={commandDisabledReason("study.compute-energies")}
-          icon={<Sigma size={13} />}
-          label="Energies"
-          onRun={runCommand}
-          variant="ghost"
-        />
+        <Button
+          disabled={authoringBusy || hasErrors}
+          size="sm"
+          title={
+            hasErrors
+              ? "Fix global study validation errors before saving."
+              : "Save global study settings"
+          }
+          type="button"
+          variant="primary"
+          onClick={onCommit}
+        >
+          <Save size={13} aria-hidden="true" />
+          {authoringBusy ? "Saving" : "Save globals"}
+        </Button>
       </div>
     </InspectorSection>
   );

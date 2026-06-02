@@ -17,6 +17,7 @@ import {
   buildDataPreviewRows,
   buildDataPreviewSignature,
   buildDataPreviewStepSignature,
+  buildDataPreviewStepTimestamp,
   normalizeDataPreviewSampleCount,
 } from "./dataPreviewModel";
 
@@ -62,6 +63,10 @@ export function DataPreviewDialog({
   );
   const stepSignature = useMemo(
     () => buildDataPreviewStepSignature(solverStatus.data),
+    [solverStatus.data],
+  );
+  const stepTimestamp = useMemo(
+    () => buildDataPreviewStepTimestamp(solverStatus.data),
     [solverStatus.data],
   );
 
@@ -189,6 +194,10 @@ export function DataPreviewDialog({
         <div>
           <dt>Step</dt>
           <dd>{stepSignature}</dd>
+        </div>
+        <div>
+          <dt>Last step</dt>
+          <dd>{stepTimestamp}</dd>
         </div>
         <div>
           <dt>Revision</dt>

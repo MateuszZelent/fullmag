@@ -87,6 +87,14 @@ export function buildDataPreviewStepSignature(
   return `step ${step} | t=${simTime} | updated ${updated} | rev ${revision}`;
 }
 
+export function buildDataPreviewStepTimestamp(
+  status: DataPreviewStepSignatureInput | null | undefined,
+): string {
+  if (!status) return "no solver sample";
+  if (status.last_step_updated_at_unix_ms == null) return "no wall timestamp";
+  return formatPreviewTimestamp(status.last_step_updated_at_unix_ms);
+}
+
 function centerBiasedSourceIndices(pointCount: number, count: number): number[] {
   const start = Math.floor((pointCount - count) / 2);
   const indices: number[] = [];

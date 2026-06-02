@@ -4824,6 +4824,90 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(analytic_fields[1]["params"]["Grading"], "geometric")
         self.assertEqual(analytic_fields[1]["params"]["GrowthRate"], 1.45)
 
+    def test_airbox_boundary_transition_token_resolves_from_object_and_airbox_bounds(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=2500e-9,
+            width=1000e-9,
+            height=40e-9,
+            arch_height=0.0,
+            name="flat_arch",
+        )
+        fields = _build_field_stack(
+            [geometry],
+            default_hmax=500e-9,
+            per_geometry=[
+                {
+                    "geometry": "flat_arch",
+                    "hmax": 40e-9,
+                    "interface_hmax": 40e-9,
+                    "interface_thickness": 40e-9,
+                    "transition_distance": "airbox_boundary",
+                    "edge_hmax": 40e-9,
+                    "edge_thickness": 40e-9,
+                    "edge_transition_distance": "airbox_boundary",
+                    "corner_hmax": 40e-9,
+                    "corner_extent": 40e-9,
+                    "corner_transition_distance": "airbox_boundary",
+                },
+            ],
+            airbox_bounds=(
+                (-2000e-9, -1250e-9, -300e-9),
+                (2000e-9, 1250e-9, 300e-9),
+            ),
+            component_aware=True,
+        )
+
+        transition_fields = [
+            field
+            for field in fields
+            if field["kind"] == "AxisAlignedBoxDistanceThreshold"
+            and field["params"].get("Source") == "airbox_boundary"
+        ]
+        edge_fields = [field for field in fields if field["kind"] == "EdgeDistanceThreshold"]
+        corner_fields = [field for field in fields if field["kind"] == "CornerDistanceThreshold"]
+
+        self.assertEqual(len(transition_fields), 1)
+        self.assertEqual(len(edge_fields), 1)
+        self.assertEqual(len(corner_fields), 1)
+        self.assertAlmostEqual(transition_fields[0]["params"]["DistMin"], 40e-9)
+        self.assertAlmostEqual(transition_fields[0]["params"]["DistMax"], 750e-9)
+        self.assertAlmostEqual(edge_fields[0]["params"]["DistMin"], 40e-9)
+        self.assertAlmostEqual(edge_fields[0]["params"]["DistMax"], 750e-9)
+        expected_corner_distance = ((750e-9) ** 2 + (750e-9) ** 2 + (280e-9) ** 2) ** 0.5
+        self.assertAlmostEqual(corner_fields[0]["params"]["DistMin"], 40e-9)
+        self.assertAlmostEqual(
+            corner_fields[0]["params"]["DistMax"],
+            expected_corner_distance,
+        )
+
+    def test_airbox_boundary_transition_token_requires_airbox_bounds(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=2500e-9,
+            width=1000e-9,
+            height=40e-9,
+            arch_height=0.0,
+            name="flat_arch",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "airbox_boundary transition distance requires rectangular airbox bounds",
+        ):
+            _build_field_stack(
+                [geometry],
+                default_hmax=500e-9,
+                per_geometry=[
+                    {
+                        "geometry": "flat_arch",
+                        "hmax": 40e-9,
+                        "interface_hmax": 40e-9,
+                        "interface_thickness": 40e-9,
+                        "transition_distance": "airbox_boundary",
+                    },
+                ],
+                component_aware=True,
+            )
+
     def test_corner_threshold_does_not_inherit_surface_transition_distance(self) -> None:
         left = fm.Cylinder(2.0, 1.0, name="left")
         fields = _build_perimeter_refinement_fields(

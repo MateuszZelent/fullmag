@@ -26,7 +26,7 @@ Bounds-based fallback (concatenated-STL or unknown topology):
 from __future__ import annotations
 
 import math
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from fullmag._progress import emit_progress
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
@@ -42,6 +42,65 @@ from ._mesh_targets import (
 )
 
 _NO_OP_FIELD_SIZE = 1.0e22
+_AIRBOX_BOUNDARY_TRANSITION_TOKENS = {"airbox_boundary", "airbox-boundary", "auto_boundary"}
+
+
+def _is_airbox_boundary_transition(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value.strip().lower() in _AIRBOX_BOUNDARY_TRANSITION_TOKENS
+    )
+
+
+def _airbox_boundary_clearance(
+    *,
+    bounds_min: Sequence[float],
+    bounds_max: Sequence[float],
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None,
+    mode: str,
+) -> float | None:
+    if airbox_bounds is None:
+        return None
+    airbox_min, airbox_max = airbox_bounds
+    gaps = [
+        max(
+            float(bounds_min[axis]) - float(airbox_min[axis]),
+            float(airbox_max[axis]) - float(bounds_max[axis]),
+            0.0,
+        )
+        for axis in range(3)
+    ]
+    if not any(gap > 0.0 for gap in gaps):
+        return None
+    if mode == "corner":
+        return math.sqrt(sum(gap * gap for gap in gaps))
+    return max(gaps)
+
+
+def _resolve_airbox_boundary_transition_span(
+    value: object,
+    *,
+    bounds_min: Sequence[float],
+    bounds_max: Sequence[float],
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None,
+    dist_min: float,
+    mode: str,
+    context: str,
+) -> float | None:
+    if not _is_airbox_boundary_transition(value):
+        return None
+    clearance = _airbox_boundary_clearance(
+        bounds_min=bounds_min,
+        bounds_max=bounds_max,
+        airbox_bounds=airbox_bounds,
+        mode=mode,
+    )
+    if clearance is None:
+        raise ValueError(
+            f"{context}: airbox_boundary transition distance requires rectangular airbox bounds"
+        )
+    span = clearance - float(dist_min)
+    return max(span, 1.0e-18)
 
 
 def _unwrap_translated_geometry(geometry: Geometry) -> Geometry | object:
@@ -153,6 +212,7 @@ def _build_perimeter_refinement_fields(
     default_hmax: float,
     override_by_name: dict[str, Mapping[str, object]],
     bounds_by_name: dict[str, tuple] | None = None,
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
 ) -> list[dict[str, object]]:
     """Build box-local or component-boundary edge and corner refinement fields."""
@@ -189,9 +249,24 @@ def _build_perimeter_refinement_fields(
             )
             if "edge_hmax" in refinement and "edge_thickness" in refinement:
                 edge_thickness = float(refinement["edge_thickness"])
-                edge_transition_distance = _coerce_positive_float(
+                raw_edge_transition_distance = (
                     entry.get("edge_transition_distance")
-                ) if entry is not None else None
+                    if entry is not None
+                    else None
+                )
+                edge_transition_distance = _coerce_positive_float(
+                    raw_edge_transition_distance
+                )
+                if edge_transition_distance is None:
+                    edge_transition_distance = _resolve_airbox_boundary_transition_span(
+                        raw_edge_transition_distance,
+                        bounds_min=bounds_min,
+                        bounds_max=bounds_max,
+                        airbox_bounds=airbox_bounds,
+                        dist_min=edge_thickness,
+                        mode="side",
+                        context=f"{geometry.geometry_name}.mesh.edge_transition_distance",
+                    )
                 edge_dist_min = edge_thickness if edge_transition_distance is not None else 0.0
                 edge_dist_max = (
                     edge_thickness + edge_transition_distance
@@ -207,7 +282,11 @@ def _build_perimeter_refinement_fields(
                     "DistMax": float(edge_dist_max),
                     "Sampling": 40,
                     "Grading": "geometric",
-                    "Source": "per_geometry.edge_maximum_element_size",
+                    "Source": (
+                        "airbox_boundary"
+                        if _is_airbox_boundary_transition(raw_edge_transition_distance)
+                        else "per_geometry.edge_maximum_element_size"
+                    ),
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     edge_params["GrowthRate"] = float(transition_growth)
@@ -219,11 +298,24 @@ def _build_perimeter_refinement_fields(
                 )
             if "corner_hmax" in refinement and "corner_extent" in refinement:
                 corner_extent = float(refinement["corner_extent"])
-                corner_transition_distance = (
-                    _coerce_positive_float(entry.get("corner_transition_distance"))
+                raw_corner_transition_distance = (
+                    entry.get("corner_transition_distance")
                     if entry is not None
                     else None
                 )
+                corner_transition_distance = (
+                    _coerce_positive_float(raw_corner_transition_distance)
+                )
+                if corner_transition_distance is None:
+                    corner_transition_distance = _resolve_airbox_boundary_transition_span(
+                        raw_corner_transition_distance,
+                        bounds_min=bounds_min,
+                        bounds_max=bounds_max,
+                        airbox_bounds=airbox_bounds,
+                        dist_min=corner_extent,
+                        mode="corner",
+                        context=f"{geometry.geometry_name}.mesh.corner_transition_distance",
+                    )
                 corner_dist_min = (
                     corner_extent if corner_transition_distance is not None else 0.0
                 )
@@ -241,7 +333,11 @@ def _build_perimeter_refinement_fields(
                     "DistMax": float(corner_dist_max),
                     "Sampling": 20,
                     "Grading": "geometric",
-                    "Source": "per_geometry.corner_maximum_element_size",
+                    "Source": (
+                        "airbox_boundary"
+                        if _is_airbox_boundary_transition(raw_corner_transition_distance)
+                        else "per_geometry.corner_maximum_element_size"
+                    ),
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     corner_params["GrowthRate"] = float(transition_growth)
@@ -326,11 +422,24 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]),
             )
             if edge_hmax < default_hmax:
-                edge_transition_distance = (
-                    _coerce_positive_float(entry.get("edge_transition_distance"))
+                raw_edge_transition_distance = (
+                    entry.get("edge_transition_distance")
                     if entry is not None
                     else None
                 )
+                edge_transition_distance = (
+                    _coerce_positive_float(raw_edge_transition_distance)
+                )
+                if edge_transition_distance is None:
+                    edge_transition_distance = _resolve_airbox_boundary_transition_span(
+                        raw_edge_transition_distance,
+                        bounds_min=bounds_min,
+                        bounds_max=bounds_max,
+                        airbox_bounds=airbox_bounds,
+                        dist_min=edge_thickness,
+                        mode="side",
+                        context=f"{geometry.geometry_name}.mesh.edge_transition_distance",
+                    )
                 edge_dist_min = edge_thickness if edge_transition_distance is not None else 0.0
                 edge_dist_max = (
                     edge_thickness + edge_transition_distance
@@ -346,7 +455,11 @@ def _build_perimeter_refinement_fields(
                     "DistMax": float(edge_dist_max),
                     "Sampling": 40,
                     "Grading": "geometric",
-                    "Source": "per_geometry.edge_maximum_element_size.air_side",
+                    "Source": (
+                        "airbox_boundary"
+                        if _is_airbox_boundary_transition(raw_edge_transition_distance)
+                        else "per_geometry.edge_maximum_element_size.air_side"
+                    ),
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     edge_params["GrowthRate"] = float(transition_growth)
@@ -389,11 +502,24 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]),
             )
             if corner_hmax < default_hmax:
-                corner_transition_distance = (
-                    _coerce_positive_float(entry.get("corner_transition_distance"))
+                raw_corner_transition_distance = (
+                    entry.get("corner_transition_distance")
                     if entry is not None
                     else None
                 )
+                corner_transition_distance = (
+                    _coerce_positive_float(raw_corner_transition_distance)
+                )
+                if corner_transition_distance is None:
+                    corner_transition_distance = _resolve_airbox_boundary_transition_span(
+                        raw_corner_transition_distance,
+                        bounds_min=bounds_min,
+                        bounds_max=bounds_max,
+                        airbox_bounds=airbox_bounds,
+                        dist_min=corner_extent,
+                        mode="corner",
+                        context=f"{geometry.geometry_name}.mesh.corner_transition_distance",
+                    )
                 corner_dist_min = (
                     corner_extent if corner_transition_distance is not None else 0.0
                 )
@@ -411,7 +537,11 @@ def _build_perimeter_refinement_fields(
                     "DistMax": float(corner_dist_max),
                     "Sampling": 20,
                     "Grading": "geometric",
-                    "Source": "per_geometry.corner_maximum_element_size.air_side",
+                    "Source": (
+                        "airbox_boundary"
+                        if _is_airbox_boundary_transition(raw_corner_transition_distance)
+                        else "per_geometry.corner_maximum_element_size.air_side"
+                    ),
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     corner_params["GrowthRate"] = float(transition_growth)
@@ -667,6 +797,7 @@ def _build_transition_fields(
     default_hmax: float,
     override_by_name: dict[str, Mapping[str, object]],
     bounds_by_name: dict[str, tuple] | None = None,
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
 ) -> list[dict[str, object]]:
     """Build transition zone fields from fine object region to coarse airbox."""
@@ -697,6 +828,27 @@ def _build_transition_fields(
         transition_size_min = interface_hmax if interface_hmax is not None else bulk_hmax
         transition_dist_min = interface_thickness if interface_hmax is not None else 0.0
 
+        if bounds_by_name is not None:
+            bounds_pair = bounds_by_name.get(geometry.geometry_name)
+            if bounds_pair is None:
+                continue
+            bounds_min, bounds_max = bounds_pair
+        else:
+            bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+        if bounds_min is None or bounds_max is None:
+            continue
+
+        if transition_distance is None:
+            transition_distance = _resolve_airbox_boundary_transition_span(
+                raw_transition_distance,
+                bounds_min=bounds_min,
+                bounds_max=bounds_max,
+                airbox_bounds=airbox_bounds,
+                dist_min=transition_dist_min,
+                mode="side",
+                context=f"{geometry.geometry_name}.mesh.transition_distance",
+            )
+
         if transition_distance is None:
             if bulk_hmax < default_hmax:
                 transition_distance = bulk_hmax * 3.0
@@ -711,18 +863,14 @@ def _build_transition_fields(
         # DistMin preserves the requested fine shell before the ramp starts.
         transition_size_max = default_hmax
         transition_dist_max = transition_dist_min + transition_distance
+        transition_source = (
+            "airbox_boundary"
+            if _is_airbox_boundary_transition(raw_transition_distance)
+            else "transition_distance" if transition_distance_requested is not None else "auto"
+        )
 
         if component_aware:
             if _uses_analytic_box_air_shell(geometry):
-                if bounds_by_name is not None:
-                    bounds_pair = bounds_by_name.get(geometry.geometry_name)
-                    if bounds_pair is None:
-                        continue
-                    bounds_min, bounds_max = bounds_pair
-                else:
-                    bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
-                if bounds_min is None or bounds_max is None:
-                    continue
                 params = {
                     "BoundsMin": [float(value) for value in bounds_min],
                     "BoundsMax": [float(value) for value in bounds_max],
@@ -731,7 +879,7 @@ def _build_transition_fields(
                     "DistMin": float(transition_dist_min),
                     "DistMax": float(transition_dist_max),
                     "Grading": "geometric",
-                    "Source": "transition_distance",
+                    "Source": transition_source,
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     params["GrowthRate"] = float(transition_growth)
@@ -750,7 +898,7 @@ def _build_transition_fields(
                 "DistMax": float(transition_dist_max),
                 "Sampling": 20,
                 "Grading": "geometric",
-                "Source": "explicit" if transition_distance_requested is not None else "auto",
+                "Source": transition_source,
             }
             if transition_growth is not None and transition_growth > 1.0:
                 params["GrowthRate"] = float(transition_growth)
@@ -762,16 +910,6 @@ def _build_transition_fields(
             )
             continue
 
-        if bounds_by_name is not None:
-            bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
-                continue
-            bounds_min, bounds_max = bounds_pair
-        else:
-            bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
-        if bounds_min is None or bounds_max is None:
-            continue
-
         params = {
             "BoundsMin": list(bounds_min),
             "BoundsMax": list(bounds_max),
@@ -781,7 +919,7 @@ def _build_transition_fields(
             "DistMax": float(transition_dist_max),
             "Sampling": 20,
             "MatchPadding": float(bulk_hmax),
-            "Source": "explicit" if transition_distance_requested is not None else "auto",
+            "Source": transition_source,
         }
         if transition_growth is not None and transition_growth > 1.0:
             params["GrowthRate"] = float(transition_growth)
@@ -917,6 +1055,7 @@ def _build_field_stack(
     default_hmax: float,
     per_geometry: object,
     bounds_by_name: dict[str, tuple] | None = None,
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
 ) -> list[dict[str, object]]:
     """Full field stack: bulk + interface + transition + manual hotspots.
@@ -953,6 +1092,7 @@ def _build_field_stack(
         default_hmax=default_hmax,
         override_by_name=override_by_name,
         bounds_by_name=bounds_by_name,
+        airbox_bounds=airbox_bounds,
         component_aware=component_aware,
     )
     if transition_fields:
@@ -963,6 +1103,7 @@ def _build_field_stack(
         default_hmax=default_hmax,
         override_by_name=override_by_name,
         bounds_by_name=bounds_by_name,
+        airbox_bounds=airbox_bounds,
         component_aware=component_aware,
     )
     if perimeter_fields:
@@ -1066,6 +1207,7 @@ def _mesh_options_from_runtime_metadata(
     geometries: list[Geometry],
     default_hmax: float,
     bounds_by_name: dict[str, tuple] | None = None,
+    airbox_bounds: tuple[Sequence[float], Sequence[float]] | None = None,
     component_aware: bool = False,
     per_object_recipes: dict[str, PerObjectMeshRecipe] | None = None,
     include_size_fields: bool = True,
@@ -1179,6 +1321,7 @@ def _mesh_options_from_runtime_metadata(
                 default_hmax=default_hmax,
                 per_geometry=mesh_workflow.get("per_geometry") if isinstance(mesh_workflow, Mapping) else None,
                 bounds_by_name=bounds_by_name,
+                airbox_bounds=airbox_bounds,
                 component_aware=component_aware,
             )
         )

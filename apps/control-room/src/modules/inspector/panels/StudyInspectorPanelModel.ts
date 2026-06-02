@@ -57,11 +57,16 @@ export type StudyStageModel = StudyStageSnapshot & {
 
 export interface StudyInspectorSnapshot {
   boundary: {
+    demagEnabled: string;
     demagRealization: string;
+    exchangeEnabled: string;
     externalField: string;
+    femDemagSolverPolicy: string;
+    solver: string;
   };
   requested: {
     backend: string;
+    cpuThreads: string;
     device: string;
     mode: string;
     precision: string;
@@ -127,11 +132,16 @@ export function studySnapshotFromScene(
 
   return {
     boundary: {
+      demagEnabled: booleanLabel(study?.demag_enabled, true),
       demagRealization: stringValue(study?.demag_realization, "default"),
+      exchangeEnabled: booleanLabel(study?.exchange_enabled, true),
       externalField: formatExternalField(study?.external_field),
+      femDemagSolverPolicy: objectSummary(study?.fem_demag_solver_policy),
+      solver: objectSummary(study?.solver),
     },
     requested: {
       backend: stringValue(study?.requested_backend, "auto"),
+      cpuThreads: optionalScalarValue(study?.requested_cpu_threads, "auto"),
       device: stringValue(study?.requested_device, "auto"),
       mode: stringValue(study?.requested_mode, "strict"),
       precision: stringValue(study?.requested_precision, "double"),
@@ -662,6 +672,25 @@ function optionalString(value: unknown): string | null {
 
 function stringValue(value: unknown, fallback: string): string {
   return optionalString(value) ?? fallback;
+}
+
+function optionalScalarValue(value: unknown, fallback: string): string {
+  const text = optionalScalarText(value);
+  return text && text.trim().length > 0 ? text : fallback;
+}
+
+function booleanLabel(value: unknown, fallback: boolean): string {
+  const resolved = typeof value === "boolean" ? value : fallback;
+  return resolved ? "enabled" : "disabled";
+}
+
+function objectSummary(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "default";
+  }
+  return Object.keys(value as JsonRecord).length > 0
+    ? JSON.stringify(value)
+    : "default";
 }
 
 function finiteNumber(value: unknown): number | null {

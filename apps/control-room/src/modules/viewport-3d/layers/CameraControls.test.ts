@@ -244,9 +244,12 @@ describe("CameraControls", () => {
 
     expect(source).toContain("VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS");
     expect(updateBlock).toContain("scheduleCameraControlsPoseCommit();");
+    expect(updateBlock).not.toContain("clearCameraControlsPoseCommit();");
     expect(transitionBlock).toContain("beginViewport3DCameraGesture(cameraGestureRef);");
     expect(transitionBlock).toContain("clearCameraControlsPoseCommit();");
-    expect(endBlock).toContain("scheduleCameraControlsPoseCommit();");
+    expect(endBlock).toContain(
+      "scheduleCameraControlsPoseCommit({ restart: true });",
+    );
     expect(controlsBlock).toContain("onStart={handleTransitionStart}");
     expect(controlsBlock).toContain("onEnd={handleEnd}");
   });

@@ -46,17 +46,17 @@ class ResolvedSharedObjectTarget:
     hmax: float | None
     interface_hmax: float | None = None
     interface_thickness: float | None = None
-    transition_distance: float | None = None
-    transition_distance_requested: float | None = None
+    transition_distance: float | str | None = None
+    transition_distance_requested: float | str | None = None
     transition_distance_effective: float | None = None
-    transition_realization: Literal["none", "auto", "explicit", "degraded"] = "none"
+    transition_realization: Literal["none", "auto", "explicit", "airbox_boundary", "degraded"] = "none"
     transition_growth: float | None = None
     edge_hmax: float | None = None
     edge_thickness: float | None = None
-    edge_transition_distance: float | None = None
+    edge_transition_distance: float | str | None = None
     corner_hmax: float | None = None
     corner_extent: float | None = None
-    corner_transition_distance: float | None = None
+    corner_transition_distance: float | str | None = None
     source: str = "study_default"
     marker: int | None = None
 
@@ -90,6 +90,19 @@ def _coerce_positive_float(value: object) -> float | None:
     else:
         return None
     return candidate if math.isfinite(candidate) and candidate > 0.0 else None
+
+
+def _coerce_transition_distance_intent(value: object) -> float | str | None:
+    numeric = _coerce_positive_float(value)
+    if numeric is not None:
+        return numeric
+    if isinstance(value, str) and value.strip().lower() in {
+        "airbox_boundary",
+        "airbox-boundary",
+        "auto_boundary",
+    }:
+        return "airbox_boundary"
+    return None
 
 
 def _geometry_name_aliases(name: str) -> tuple[str, ...]:
@@ -328,13 +341,19 @@ def resolve_shared_domain_targets(
         )
 
         transition_distance_requested = (
-            _coerce_positive_float(workflow_entry.get("transition_distance"))
+            _coerce_transition_distance_intent(workflow_entry.get("transition_distance"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
-        transition_distance = transition_distance_requested
-        transition_realization: Literal["none", "auto", "explicit", "degraded"] = (
-            "explicit" if transition_distance_requested is not None else "none"
+        transition_distance = (
+            transition_distance_requested
+            if isinstance(transition_distance_requested, float)
+            else transition_distance_requested
+        )
+        transition_realization: Literal["none", "auto", "explicit", "airbox_boundary", "degraded"] = (
+            "airbox_boundary"
+            if transition_distance_requested == "airbox_boundary"
+            else "explicit" if transition_distance_requested is not None else "none"
         )
         transition_growth = (
             _coerce_positive_float(workflow_entry.get("transition_growth"))
@@ -352,7 +371,7 @@ def resolve_shared_domain_targets(
             else None
         )
         edge_transition_distance = (
-            _coerce_positive_float(workflow_entry.get("edge_transition_distance"))
+            _coerce_transition_distance_intent(workflow_entry.get("edge_transition_distance"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
@@ -367,11 +386,16 @@ def resolve_shared_domain_targets(
             else None
         )
         corner_transition_distance = (
-            _coerce_positive_float(workflow_entry.get("corner_transition_distance"))
+            _coerce_transition_distance_intent(workflow_entry.get("corner_transition_distance"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
-        if transition_distance is None and bulk_hmax is not None and default_hmax is not None and bulk_hmax < default_hmax:
+        if (
+            transition_distance is None
+            and bulk_hmax is not None
+            and default_hmax is not None
+            and bulk_hmax < default_hmax
+        ):
             transition_distance = bulk_hmax * 3.0
             transition_realization = "auto"
 
@@ -389,7 +413,9 @@ def resolve_shared_domain_targets(
             interface_thickness=interface_thickness,
             transition_distance=transition_distance,
             transition_distance_requested=transition_distance_requested,
-            transition_distance_effective=transition_distance,
+            transition_distance_effective=(
+                transition_distance if isinstance(transition_distance, float) else None
+            ),
             transition_realization=transition_realization,
             transition_growth=transition_growth,
             edge_hmax=edge_hmax,

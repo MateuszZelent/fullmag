@@ -488,6 +488,43 @@ def _study_universe_airbox_options(
     )
 
 
+def _rectangular_airbox_bounds_from_options(
+    airbox: AirboxOptions | None,
+    bounds_by_name: Mapping[str, tuple] | None,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    if airbox is None or str(airbox.shape).lower() != "bbox":
+        return None
+    if airbox.size is not None and airbox.center is not None:
+        center = tuple(float(value) for value in airbox.center)
+        size = tuple(float(value) for value in airbox.size)
+        return (
+            tuple(center[axis] - 0.5 * size[axis] for axis in range(3)),
+            tuple(center[axis] + 0.5 * size[axis] for axis in range(3)),
+        )
+    if not bounds_by_name:
+        return None
+    valid_bounds = [
+        bounds
+        for bounds in bounds_by_name.values()
+        if isinstance(bounds, tuple)
+        and len(bounds) == 2
+        and bounds[0] is not None
+        and bounds[1] is not None
+    ]
+    if not valid_bounds:
+        return None
+    mins = np.asarray([bounds[0] for bounds in valid_bounds], dtype=np.float64)
+    maxs = np.asarray([bounds[1] for bounds in valid_bounds], dtype=np.float64)
+    object_min = mins.min(axis=0)
+    object_max = maxs.max(axis=0)
+    center = 0.5 * (object_min + object_max)
+    size = (object_max - object_min) * float(airbox.padding_factor)
+    return (
+        tuple(float(center[axis] - 0.5 * size[axis]) for axis in range(3)),
+        tuple(float(center[axis] + 0.5 * size[axis]) for axis in range(3)),
+    )
+
+
 # _coerce_positive_float, _parse_per_geometry_overrides,
 # _geometry_name_aliases, _lookup_geometry_name_alias are now imported
 # from _mesh_targets (see top-of-file imports).
@@ -1140,12 +1177,14 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 )
 
         size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
+        airbox_bounds = _rectangular_airbox_bounds_from_options(airbox, bounds_by_name)
 
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
             geometries=geometries,
             default_hmax=size_field_default_hmax,
             bounds_by_name=bounds_by_name,
+            airbox_bounds=airbox_bounds,
             component_aware=True,
             per_object_recipes=per_object_recipes,
         )
@@ -1365,6 +1404,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             geometries=geometries,
                             default_hmax=size_field_default_hmax,
                             bounds_by_name=bounds_by_name,
+                            airbox_bounds=airbox_bounds,
                             component_aware=False,
                             per_object_recipes=per_object_recipes,
                         )

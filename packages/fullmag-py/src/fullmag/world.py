@@ -554,14 +554,14 @@ class _MeshSpecState:
     narrow_region_resolution: float | None = None
     interface_hmax: float | None = None
     interface_thickness: float | None = None
-    transition_distance: float | None = None
+    transition_distance: float | str | None = None
     transition_growth: float | None = None
     edge_hmax: float | None = None
     edge_thickness: float | None = None
-    edge_transition_distance: float | None = None
+    edge_transition_distance: float | str | None = None
     corner_hmax: float | None = None
     corner_extent: float | None = None
-    corner_transition_distance: float | None = None
+    corner_transition_distance: float | str | None = None
     boundary_layer_count: int | None = None
     boundary_layer_thickness: float | None = None
     boundary_layer_stretching: float | None = None
@@ -679,6 +679,7 @@ def _validate_perimeter_refinement_spec(
             f"{context}: corner_maximum_element_size must be less than or equal to edge_maximum_element_size"
         )
 
+
     box = _unwrap_translated_box(geometry)
     if box is None:
         return
@@ -696,6 +697,24 @@ def _validate_perimeter_refinement_spec(
         raise ValueError(
             f"{context}: corner_extent must be smaller than half of the smaller in-plane dimension"
         )
+
+
+def _normalize_transition_distance_value(
+    value: float | str,
+    *,
+    context: str,
+    allow_zero: bool,
+) -> float | str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"airbox_boundary", "airbox-boundary", "auto_boundary"}:
+            return "airbox_boundary"
+        raise ValueError(f"{context} must be a length in metres or 'airbox_boundary'")
+    resolved = float(value)
+    if resolved < 0.0 or (not allow_zero and resolved <= 0.0):
+        qualifier = "non-negative" if allow_zero else "positive"
+        raise ValueError(f"{context} must be {qualifier}")
+    return resolved
 
 
 def _normalize_int_tags(value: Sequence[int] | None, *, context: str) -> list[int] | None:
@@ -763,16 +782,16 @@ class GeometryMeshHandle:
         interface_maximum_element_size: float | None = None,
         interface_hmax: float | None = None,
         interface_thickness: float | None = None,
-        transition_distance: float | None = None,
+        transition_distance: float | str | None = None,
         transition_growth: float | None = None,
         edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
-        edge_transition_distance: float | None = None,
+        edge_transition_distance: float | str | None = None,
         corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
-        corner_transition_distance: float | None = None,
+        corner_transition_distance: float | str | None = None,
         boundary_layer_count: int | None = None,
         boundary_layer_thickness: float | None = None,
         boundary_layer_stretching: float | None = None,
@@ -860,16 +879,16 @@ class GeometryMeshHandle:
         interface_maximum_element_size: float | None = None,
         interface_hmax: float | None = None,
         interface_thickness: float | None = None,
-        transition_distance: float | None = None,
+        transition_distance: float | str | None = None,
         transition_growth: float | None = None,
         edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
-        edge_transition_distance: float | None = None,
+        edge_transition_distance: float | str | None = None,
         corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
-        corner_transition_distance: float | None = None,
+        corner_transition_distance: float | str | None = None,
         boundary_layer_count: int | None = None,
         boundary_layer_thickness: float | None = None,
         boundary_layer_stretching: float | None = None,
@@ -1010,10 +1029,11 @@ class GeometryMeshHandle:
             require_positive(float(interface_thickness), f"{self._owner._name}.mesh.interface_thickness")
             spec.interface_thickness = float(interface_thickness)
         if transition_distance is not None:
-            resolved_transition_distance = float(transition_distance)
-            if resolved_transition_distance < 0.0:
-                raise ValueError(f"{self._owner._name}.mesh.transition_distance must be non-negative")
-            spec.transition_distance = resolved_transition_distance
+            spec.transition_distance = _normalize_transition_distance_value(
+                transition_distance,
+                context=f"{self._owner._name}.mesh.transition_distance",
+                allow_zero=True,
+            )
         if transition_growth is not None:
             require_positive(float(transition_growth), f"{self._owner._name}.mesh.transition_growth")
             spec.transition_growth = float(transition_growth)
@@ -1027,11 +1047,11 @@ class GeometryMeshHandle:
             require_positive(float(edge_thickness), f"{self._owner._name}.mesh.edge_thickness")
             spec.edge_thickness = float(edge_thickness)
         if edge_transition_distance is not None:
-            require_positive(
-                float(edge_transition_distance),
-                f"{self._owner._name}.mesh.edge_transition_distance",
+            spec.edge_transition_distance = _normalize_transition_distance_value(
+                edge_transition_distance,
+                context=f"{self._owner._name}.mesh.edge_transition_distance",
+                allow_zero=False,
             )
-            spec.edge_transition_distance = float(edge_transition_distance)
         if resolved_corner_maximum_element_size is not None:
             require_positive(
                 float(resolved_corner_maximum_element_size),
@@ -1042,11 +1062,11 @@ class GeometryMeshHandle:
             require_positive(float(corner_extent), f"{self._owner._name}.mesh.corner_extent")
             spec.corner_extent = float(corner_extent)
         if corner_transition_distance is not None:
-            require_positive(
-                float(corner_transition_distance),
-                f"{self._owner._name}.mesh.corner_transition_distance",
+            spec.corner_transition_distance = _normalize_transition_distance_value(
+                corner_transition_distance,
+                context=f"{self._owner._name}.mesh.corner_transition_distance",
+                allow_zero=False,
             )
-            spec.corner_transition_distance = float(corner_transition_distance)
         if boundary_layer_count is not None:
             count = int(boundary_layer_count)
             if count < 1:
@@ -1215,14 +1235,14 @@ class GeometryMeshHandle:
         surface_maximum_element_size: float | None = None,
         interface_thickness: float | None = None,
         surface_thickness: float | None = None,
-        transition_distance: float | None = None,
-        surface_transition_distance: float | None = None,
+        transition_distance: float | str | None = None,
+        surface_transition_distance: float | str | None = None,
         edge_maximum_element_size: float | None = None,
         edge_thickness: float | None = None,
-        edge_transition_distance: float | None = None,
+        edge_transition_distance: float | str | None = None,
         corner_maximum_element_size: float | None = None,
         corner_extent: float | None = None,
-        corner_transition_distance: float | None = None,
+        corner_transition_distance: float | str | None = None,
     ) -> "GeometryMeshHandle":
         """Configure a feature-aware tetrahedral preset for thin-film FEM meshes.
 
@@ -1279,7 +1299,11 @@ class GeometryMeshHandle:
         edge_shell = edge_thickness if edge_thickness is not None else surface_shell
         edge_transition = edge_transition_distance
         if edge_transition is None and surface_transition is not None:
-            edge_transition = float(surface_transition) * 0.5
+            edge_transition = (
+                surface_transition
+                if isinstance(surface_transition, str)
+                else float(surface_transition) * 0.5
+            )
         if edge_hmax is None:
             edge_shell = None
             edge_transition = None
@@ -3536,7 +3560,7 @@ def _configure_object_mesh_defaults(
     interface_maximum_element_size: float | None = None,
     interface_hmax: float | None = None,
     interface_thickness: float | None = None,
-    transition_distance: float | None = None,
+    transition_distance: float | str | None = None,
     transition_growth: float | None = None,
     boundary_layer_count: int | None = None,
     boundary_layer_thickness: float | None = None,
@@ -3618,8 +3642,11 @@ def _configure_object_mesh_defaults(
         require_positive(float(interface_thickness), "study.objects.mesh.defaults.interface_thickness")
         _state._default_mesh_spec.interface_thickness = float(interface_thickness)
     if transition_distance is not None:
-        require_positive(float(transition_distance), "study.objects.mesh.defaults.transition_distance")
-        _state._default_mesh_spec.transition_distance = float(transition_distance)
+        _state._default_mesh_spec.transition_distance = _normalize_transition_distance_value(
+            transition_distance,
+            context="study.objects.mesh.defaults.transition_distance",
+            allow_zero=True,
+        )
     if transition_growth is not None:
         require_positive(float(transition_growth), "study.objects.mesh.defaults.transition_growth")
         _state._default_mesh_spec.transition_growth = float(transition_growth)

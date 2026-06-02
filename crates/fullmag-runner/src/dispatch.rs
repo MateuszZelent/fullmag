@@ -31,8 +31,8 @@ use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fem_baseline;
 use crate::fem_eigen;
 #[cfg(feature = "fem-gpu")]
-use crate::interactive_runtime::cached_preview_quantities_for;
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::fem::relax::scalars::ensure_fem_object_scalars;
+#[cfg(feature = "cuda")]
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
@@ -42,40 +42,53 @@ use crate::native_fem::{
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
 use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quantities};
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(feature = "fem-gpu")]
 use crate::relaxation::apply_energy_minimizer_provenance;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(feature = "cuda")]
 use crate::relaxation::relaxation_converged;
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(feature = "cuda")]
 use crate::relaxation::relaxation_stop_criteria_satisfied;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
-use crate::runtime_registry::RuntimeRegistry;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation_direct_minimizer::direct_minimizer_control;
+#[cfg(feature = "cuda")]
+use crate::relaxation_direct_minimizer::{
+    apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
+    direct_minimizer_gradient_norm_sq, direct_minimizer_step_budget,
+    nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
+    nonlinear_cg_next_direction, projected_gradient_line_search,
+    projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerState,
+    DirectMinimizerTrialEvaluation,
+};
+#[cfg(feature = "cuda")]
+use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
+use crate::runtime_registry::RuntimeRegistry;
+#[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
-#[cfg(feature = "fem-gpu")]
-use crate::scalar_metrics::weighted_object_scalars;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, scalar_outputs_request_average_m, scalar_row_due,
 };
+#[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
+use crate::schedules::collect_field_schedules;
 #[cfg(feature = "cuda")]
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
     OutputSchedule,
 };
-#[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
-use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
+#[cfg(feature = "fem-gpu")]
+use crate::types::FemPoissonDemagProvenance;
 use crate::types::{
     ExecutedRun, LivePreviewRequest, LiveStepConsumer, ResolvedFallback, RunError, StepAction,
     StepUpdate,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::types::{
-    ExecutionProvenance, FemPoissonDemagProvenance, FieldSnapshot, RunResult, RunStatus, StepStats,
-};
+use crate::types::{ExecutionProvenance, StepStats};
+#[cfg(feature = "cuda")]
+use crate::types::{FieldSnapshot, RunResult, RunStatus};
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::fem::FemBackendId;
 
@@ -184,7 +197,7 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
 }
 
 #[cfg(feature = "fem-gpu")]
-fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
+pub(crate) fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
     if !stats.per_object_scalars.is_empty() {
         return;
     }
@@ -1229,7 +1242,7 @@ fn fem_plan_for_native_gpu(plan: &FemPlanIR) -> FemPlanIR {
         let mfem_device = std::env::var("FULLMAG_FEM_MFEM_DEVICE")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+            .filter(|value| crate::native_fem::native_fem_mfem_device_string_requests_gpu(value))
             .unwrap_or_else(|| "cuda".to_string());
         gpu_plan.mfem_device_string = Some(mfem_device);
     }
@@ -2405,32 +2418,16 @@ fn execute_cuda_fdm(
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
 
-    let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
-        matches!(
-            control.algorithm,
-            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-        )
-    });
-
-    if let Some(control) = direct_minimization_relax {
+    if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
+        let control = direct_minimizer.control;
         latest_stats = Some(current_stats.clone());
-        let mut m = backend.copy_m(cell_count)?;
-        let mut h_eff = backend.copy_h_eff(cell_count)?;
-        let mut g = tangent_gradient_from_field(&m, &h_eff);
-        let mut energy = current_stats.e_total;
-        let mut p: Vec<[f64; 3]> = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
+        let mut state = DirectMinimizerState::new(
+            backend.copy_m(cell_count)?,
+            backend.copy_h_eff(cell_count)?,
+            current_stats.e_total,
+        );
 
-        let mut lambda: f64 = 1e-6;
-        let lambda_min: f64 = 1e-15;
-        let lambda_max: f64 = 1e-3;
-        let c_armijo: f64 = 1e-4;
-        let max_backtrack: u32 = 20;
-        let mut use_bb1 = true;
-        let mut reset_consecutive: u64 = 0;
-        let mut direct_step: u64 = 0;
-
-        while direct_step < control.stop.max_steps.unwrap_or(u64::MAX) {
+        while state.accepted_steps < direct_minimizer_step_budget(control) {
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {
                     let preview_due = display_refresh_due(
@@ -2454,7 +2451,7 @@ fn execute_cuda_fdm(
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh: None,
-                        magnetization: Some(flatten_vectors(&m)),
+                        magnetization: Some(flatten_vectors(&state.magnetization)),
                         preview_field,
                         cached_preview_fields: None,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
@@ -2473,171 +2470,115 @@ fn execute_cuda_fdm(
                 break;
             }
 
-            let max_torque = max_torque_from_field(&m, &h_eff);
+            let max_torque = max_torque_from_field(&state.magnetization, &state.h_eff);
             if relaxation_stop_criteria_satisfied(control, None, max_torque) {
                 break;
             }
-            let g_norm_sq = global_dot_vec3(&g, &g);
-            if g_norm_sq < 1e-30 {
+            let g_norm_sq = direct_minimizer_gradient_norm_sq(&state.gradient);
+            if direct_minimizer_gradient_degenerate(g_norm_sq) {
                 break;
             }
 
-            let mut trial_lambda = lambda;
-            let mut backtracks = 0u32;
-            let mut m_trial = m.clone();
-            let trial_stats = match control.algorithm {
-                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
-                    let trial_stats = loop {
-                        for i in 0..m.len() {
-                            m_trial[i] =
-                                normalized_vec3(sub_vec3(m[i], scale_vec3(g[i], trial_lambda)));
-                        }
-                        backend.upload_magnetization(&m_trial)?;
-                        backend.refresh_observables()?;
-                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                        ensure_single_object_scalars(&mut stats, "free");
-                        let e_trial = stats.e_total;
-                        if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
-                            || backtracks >= max_backtrack
-                        {
-                            break stats;
-                        }
-                        trial_lambda *= 0.5;
-                        backtracks += 1;
-                    };
+            let mut trial_lambda = state.step_size;
+            let (trial_stats, m_trial) = match direct_minimizer.algorithm {
+                DirectMinimizerAlgorithm::ProjectedGradientBb => {
+                    let accepted_trial = projected_gradient_line_search(
+                        state.energy_j,
+                        g_norm_sq,
+                        &state.magnetization,
+                        &state.gradient,
+                        trial_lambda,
+                        |trial| {
+                            backend.upload_magnetization(trial)?;
+                            backend.refresh_observables()?;
+                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                            ensure_single_object_scalars(&mut stats, "free");
+                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
+                                energy_j: stats.e_total,
+                                stats,
+                            })
+                        },
+                    )?;
+                    trial_lambda = accepted_trial.step_size;
+                    let trial_stats = accepted_trial.stats;
+                    let m_trial = accepted_trial.magnetization;
 
                     let h_eff_new = backend.copy_h_eff(cell_count)?;
                     let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
 
-                    let scale_factor = 1e-6;
-                    let s: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| scale_vec3(sub_vec3(m_trial[i], m[i]), scale_factor))
-                        .collect();
-                    let y: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| scale_vec3(sub_vec3(g_new[i], g[i]), scale_factor))
-                        .collect();
-                    let s_dot_s = global_dot_vec3(&s, &s);
-                    let s_dot_y = global_dot_vec3(&s, &y);
-                    let y_dot_y = global_dot_vec3(&y, &y);
+                    let step_size_update = projected_gradient_step_size_update(
+                        &state.magnetization,
+                        &m_trial,
+                        &state.gradient,
+                        &g_new,
+                        state.use_bb1,
+                        state.reset_consecutive,
+                    );
+                    state.step_size = step_size_update.step_size;
+                    state.use_bb1 = step_size_update.use_bb1;
+                    state.reset_consecutive = step_size_update.reset_consecutive;
 
-                    let bb_ok;
-                    if use_bb1 {
-                        if s_dot_y > 1e-30 {
-                            lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                            bb_ok = true;
-                        } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
-                            lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
-                            bb_ok = true;
-                        } else {
-                            bb_ok = false;
-                        }
-                    } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
-                        lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
-                        bb_ok = true;
-                    } else if s_dot_y > 1e-30 {
-                        lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                        bb_ok = true;
-                    } else {
-                        bb_ok = false;
-                    }
-                    if bb_ok {
-                        reset_consecutive = 0;
-                    } else {
-                        reset_consecutive += 1;
-                        lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
-                    }
-                    use_bb1 = !use_bb1;
-
-                    h_eff = h_eff_new;
-                    g = g_new;
-                    trial_stats
+                    state.h_eff = h_eff_new;
+                    state.gradient = g_new;
+                    (trial_stats, m_trial)
                 }
-                fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
-                    let mut p_dot_g = global_dot_vec3(&p, &g);
-                    if p_dot_g >= 0.0 {
-                        p = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-                        p_dot_g = global_dot_vec3(&p, &g);
-                    }
-                    let p_norm = global_dot_vec3(&p, &p).sqrt();
-                    trial_lambda = if p_norm > 0.0 {
-                        (1e-6_f64).min(1.0 / p_norm)
-                    } else {
-                        1e-6
-                    };
-                    let max_backtrack_ncg = 30u32;
+                DirectMinimizerAlgorithm::NonlinearCg => {
+                    let p_dot_g = nonlinear_cg_descent_direction_dot(
+                        &mut state.search_direction,
+                        &state.gradient,
+                    );
+                    trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
 
-                    let trial_stats = loop {
-                        for i in 0..m.len() {
-                            m_trial[i] =
-                                normalized_vec3(add_vec3(m[i], scale_vec3(p[i], trial_lambda)));
-                        }
-                        backend.upload_magnetization(&m_trial)?;
-                        backend.refresh_observables()?;
-                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                        ensure_single_object_scalars(&mut stats, "free");
-                        let e_trial = stats.e_total;
-                        if e_trial <= energy + c_armijo * trial_lambda * p_dot_g
-                            || backtracks >= max_backtrack_ncg
-                        {
-                            break stats;
-                        }
-                        trial_lambda *= 0.5;
-                        backtracks += 1;
-                    };
+                    let accepted_trial = nonlinear_cg_line_search(
+                        state.energy_j,
+                        p_dot_g,
+                        &state.magnetization,
+                        &state.search_direction,
+                        trial_lambda,
+                        |trial| {
+                            backend.upload_magnetization(trial)?;
+                            backend.refresh_observables()?;
+                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                            ensure_single_object_scalars(&mut stats, "free");
+                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
+                                energy_j: stats.e_total,
+                                stats,
+                            })
+                        },
+                    )?;
+                    trial_lambda = accepted_trial.step_size;
+                    let trial_stats = accepted_trial.stats;
+                    let m_trial = accepted_trial.magnetization;
 
                     let h_eff_new = backend.copy_h_eff(cell_count)?;
                     let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    let g_old_transported = project_tangent(&m_trial, &g);
-                    let y_pr: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| sub_vec3(g_new[i], g_old_transported[i]))
-                        .collect();
-                    let mut beta = if g_norm_sq > 1e-30 {
-                        (global_dot_vec3(&g_new, &y_pr) / g_norm_sq).max(0.0)
-                    } else {
-                        0.0
-                    };
-                    let restart_interval = 50u64;
-                    if (direct_step + 1) % restart_interval == 0 {
-                        beta = 0.0;
-                    }
-                    let p_transported = project_tangent(&m_trial, &p);
-                    let mut p_new: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| {
-                            add_vec3(
-                                scale_vec3(g_new[i], -1.0),
-                                scale_vec3(p_transported[i], beta),
-                            )
-                        })
-                        .collect();
-                    if global_dot_vec3(&p_new, &g_new) >= 0.0 {
-                        p_new = g_new.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-                    }
-
-                    p = p_new;
-                    h_eff = h_eff_new;
-                    g = g_new;
-                    lambda = trial_lambda;
-                    trial_stats
+                    state.search_direction = nonlinear_cg_next_direction(
+                        &m_trial,
+                        &state.gradient,
+                        &g_new,
+                        &state.search_direction,
+                        g_norm_sq,
+                        state.accepted_steps + 1,
+                    );
+                    state.h_eff = h_eff_new;
+                    state.gradient = g_new;
+                    state.step_size = trial_lambda;
+                    (trial_stats, m_trial)
                 }
-                _ => break,
             };
 
-            m = m_trial;
-            energy = trial_stats.e_total;
-            direct_step += 1;
+            state.magnetization = m_trial;
+            state.energy_j = trial_stats.e_total;
+            state.accepted_steps += 1;
 
             let mut accepted_stats = trial_stats.clone();
-            accepted_stats.step = direct_step;
-            accepted_stats.time = 0.0;
-            accepted_stats.dt = trial_lambda;
-            let torque_apm = max_torque_from_field(&m, &h_eff);
-            accepted_stats.max_dm_dt = 0.0;
-            accepted_stats.max_torque_Apm = torque_apm;
-            accepted_stats.max_torque_T = torque_apm * crate::MU0;
-            accepted_stats.max_h_eff = h_eff
-                .iter()
-                .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())
-                .fold(0.0, f64::max);
+            let torque_apm = apply_direct_minimizer_step_metrics(
+                &mut accepted_stats,
+                state.accepted_steps,
+                trial_lambda,
+                &state.magnetization,
+                &state.h_eff,
+            );
             ensure_single_object_scalars(&mut accepted_stats, "free");
 
             artifacts.record_scalar(&accepted_stats)?;
@@ -2645,7 +2586,7 @@ fn execute_cuda_fdm(
             latest_stats = Some(accepted_stats.clone());
             current_stats = accepted_stats;
 
-            let energy_plateau_range = energy_plateau.record(energy);
+            let energy_plateau_range = energy_plateau.record(state.energy_j);
             if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
                 break;
             }
@@ -2847,55 +2788,18 @@ fn execute_cuda_fdm(
     })
 }
 
-/// Build cached preview fields for all non-active FEM quantities.
-///
-/// This mirrors the cached-preview logic in `CudaInteractiveFdmPreviewRuntime`
-/// so that switching display-quantity in the frontend finds data in the cache
-/// immediately.
-#[cfg(feature = "fem-gpu")]
-fn build_fem_cached_preview_fields(
-    backend: &NativeFemBackend,
-    display_selection: &crate::DisplaySelectionState,
-    plan: &FemPlanIR,
-    node_count: usize,
-) -> Option<Vec<crate::LivePreviewField>> {
-    let quantities = active_fem_preview_quantities(
-        FemEngine::NativeGpu,
-        plan,
-        &cached_preview_quantities_for(display_selection),
-    );
-    if quantities.is_empty() {
-        return None;
-    }
-    let base_request = display_selection.preview_request();
-    let mut cached = Vec::new();
-    for quantity in quantities {
-        let mut req = base_request.clone();
-        req.quantity = quantity.to_string();
-        match backend.copy_live_preview_field(&req, node_count) {
-            Ok(field) => cached.push(field),
-            Err(_) => { /* quantity not computed yet — skip */ }
-        }
-    }
-    if cached.is_empty() {
-        None
-    } else {
-        Some(cached)
-    }
-}
-
 #[cfg(feature = "fem-gpu")]
 fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
-    if plan.mfem_device_string.as_deref() == Some("cpu") {
-        FemBackendId::CpuNative.provenance_name()
-    } else {
+    if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         FemBackendId::GpuNative.provenance_name()
+    } else {
+        FemBackendId::CpuNative.provenance_name()
     }
 }
 
 #[cfg(feature = "fem-gpu")]
 fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
-    if plan.mfem_device_string.as_deref() == Some("cpu") {
+    if !crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         "cpu_native"
     } else if std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
         .ok()
@@ -2992,12 +2896,12 @@ fn native_fem_data_residency(
 
 #[cfg(feature = "fem-gpu")]
 fn native_fem_uses_cuda_kernels(plan: &FemPlanIR) -> bool {
-    plan.mfem_device_string.as_deref() != Some("cpu")
+    crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan)
 }
 
 #[cfg(feature = "fem-gpu")]
 fn native_fem_uses_gpu_poisson(plan: &FemPlanIR) -> bool {
-    plan.mfem_device_string.as_deref() != Some("cpu") && plan.enable_demag
+    crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) && plan.enable_demag
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -3006,7 +2910,7 @@ fn native_fem_gpu_qualification_status(
     stats: Option<&StepStats>,
     gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
 ) -> &'static str {
-    if plan.mfem_device_string.as_deref() == Some("cpu") {
+    if !crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         return "unsupported";
     }
     let Some(rk_plan) = gpu_rk_plan else {
@@ -3030,7 +2934,7 @@ fn native_fem_gpu_qualification_status(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn apply_native_fem_runtime_contract(
+pub(crate) fn apply_native_fem_runtime_contract(
     provenance: &mut ExecutionProvenance,
     plan: &FemPlanIR,
     stats: Option<&StepStats>,
@@ -3106,14 +3010,7 @@ fn execute_native_fem(
         });
     }
 
-    let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
-        matches!(
-            control.algorithm,
-            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-        )
-    });
-    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let direct_minimization_relax = direct_minimizer_control(plan.relaxation.as_ref());
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
@@ -3123,8 +3020,8 @@ fn execute_native_fem(
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
     let device_info = backend.device_info()?;
-    let mut gpu_state_info = backend.gpu_state_info()?;
-    let mut gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
+    let gpu_state_info = backend.gpu_state_info()?;
+    let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     let execution_engine = native_fem_execution_engine(plan);
     let execution_mode = native_fem_execution_mode(plan);
     validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
@@ -3144,7 +3041,7 @@ fn execute_native_fem(
         gpu_rk_plan_info.hypre_execution_policy,
         gpu_rk_plan_info.demag_residency,
     ));
-    if plan.mfem_device_string.as_deref() != Some("cpu") {
+    if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
         let (level, message) = native_fem_gpu_ready_log_message(
             &gpu_state_info,
             &device_info,
@@ -3154,12 +3051,11 @@ fn execute_native_fem(
     }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let mut dt =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
-    let mut current_stats = if needs_initial_snapshot {
+    let current_stats = if needs_initial_snapshot {
         let mut stats = backend.snapshot_step_stats(node_count)?;
         ensure_fem_object_scalars(&mut stats, plan);
         stats
@@ -3234,674 +3130,73 @@ fn execute_native_fem(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
-    let scalar_schedules = collect_scalar_schedules(outputs)?;
-    let mut field_schedules = collect_field_schedules(outputs)?;
-    let default_scalar_trace = scalar_schedules.is_empty();
+    let field_schedules = collect_field_schedules(outputs)?;
 
-    let mut latest_stats: Option<StepStats> = None;
-    let mut current_time = 0.0;
+    let latest_stats: Option<StepStats>;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-    let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
-    let mut last_preview_revision: Option<u64> = None;
-    let mut cancelled = false;
-    let mut paused = false;
+    let backend_completion: Option<fullmag_ir::StageCompletionIR>;
+    let last_preview_revision: Option<u64> = None;
+    let cancelled: bool;
+    let paused: bool;
 
-    if let Some(control) = direct_minimization_relax {
-        let mut m = backend.copy_m(node_count)?;
-        let mut h_eff = backend.copy_h_eff(node_count)?;
-        let mut g = tangent_gradient_from_field(&m, &h_eff);
-        let mut energy = current_stats.e_total;
-        let mut p: Vec<[f64; 3]> = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-
-        let mut lambda: f64 = 1e-6;
-        let lambda_min: f64 = 1e-15;
-        let lambda_max: f64 = 1e-3;
-        let c_armijo: f64 = 1e-4;
-        let max_backtrack: u32 = 20;
-        let mut use_bb1 = true;
-        let mut reset_consecutive: u64 = 0;
-        let mut direct_step: u64 = 0;
-
-        while direct_step < control.stop.max_steps.unwrap_or(u64::MAX) {
-            if live
-                .as_ref()
-                .is_some_and(|consumer| consumer.initial_snapshot)
-            {
-                if let Some(live) = live.as_mut() {
-                    if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                        let preview_due = display_refresh_due(
-                            last_preview_revision,
-                            &display_selection,
-                            current_stats.step,
-                        );
-                        let preview_targets_global_scalar =
-                            display_is_global_scalar(&display_selection);
-                        let preview_field = if preview_due && !preview_targets_global_scalar {
-                            let request = display_selection.preview_request();
-                            Some(backend.copy_live_preview_field(&request, node_count)?)
-                        } else {
-                            None
-                        };
-                        let cached_preview_fields = if preview_due {
-                            build_fem_cached_preview_fields(
-                                &backend,
-                                &display_selection,
-                                plan,
-                                node_count,
-                            )
-                        } else {
-                            None
-                        };
-                        if current_stats.step <= 2 || preview_due {
-                            eprintln!(
-                            "[fullmag-runner] native-fem bootstrap live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
-                            current_stats.step,
-                            u64::from(display_selection.selection.every_n.max(1)),
-                            preview_due,
-                            display_selection.selection.quantity.as_str(),
-                            preview_field.is_some(),
-                            cached_preview_fields
-                                .as_ref()
-                                .map(|fields| fields.len())
-                                .unwrap_or(0),
-                            preview_targets_global_scalar,
-                            node_count.saturating_mul(3),
-                        );
-                        }
-                        let action = (live.on_step)(StepUpdate {
-                            stats: current_stats.clone(),
-                            grid: live.grid,
-                            fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
-                            magnetization: Some(flatten_vectors(&m)),
-                            preview_field,
-                            cached_preview_fields,
-                            scalar_row_due: preview_due && preview_targets_global_scalar,
-                            finished: false,
-                        });
-                        if preview_due {
-                            last_preview_revision = Some(display_selection.revision);
-                        }
-                        match action {
-                            StepAction::Continue => {}
-                            StepAction::Stop => {
-                                cancelled = true;
-                                break;
-                            }
-                            StepAction::Pause => {
-                                paused = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if paused {
-                break;
-            }
-
-            let max_torque = max_torque_from_field(&m, &h_eff);
-            if control
-                .stop
-                .torque_tolerance_apm
-                .is_some_and(|threshold| max_torque <= threshold)
-            {
-                break;
-            }
-            let g_norm_sq = global_dot_vec3(&g, &g);
-            if g_norm_sq < 1e-30 {
-                break;
-            }
-
-            let mut trial_lambda = lambda;
-            let mut backtracks = 0u32;
-            let mut m_trial = m.clone();
-            let trial_stats = match control.algorithm {
-                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
-                    let trial_stats = loop {
-                        for i in 0..m.len() {
-                            m_trial[i] =
-                                normalized_vec3(sub_vec3(m[i], scale_vec3(g[i], trial_lambda)));
-                        }
-                        backend.upload_magnetization(&m_trial)?;
-                        let mut stats = backend.snapshot_step_stats(node_count)?;
-                        ensure_fem_object_scalars(&mut stats, plan);
-                        let e_trial = stats.e_total;
-                        if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
-                            || backtracks >= max_backtrack
-                        {
-                            break stats;
-                        }
-                        trial_lambda *= 0.5;
-                        backtracks += 1;
-                    };
-
-                    let h_eff_new = backend.copy_h_eff(node_count)?;
-                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-
-                    let scale_factor = 1e-6;
-                    let s: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| scale_vec3(sub_vec3(m_trial[i], m[i]), scale_factor))
-                        .collect();
-                    let y: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| scale_vec3(sub_vec3(g_new[i], g[i]), scale_factor))
-                        .collect();
-                    let s_dot_s = global_dot_vec3(&s, &s);
-                    let s_dot_y = global_dot_vec3(&s, &y);
-                    let y_dot_y = global_dot_vec3(&y, &y);
-
-                    let bb_ok;
-                    if use_bb1 {
-                        if s_dot_y > 1e-30 {
-                            lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                            bb_ok = true;
-                        } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
-                            lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
-                            bb_ok = true;
-                        } else {
-                            bb_ok = false;
-                        }
-                    } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
-                        lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
-                        bb_ok = true;
-                    } else if s_dot_y > 1e-30 {
-                        lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                        bb_ok = true;
-                    } else {
-                        bb_ok = false;
-                    }
-                    if bb_ok {
-                        reset_consecutive = 0;
-                    } else {
-                        reset_consecutive += 1;
-                        lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
-                    }
-                    use_bb1 = !use_bb1;
-
-                    h_eff = h_eff_new;
-                    g = g_new;
-                    trial_stats
-                }
-                fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
-                    let mut p_dot_g = global_dot_vec3(&p, &g);
-                    if p_dot_g >= 0.0 {
-                        p = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-                        p_dot_g = global_dot_vec3(&p, &g);
-                    }
-                    let p_norm = global_dot_vec3(&p, &p).sqrt();
-                    trial_lambda = if p_norm > 0.0 {
-                        (1e-6_f64).min(1.0 / p_norm)
-                    } else {
-                        1e-6
-                    };
-                    let max_backtrack_ncg = 30u32;
-
-                    let trial_stats = loop {
-                        for i in 0..m.len() {
-                            m_trial[i] =
-                                normalized_vec3(add_vec3(m[i], scale_vec3(p[i], trial_lambda)));
-                        }
-                        backend.upload_magnetization(&m_trial)?;
-                        let mut stats = backend.snapshot_step_stats(node_count)?;
-                        ensure_fem_object_scalars(&mut stats, plan);
-                        let e_trial = stats.e_total;
-                        if e_trial <= energy + c_armijo * trial_lambda * p_dot_g
-                            || backtracks >= max_backtrack_ncg
-                        {
-                            break stats;
-                        }
-                        trial_lambda *= 0.5;
-                        backtracks += 1;
-                    };
-
-                    let h_eff_new = backend.copy_h_eff(node_count)?;
-                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    let g_old_transported = project_tangent(&m_trial, &g);
-                    let y_pr: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| sub_vec3(g_new[i], g_old_transported[i]))
-                        .collect();
-                    let mut beta = if g_norm_sq > 1e-30 {
-                        (global_dot_vec3(&g_new, &y_pr) / g_norm_sq).max(0.0)
-                    } else {
-                        0.0
-                    };
-                    let restart_interval = 50u64;
-                    if (direct_step + 1) % restart_interval == 0 {
-                        beta = 0.0;
-                    }
-                    let p_transported = project_tangent(&m_trial, &p);
-                    let mut p_new: Vec<[f64; 3]> = (0..m.len())
-                        .map(|i| {
-                            add_vec3(
-                                scale_vec3(g_new[i], -1.0),
-                                scale_vec3(p_transported[i], beta),
-                            )
-                        })
-                        .collect();
-                    if global_dot_vec3(&p_new, &g_new) >= 0.0 {
-                        p_new = g_new.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
-                    }
-
-                    p = p_new;
-                    h_eff = h_eff_new;
-                    g = g_new;
-                    lambda = trial_lambda;
-                    trial_stats
-                }
-                _ => break,
-            };
-
-            m = m_trial;
-            energy = trial_stats.e_total;
-            direct_step += 1;
-
-            let mut accepted_stats = trial_stats.clone();
-            accepted_stats.step = direct_step;
-            accepted_stats.time = 0.0;
-            accepted_stats.dt = trial_lambda;
-            let torque_apm = max_torque_from_field(&m, &h_eff);
-            accepted_stats.max_dm_dt = 0.0; // direct minimization has no dm/dt
-            accepted_stats.max_torque_Apm = torque_apm;
-            accepted_stats.max_torque_T = torque_apm * crate::MU0;
-            accepted_stats.max_h_eff = h_eff
-                .iter()
-                .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())
-                .fold(0.0, f64::max);
-            ensure_fem_object_scalars(&mut accepted_stats, plan);
-
-            artifacts.record_scalar(&accepted_stats)?;
-            steps.push(accepted_stats.clone());
-            latest_stats = Some(accepted_stats.clone());
-            current_stats = accepted_stats;
-
-            if cancelled {
-                break;
-            }
-
-            let torque = max_torque_from_field(&m, &h_eff);
-            let energy_plateau_range = energy_plateau.record(energy);
-            if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque) {
-                break;
-            }
-        }
+    if let Some(direct_minimizer) = direct_minimization_relax {
+        let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
+            &mut backend,
+            plan,
+            node_count,
+            direct_minimizer,
+            current_stats,
+            live.as_mut(),
+            &mut artifacts,
+            &mut steps,
+            &mut energy_plateau,
+            last_preview_revision,
+        )?;
+        latest_stats = outcome.latest_stats;
+        backend_completion = None;
+        cancelled = outcome.cancelled;
+        paused = outcome.paused;
     } else {
-        let until_label = if until_seconds.is_finite() {
-            format!("{until_seconds:.4e}")
-        } else {
-            "unbounded".to_string()
-        };
-        eprintln!(
-            "[fullmag-runner] native-fem LLG loop: until={} dt_initial={:.4e} \
-             max_steps={} torque_tol_Apm={:.4e} torque_tol_T={:.4e} adaptive={}",
-            until_label,
+        let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
+            &mut backend,
+            plan,
+            until_seconds,
+            node_count,
             dt,
-            plan.relaxation
-                .as_ref()
-                .and_then(|c| c.stop.max_steps)
-                .unwrap_or(0),
-            plan.relaxation
-                .as_ref()
-                .and_then(|c| c.stop.torque_tolerance_apm)
-                .unwrap_or(0.0),
-            plan.relaxation
-                .as_ref()
-                .and_then(|c| c.stop.torque_tolerance_apm)
-                .map(|value| value * crate::MU0)
-                .unwrap_or(0.0),
-            !dt_is_fixed,
-        );
-        while current_time < until_seconds {
-            if live
-                .as_ref()
-                .is_some_and(|consumer| consumer.initial_snapshot)
-            {
-                if let Some(live) = live.as_mut() {
-                    if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                        let preview_due = display_refresh_due(
-                            last_preview_revision,
-                            &display_selection,
-                            current_stats.step,
-                        );
-                        let preview_targets_global_scalar =
-                            display_is_global_scalar(&display_selection);
-                        let preview_field = if preview_due && !preview_targets_global_scalar {
-                            let request = display_selection.preview_request();
-                            Some(backend.copy_live_preview_field(&request, node_count)?)
-                        } else {
-                            None
-                        };
-                        let cached_preview_fields = if preview_due {
-                            build_fem_cached_preview_fields(
-                                &backend,
-                                &display_selection,
-                                plan,
-                                node_count,
-                            )
-                        } else {
-                            None
-                        };
-                        let action = (live.on_step)(StepUpdate {
-                            stats: current_stats.clone(),
-                            grid: live.grid,
-                            fem_mesh: (current_stats.step == 0)
-                                .then_some(crate::types::FemMeshPayload::from(plan)),
-                            magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
-                            preview_field,
-                            cached_preview_fields,
-                            scalar_row_due: preview_due && preview_targets_global_scalar,
-                            finished: false,
-                        });
-                        if preview_due {
-                            last_preview_revision = Some(display_selection.revision);
-                        }
-                        match action {
-                            StepAction::Continue => {}
-                            StepAction::Stop => {
-                                cancelled = true;
-                                break;
-                            }
-                            StepAction::Pause => {
-                                paused = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if paused {
-                break;
-            }
-            let dt_step = dt.min(until_seconds - current_time);
-            let interrupt_requested = live
-                .as_ref()
-                .and_then(|consumer| consumer.interrupt_requested);
-            let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
-                continue;
-            };
-            ensure_fem_object_scalars(&mut stats, plan);
-            current_time = stats.time;
-            // Feed back the suggested next dt so the adaptive stepper can grow/shrink
-            // across outer loop iterations (mirrors fem_reference.rs behaviour).
-            if !dt_is_fixed {
-                if let Some(s) = stats.dt_suggested {
-                    dt = s;
-                } else if stats.dt > 0.0 {
-                    dt = stats.dt;
-                }
-            }
-            latest_stats = Some(stats.clone());
-            current_stats = stats.clone();
-            if let Some(live) = live.as_mut() {
-                let heavy_payload_every = live.field_every_n.max(1);
-                let display_selection = live.display_selection.map(|get| get());
-                let preview_due = display_selection
-                    .as_ref()
-                    .map(|selection| {
-                        display_refresh_due(last_preview_revision, selection, stats.step)
-                    })
-                    .unwrap_or(false);
-                let preview_targets_global_scalar = display_selection
-                    .as_ref()
-                    .is_some_and(display_is_global_scalar);
-                let magnetization = if stats.step % heavy_payload_every == 0 {
-                    Some(flatten_vectors(&backend.copy_m(node_count)?))
-                } else {
-                    None
-                };
-                let preview_field = if preview_due && !preview_targets_global_scalar {
-                    let selection = display_selection.as_ref().expect("checked preview_due");
-                    let request = selection.preview_request();
-                    Some(backend.copy_live_preview_field(&request, node_count)?)
-                } else {
-                    None
-                };
-                let cached_preview_fields = if preview_due {
-                    display_selection.as_ref().and_then(|sel| {
-                        build_fem_cached_preview_fields(&backend, sel, plan, node_count)
-                    })
-                } else {
-                    None
-                };
-                if stats.step <= 2 || preview_due {
-                    eprintln!(
-                        "[fullmag-runner] native-fem live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
-                        stats.step,
-                        display_selection
-                            .as_ref()
-                            .map(|selection| u64::from(selection.selection.every_n.max(1)))
-                            .unwrap_or(0),
-                        preview_due,
-                        display_selection
-                            .as_ref()
-                            .map(|selection| selection.selection.quantity.as_str())
-                            .unwrap_or("-"),
-                        preview_field.is_some(),
-                        cached_preview_fields
-                            .as_ref()
-                            .map(|fields| fields.len())
-                            .unwrap_or(0),
-                        preview_targets_global_scalar,
-                        magnetization
-                            .as_ref()
-                            .map(|values| values.len())
-                            .unwrap_or(0),
-                    );
-                }
-                let action = (live.on_step)(StepUpdate {
-                    stats: stats.clone(),
-                    grid: live.grid,
-                    fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
-                    magnetization,
-                    preview_field,
-                    cached_preview_fields,
-                    scalar_row_due: preview_due && preview_targets_global_scalar,
-                    finished: false,
-                });
-                if preview_due {
-                    last_preview_revision = Some(
-                        display_selection
-                            .as_ref()
-                            .expect("checked preview_due")
-                            .revision,
-                    );
-                }
-                match action {
-                    StepAction::Continue => {}
-                    StepAction::Stop => {
-                        cancelled = true;
-                    }
-                    StepAction::Pause => {
-                        paused = true;
-                    }
-                }
-            }
-            if cancelled || paused {
-                break;
-            }
-            if default_scalar_trace || scalar_schedules.is_empty() {
-                artifacts.record_scalar(&stats)?;
-                steps.push(stats);
-            } else {
-                artifacts.record_scalar(&stats)?;
-                steps.push(stats);
-            }
-            let latest = steps.last().expect("just pushed stats");
-            let energy_plateau_range = energy_plateau.record(latest.e_total);
-            let stop_for_relaxation = if let Some(control) = plan.relaxation.as_ref() {
-                if let Some(completion) = backend.stage_completion()? {
-                    backend_completion = Some(completion);
-                    true
-                } else {
-                    let max_steps_hit = latest.step >= control.stop.max_steps.unwrap_or(u64::MAX);
-                    let converged = relaxation_converged(
-                        control,
-                        latest,
-                        energy_plateau_range,
-                        plan.gyromagnetic_ratio,
-                        plan.material.damping,
-                        pure_damping_relax,
-                    );
-                    if max_steps_hit || converged {
-                        eprintln!(
-                            "[fullmag-runner] native-fem relaxation stop at step {}: \
-                             max_steps_hit={max_steps_hit} (step={} >= max_steps={}), \
-                             converged={converged} \
-                             (max_torque_T={:.4e} torque_tol_Apm={} torque_tol_T={} energy_tol={})",
-                            latest.step,
-                            latest.step,
-                            control
-                                .stop
-                                .max_steps
-                                .map(|value| value.to_string())
-                                .unwrap_or_else(|| "none".to_string()),
-                            latest.max_torque_T,
-                            control
-                                .stop
-                                .torque_tolerance_apm
-                                .map(|value| format!("{value:.4e}"))
-                                .unwrap_or_else(|| "none".to_string()),
-                            control
-                                .stop
-                                .torque_tolerance_apm
-                                .map(|value| format!("{:.4e}", value * crate::MU0))
-                                .unwrap_or_else(|| "none".to_string()),
-                            control
-                                .stop
-                                .energy_tolerance_j
-                                .map(|value| format!("{value:.4e}"))
-                                .unwrap_or_else(|| "none".to_string()),
-                        );
-                    }
-                    max_steps_hit || converged
-                }
-            } else {
-                false
-            };
-            if stop_for_relaxation {
-                break;
-            }
-        }
-        if !cancelled {
-            let until_label = if until_seconds.is_finite() {
-                format!("{until_seconds:.4e}")
-            } else {
-                "unbounded".to_string()
-            };
-            eprintln!(
-                "[fullmag-runner] native-fem loop exited: time={:.4e} until={} (time_limit_reached={})",
-                current_time,
-                until_label,
-                current_time >= until_seconds,
-            );
-        }
+            dt_is_fixed,
+            current_stats,
+            live.as_mut(),
+            &mut artifacts,
+            &mut steps,
+            &mut energy_plateau,
+            last_preview_revision,
+        )?;
+        latest_stats = outcome.latest_stats;
+        backend_completion = outcome.backend_completion;
+        cancelled = outcome.cancelled;
+        paused = outcome.paused;
     }
 
-    let mut final_stats = latest_stats.unwrap_or(StepStats {
-        step: 0,
-        time: 0.0,
-        dt: 0.0,
-        e_ex: 0.0,
-        e_demag: 0.0,
-        e_ext: 0.0,
-        e_ani: 0.0,
-        e_total: 0.0,
-        max_dm_dt: 0.0,
-        max_h_eff: 0.0,
-        max_h_demag: 0.0,
-        wall_time_ns: 0,
-        ..StepStats::default()
-    });
-    ensure_fem_object_scalars(&mut final_stats, plan);
-
-    // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
-    // regardless of whether the last loop iteration had preview_due = true.
-    if let Some(live) = live.as_mut() {
-        if let Some(display_selection) = live.display_selection.map(|get| get()) {
-            if let Some(cached) =
-                build_fem_cached_preview_fields(&backend, &display_selection, plan, node_count)
-            {
-                let _ = (live.on_step)(StepUpdate {
-                    stats: final_stats.clone(),
-                    grid: live.grid,
-                    fem_mesh: None,
-                    magnetization: None,
-                    preview_field: None,
-                    cached_preview_fields: Some(cached),
-                    scalar_row_due: false,
-                    finished: false,
-                });
-            }
-        }
-    }
-
-    for schedule in &mut field_schedules {
-        let values = copy_native_fem_field_snapshot(&backend, &schedule.name, node_count)?;
-        artifacts.record_field_snapshot(FieldSnapshot {
-            name: schedule.name.clone(),
-            step: final_stats.step,
-            time: final_stats.time,
-            solver_dt: final_stats.dt,
-            values,
-        })?;
-    }
-
-    let final_magnetization = backend.copy_m(node_count)?;
-    let (field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
-    provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
-    gpu_state_info = backend.gpu_state_info()?;
-    gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
-    apply_native_fem_runtime_contract(
-        &mut provenance,
+    crate::fem::relax::finalize::finalize_native_fem_relaxation(
+        &mut backend,
         plan,
-        Some(&final_stats),
-        Some(&gpu_state_info),
-        Some(&gpu_rk_plan_info),
-    );
-    let status = if paused {
-        RunStatus::Paused
-    } else if cancelled {
-        RunStatus::Cancelled
-    } else {
-        RunStatus::Completed
-    };
-    let completion = if let Some(mut completion) = backend_completion {
-        completion.status = match status {
-            RunStatus::Completed => "completed",
-            RunStatus::Cancelled => "cancelled",
-            RunStatus::Paused => "paused",
-            RunStatus::Failed => "failed",
-        }
-        .to_string();
-        completion
-    } else {
-        crate::relaxation::infer_stage_completion(
-            status,
-            plan.relaxation.as_ref(),
-            &steps,
-            plan.gyromagnetic_ratio,
-            plan.material.damping,
-            llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
-        )
-    };
-
-    Ok(ExecutedRun {
-        result: RunResult {
-            status,
-            steps,
-            final_magnetization,
-            completion: Some(completion),
-        },
+        node_count,
         initial_magnetization,
-        field_snapshots,
-        field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
-        provenance,
-    })
+        field_schedules,
+        live.as_mut(),
+        artifacts,
+        steps,
+        crate::fem::relax::finalize::NativeFemRelaxationFinalization {
+            latest_stats,
+            backend_completion,
+            cancelled,
+            paused,
+        },
+    )
 }
 
 #[cfg(feature = "fem-gpu")]
-fn fem_poisson_demag_provenance(
+pub(crate) fn fem_poisson_demag_provenance(
     plan: &FemPlanIR,
     stats: Option<&StepStats>,
 ) -> Option<FemPoissonDemagProvenance> {
@@ -3971,86 +3266,11 @@ fn execute_cuda_fdm(
 }
 
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
+pub(crate) fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
     values
         .iter()
         .flat_map(|vector| vector.iter().copied())
         .collect()
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn dot_vec3(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn add_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn sub_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn scale_vec3(a: [f64; 3], s: f64) -> [f64; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn normalized_vec3(v: [f64; 3]) -> [f64; 3] {
-    let n2 = dot_vec3(v, v);
-    if n2 <= 0.0 {
-        [0.0, 0.0, 0.0]
-    } else {
-        let inv = 1.0 / n2.sqrt();
-        [v[0] * inv, v[1] * inv, v[2] * inv]
-    }
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn tangent_gradient_from_field(magnetization: &[[f64; 3]], h_eff: &[[f64; 3]]) -> Vec<[f64; 3]> {
-    magnetization
-        .iter()
-        .zip(h_eff.iter())
-        .map(|(m, h)| {
-            let projected = sub_vec3(*h, scale_vec3(*m, dot_vec3(*m, *h)));
-            scale_vec3(projected, -1.0)
-        })
-        .collect()
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn global_dot_vec3(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(ai, bi)| dot_vec3(*ai, *bi))
-        .sum()
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn project_tangent(m: &[[f64; 3]], v: &[[f64; 3]]) -> Vec<[f64; 3]> {
-    m.iter()
-        .zip(v.iter())
-        .map(|(mi, vi)| sub_vec3(*vi, scale_vec3(*mi, dot_vec3(*mi, *vi))))
-        .collect()
-}
-
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-fn max_torque_from_field(magnetization: &[[f64; 3]], h_eff: &[[f64; 3]]) -> f64 {
-    magnetization
-        .iter()
-        .zip(h_eff.iter())
-        .map(|(m, h)| {
-            let cross = [
-                m[1] * h[2] - m[2] * h[1],
-                m[2] * h[0] - m[0] * h[2],
-                m[0] * h[1] - m[1] * h[0],
-            ];
-            (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt()
-        })
-        .fold(0.0, f64::max)
 }
 
 #[cfg(feature = "cuda")]
@@ -4194,30 +3414,6 @@ fn record_cuda_final_outputs(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
-fn copy_native_fem_field_snapshot(
-    backend: &NativeFemBackend,
-    name: &str,
-    node_count: usize,
-) -> Result<Vec<[f64; 3]>, RunError> {
-    let quantity = normalized_quantity_name(name).map_err(|_| RunError {
-        message: format!("unsupported native FEM field snapshot '{}'", name),
-    })?;
-    match quantity {
-        "m" => backend.copy_m(node_count),
-        "H_ex" => backend.copy_h_ex(node_count),
-        "H_demag" => backend.copy_h_demag(node_count),
-        "H_ext" => backend.copy_h_ext(node_count),
-        "H_ani" => backend.copy_h_ani(node_count),
-        "H_dmi" => backend.copy_h_dmi(node_count),
-        "H_dmi_bulk" => backend.copy_h_dmi_bulk(node_count),
-        "H_eff" => backend.copy_h_eff(node_count),
-        other => Err(RunError {
-            message: format!("unsupported native FEM field snapshot '{}'", other),
-        }),
-    }
-}
-
 #[cfg(feature = "cuda")]
 fn copy_cuda_field_snapshot(
     backend: &NativeFdmBackend,
@@ -4294,6 +3490,22 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_plan_for_native_gpu_ignores_cpu_mfem_device_env() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_MFEM_DEVICE", "ceed-cpu");
+        }
+
+        let gpu_plan = fem_plan_for_native_gpu(&tiny_fem_plan());
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_MFEM_DEVICE");
+        }
+        assert_eq!(gpu_plan.mfem_device_string.as_deref(), Some("cuda"));
+    }
+
     #[test]
     fn native_cuda_field_outputs_use_shared_local_field_copy_helper() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
@@ -4327,21 +3539,36 @@ mod tests {
 
     #[test]
     fn native_fem_field_outputs_expose_dmi_snapshot_quantities() {
-        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
             .expect("dispatch.rs should be readable");
+        let snapshots = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/snapshots.rs"
+        ))
+        .expect("fem/relax/snapshots.rs should be readable");
+        let finalize = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/finalize.rs"
+        ))
+        .expect("fem/relax/finalize.rs should be readable");
+        let helper_signature = ["pub(crate) fn ", "copy_native_fem_field_snapshot"].concat();
 
         assert!(
-            source.contains("fn copy_native_fem_field_snapshot("),
-            "native FEM field outputs should share one copy helper"
+            !dispatch.contains(&helper_signature),
+            "dispatch.rs must not own native FEM relaxation field snapshot copying"
         );
         assert!(
-            source.contains("\"H_dmi\" => backend.copy_h_dmi(node_count)")
-                && source.contains("\"H_dmi_bulk\" => backend.copy_h_dmi_bulk(node_count)"),
+            snapshots.contains(&helper_signature),
+            "native FEM relaxation field outputs should share one copy helper"
+        );
+        assert!(
+            snapshots.contains("\"H_dmi\" => backend.copy_h_dmi(node_count)")
+                && snapshots.contains("\"H_dmi_bulk\" => backend.copy_h_dmi_bulk(node_count)"),
             "native FEM field output helper must expose interfacial and bulk DMI fields"
         );
         assert!(
-            source
-                .contains("copy_native_fem_field_snapshot(&backend, &schedule.name, node_count)?"),
+            finalize
+                .contains("copy_native_fem_field_snapshot(backend, &schedule.name, node_count)?"),
             "native FEM final field snapshots should use the shared field copy helper"
         );
     }
@@ -4761,7 +3988,8 @@ mod tests {
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn native_fem_runtime_contract_does_not_publish_device_residency_with_hot_loop_sync() {
-        let plan = tiny_fem_plan();
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
         let stats = StepStats {
             hot_loop_host_sync_count: 3,
             ..StepStats::default()
@@ -4800,7 +4028,8 @@ mod tests {
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn native_fem_runtime_contract_marks_strict_device_gpu_as_executable_not_validated() {
-        let plan = tiny_fem_plan();
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
         let stats = StepStats {
             hot_loop_host_sync_count: 0,
             ..StepStats::default()
@@ -4838,7 +4067,8 @@ mod tests {
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn native_fem_runtime_contract_records_gpu_rk_plan_info() {
-        let plan = tiny_fem_plan();
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
         let rk_plan = NativeFemGpuRkPlanInfo {
             exchange_only_enabled: false,
             stage_count: 2,
@@ -4885,6 +4115,25 @@ mod tests {
             provenance.fem_gpu_rk_block_reason.as_deref(),
             Some("GPU RK device-resident path requires CUDA runtime support")
         );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_treats_cpu_mfem_variants_as_unsupported() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.mfem_device_string = Some("ceed-cpu".to_string());
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(&mut provenance, &plan, None, None, None);
+
+        assert_eq!(provenance.fem_execution_mode.as_deref(), Some("cpu_native"));
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("unsupported")
+        );
+        assert_eq!(provenance.uses_cuda_kernels, Some(false));
+        assert_eq!(provenance.uses_gpu_poisson, Some(false));
     }
 
     #[cfg(feature = "fem-gpu")]

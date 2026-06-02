@@ -6,6 +6,7 @@ import {
   buildDataPreviewRows,
   buildDataPreviewSignature,
   buildDataPreviewStepSignature,
+  buildDataPreviewStepTimestamp,
   normalizeDataPreviewSampleCount,
 } from "./dataPreviewModel";
 
@@ -76,16 +77,19 @@ describe("dataPreviewModel", () => {
   });
 
   it("builds a live step signature from solver status", () => {
-    expect(
-      buildDataPreviewStepSignature({
-        last_step_updated_at_unix_ms: Date.UTC(2026, 4, 31, 10, 20, 30, 123),
-        revision: 44,
-        runtime_state: "running",
-        sim_time_seconds: 2.5e-9,
-        step_index: 42,
-      }),
-    ).toBe(
+    const status = {
+      last_step_updated_at_unix_ms: Date.UTC(2026, 4, 31, 10, 20, 30, 123),
+      revision: 44,
+      runtime_state: "running",
+      sim_time_seconds: 2.5e-9,
+      step_index: 42,
+    };
+
+    expect(buildDataPreviewStepSignature(status)).toBe(
       "step 42 | t=2.5000e-9 s | updated 2026-05-31T10:20:30.123Z | rev 44",
+    );
+    expect(buildDataPreviewStepTimestamp(status)).toBe(
+      "2026-05-31T10:20:30.123Z",
     );
   });
 });

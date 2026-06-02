@@ -344,8 +344,8 @@ fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
-fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> bool {
+#[allow(dead_code)]
+pub(crate) fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> bool {
     if let Some(device) = plan
         .mfem_device_string
         .as_deref()
@@ -361,8 +361,7 @@ fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> boo
     }
 }
 
-#[cfg(feature = "fem-gpu")]
-fn native_fem_mfem_device_string_requests_gpu(device: &str) -> bool {
+pub(crate) fn native_fem_mfem_device_string_requests_gpu(device: &str) -> bool {
     let device = device.trim().to_ascii_lowercase();
     if device.is_empty() {
         return false;
@@ -2804,7 +2803,9 @@ mod tests {
         let mut plan = make_test_plan();
         plan.enable_demag = true;
 
-        for device in ["cpu", "omp", "ceed-cpu", "ceed/cpu", "ceed-omp", "ceed/omp", "raja-omp"] {
+        for device in [
+            "cpu", "omp", "ceed-cpu", "ceed/cpu", "ceed-omp", "ceed/omp", "raja-omp",
+        ] {
             plan.mfem_device_string = Some(device.to_string());
             assert_eq!(
                 native_fem_gpu_demag_mode(&plan),

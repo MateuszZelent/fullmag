@@ -12,12 +12,17 @@ describe("StudyInspectorPanelModel", () => {
   it("projects stage authoring, boundary policy, runtime progress, and max torque", () => {
     const snapshot = studySnapshotFromScene({
       study: {
+        demag_enabled: false,
         demag_realization: "poisson_robin",
+        exchange_enabled: true,
         external_field: [0.01, 0, -0.002],
+        fem_demag_solver_policy: { linear_solver: "cg" },
         requested_backend: "fem",
+        requested_cpu_threads: 8,
         requested_device: "gpu",
         requested_mode: "strict",
         requested_precision: "double",
+        solver: { integrator: "rk45" },
         stages: [
           {
             energy_tolerance: "1e-8",
@@ -103,11 +108,16 @@ describe("StudyInspectorPanelModel", () => {
     });
     expect(model.stages[0].progressPercent).toBe(100);
     expect(model.boundary).toEqual({
+      demagEnabled: "disabled",
       demagRealization: "poisson_robin",
+      exchangeEnabled: "enabled",
       externalField: "0.01, 0, -0.002 T",
+      femDemagSolverPolicy: '{"linear_solver":"cg"}',
+      solver: '{"integrator":"rk45"}',
     });
     expect(model.requested).toEqual({
       backend: "fem",
+      cpuThreads: "8",
       device: "gpu",
       mode: "strict",
       precision: "double",
