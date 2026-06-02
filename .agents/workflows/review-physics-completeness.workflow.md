@@ -14,6 +14,12 @@ Review whether a physics-facing feature is complete enough to merge.
    API impact explicit?
 6. Are FDM, FEM, CPU, GPU, and hybrid differences explicit where relevant?
 7. Are validation status, observables, tolerances, and deferred work recorded?
+8. If the change touches backend ownership, runtime selection, solver layout, or
+   production validation, does it align with
+   `docs/architecture/backend-golden-masterplan.md`?
+9. If the change touches FEM demag, are model family, mesh requirements,
+   boundary variant, runtime realization, provenance, and validation target
+   explicit instead of treating demag as one Poisson implementation?
 
 ## Verdict
 

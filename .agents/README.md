@@ -47,6 +47,25 @@ Rules:
 - FDM/FEM differences stay in capability guards and domain adapters,
 - old `bootstrap` / `poll` / `preview/*` flows are legacy, not target architecture.
 
+## Backend architecture rule
+
+The canonical backend solver architecture is:
+
+- `docs/architecture/backend-golden-masterplan.md`
+- `.agents/skills/backend-golden-masterplan/SKILL.md`
+
+Backend work must identify the affected lane: FDM CPU, FDM GPU, FEM CPU, or FEM
+GPU. FEM production work means MFEM/hypre/libCEED for CPU and GPU, not a new
+standalone in-house FEM solver stack. Historical `native-fem-*` documents are
+migration inputs unless they are explicitly superseded into the backend golden
+masterplan.
+
+FEM demag is a model family, not one generic Poisson bucket. Changes must name
+the strategy being touched, such as Poisson airbox Dirichlet/Robin,
+PBC-reduced Poisson, FEM/BEM Fredkin-Koehler, BEM, FMM, or mapped exterior
+shell, and must state mesh requirements, boundary semantics, runtime
+realization, provenance, and validation impact.
+
 ## Build and run rule
 
 When a repository-level `justfile` recipe exists for a build/run/package task, agents should use it

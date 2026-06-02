@@ -6,6 +6,7 @@ If you are looking for the main architecture document for the whole application,
 
 - **Primary application architecture:** `docs/specs/fullmag-application-architecture-v2.md`
 - **Primary control-room API architecture:** `docs/specs/resource-first-control-room-api-v2.md`
+- **Primary backend solver architecture:** `docs/architecture/backend-golden-masterplan.md`
 - **Compatibility endpoint reference:** `docs/specs/control-room-api-endpoint-reference-v1.md`
 - **Historical control-room API tree:** `docs/specs/control-room-api-tree-v1.md`
 
@@ -15,26 +16,27 @@ When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
 2. `docs/specs/resource-first-control-room-api-v2.md`
-3. `docs/specs/frontend-v2/README.md`
-4. `docs/specs/session-run-api-v1.md`
-5. `docs/specs/resource-first-control-room-api-v1.md`
-6. `docs/specs/control-room-api-endpoint-reference-v1.md`
-7. `docs/specs/control-room-api-tree-v1.md`
-8. `docs/specs/command-lifecycle-v1.md`
-9. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
-10. `docs/specs/hpc-cluster-execution-v1.md`
-11. `docs/1_project_scope.md`
-12. `docs/2_repo_blueprint.md`
-13. `docs/specs/problem-ir-compatibility-v1.md`
-14. `docs/specs/problem-ir-v0.md`
-15. `docs/specs/capability-matrix-v0.md`
-16. `docs/specs/native-fem-backend-architecture-v1.md`
-17. `docs/specs/native-fem-magnetoelastic-patch-v1.md`
-18. `docs/specs/mesh-roundtrip-semantics-v1.md`
-19. `docs/specs/frequency-domain-artifacts-v2.md`
-20. `docs/specs/viewport3d-contract-v1.md`
-21. the relevant `docs/physics/` notes
-22. the relevant `docs/plans/active/` plan
+3. `docs/architecture/backend-golden-masterplan.md`
+4. `docs/specs/frontend-v2/README.md`
+5. `docs/specs/session-run-api-v1.md`
+6. `docs/specs/resource-first-control-room-api-v1.md`
+7. `docs/specs/control-room-api-endpoint-reference-v1.md`
+8. `docs/specs/control-room-api-tree-v1.md`
+9. `docs/specs/command-lifecycle-v1.md`
+10. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+11. `docs/specs/hpc-cluster-execution-v1.md`
+12. `docs/1_project_scope.md`
+13. `docs/2_repo_blueprint.md`
+14. `docs/specs/problem-ir-compatibility-v1.md`
+15. `docs/specs/problem-ir-v0.md`
+16. `docs/specs/capability-matrix-v0.md`
+17. `docs/specs/native-fem-backend-architecture-v1.md` as historical migration input
+18. `docs/specs/native-fem-magnetoelastic-patch-v1.md`
+19. `docs/specs/mesh-roundtrip-semantics-v1.md`
+20. `docs/specs/frequency-domain-artifacts-v2.md`
+21. `docs/specs/viewport3d-contract-v1.md`
+22. the relevant `docs/physics/` notes
+23. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -68,14 +70,19 @@ cutover acceptance. They do not override the resource-first API contract.
 
 ### 2. Solver architecture
 
+- `docs/architecture/backend-golden-masterplan.md`
 - `docs/specs/native-fem-backend-architecture-v1.md`
 - `docs/specs/native-fem-magnetoelastic-patch-v1.md`
 - `docs/specs/exchange-only-full-solver-architecture-v1.md`
 
-`native-fem-backend-architecture-v1.md` is the target architecture for the
-native FEM backend after the 2026-05-16 audit. It defines the modular split
-between FEM core, CPU/MFEM, GPU/CUDA, operator modules, demag subsystem,
-runtime ownership, and validation/qualification boundaries.
+`backend-golden-masterplan.md` is the accepted target architecture for backend
+solver ownership, solver lanes, source layout, workflow ownership, runtime
+selection, FEM demag model families, and production physics validation.
+
+`native-fem-backend-architecture-v1.md` is a historical migration input from
+the 2026-05-16 audit. Use it only where it helps preserve operator/module
+lessons while moving FEM production work into the MFEM/hypre/libCEED-centered
+architecture defined by the backend golden masterplan.
 
 `native-fem-magnetoelastic-patch-v1.md` is the staged contract for moving from
 the current prescribed-strain magnetoelastic slice to same-mesh quasistatic
@@ -84,7 +91,8 @@ two-way FEM magnetoelasticity.
 `exchange-only-full-solver-architecture-v1.md` is the architecture for the
 first physically meaningful solver slice.
 
-These are subordinate to the application architecture and should be read as:
+The solver docs are subordinate to the application architecture and should be
+read as:
 
 - how the first executable solver fits inside the whole app,
 - not as the only architecture document for Fullmag.
@@ -193,13 +201,21 @@ frontend cutover, or legacy `apps/web` status changes, also update:
 - `AGENTS.md`
 - the relevant `.agents/skills/frontend-v2-*` skill when agent behavior must change
 
-Whenever native FEM backend ownership, `Context`, `mfem_bridge.cpp`,
-CPU/GPU separation, operator extraction, demag Poisson policy, or FEM solver
-qualification changes, also update:
+Whenever backend solver ownership, source layout, runtime selection, workflow
+ownership, solver lane separation, FEM demag model family, or production
+physics-validation policy changes, also update:
 
-- `docs/specs/native-fem-backend-architecture-v1.md`
+- `docs/architecture/backend-golden-masterplan.md`
+- `.agents/skills/backend-golden-masterplan/SKILL.md` when agent behavior must
+  change
+
+For FEM/MFEM implementation details that touch `Context`, `mfem_bridge.cpp`,
+CPU/GPU separation, operator extraction, demag strategy implementations, or FEM
+solver qualification, also check:
+
+- `.agents/skills/fem-native-backend-architecture/SKILL.md`
+- `docs/specs/native-fem-backend-architecture-v1.md` as a historical migration
+  input, not as the accepted target architecture
 - `docs/adr/0014-native-fem-backend-modularization.md` when the long-lived
   decision changes
 - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
-- `.agents/skills/fem-native-backend-architecture/SKILL.md` when agent behavior
-  must change

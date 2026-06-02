@@ -208,9 +208,9 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
 - FEM time-integration performance gates must cover every supported explicit RK integrator, not only Heun.
 - When FEM CPU and FEM GPU work are split between agents, keep this agent's changes to the FEM CPU path only and do not create GPU hot-loop or GPU-state artifacts.
-- Native FEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
-- Native FEM CPU and GPU implementations must share backend-neutral physics contracts; do not duplicate equations, signs, units, or observable semantics per device.
-- Any native FEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
+- FEM/MFEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
+- FEM CPU and FEM GPU implementations must share backend-neutral physics contracts while using separate MFEM/hypre/libCEED runtime realizations; do not duplicate equations, signs, units, or observable semantics per device.
+- Any FEM/MFEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
 
 ---
 
@@ -583,6 +583,24 @@ The user-facing execution vocabulary should remain:
 
 ## 11. Backend authority policy
 
+`docs/architecture/backend-golden-masterplan.md` is the canonical backend
+architecture source. It governs solver lanes, runtime ownership, source layout,
+production physics validation, and backend-related agent instructions. Lower
+level ADRs, physics notes, specs, skills, and implementation reports must align
+with it or explicitly supersede a scoped part of it.
+
+Before backend work, identify the solver lane:
+
+1. FDM CPU
+2. FDM GPU
+3. FEM CPU
+4. FEM GPU
+
+The lanes share physics contracts, units, public quantity semantics,
+provenance vocabulary, and validation targets. They do not share hidden runtime
+state, hot loops, device residency, fallback behavior, or backend-specific
+implementation details.
+
 Each solver family needs:
 
 - one **authoritative production backend**
@@ -601,8 +619,18 @@ Each solver family needs:
 | Role | Backend | Authority |
 |---|---|---|
 | Reference | Rust FEM reference | validation oracle, debug path |
-| Production CPU | native MFEM/hypre/libCEED | authoritative CPU production path |
-| Production GPU | native MFEM/libCEED/CUDA | authoritative GPU production path |
+| Production CPU | MFEM/hypre/libCEED | authoritative CPU production path |
+| Production GPU | MFEM/hypre/libCEED/CUDA | authoritative GPU production path |
+
+FEM is not a standalone in-house FEM numerical stack. Fullmag's production FEM
+architecture means MFEM/hypre/libCEED integration with explicit CPU and GPU
+execution lanes. Historical file names that say "native FEM" are migration
+sources, not the strategic architecture.
+
+FEM demag is a model family, not one Poisson implementation. Keep Poisson
+airbox Dirichlet/Robin, PBC-reduced Poisson, FEM/BEM Fredkin-Koehler, future
+BEM/FMM, and mapped-exterior strategies separated by model, mesh requirements,
+boundary semantics, runtime realization, provenance, and validation.
 
 ### 11.3 Frequency-domain / eigensolve
 
@@ -879,17 +907,23 @@ Use them to study:
   - lightweight scripting ergonomics
   - pragmatic relax/minimize semantics
   - FFT-centered operator layout
+  - interaction files own parameters, field, energy, observables, and backend
+    calls separately from run/relax workflow files
 
 - **BORIS**
   - modular multiphysics
   - CUDA decomposition
   - large-scale GPU runtime patterns
+  - CPU/CUDA implementations mirror each other by interaction and by ODE
+    evaluator/integrator family
 
 - **tetmag / tetrax**
   - FEM operator design
   - matrix-free ideas
   - frequency-domain architecture
   - demag/operator caching concepts
+  - interactions are plugin-like units and experiments/workflows such as
+    relaxation and eigen solve live above interactions
 
 ### Hard rule
 
@@ -1119,7 +1153,8 @@ The following stale concepts should be actively retired when encountered:
 | dense eigensolver as default future path | matrix-free Krylov operator architecture |
 | “relax = run with another stop” | explicit relax semantics and stop reason |
 | monolithic viewport file | split model/hooks/overlays/scene |
-| monolithic native FEM `Context` / `mfem_bridge.cpp` solver | `FemCore` plus CPU/GPU backend modules for interactions, demag, solvers, integrators, runtime, and observables |
+| monolithic native FEM `Context` / `mfem_bridge.cpp` solver | `solver_runtime/*`, `solvers/{fdm,fem}/*`, and `backends/solvers/fem/mfem/{common,cpu,gpu}/*` |
+| generic FEM `demag/` implementation | explicit FEM demag strategy directories: `poisson_airbox`, `pbc_reduced_poisson`, `fem_bem`, `fmm`, and `mapped_exterior_shell` where applicable |
 
 ---
 

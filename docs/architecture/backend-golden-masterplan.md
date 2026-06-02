@@ -97,9 +97,97 @@ focused control-room resource or smoke checks.
 
 ## 5. Canonical target solver tree
 
-This is the intended source tree after the masterplan refactor. It is the
-navigation model humans should use when looking for a solver, interaction,
-integrator, observable, backend adapter, or validation fixture.
+This is the intended source tree after the masterplan refactor. It is not an
+illustrative sketch. It is the navigation model humans should use when looking
+for a solver, interaction, workflow, integrator, observable, backend adapter, or
+validation fixture.
+
+### 5.1 External solver architecture lessons
+
+The target layout follows patterns already proven by the local reference
+solvers in `external_solvers/`:
+
+| Solver | Local evidence | Architectural lesson for Fullmag |
+|---|---|---|
+| mumax3 | `external_solvers/3/engine/exchange.go`, `demag.go`, `energy.go`, `relax.go`, `run.go`; CUDA kernels under `external_solvers/3/cuda/*` | physics interactions, energy registration, relaxation, time loop, and CUDA kernels are separate modules, not branches in one dispatcher |
+| BORIS | `external_solvers/BORIS/Boris/Exchange.*`, `ExchangeCUDA.*`, `Demag*`, `Zeeman*`, `DiffEqFM_Evals_*.cpp`, `DiffEqFM_EvalsCUDA_*.cu` | CPU/CUDA implementations mirror each other by interaction and by algorithm; complex subsystems such as demag get their own directory-level ownership |
+| TetraX | `external_solvers/tetrax/tetrax/interactions/*`, `experiments/_relax/*`, `experiments/eigen/*` | interactions are plugin-like units; relaxation and eigensolvers are workflow modules above interactions, not mixed into interaction code |
+
+Fullmag adopts these rules:
+
+1. Every interaction is a first-class module. It owns its parameters, effective
+   field or weak form, energy, energy density, observables, validation fixtures,
+   and CPU/GPU realization adapters.
+2. Every workflow is a first-class module. Time-domain solve, relaxation,
+   hysteresis, eigensolver, and frequency-domain solve are sibling workflows.
+   They must not be hidden as branches in `dispatch.rs`, `execute.rs`, or a
+   compiled bridge file.
+3. CPU and GPU code must mirror names and ownership. If FDM CUDA has
+   `interactions/exchange`, FDM CPU and the shared FDM contract must expose the
+   corresponding exchange module unless the capability is explicitly unsupported
+   with provenance.
+4. Non-local or workspace-heavy interactions, especially demag, are subsystem
+   directories. FFT kernels, convolution plans, PBC kernels, mesh operators, and
+   temporary buffers do not belong in a generic interaction file.
+5. Energy and observable aggregation uses registries. Interactions register
+   terms; aggregate total energy code must not know every interaction through a
+   growing `match` or `if` chain.
+6. Validation is colocated with the module it protects and promoted into the
+   production physics suite. A new interaction without fixtures is incomplete.
+
+### 5.2 Required navigation axes
+
+The tree is organized by three axes:
+
+1. Discretization: `fdm` and `fem/mfem`.
+2. Device lane: `cpu` and `gpu/cuda`.
+3. Concern: `interactions`, `workflows`, `integrators`, `observables`,
+   `artifacts`, and `validation`.
+
+The user-facing FEM architecture is MFEM/hypre/libCEED. Historical file names
+may remain only as migration sources until they are renamed or deleted.
+
+### 5.3 FEM demag is a model family
+
+FEM demagnetization is not one implementation behind `demag/`. It is a family
+of numerical realizations of the same magnetostatic energy and field contract.
+The architecture must keep these axes separate:
+
+| Axis | Examples | Why it matters |
+|---|---|---|
+| Physical/numerical model | Poisson airbox, FEM/BEM Fredkin-Koehler, BEM, FMM, mapped exterior/shell transform | decides whether the exterior is a volumetric air domain, a boundary integral, or a far-field approximation |
+| Mesh topology | shared magnetic+air domain, body-only magnetic mesh, periodic shared-domain unit cell | planner must choose or reject mesh workflows before runtime |
+| Boundary variant | airbox Dirichlet, airbox Robin, periodic reduced Poisson, open-boundary BEM | changes weak form, validation target, and provenance |
+| Runtime realization | MFEM/hypre CPU, MFEM/hypre GPU, libCEED/CUDA operators, dense reference BEM, compressed BEM/H2/FMM, explicit hybrid CPU Poisson debug path | changes performance, residency, fallback legality, and runtime telemetry |
+
+Current and target FEM demag strategy names:
+
+| Strategy | Mesh requirement | CPU status | GPU status | Notes |
+|---|---|---|---|---|
+| `poisson_airbox_dirichlet` | shared magnetic+air mesh | executable/bootstrap | target via MFEM/hypre GPU when prerequisites pass | finite-domain approximation, fastest sanity path |
+| `poisson_airbox_robin` | shared magnetic+air mesh | executable/default | target via MFEM/hypre GPU when prerequisites pass | current preferred airbox model; must carry Robin beta policy |
+| `poisson_airbox_pbc_reduced` | periodic shared magnetic+air unit cell | reference/partial, MFEM target | target after MFEM/hypre PBC gate | excludes Robin/Dirichlet mass on periodic seams |
+| `fem_bem_fredkin_koehler` | body-only closed magnetic mesh with oriented boundary | dense reference path first | future compressed/operator path | no volumetric airbox; exterior is represented by boundary integral |
+| `bem` | body-only closed magnetic mesh with oriented boundary | architecture only until capability gate | future | public alias or lower-level realization must be decided by capability matrix |
+| `fmm` | body-only magnetic mesh | future | future | far-field acceleration, not a separate public energy term |
+| `mapped_exterior_shell` | mapped exterior mesh | future | future | may require exterior shell elements but not ordinary truncated airbox semantics |
+
+Rules:
+
+1. `Demag()` remains the public physics term. FEM demag model selection is a
+   requested/resolved strategy under that term, not a new interaction.
+2. Airbox strategies must require `air_box_config` and shared-domain
+   magnetic+air meshes. FEM/BEM/FMM strategies must not allocate or require a
+   volumetric airbox.
+3. Provenance must record requested model, resolved model, mesh topology,
+   boundary variant, solver policy, execution realization, and validation
+   status.
+4. Runtime compatibility paths such as `hybrid_cpu_poisson` are execution
+   realizations, not physical models. Strict GPU requests must not silently
+   fallback to them.
+5. Cross-model validation is mandatory: airbox padding convergence must be
+   compared against body-only open-boundary strategies on the same magnetic
+   body before production claims.
 
 ```text
 crates/fullmag-runner/src/
@@ -115,8 +203,19 @@ crates/fullmag-runner/src/
     shared/
       units.rs             lane-independent unit assertions
       quantities.rs        public quantity and artifact IDs
+      energy_registry.rs   aggregate energy/energy-density registry contracts
       validation.rs        common validation report types
       state_transfer.rs    explicit FDM<->FEM transfer contracts
+      interactions/
+        exchange.rs        backend-neutral interaction contracts
+        demag.rs
+        zeeman.rs
+        anisotropy.rs
+        dmi.rs
+        thermal.rs
+        stt.rs
+        oersted.rs
+        magnetoelastic.rs
 
     fdm/
       mod.rs
@@ -127,19 +226,60 @@ crates/fullmag-runner/src/
       artifacts.rs         FDM artifact persistence
       observables.rs       FDM energy/field/average read models
       interactions/
-        exchange.rs
-        demag.rs
-        zeeman.rs
-        anisotropy.rs
-        dmi.rs
-        thermal.rs
-        stt.rs
+        exchange/
+          contract.rs
+          field.rs
+          energy.rs
+          observables.rs
+          validation.rs
+        demag/
+          contract.rs
+          field.rs
+          energy.rs
+          fft_plan.rs
+          pbc.rs
+          observables.rs
+          validation.rs
+        zeeman/
+        anisotropy/
+        dmi/
+        thermal/
+        stt/
+      workflows/
+        time_domain/
+          execute.rs
+          schedule.rs
+          output.rs
+        relaxation/
+          energy_minimize.rs
+          torque_minimize.rs
+          execute.rs
+        hysteresis/
+          sweep.rs
+          loop_state.rs
+          execute.rs
+        frequency_domain/
+          linear_response.rs
+          spectrum.rs
+          execute.rs
+      integrators/
+        euler.rs
+        heun.rs
+        rk4.rs
+        rk_adaptive.rs
       cpu/
         mod.rs
         engine.rs          CPU reference lane adapter
         integrators/
         interactions/
+          exchange/
+            stencil.rs
+            workspace.rs
+          demag/
+            convolution.rs
+            workspace.rs
         observables/
+        workflows/
       gpu/
         mod.rs
         cuda/
@@ -147,19 +287,48 @@ crates/fullmag-runner/src/
           residency.rs
           integrators/
           interactions/
+            exchange/
+              launch.rs
+              workspace.rs
+            demag/
+              kernel_builder.rs
+              convolution.rs
+              workspace.rs
           demag_fft/
           observables/
+          workflows/
 
     fem/
       mod.rs
       contract.rs          FEM public lane contract
       plan.rs              FEM plan normalization
       pbc.rs               FEM periodic and capability preprocessing
-      execute.rs           FEM time-domain facade
-      eigen_execute.rs     FEM eigen facade
+      execute.rs           FEM workflow facade after lane selection
       preview.rs           FEM preview/data extraction
       artifacts.rs         FEM artifact persistence
       observables.rs       FEM energy/field/average read models
+      workflows/
+        time_domain/
+          execute.rs
+          schedule.rs
+          output.rs
+        relaxation/
+          energy_minimize.rs
+          torque_minimize.rs
+          execute.rs
+        hysteresis/
+          sweep.rs
+          loop_state.rs
+          execute.rs
+        eigen/
+          assemble_dynamic_matrix.rs
+          solve.rs
+          mode_profiles.rs
+          execute.rs
+        frequency_domain/
+          linear_response.rs
+          spectrum.rs
+          execute.rs
       mfem/
         mod.rs
         common/
@@ -168,15 +337,42 @@ crates/fullmag-runner/src/
           materials.rs     material fields and coefficient import
           fields.rs        magnetization and effective-field buffers
           interactions/
-            exchange.rs
-            demag.rs
-            zeeman.rs
-            anisotropy.rs
-            dmi.rs
-            thermal.rs
-            stt.rs
-            oersted.rs
-            magnetoelastic.rs
+            exchange/
+              contract.rs
+              coefficients.rs
+              weak_form.rs
+              energy.rs
+              validation.rs
+            demag/
+              contract.rs
+              model.rs
+              mesh_requirements.rs
+              provenance.rs
+              airbox.rs
+              energy.rs
+              validation.rs
+              poisson_airbox/
+                dirichlet.rs
+                robin.rs
+                pbc_reduction.rs
+                weak_form.rs
+                solver_policy.rs
+              fem_bem/
+                boundary_surface.rs
+                fredkin_koehler.rs
+                dense_reference.rs
+                compressed_operator.rs
+              fmm/
+                contract.rs
+              mapped_exterior_shell/
+                contract.rs
+            zeeman/
+            anisotropy/
+            dmi/
+            thermal/
+            stt/
+            oersted/
+            magnetoelastic/
           observables/
           validation/
         cpu/
@@ -186,8 +382,33 @@ crates/fullmag-runner/src/
           hypre/
           integrators/
           demag/
+            poisson_airbox/
+              rhs.rs
+              hypre_solver.rs
+              recovery.rs
+              energy.rs
+              warm_start.rs
+            pbc_reduced_poisson/
+              reduction.rs
+              solver.rs
+              recovery.rs
+            fem_bem/
+              neumann_poisson.rs
+              boundary_operator_dense.rs
+              boundary_operator_compressed.rs
+              dirichlet_laplace.rs
+              recovery.rs
+              energy.rs
+            validation_reference/
           interactions/
+            exchange/
+              operator.rs
+              workspace.rs
+            demag/
+              operator.rs
+              workspace.rs
           observables/
+          workflows/
         gpu/
           engine.rs        MFEM GPU lane adapter
           cuda/
@@ -196,8 +417,30 @@ crates/fullmag-runner/src/
           transfer/
           integrators/
           demag/
+            poisson_airbox/
+              device_hypre_solver.rs
+              rhs_recovery_kernels.rs
+              energy_kernels.rs
+              warm_start.rs
+              residency.rs
+            hybrid_cpu_poisson/
+              transfer_audit.rs
+              compatibility.rs
+            pbc_reduced_poisson/
+              device_reduction.rs
+              solver.rs
+            fem_bem/
+              boundary_operator_apply.rs
+              compressed_operator.rs
           interactions/
+            exchange/
+              ceed_operator.rs
+              cuda_workspace.rs
+            demag/
+              ceed_operator.rs
+              cuda_workspace.rs
           observables/
+          workflows/
 ```
 
 Compiled implementation target:
@@ -210,13 +453,29 @@ backends/solvers/
       runtime/
       interactions/
         exchange/
+          contract.hpp
+          kernels.cu
+          launch.cpp
+          energy.cu
         demag/
+          kernels.cu
+          fft_plan.cpp
+          convolution.cu
+          pbc.cu
         zeeman/
         anisotropy/
         dmi/
         thermal/
         stt/
       integrators/
+        euler/
+        rk4/
+        rk_adaptive/
+      workflows/
+        time_domain/
+        relaxation/
+        hysteresis/
+        frequency_domain/
       observables/
       tests/
 
@@ -230,6 +489,15 @@ backends/solvers/
         materials/
         fields/
         interactions/
+          exchange/
+          demag/
+            contract/
+            poisson_airbox/
+            fem_bem/
+            fmm/
+          zeeman/
+          anisotropy/
+          dmi/
         observables/
         validation/
       cpu/
@@ -237,7 +505,22 @@ backends/solvers/
         hypre/
         integrators/
         demag/
+          poisson_airbox/
+          pbc_reduced_poisson/
+          fem_bem/
+          validation_reference/
         interactions/
+          exchange/
+          demag/
+          zeeman/
+          anisotropy/
+          dmi/
+        workflows/
+          time_domain/
+          relaxation/
+          hysteresis/
+          eigen/
+          frequency_domain/
         observables/
       gpu/
         cuda/
@@ -246,7 +529,22 @@ backends/solvers/
         transfer/
         integrators/
         demag/
+          poisson_airbox/
+          hybrid_cpu_poisson/
+          pbc_reduced_poisson/
+          fem_bem/
         interactions/
+          exchange/
+          demag/
+          zeeman/
+          anisotropy/
+          dmi/
+        workflows/
+          time_domain/
+          relaxation/
+          hysteresis/
+          eigen/
+          frequency_domain/
         observables/
       tests/
 ```
@@ -261,8 +559,20 @@ Rules for this tree:
 3. FDM code never lives under `fem/`; FEM code never lives under `fdm/`.
 4. MFEM common code is allowed only for FEM descriptors, mesh/spaces/material
    import, shared observables, validation, and ABI descriptors.
-5. `dispatch.rs`, `Context`, and `mfem_bridge.cpp` are compatibility migration
+5. Workflow modules own algorithms. `relaxation`, `hysteresis`, `eigen`, and
+   `frequency_domain` must be discoverable by path before implementation is
+   considered complete.
+6. FEM demag model code must be discoverable under
+   `fem/mfem/*/demag/<strategy>/`. A generic `demag.rs` or `demag/` may only
+   hold contracts, registries, and shared dispatch, never all model
+   implementations.
+7. `mod.rs`, `execute.rs`, and bridge files are orchestration surfaces, not
+   homes for physics equations, kernels, or solver algorithms.
+8. `dispatch.rs`, `Context`, and `mfem_bridge.cpp` are compatibility migration
    files, not target homes for new code.
+9. Target module files should stay below 500 lines. A larger file requires a
+   written reason and an extraction task in the roadmap.
+10. New target paths must use `fem/mfem`, not historical standalone FEM naming.
 
 ## 6. Legacy migration map
 
@@ -296,7 +606,7 @@ navigation model". New code should target `solver_runtime`, `solvers`, and
 - artifact writing,
 - FEM/MFEM availability and fallback handling,
 - runtime registry/backend metadata,
-- stage/eigen routing,
+- stage, relaxation, hysteresis, eigen, and frequency-domain routing,
 - cross-cutting provenance decisions.
 
 Target ownership:
@@ -310,17 +620,40 @@ Target ownership:
 | `crates/fullmag-runner/src/solvers/fdm/execute.rs` | FDM execution facade after lane selection |
 | `crates/fullmag-runner/src/solvers/fdm/preview.rs` | FDM preview/export concerns |
 | `crates/fullmag-runner/src/solvers/fdm/artifacts.rs` | FDM-specific artifact persistence |
+| `crates/fullmag-runner/src/solvers/fdm/interactions/*` | FDM interaction contracts, energies, observables, and validation fixtures |
+| `crates/fullmag-runner/src/solvers/fdm/workflows/time_domain/*` | FDM time-domain scheduling and output workflow |
+| `crates/fullmag-runner/src/solvers/fdm/workflows/relaxation/*` | FDM energy/torque relaxation workflow |
+| `crates/fullmag-runner/src/solvers/fdm/workflows/hysteresis/*` | FDM field-sweep and loop-state workflow |
+| `crates/fullmag-runner/src/solvers/fdm/workflows/frequency_domain/*` | FDM linear-response/frequency-domain workflow |
 | `crates/fullmag-runner/src/solvers/fem/plan.rs` | FEM execution-plan normalization before MFEM calls |
 | `crates/fullmag-runner/src/solvers/fem/pbc.rs` | FEM periodic/PBC preprocessing and capability rejection |
-| `crates/fullmag-runner/src/solvers/fem/execute.rs` | FEM time-domain execution facade after lane selection |
-| `crates/fullmag-runner/src/solvers/fem/eigen_execute.rs` | FEM eigen execution facade |
+| `crates/fullmag-runner/src/solvers/fem/execute.rs` | FEM workflow facade after lane selection |
 | `crates/fullmag-runner/src/solvers/fem/preview.rs` | FEM preview/export concerns |
 | `crates/fullmag-runner/src/solvers/fem/artifacts.rs` | FEM-specific artifact persistence |
+| `crates/fullmag-runner/src/solvers/fem/workflows/time_domain/*` | FEM time-domain scheduling and output workflow |
+| `crates/fullmag-runner/src/solvers/fem/workflows/relaxation/*` | FEM energy/torque relaxation workflow |
+| `crates/fullmag-runner/src/solvers/fem/workflows/hysteresis/*` | FEM field-sweep and loop-state workflow |
+| `crates/fullmag-runner/src/solvers/fem/workflows/eigen/*` | FEM dynamic-matrix/eigenmode workflow |
+| `crates/fullmag-runner/src/solvers/fem/workflows/frequency_domain/*` | FEM linear-response/frequency-domain workflow |
 | `crates/fullmag-runner/src/solvers/fem/mfem/common/abi.rs` | Fullmag-to-MFEM descriptors and ABI translation |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/interactions/*` | MFEM interaction weak forms, coefficients, energies, and validation fixtures |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/interactions/demag/model.rs` | requested/resolved FEM demag strategy vocabulary |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/interactions/demag/mesh_requirements.rs` | airbox/body-only/PBC mesh requirements and planner rejection reasons |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/interactions/demag/poisson_airbox/*` | airbox Dirichlet/Robin/PBC weak forms, boundary variants, and solver policy contract |
+| `crates/fullmag-runner/src/solvers/fem/mfem/common/interactions/demag/fem_bem/*` | body-only open-boundary FEM/BEM and Fredkin-Koehler contract |
+| `crates/fullmag-runner/src/solvers/fem/mfem/cpu/demag/poisson_airbox/*` | CPU MFEM/hypre Poisson airbox RHS, solve, recovery, energy, warm-start |
+| `crates/fullmag-runner/src/solvers/fem/mfem/cpu/demag/pbc_reduced_poisson/*` | CPU reduced periodic Poisson solve and recovery |
+| `crates/fullmag-runner/src/solvers/fem/mfem/cpu/demag/fem_bem/*` | CPU dense/compressed FEM/BEM reference and production boundary-operator path |
+| `crates/fullmag-runner/src/solvers/fem/mfem/gpu/demag/poisson_airbox/*` | strict device-resident MFEM/hypre Poisson airbox realization |
+| `crates/fullmag-runner/src/solvers/fem/mfem/gpu/demag/hybrid_cpu_poisson/*` | explicit debug/compatibility CPU round-trip path, never silent fallback |
+| `crates/fullmag-runner/src/solvers/fem/mfem/gpu/demag/fem_bem/*` | future GPU boundary-operator application/compression path |
 
 `dispatch.rs` should shrink to a temporary compatibility facade, then disappear
-or become a small public routing shim. Any remaining function over 250 lines in
-the target solver tree needs an explicit reason and an extraction task.
+or become a small public routing shim. The extraction is not complete until the
+directory for each interaction and workflow exists and owns at least its
+contract, validation plan, and execution adapter. Any remaining function over
+250 lines in the target solver tree needs an explicit reason and an extraction
+task.
 
 ## 8. Shared contracts
 
@@ -357,6 +690,11 @@ These are architecture violations:
 - Cross-lane state transfer without an explicit adapter, provenance, and
   validation note.
 - Duplicating equations per lane without a shared physics contract.
+- Treating FEM demag as a single Poisson implementation when the requested
+  model requires body-only FEM/BEM, FMM, PBC reduction, or mapped exterior
+  semantics.
+- Allocating a volumetric airbox for a body-only FEM/BEM/FMM demag request.
+- Treating `hybrid_cpu_poisson` as an allowed fallback for strict FEM GPU demag.
 - Adding a new operator as another branch in `dispatch.rs`, `Context`, or
   `mfem_bridge.cpp`.
 - Exposing backend-only toggles as normal user semantics.
@@ -481,7 +819,8 @@ The validation suite must include these families before production claims:
 |---|---|---|
 | Macrospin | uniform Zeeman precession, damping to field, anisotropy minima | `m(t)`, energy monotonicity where expected, analytical frequency/decay |
 | Exchange | sinusoidal magnetization, spin wave, 1D wall profile | exchange energy, exchange field, convergence order |
-| Demag | uniformly magnetized sphere, ellipsoid, rectangular prism, thin film | demag field, demag energy, boundary/airbox convergence |
+| Demag | uniformly magnetized sphere, ellipsoid, rectangular prism, thin film | demag field, demag energy, boundary/airbox convergence, body-only open-boundary comparison |
+| FEM demag model family | Poisson airbox Dirichlet/Robin, airbox PBC reduction, FEM/BEM Fredkin-Koehler, future BEM/FMM | requested/resolved model, mesh requirement, boundary variant, solver policy, `H_demag`, `E_demag`, cross-model convergence |
 | Anisotropy | uniaxial and cubic known minima, rotated axes | anisotropy energy, field derivative, axis normalization |
 | Zeeman | constant and time-dependent fields | Zeeman energy sign, envelope timing, averaged magnetization |
 | DMI | 1D spiral pitch, chirality, boundary tilt, interfacial/bulk convention | DMI energy, DMI field/torque, unit convention, chirality |
@@ -542,6 +881,14 @@ boundary conditions, material fields, and observables are actually the same.
 Otherwise the suite must report "not comparable" rather than forcing a false
 parity target.
 
+FEM demag validation must also compare numerical realizations inside the FEM
+family. Poisson airbox runs must include airbox-size and boundary-variant
+convergence; body-only FEM/BEM or FMM runs must include closed-boundary
+topology checks, boundary-operator sanity checks, and comparison against the
+converged airbox limit on the same magnetic body. Periodic reduced Poisson is a
+separate validation target and must report periodic axes, seam handling, gauge
+policy, and open-axis boundary policy.
+
 ### 13.6 Promotion gate
 
 A solver lane is production-ready only when its validation report can answer:
@@ -567,11 +914,11 @@ specialized authority:
 
 | Document | Role under this masterplan |
 |---|---|
-| `docs/adr/0014-native-fem-backend-modularization.md` | FEM-only modularization decision |
-| `docs/specs/native-fem-backend-architecture-v1.md` | legacy-named target architecture for the MFEM/hypre/libCEED integration layer |
-| `docs/physics/0900-native-fem-operator-contracts-and-validation.md` | FEM operator contract standard |
+| `docs/adr/0014-mfem-backend-modularization.md` | FEM/MFEM backend modularization decision |
+| `docs/specs/mfem-backend-architecture-v1.md` | target architecture for the MFEM/hypre/libCEED integration layer |
+| `docs/physics/0900-mfem-operator-contracts-and-validation.md` | FEM/MFEM operator contract standard |
 | `docs/physics/0560-all-in-gpu-fem-runtime.md` | strict FEM GPU residency contract |
-| `docs/physics/0816-native-fem-cpu-availability-contract.md` | FEM CPU availability split from GPU availability |
+| `docs/physics/0816-mfem-cpu-availability-contract.md` | FEM CPU availability split from GPU availability |
 | `docs/physics/0532-fem-fdm-magnetization-state-transfer.md` | cross-discretization state transfer semantics |
 | `docs/physics/units.md` | shared solver units contract |
 | `docs/physics/validation/*` | target location for production physics benchmark specs and tolerances |
@@ -580,6 +927,10 @@ specialized authority:
 
 When these documents conflict, update the lower-level document or write a new
 ADR that explicitly supersedes this masterplan section.
+
+Historical FEM document names that imply an in-house FEM stack must be renamed
+or superseded with the MFEM/hypre/libCEED target document names above during
+Phase 5.
 
 ## 15. AGENTS and skills update plan
 
@@ -625,14 +976,22 @@ After this document is accepted:
 
 - Move FDM execution routing to `crates/fullmag-runner/src/solvers/fdm/execute.rs`.
 - Move FDM preview concerns to `crates/fullmag-runner/src/solvers/fdm/preview.rs`.
+- Create `crates/fullmag-runner/src/solvers/fdm/interactions/*` directories
+  before moving interaction logic.
+- Create `crates/fullmag-runner/src/solvers/fdm/workflows/{time_domain,relaxation,hysteresis,frequency_domain}/*`.
 - Keep FDM CPU and FDM GPU lane code separate below the facade.
 
 ### Phase 3: Extract FEM execution ownership
 
 - Move FEM plan normalization to `crates/fullmag-runner/src/solvers/fem/plan.rs`.
 - Move FEM PBC/capability preprocessing to `crates/fullmag-runner/src/solvers/fem/pbc.rs`.
-- Move FEM time-domain execution to `crates/fullmag-runner/src/solvers/fem/execute.rs`.
-- Move FEM eigen execution to `crates/fullmag-runner/src/solvers/fem/eigen_execute.rs`.
+- Move FEM time-domain execution to `crates/fullmag-runner/src/solvers/fem/workflows/time_domain/*`.
+- Move FEM relaxation execution to `crates/fullmag-runner/src/solvers/fem/workflows/relaxation/*`.
+- Move FEM hysteresis execution to `crates/fullmag-runner/src/solvers/fem/workflows/hysteresis/*`.
+- Move FEM eigen execution to `crates/fullmag-runner/src/solvers/fem/workflows/eigen/*`.
+- Move FEM frequency-domain execution to `crates/fullmag-runner/src/solvers/fem/workflows/frequency_domain/*`.
+- Keep `crates/fullmag-runner/src/solvers/fem/execute.rs` as a thin workflow
+  facade only.
 - Move FEM preview concerns to `crates/fullmag-runner/src/solvers/fem/preview.rs`.
 
 ### Phase 4: Align FEM/MFEM layout
@@ -643,6 +1002,15 @@ After this document is accepted:
   details under `mfem/gpu/*`.
 - Keep shared MFEM descriptors, mesh import, FE-space contracts, material
   import, fields, observables, and validation under `mfem/common/*`.
+- Split FEM demag into explicit strategy directories:
+  `poisson_airbox`, `pbc_reduced_poisson`, `fem_bem`, `fmm`, and
+  `mapped_exterior_shell` where applicable.
+- Keep demag model selection, mesh requirements, boundary variants, solver
+  policy, and provenance in `mfem/common/interactions/demag/*`.
+- Keep CPU Poisson/BEM solvers under `mfem/cpu/demag/*` and strict GPU Poisson
+  or future GPU BEM realizations under `mfem/gpu/demag/*`.
+- Require planner errors when an airbox strategy receives a body-only mesh or a
+  body-only FEM/BEM/FMM strategy receives only an airbox-specific topology.
 - Do not introduce a custom non-MFEM FEM assembly or solver subtree.
 - Require operator contract tests before moving production responsibility.
 
@@ -651,6 +1019,8 @@ After this document is accepted:
 - Update `AGENTS.md`.
 - Update or create backend skills.
 - Add backlinks from FEM-only architecture docs to this masterplan.
+- Rename or supersede FEM documents that still use historical standalone-FEM
+  naming so the accepted architecture consistently says MFEM/hypre/libCEED.
 - Remove stale instructions that describe `dispatch.rs` as a normal extension
   point.
 
@@ -676,6 +1046,14 @@ This masterplan is operationally complete when:
   convergence studies, and machine-readable validation reports;
 - the FEM/MFEM compatibility `Context` and `mfem_bridge.cpp` no longer own
   cross-cutting physics/runtime concerns;
+- every interaction and workflow listed in Section 5 has a discoverable owner
+  directory with a contract, execution adapter, observables/outputs, and
+  validation fixture plan;
+- every FEM demag strategy listed in Section 5.3 has explicit mesh
+  requirements, requested/resolved provenance, capability status, runtime
+  realization ownership, and validation target;
+- accepted target docs and agent instructions use MFEM/hypre/libCEED naming
+  rather than historical standalone-FEM wording;
 - `AGENTS.md` and backend skills point to this document instead of carrying
   divergent backend doctrine;
 - API-visible backend changes continue through generated OpenAPI and handwritten
