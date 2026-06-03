@@ -33,7 +33,8 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewField, LivePreviewRequest,
-    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ResolvedFallback, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 use crate::DisplaySelectionState;
 
@@ -140,11 +141,21 @@ pub(crate) fn display_is_global_scalar(display_state: &DisplaySelectionState) ->
     )
 }
 
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+fn attach_resolved_fallback_to_provenance(
+    provenance: &mut ExecutionProvenance,
+    fallback: Option<ResolvedFallback>,
+) {
+    if provenance.resolved_fallback.is_none() {
+        provenance.resolved_fallback = fallback;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cached_display_refresh_due, display_refresh_due, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        attach_resolved_fallback_to_provenance, cached_display_refresh_due, display_refresh_due,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -191,6 +202,31 @@ mod tests {
             enable_demag: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn interactive_fem_runtime_attaches_fallback_to_provenance() {
+        let fallback = crate::ResolvedFallback {
+            occurred: true,
+            original_engine: "fem_native_gpu".to_string(),
+            fallback_engine: "fem_cpu_native".to_string(),
+            reason: "native_fem_gpu_unavailable".to_string(),
+            message: "native FEM GPU unavailable in test".to_string(),
+        };
+        let mut provenance = crate::ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..crate::ExecutionProvenance::default()
+        };
+
+        attach_resolved_fallback_to_provenance(&mut provenance, Some(fallback.clone()));
+
+        let fallback = provenance
+            .resolved_fallback
+            .expect("interactive FEM runtime should keep fallback in provenance");
+        assert_eq!(fallback.original_engine, "fem_native_gpu");
+        assert_eq!(fallback.fallback_engine, "fem_cpu_native");
+        assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
     }
 
     #[test]
@@ -665,13 +701,17 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine)
+        Self::from_fem_plan(fem, resolution.engine, resolution.fallback)
     }
 
-    fn from_fem_plan(plan: &FemPlanIR, engine: FemEngine) -> Result<Self, RunError> {
+    fn from_fem_plan(
+        plan: &FemPlanIR,
+        engine: FemEngine,
+        fallback: Option<ResolvedFallback>,
+    ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine);
+            let _ = (plan, engine, fallback);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -689,12 +729,14 @@ impl InteractiveFemPreviewRuntime {
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
+            let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info);
+            attach_resolved_fallback_to_provenance(&mut provenance, fallback);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
                 mesh,
                 node_count: effective_plan.mesh.nodes.len(),
                 plan_signature: normalize_fem_plan_signature(&effective_plan),
-                provenance: fem_gpu_execution_provenance(&effective_plan, &device_info),
+                provenance,
                 total_steps: 0,
                 total_time: 0.0,
                 antenna_field,

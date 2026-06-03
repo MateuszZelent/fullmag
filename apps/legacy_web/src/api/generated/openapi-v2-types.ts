@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -596,6 +612,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/diagnostics/cpu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_cpu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/diagnostics/engine-log": {
         parameters: {
             query?: never;
@@ -620,6 +652,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["diagnostics_get_sessions_current_diagnostics_gpu"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/diagnostics/solver-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_solver_profile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -836,6 +884,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest": {
         parameters: {
             query?: never;
@@ -876,6 +972,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element"];
         put?: never;
         post?: never;
         delete?: never;
@@ -956,6 +1068,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["meshing_get_sessions_current_meshing_meshes_universe_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1154,6 +1282,22 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/magnetization-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_magnetization_assets_asset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_magnetization_assets_asset_id"];
         trace?: never;
     };
     "/v2/sessions/current/model/materials/{material_id}": {
@@ -1405,7 +1549,39 @@ export interface paths {
         };
         get: operations["persistence_get_sessions_current_persistence_checkpoints"];
         put?: never;
+        post: operations["persistence_post_sessions_current_persistence_checkpoints"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_sessions_current_persistence_checkpoints_checkpoint_id"];
+        put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1500,6 +1676,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["simulation_get_sessions_current_simulation_commands_command_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/objects/{object_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_objects_object_id_metrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1620,6 +1812,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/visualization/client-acks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["visualization_get_sessions_current_visualization_client_acks"];
+        put?: never;
+        post: operations["visualization_post_sessions_current_visualization_client_acks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/visualization/display": {
         parameters: {
             query?: never;
@@ -1721,6 +1929,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AirboxLayerPatch: {
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
             /** Format: double */
             opacity?: number | null;
             points?: null | components["schemas"]["BasicLayerPatch"];
@@ -1730,6 +1939,7 @@ export interface components {
             wireframe?: null | components["schemas"]["BasicLayerPatch"];
         };
         AirboxLayerState: {
+            bounds?: components["schemas"]["BasicLayerState"];
             /** Format: double */
             opacity: number;
             points: components["schemas"]["BasicLayerState"];
@@ -1823,6 +2033,14 @@ export interface components {
             opacity: number;
             visible: boolean;
         };
+        BooleanGeometryCapability: {
+            dsl: boolean;
+            fdm: boolean;
+            fem: boolean;
+            notes: string;
+            op: string;
+            status: components["schemas"]["GeometrySupportStatus"];
+        };
         Bounds2: {
             /** Format: double */
             u_max: number;
@@ -1855,16 +2073,55 @@ export interface components {
             scalar_history: boolean;
             structured_grid: boolean;
         };
+        CheckpointCreateRequest: {
+            profile?: components["schemas"]["SaveProfile"];
+            reason?: string | null;
+        };
+        CheckpointCreateResponse: {
+            checkpoint: components["schemas"]["CheckpointEntry"];
+        };
         CheckpointEntry: {
+            artifact_ref: string;
+            backend_family?: string | null;
             checkpoint_id: string;
+            checksum?: string | null;
+            command_id?: string | null;
+            coordinate_frame: string;
             created_at: string;
+            /** Format: double */
+            dt: number;
+            /** Format: int64 */
+            field_revision?: number | null;
+            format: string;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            resume_class: components["schemas"]["RestoreClass"];
+            run_id: string;
+            /** Format: int64 */
+            scene_revision?: number | null;
+            source: string;
+            stage_id?: string | null;
             /** Format: int64 */
             step: number;
             /** Format: double */
             time_s: number;
+            /** Format: int64 */
+            vector_count: number;
         };
         CheckpointListResponse: {
             checkpoints: components["schemas"]["CheckpointEntry"][];
+        };
+        CheckpointRestoreRequest: {
+            reason?: string | null;
+        };
+        CheckpointRestoreResponse: {
+            checkpoint: components["schemas"]["CheckpointEntry"];
+            /** Format: int64 */
+            field_revision: number;
+            restore_class: components["schemas"]["RestoreClass"];
+            /** Format: int64 */
+            restored_vector_count: number;
+            warnings: string[];
         };
         CheckpointSummary: {
             checkpoint_id: string;
@@ -1891,10 +2148,15 @@ export interface components {
             position_percent: number;
         };
         CommandDetailResource: {
+            accepted_at_unix_ms?: number | null;
+            artifact_refs?: string[];
+            checkpoint_ref?: string | null;
+            client_intent_id?: string | null;
             command_id: string;
             completed_at_unix_ms?: number | null;
             completion_status?: string | null;
             created_at_unix_ms: number;
+            diagnostics?: components["schemas"]["CommandDiagnosticReferenceResource"][];
             dispatched_at_unix_ms?: number | null;
             /** Format: double */
             energy_tolerance?: number | null;
@@ -1903,22 +2165,58 @@ export interface components {
             fixed_timestep?: number | null;
             integrator?: string | null;
             kind: string;
+            loaded_state_ref?: string | null;
             /** Format: double */
             max_error?: number | null;
             /** Format: int64 */
             max_steps?: number | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
+            precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
+            reason?: string | null;
             relax_algorithm?: string | null;
             /** Format: double */
             relax_alpha?: number | null;
+            request_id?: string | null;
+            /** Format: int64 */
+            requested_at_unix_ms?: number | null;
+            requested_execution?: null | components["schemas"]["CommandExecutionReadbackResource"];
+            resolved_execution?: null | components["schemas"]["CommandExecutionReadbackResource"];
+            resource_invalidations?: components["schemas"]["CommandResourceInvalidationResource"][];
+            resume_from_checkpoint_ref?: string | null;
+            run_id?: string | null;
             /** Format: int64 */
             seq: number;
+            stage_id?: string | null;
+            /** Format: int32 */
+            stage_index?: number | null;
+            started_at_unix_ms?: number | null;
+            state_transition?: string | null;
             status: string;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
+            terminal_at_unix_ms?: number | null;
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */
+            torque_tolerance_apm?: number | null;
+            /** Format: double */
             until_seconds?: number | null;
+        };
+        CommandDiagnosticReferenceResource: {
+            message: string;
+            resource_key: string;
+            /** Format: int64 */
+            revision: number;
+            severity: string;
+        };
+        CommandExecutionReadbackResource: {
+            backend?: string | null;
+            device?: string | null;
+            engine_id?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            runtime_family?: string | null;
+            worker?: string | null;
         };
         CommandQueueStatusResource: {
             /** Format: int64 */
@@ -1939,11 +2237,20 @@ export interface components {
             revision: number;
             /** Format: int64 */
             running_count: number;
+            runtime_controls: components["schemas"]["RuntimeCommandReadinessResource"][];
+        };
+        CommandResourceInvalidationResource: {
+            reason: string;
+            resource_key: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
         };
         CommandResponse: {
             accepted: boolean;
             command_id: string;
             error?: string | null;
+            request_id?: string | null;
         };
         CommandStatusResource: {
             command_id: string;
@@ -1953,12 +2260,45 @@ export interface components {
             dispatched_at_unix_ms?: number | null;
             error?: string | null;
             kind: string;
+            reason?: string | null;
+            request_id?: string | null;
             /** Format: int64 */
             seq: number;
             status: string;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        CpuTelemetryResponse: {
+            /** Format: double */
+            load_average_15m?: number | null;
+            /** Format: double */
+            load_average_1m?: number | null;
+            /** Format: double */
+            load_average_5m?: number | null;
+            /** Format: int32 */
+            logical_cpus: number;
+            /** Format: double */
+            memory_total_mb: number;
+            /** Format: double */
+            memory_used_mb: number;
+            model_name?: string | null;
+            /** Format: double */
+            process_cpu_percent: number;
+            /** Format: double */
+            process_rss_mb: number;
+            /** Format: int32 */
+            process_threads: number;
+            reason?: string | null;
+            sample_time_unix_ms: number;
+            status: string;
+            /** Format: double */
+            utilization_cpu_percent: number;
+        };
+        /** @enum {string} */
+        CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm" | "plasma" | "inferno";
+        /** @enum {string} */
+        CrossSectionQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
         CurrentRunResource: {
             /** Format: int32 */
             active_stage_index?: number | null;
@@ -1983,6 +2323,7 @@ export interface components {
             resolved_backend?: string | null;
             resolved_device?: string | null;
             resolved_engine_id?: string | null;
+            resolved_fallback?: null | components["schemas"]["ResolvedFallbackResource"];
             resolved_mode?: string | null;
             resolved_precision?: string | null;
             resolved_runtime_family?: string | null;
@@ -2060,6 +2401,11 @@ export interface components {
             nodes?: number | null;
         };
         DomainMeta: {
+            /**
+             * @description Physical cell-edge bounds in meters. For structured FDM grids, `min`
+             *     is the grid edge origin and `max` is `origin + shape * spacing`.
+             *     Cell centers are offset by `spacing / 2` on non-zero axes.
+             */
             bounds: components["schemas"]["Bounds3"];
             coordinate_system: string;
             counts: components["schemas"]["DomainCounts"];
@@ -2155,6 +2501,80 @@ export interface components {
             x_chosen_size: number;
             /** Format: int32 */
             y_chosen_size: number;
+        };
+        FemCpuRelaxationDemagPolicyMetadata: {
+            /** Format: double */
+            absolute_tolerance?: number | null;
+            /** Format: int32 */
+            actual_iterations?: number | null;
+            boundary_variant?: string | null;
+            /** Format: double */
+            final_residual_norm?: number | null;
+            linear_solver?: string | null;
+            /** Format: int32 */
+            max_iterations?: number | null;
+            model?: string | null;
+            preconditioner?: string | null;
+            /** Format: int32 */
+            print_level?: number | null;
+            /** Format: double */
+            relative_tolerance?: number | null;
+            solver_setup_reused?: boolean | null;
+            timings_ns?: null | components["schemas"]["FemCpuRelaxationDemagTimingsNs"];
+        };
+        FemCpuRelaxationDemagTimingsNs: {
+            /** Format: int64 */
+            assemble: number;
+            /** Format: int64 */
+            energy: number;
+            /** Format: int64 */
+            recover: number;
+            /** Format: int64 */
+            solve: number;
+            /** Format: int64 */
+            solver_apply: number;
+            /** Format: int64 */
+            solver_setup: number;
+            /** Format: int64 */
+            total: number;
+        };
+        FemCpuRelaxationEnergyTerms: {
+            /** Format: double */
+            E_ani: number;
+            /** Format: double */
+            E_demag: number;
+            /** Format: double */
+            E_dmi: number;
+            /** Format: double */
+            E_ex: number;
+            /** Format: double */
+            E_ext: number;
+            /** Format: double */
+            E_total: number;
+        };
+        FemCpuRelaxationQualificationMetadata: {
+            assembly_mode?: string | null;
+            benchmark_gate_version: string;
+            demag_policy: components["schemas"]["FemCpuRelaxationDemagPolicyMetadata"];
+            /** Format: int64 */
+            executed_steps: number;
+            final_energy_terms_j: components["schemas"]["FemCpuRelaxationEnergyTerms"];
+            /** Format: double */
+            final_torque_apm: number;
+            /** Format: double */
+            final_torque_t: number;
+            /** Format: double */
+            norm_defect: number;
+            physics_terms: string[];
+            relaxation_algorithm?: string | null;
+            schema_version: string;
+            solver_mesh_signature: string;
+            stop_metric_name?: string | null;
+            /** Format: double */
+            stop_metric_value?: number | null;
+            stop_reason?: string | null;
+            /** Format: double */
+            stop_threshold?: number | null;
         };
         /** @enum {string} */
         FemTopologyMode: "surface" | "boundary" | "volume" | "auto";
@@ -2414,6 +2834,14 @@ export interface components {
              *     - `x`/`y`/`z`/`cN` → single component by index (nComp=1)
              */
             component?: string | null;
+            /**
+             * Format: int32
+             * @description Optional hard cap for vector samples returned by the binary payload.
+             *
+             *     Scoped FEM queries are sampled by scope node index. Unscoped queries
+             *     return a contiguous center window for lightweight diagnostics.
+             */
+            max_samples?: number | null;
             /** @description Scope identifier for `object` and `part` scopes. */
             scope_id?: string | null;
             /**
@@ -2426,8 +2854,75 @@ export interface components {
              */
             scope_kind?: string | null;
         };
+        /** @enum {string} */
+        GeometryBackendTarget: "fem" | "fdm";
+        GeometryCapabilitiesResource: {
+            csg_capabilities: components["schemas"]["BooleanGeometryCapability"][];
+            primitive_capabilities: components["schemas"]["PrimitiveGeometryCapability"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        GeometryDiagnostic: {
+            blocks?: string[];
+            code: string;
+            geometry_path?: string | null;
+            id: string;
+            message: string;
+            object_id?: string | null;
+            severity: components["schemas"]["GeometryDiagnosticSeverity"];
+        };
+        /** @enum {string} */
+        GeometryDiagnosticSeverity: "info" | "warning" | "error";
+        GeometryDiagnosticsResource: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            diagnostics: components["schemas"]["GeometryDiagnostic"][];
+            /** Format: int64 */
+            scene_revision: number;
+            status: string;
+        };
+        GeometryProvenanceEntry: {
+            body_id: string;
+            geometry_path: string;
+            object_id: string;
+            source: string;
+        };
         GeometryRealizationRequest: {
             backend_target?: string | null;
+        };
+        GeometryRealizationSnapshot: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            bodies?: components["schemas"]["RealizedGeometryBody"][];
+            bounds_max?: number[] | null;
+            bounds_min?: number[] | null;
+            diagnostics?: components["schemas"]["GeometryDiagnostic"][];
+            provenance?: components["schemas"]["GeometryProvenanceEntry"][];
+            /** Format: int64 */
+            realization_revision: number;
+            region_candidates?: components["schemas"]["GeometryRegionCandidate"][];
+            /** Format: int64 */
+            source_scene_revision: number;
+            status: string;
+        };
+        GeometryRegionCandidate: {
+            bounds_max: number[];
+            bounds_min: number[];
+            id: string;
+            magnetization_ref?: string | null;
+            material_ref: string;
+            object_id: string;
+            source_body_id: string;
+            source_body_ids?: string[];
+            source_geometry_path: string;
+        };
+        /** @enum {string} */
+        GeometrySupportStatus: "production" | "preview" | "unsupported";
+        GeometryValidationResource: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            diagnostics: components["schemas"]["GeometryDiagnostic"][];
+            dirty: boolean;
+            /** Format: int64 */
+            scene_revision: number;
+            status: string;
         };
         GpuTelemetryDevice: {
             /** Format: int32 */
@@ -2507,12 +3002,27 @@ export interface components {
             /** @description Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`. */
             solver: components["schemas"]["SolverSummary"];
         };
+        MagnetizationAssetPatchRequest: {
+            asset: {
+                [key: string]: unknown;
+            };
+            /** Format: int64 */
+            base_revision?: number | null;
+        };
+        MagnetizationAssetResource: {
+            asset: {
+                [key: string]: unknown;
+            };
+            /** Format: int64 */
+            scene_revision: number;
+        };
         MaterialPatchRequest: {
             name?: string | null;
             properties?: null | components["schemas"]["MaterialPropertiesPatchRequest"];
         };
         MaterialPropertiesPatchRequest: {
             Aex?: null | components["schemas"]["NullableF64PatchValue"];
+            Dbulk?: null | components["schemas"]["NullableF64PatchValue"];
             Dind?: null | components["schemas"]["NullableF64PatchValue"];
             Ms?: null | components["schemas"]["NullableF64PatchValue"];
             /** Format: double */
@@ -2521,6 +3031,8 @@ export interface components {
         MaterialPropertiesResource: {
             /** Format: double */
             Aex?: number | null;
+            /** Format: double */
+            Dbulk?: number | null;
             /** Format: double */
             Dind?: number | null;
             /** Format: double */
@@ -2540,14 +3052,18 @@ export interface components {
             effective_airbox_target?: Record<string, never> | null;
             /** @description Resolved per-object targets for the current build. Summary-level copies are transitional dashboard projections. */
             effective_per_object_targets?: Record<string, never> | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Current/last build summary for build panels. Latest-success endpoint owns stable successful build references. */
             last_build_summary?: Record<string, never> | null;
             /** @description Build/pipeline state for build panels. */
-            mesh_pipeline_status?: Record<string, never> | null;
+            mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             /** Format: int64 */
             revision: number;
             shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
+            /** Format: int64 */
+            source_scene_revision?: number | null;
         };
         MeshAirboxTargetResource: {
             /** Format: double */
@@ -2567,7 +3083,7 @@ export interface components {
             /** @description Detailed latest build summary for diagnostics and inspectors. */
             last_build_summary?: Record<string, never> | null;
             /** @description Detailed build pipeline state for diagnostics and build panels. */
-            mesh_pipeline_status?: Record<string, never> | null;
+            mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             /** @description Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only. */
             mesh_quality_summary?: Record<string, never> | null;
             /** @description Full mesh statistics report for realized solver mesh diagnostics. */
@@ -2577,6 +3093,17 @@ export interface components {
             history: Record<string, never>[];
             /** Format: int64 */
             revision: number;
+        };
+        MeshBuildPipelinePhaseResource: {
+            detail?: string | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            id?: string | null;
+            label?: string | null;
+            progress_label?: string | null;
+            /** Format: int32 */
+            progress_percent?: number | null;
+            status?: string | null;
         };
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
@@ -2604,6 +3131,15 @@ export interface components {
             geometry_name: string;
             /** Format: int32 */
             marker: number;
+        };
+        MeshHistogramBinElementsResource: {
+            /** Format: int32 */
+            bin_index: number;
+            element_indices: number[];
+            mesh_id: string;
+            metric: string;
+            node_indices: number[];
+            part_id: string;
         };
         MeshInterfaceConfigReplaceRequest: {
             config?: Record<string, never> | null;
@@ -2633,11 +3169,15 @@ export interface components {
             effective_airbox_target?: Record<string, never> | null;
             /** @description Transitional target projection retained for current frontend adapters. */
             effective_per_object_targets?: Record<string, never> | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Last successful build artifact/reference summary. It must not become a copy of the active build resource. */
             last_success?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
         };
         MeshObjectConfigEntryResource: {
             config?: Record<string, never> | null;
@@ -2949,6 +3489,7 @@ export interface components {
             uptime_seconds: number;
         };
         NullableF64PatchValue: number | null;
+        NullableStringPatchValue: string | null;
         NullableU32PatchValue: number | null;
         ObjectCreateRequest: {
             /** Format: int64 */
@@ -2964,6 +3505,20 @@ export interface components {
             study_universe_mesh?: Record<string, never> | null;
             transform?: Record<string, never> | null;
             universe?: Record<string, never> | null;
+        };
+        ObjectEnergySummary: {
+            /** Format: double */
+            anisotropy: number;
+            /** Format: double */
+            demag: number;
+            /** Format: double */
+            dmi: number;
+            /** Format: double */
+            exchange: number;
+            /** Format: double */
+            total: number;
+            /** Format: double */
+            zeeman: number;
         };
         ObjectGeometryPatchRequest: {
             /** Format: int64 */
@@ -2983,6 +3538,27 @@ export interface components {
             params: Record<string, never>;
             present: boolean;
         };
+        ObjectMagnetizationAverage: {
+            /** Format: double */
+            mx: number;
+            /** Format: double */
+            my: number;
+            /** Format: double */
+            mz: number;
+        };
+        ObjectMetricsResource: {
+            energies: components["schemas"]["ObjectEnergySummary"];
+            has_solver_sample: boolean;
+            magnetization_average: components["schemas"]["ObjectMagnetizationAverage"];
+            object_id: string;
+            /** Format: int64 */
+            revision: number;
+            source: string;
+            /** Format: int64 */
+            step: number;
+            /** Format: double */
+            time_seconds: number;
+        };
         ObjectPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -2990,9 +3566,20 @@ export interface components {
             magnetization_ref?: string | null;
             material_ref?: string | null;
             name?: string | null;
+            notes?: string | null;
             region_name?: string | null;
             transform?: Record<string, never> | null;
             visible?: boolean | null;
+        };
+        PrimitiveGeometryCapability: {
+            boolean: boolean;
+            category: string;
+            dsl: boolean;
+            fdm: boolean;
+            fem: boolean;
+            id: string;
+            label: string;
+            status: components["schemas"]["GeometrySupportStatus"];
         };
         QuantityCatalogEntry: {
             description: string;
@@ -3037,6 +3624,19 @@ export interface components {
             contrast_min?: number | null;
             field_component: components["schemas"]["FieldComponent"];
         };
+        RealizedGeometryBody: {
+            body_id: string;
+            bounds_max: number[];
+            bounds_min: number[];
+            geometry_kind: string;
+            magnetization_ref?: string | null;
+            material_ref: string;
+            object_id: string;
+            object_name: string;
+            provenance?: string[];
+            status: string;
+            visible: boolean;
+        };
         RecoveryClearResponse: {
             cleared: number;
         };
@@ -3058,6 +3658,7 @@ export interface components {
         };
         RegionPatchRequest: {
             enabled?: boolean | null;
+            magnetization_ref?: null | components["schemas"]["NullableStringPatchValue"];
             name?: string | null;
         };
         RegionResource: {
@@ -3073,6 +3674,13 @@ export interface components {
             source: string;
             source_body_ids: string[];
             source_object_ids: string[];
+        };
+        ResolvedFallbackResource: {
+            fallback_engine: string;
+            message: string;
+            occurred: boolean;
+            original_engine: string;
+            reason: string;
         };
         ResourceRevisionMap: {
             /** Format: int64 */
@@ -3106,6 +3714,8 @@ export interface components {
             /** Format: int64 */
             slice_revision: number;
             /** Format: int64 */
+            solver_profile_revision: number;
+            /** Format: int64 */
             stages_revision: number;
             /** Format: int64 */
             topology_revision: number;
@@ -3135,6 +3745,55 @@ export interface components {
         RuntimeCapabilityMatrix: {
             engines: components["schemas"]["HostEngineEntry"][];
             profile_version: string;
+        };
+        RuntimeCommandIntent: {
+            client_intent_id?: string | null;
+            precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
+            reason?: string | null;
+            /** Format: int64 */
+            requested_at_unix_ms?: number | null;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
+        };
+        RuntimeCommandPrecondition: {
+            /** Format: int64 */
+            command_revision?: number | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            runtime_state?: string | null;
+            /** Format: int64 */
+            scene_revision?: number | null;
+            /** Format: int64 */
+            stage_execution_revision?: number | null;
+        };
+        RuntimeCommandReadinessResource: {
+            enabled: boolean;
+            kind: string;
+            reason?: string | null;
+        };
+        RuntimeCommandTarget: {
+            /** @enum {string} */
+            kind: "study";
+        } | {
+            /** @enum {string} */
+            kind: "run";
+            run_id?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "current_stage";
+            stage_id?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "stage_index";
+            /** Format: int32 */
+            stage_index: number;
+        } | {
+            /** @enum {string} */
+            kind: "stage_id";
+            stage_id: string;
+        } | {
+            command_id: string;
+            /** @enum {string} */
+            kind: "command_id";
         };
         /** @enum {string} */
         SamplingProfile: "quality" | "balanced" | "interactive" | "memory_saver" | "custom";
@@ -3173,8 +3832,78 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        SceneMaterialResource: {
+            id: string;
+            name: string;
+            properties: {
+                [key: string]: unknown;
+            };
+        };
+        SceneMetadataResource: {
+            authoring_schema: string;
+            id: string;
+            name: string;
+            source_of_truth: string;
+        };
+        SceneObjectResource: {
+            geometry?: {
+                [key: string]: unknown;
+            } | null;
+            id: string;
+            locked?: boolean | null;
+            magnetization_ref?: string | null;
+            material_ref?: string | null;
+            mesh_override?: {
+                [key: string]: unknown;
+            } | null;
+            name?: string | null;
+            notes?: string | null;
+            object_mesh?: {
+                [key: string]: unknown;
+            } | null;
+            physics_stack?: {
+                [key: string]: unknown;
+            }[];
+            region_name?: string | null;
+            region_overrides?: {
+                [key: string]: unknown;
+            };
+            tags?: string[];
+            transform?: {
+                [key: string]: unknown;
+            } | null;
+            visible?: boolean | null;
+        };
         ScenePatchRequest: {
             merge_patch: Record<string, never>;
+        };
+        SceneResource: {
+            current_modules?: {
+                [key: string]: unknown;
+            } | null;
+            editor?: {
+                [key: string]: unknown;
+            } | null;
+            magnetization_assets?: {
+                [key: string]: unknown;
+            }[];
+            materials?: components["schemas"]["SceneMaterialResource"][];
+            objects?: components["schemas"]["SceneObjectResource"][];
+            outputs?: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: int64 */
+            revision?: number | null;
+            scene?: null | components["schemas"]["SceneMetadataResource"];
+            /** Format: int64 */
+            scene_revision?: number | null;
+            study?: {
+                [key: string]: unknown;
+            } | null;
+            universe?: {
+                [key: string]: unknown;
+            } | null;
+            version?: string | null;
         };
         ScriptSourceResponse: {
             bytes: number;
@@ -3260,6 +3989,10 @@ export interface components {
         /** @enum {string} */
         SliceAirboxRenderMode: "surface" | "wireframe" | "surface+edges" | "points";
         /** @enum {string} */
+        SliceMeshColorScale: "jet" | "viridis" | "hot" | "coolwarm";
+        /** @enum {string} */
+        SliceMeshQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
+        /** @enum {string} */
         SlicePlane: "xy" | "xz" | "yz";
         /** @enum {string} */
         SliceRenderMode: "heatmap" | "contour" | "heatmap+contour" | "vectors" | "mesh-overlay";
@@ -3273,6 +4006,11 @@ export interface components {
             component?: null | components["schemas"]["FieldComponent"];
             /** Format: int32 */
             layer_index?: number | null;
+            mesh_color_scale?: null | components["schemas"]["SliceMeshColorScale"];
+            mesh_filter_expression?: string | null;
+            mesh_quality_metric?: null | components["schemas"]["SliceMeshQualityMetric"];
+            /** Format: double */
+            mesh_shrink_factor?: number | null;
             mode?: null | components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent?: number | null;
@@ -3302,6 +4040,11 @@ export interface components {
             component: components["schemas"]["FieldComponent"];
             /** Format: int32 */
             layer_index?: number | null;
+            mesh_color_scale: components["schemas"]["SliceMeshColorScale"];
+            mesh_filter_expression: string;
+            mesh_quality_metric: components["schemas"]["SliceMeshQualityMetric"];
+            /** Format: double */
+            mesh_shrink_factor: number;
             mode: components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent: number;
@@ -3370,6 +4113,82 @@ export interface components {
             /** Format: double */
             zeeman: number;
         };
+        SolverProfileAggregatesResource: {
+            /** Format: int64 */
+            average_demag_ns: number;
+            /** Format: int64 */
+            average_exchange_ns: number;
+            /** Format: int64 */
+            average_total_ns: number;
+            /** Format: int64 */
+            max_total_ns: number;
+            sample_count: number;
+        };
+        SolverProfileCommandConfig: {
+            emit_engine_log?: boolean;
+            enabled?: boolean;
+            max_samples?: number;
+            persist_artifact?: boolean;
+            /** Format: int64 */
+            sample_every?: number;
+        };
+        SolverProfilePhaseResource: {
+            id: string;
+            label: string;
+            /** Format: double */
+            percent_of_total: number;
+            /** Format: int64 */
+            wall_time_ns: number;
+        };
+        SolverProfileResource: {
+            aggregates: components["schemas"]["SolverProfileAggregatesResource"];
+            artifact_refs: string[];
+            config: components["schemas"]["SolverProfileCommandConfig"];
+            latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            threading?: null | components["schemas"]["SolverProfileThreadingResource"];
+        };
+        SolverProfileStepSampleResource: {
+            /** Format: int32 */
+            demag_solves: number;
+            /** Format: int64 */
+            demag_subphase_sum_ns: number;
+            demag_subphases: components["schemas"]["SolverProfilePhaseResource"][];
+            /** Format: double */
+            dt: number;
+            /** Format: int64 */
+            missing_ns: number;
+            /** Format: int64 */
+            phase_sum_ns: number;
+            phases: components["schemas"]["SolverProfilePhaseResource"][];
+            /** Format: double */
+            poisson_final_residual: number;
+            /** Format: int32 */
+            poisson_iterations: number;
+            /** Format: int32 */
+            rejected_attempts: number;
+            /** Format: int32 */
+            rhs_evaluations: number;
+            /** Format: int64 */
+            step: number;
+            threading: components["schemas"]["SolverProfileThreadingResource"];
+            /** Format: double */
+            time: number;
+            /** Format: int64 */
+            total_ns: number;
+        };
+        SolverProfileThreadingResource: {
+            /** Format: int32 */
+            effective_omp_threads: number;
+            mfem_device?: string | null;
+            openmp_available?: boolean | null;
+            openmp_compiled?: boolean | null;
+            /** Format: int32 */
+            requested_omp_threads: number;
+            thread_mode: string;
+        };
         SolverStatusResource: {
             algorithm?: string | null;
             can_accept_commands: boolean;
@@ -3379,8 +4198,14 @@ export interface components {
             integrator?: string | null;
             is_busy: boolean;
             last_error?: string | null;
+            /** Format: int64 */
+            last_step_updated_at_unix_ms?: number | null;
             /** Format: double */
             max_torque?: number | null;
+            /** Format: double */
+            max_torque_Apm?: number | null;
+            /** Format: double */
+            max_torque_T?: number | null;
             /** Format: int64 */
             revision: number;
             run_id?: string | null;
@@ -3402,14 +4227,34 @@ export interface components {
             dt?: number | null;
             /** Format: double */
             max_torque?: number | null;
+            /** Format: double */
+            max_torque_Apm?: number | null;
+            /** Format: double */
+            max_torque_T?: number | null;
             /** @description idle | running | paused | finished | error */
             state: string;
         };
         StageExecutionRecordResource: {
+            action?: string | null;
+            artifact_refs?: string[];
+            checkpoint_ref?: string | null;
+            command_id?: string | null;
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            /** Format: int32 */
+            index: number;
+            kind?: string | null;
+            label?: string | null;
+            loaded_state_ref?: string | null;
             metric_name?: string | null;
             /** Format: double */
             metric_value?: number | null;
             reason?: string | null;
+            resume_from_checkpoint_ref?: string | null;
+            stage_id: string;
+            /** Format: int64 */
+            started_at_unix_ms?: number | null;
+            state_transition?: string | null;
             status: string;
             /** Format: double */
             threshold?: number | null;
@@ -3427,23 +4272,22 @@ export interface components {
             /** Format: int32 */
             total_stages: number;
         };
-        StructuredCommandRequest: {
+        StructuredCommandRequest: (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             fixed_timestep?: number | null;
             integrator?: string | null;
-            /** @enum {string} */
-            kind: "run";
             /** Format: int64 */
             max_steps?: number | null;
             /** Format: double */
             until_seconds: number;
-        } | {
+        } & {
+            /** @enum {string} */
+            kind: "run";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             energy_tolerance?: number | null;
             /** Format: double */
             fixed_timestep?: number | null;
-            /** @enum {string} */
-            kind: "relax";
             /** Format: double */
             max_error?: number | null;
             /** Format: int64 */
@@ -3454,39 +4298,59 @@ export interface components {
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */
+            torque_tolerance_T?: number | null;
+            /** Format: double */
+            torque_tolerance_apm?: number | null;
+            /** Format: double */
             until_seconds?: number | null;
-        } | {
+        } & {
+            /** @enum {string} */
+            kind: "relax";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "pause";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "resume";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "stop";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "skip";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "save_vtk";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "solve";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "compute_fields";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            /** @enum {string} */
+            kind: "compute_energies";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "close";
-        } | {
-            /** @enum {string} */
-            kind: "mesh_build";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             mesh_options?: Record<string, never> | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
-        };
+        } & {
+            /** @enum {string} */
+            kind: "mesh_build";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            profile: components["schemas"]["SolverProfileCommandConfig"];
+        } & {
+            /** @enum {string} */
+            kind: "set_solver_profile";
+        });
         StructuredGridDescriptor: {
+            /**
+             * @description Physical grid edge origin in meters. Cell centers are
+             *     `origin + (i + 0.5) * spacing` on non-zero axes.
+             */
             origin: number[];
             shape: number[];
             spacing: number[];
@@ -3507,6 +4371,8 @@ export interface components {
             requested_mode: string;
             requested_precision: string;
         };
+        /** @enum {string} */
+        SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
             y: components["schemas"]["TrimAxisVisualizationState"];
@@ -3599,12 +4465,64 @@ export interface components {
             /** Format: double */
             thickness: number;
         };
+        VisualizationCameraPatch: {
+            /** Format: double */
+            fov_degrees?: number | null;
+            /** Format: double */
+            orthographic_scale?: number | null;
+            position?: number[] | null;
+            projection?: null | components["schemas"]["VisualizationCameraProjection"];
+            target?: number[] | null;
+            up?: number[] | null;
+        };
+        /** @enum {string} */
+        VisualizationCameraProjection: "perspective" | "orthographic";
+        VisualizationCameraState: {
+            /** Format: double */
+            fov_degrees: number;
+            /** Format: double */
+            orthographic_scale?: number | null;
+            position: number[];
+            projection: components["schemas"]["VisualizationCameraProjection"];
+            target: number[];
+            up: number[];
+        };
+        VisualizationClientAckEntry: {
+            client_id: string;
+            client_label?: string | null;
+            effective_render_mode?: string | null;
+            error?: string | null;
+            /** Format: int64 */
+            received_at_unix_ms: number;
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["VisualizationClientAckStatus"];
+            viewport_id?: string | null;
+        };
+        VisualizationClientAckRequest: {
+            client_id: string;
+            client_label?: string | null;
+            effective_render_mode?: string | null;
+            error?: string | null;
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["VisualizationClientAckStatus"];
+            viewport_id?: string | null;
+        };
+        VisualizationClientAckResource: {
+            entries: components["schemas"]["VisualizationClientAckEntry"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @enum {string} */
+        VisualizationClientAckStatus: "applied" | "rendered" | "failed";
         VisualizationDiagnostics: {
             degraded_reasons: string[];
             warnings: string[];
         };
         VisualizationLayerPatch: {
             airbox?: null | components["schemas"]["AirboxLayerPatch"];
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
             points?: null | components["schemas"]["BasicLayerPatch"];
             primitives?: null | components["schemas"]["BasicLayerPatch"];
             quantity_overlay?: null | components["schemas"]["BasicLayerPatch"];
@@ -3615,6 +4533,7 @@ export interface components {
         };
         VisualizationLayerState: {
             airbox: components["schemas"]["AirboxLayerState"];
+            bounds?: components["schemas"]["BasicLayerState"];
             points: components["schemas"]["BasicLayerState"];
             primitives: components["schemas"]["BasicLayerState"];
             quantity_overlay: components["schemas"]["BasicLayerState"];
@@ -3624,15 +4543,49 @@ export interface components {
             wireframe: components["schemas"]["BasicLayerState"];
         };
         VisualizationOverrideState: {
+            display?: null | components["schemas"]["VisualizationTargetDisplayOverride"];
+            quantity?: null | components["schemas"]["VisualizationTargetQuantityOverride"];
             scope: components["schemas"]["VisualizationScopeKind"];
             scope_id: string;
+            style?: null | components["schemas"]["VisualizationTargetStyleOverride"];
+            /** @description Compatibility target visibility override. Prefer `display.visible` for new clients. */
             visible?: boolean | null;
+        };
+        VisualizationResolvedTargetSettings: {
+            active_quantity_id: string;
+            bounds_visible: boolean;
+            geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
+            /** Format: double */
+            opacity: number;
+            point_color: string;
+            points_visible: boolean;
+            render_mode: components["schemas"]["VisualizationTargetRenderMode"];
+            surface_color_source: components["schemas"]["SurfaceColorSource"];
+            surface_mono_color: string;
+            surface_visible: boolean;
+            /** Format: double */
+            vector_alpha: number;
+            /** Format: int32 */
+            vector_budget: number;
+            vector_color_mode: components["schemas"]["VectorColorMode"];
+            /** Format: double */
+            vector_length_scale: number;
+            vector_mono_color: string;
+            /** Format: double */
+            vector_thickness: number;
+            vectors_visible: boolean;
+            visible: boolean;
+            wireframe_color: string;
+            /** Format: double */
+            wireframe_opacity: number;
+            wireframe_visible: boolean;
         };
         /** @enum {string} */
         VisualizationScopeKind: "full" | "magnetic" | "airbox" | "object" | "part" | "selection";
         VisualizationStatePatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
+            camera?: null | components["schemas"]["VisualizationCameraPatch"];
             clip?: null | components["schemas"]["ClipVisualizationPatch"];
             colormap?: string | null;
             /** Format: double */
@@ -3646,6 +4599,7 @@ export interface components {
             layers?: null | components["schemas"]["VisualizationLayerPatch"];
             /** Format: int32 */
             max_points?: number | null;
+            overrides?: components["schemas"]["VisualizationOverrideState"][] | null;
             quantity?: null | components["schemas"]["QuantityVisualizationPatch"];
             sampling?: null | components["schemas"]["SamplingVisualizationPatch"];
             slice?: null | components["schemas"]["SliceVisualizationPatch"];
@@ -3668,6 +4622,8 @@ export interface components {
             active_quantity_id: string;
             /** @description Compatibility projection for current display clients. Prefer `quantity.auto_contrast`. */
             auto_contrast: boolean;
+            /** @description Session-wide viewport camera. All connected clients should converge to this view. */
+            camera: components["schemas"]["VisualizationCameraState"];
             /** @description Compatibility projection of the legacy single clip plane. */
             clip: components["schemas"]["ClipVisualizationState"];
             /** @description Compatibility projection for current display clients. Prefer `quantity.colormap`. */
@@ -3720,6 +4676,8 @@ export interface components {
             /** Format: int32 */
             slice_layer: number;
             slice_mode: string;
+            /** @description Complete effective target registry for the current scene and mesh. */
+            targets?: components["schemas"]["VisualizationTargetRegistryState"];
             /** @description Canonical 3-D trim controls for topology-aware viewports. */
             trim: components["schemas"]["TrimVisualizationState"];
             /**
@@ -3743,6 +4701,55 @@ export interface components {
              * @description Compatibility projection for current display clients. Prefer `fdm.y_chosen_size`.
              */
             y_chosen_size: number;
+        };
+        VisualizationTargetDisplayOverride: {
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
+            geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
+            /** Format: double */
+            opacity?: number | null;
+            points?: null | components["schemas"]["BasicLayerPatch"];
+            surface?: null | components["schemas"]["BasicLayerPatch"];
+            vectors?: null | components["schemas"]["VectorLayerPatch"];
+            visible?: boolean | null;
+            wireframe?: null | components["schemas"]["BasicLayerPatch"];
+        };
+        /** @enum {string} */
+        VisualizationTargetGeometryScope: "surface" | "full";
+        VisualizationTargetQuantityOverride: {
+            active_quantity_id: string;
+        };
+        VisualizationTargetRegistryEntry: {
+            label: string;
+            override?: null | components["schemas"]["VisualizationOverrideState"];
+            scope: components["schemas"]["VisualizationScopeKind"];
+            scope_id: string;
+            settings: components["schemas"]["VisualizationResolvedTargetSettings"];
+            source: components["schemas"]["VisualizationTargetSource"];
+        };
+        VisualizationTargetRegistryState: {
+            airbox: components["schemas"]["VisualizationTargetRegistryEntry"];
+            objects: components["schemas"]["VisualizationTargetRegistryEntry"][];
+            parts: components["schemas"]["VisualizationTargetRegistryEntry"][];
+        };
+        /** @enum {string} */
+        VisualizationTargetRenderMode: "points" | "surface" | "surface+edges" | "wireframe";
+        /** @enum {string} */
+        VisualizationTargetSource: "airbox" | "scene_object" | "mesh_part";
+        VisualizationTargetStyleOverride: {
+            point_color?: string | null;
+            surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
+            surface_mono_color?: string | null;
+            /** Format: double */
+            vector_alpha?: number | null;
+            /** Format: int32 */
+            vector_budget?: number | null;
+            vector_color_mode?: null | components["schemas"]["VectorColorMode"];
+            /** Format: double */
+            vector_length_scale?: number | null;
+            vector_mono_color?: string | null;
+            /** Format: double */
+            vector_thickness?: number | null;
+            wireframe_color?: string | null;
         };
         WorkspaceActiveNodeReplaceRequest: {
             node_id?: string | null;
@@ -4221,6 +5228,31 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Driven magnetic response sweep artifact v1 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No magnetic response sweep artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_artifacts: {
         parameters: {
             query?: never;
@@ -4365,7 +5397,12 @@ export interface operations {
     data_get_sessions_current_data_domain_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous domain topology response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4387,6 +5424,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial binary FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Domain topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -4396,6 +5442,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5250,8 +6303,18 @@ export interface operations {
                 scope_kind?: string | null;
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
+                /**
+                 * @description Optional hard cap for vector samples returned by the binary payload.
+                 *
+                 *     Scoped FEM queries are sampled by scope node index. Unscoped queries
+                 *     return a contiguous center window for lightweight diagnostics.
+                 */
+                max_samples?: number | null;
             };
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous field-vector response */
+                "If-None-Match"?: string | null;
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -5268,6 +6331,13 @@ export interface operations {
                 content: {
                     "application/octet-stream": unknown;
                 };
+            };
+            /** @description Recognized field quantity is not available yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Not modified — ETag matched */
             304: {
@@ -5339,6 +6409,26 @@ export interface operations {
             };
         };
     };
+    diagnostics_get_sessions_current_diagnostics_cpu: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CPU telemetry or degraded unavailable response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CpuTelemetryResponse"];
+                };
+            };
+        };
+    };
     diagnostics_get_sessions_current_diagnostics_engine_log: {
         parameters: {
             query?: never;
@@ -5390,6 +6480,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GpuTelemetryResponse"];
                 };
+            };
+        };
+    };
+    diagnostics_get_sessions_current_diagnostics_solver_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Opt-in FEM solver phase profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolverProfileResource"];
+                };
+            };
+            /** @description Solver profile not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -5751,7 +6875,12 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_objects_object_id_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous object-topology response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -5776,6 +6905,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial per-object FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Per-object topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -5790,12 +6928,24 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     meshing_get_sessions_current_meshing_meshes_parts_part_id_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous part-topology response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
+            };
             path: {
                 /** @description Stable FEM mesh part id, for example an airbox part */
                 part_id: string;
@@ -5820,6 +6970,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial per-part FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Per-part topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -5829,6 +6988,186 @@ export interface operations {
             };
             /** @description No active workspace or mesh part */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                include_polygons?: boolean;
+                include_wireframe?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary shared-domain FEM cross-section geometry (FMCS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Not applicable (FDM) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section geometry not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                metric: components["schemas"]["CrossSectionQualityMetric"];
+                color_scale?: components["schemas"]["CrossSectionImageColorScale"];
+                resolution?: number;
+                rotation_degrees?: number;
+                wireframe?: boolean;
+                legend?: boolean;
+                shrink_factor?: number;
+                filter_expression?: string;
+                edge_width?: number;
+                dpr?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-rendered shared-domain FEM cross-section image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description No FEM mesh or no data for the requested metric */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section image not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                position_percent: number;
+                metric: components["schemas"]["CrossSectionQualityMetric"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary shared-domain FEM cross-section quality values (FMQS) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No per-element quality data artifact or requested metric available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cross-section quality not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for cross-section */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5931,6 +7270,50 @@ export interface operations {
             };
         };
     };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous per-element quality response */
+                "If-None-Match"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary per-element shared-domain mesh quality data (FMMQ) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No per-element quality data artifact available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Per-element mesh quality data not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields: {
         parameters: {
             query?: never;
@@ -5988,7 +7371,12 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous shared-domain topology response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMMT topology reads */
+                Range?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6010,6 +7398,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Partial shared-domain FEM topology range (FMMT) */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
             /** @description Shared-domain topology not modified for the supplied ETag */
             304: {
                 headers: {
@@ -6019,6 +7416,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested topology byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6072,6 +7476,56 @@ export interface operations {
                 };
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh. */
+                mesh_id: string;
+                /** @description Stable FEM mesh part id, for example airbox */
+                part_id: string;
+                /** @description Histogram metric: characteristic_size, tetra_size, edge_length, volume, sicn, or gamma */
+                metric: string;
+                /** @description Zero-based histogram bin index */
+                bin_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source element and node indices for a mesh histogram bin */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshHistogramBinElementsResource"];
+                };
+            };
+            /** @description No FEM mesh available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid histogram metric or bin index */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace, mesh, or mesh part */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -6428,7 +7882,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryCapabilitiesResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6455,7 +7909,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryDiagnosticsResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6485,7 +7939,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryDiagnostic"];
                 };
             };
             /** @description No active workspace, scene document, or diagnostic */
@@ -6516,7 +7970,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryRealizationSnapshot"];
                 };
             };
             /** @description Invalid backend target */
@@ -6550,7 +8004,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryRealizationSnapshot"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6577,11 +8031,89 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryValidationResource"];
                 };
             };
             /** @description No active workspace or scene document */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_magnetization_assets_asset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical magnetization asset id */
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical magnetization asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagnetizationAssetResource"];
+                };
+            };
+            /** @description No active workspace or magnetization asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_magnetization_assets_asset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical magnetization asset id */
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagnetizationAssetPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical magnetization asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagnetizationAssetResource"];
+                };
+            };
+            /** @description Invalid magnetization asset payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or magnetization asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6954,7 +8486,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6985,7 +8517,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description Invalid scene document payload */
@@ -7023,7 +8555,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description Invalid scene patch payload */
@@ -7371,6 +8903,115 @@ export interface operations {
             };
         };
     };
+    persistence_post_sessions_current_persistence_checkpoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Checkpoint captured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointCreateResponse"];
+                };
+            };
+            /** @description No live magnetization to capture */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_sessions_current_persistence_checkpoints_checkpoint_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session checkpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointEntry"];
+                };
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Checkpoint restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointRestoreResponse"];
+                };
+            };
+            /** @description Checkpoint is incompatible with the active domain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     persistence_post_sessions_current_persistence_exports: {
         parameters: {
             query?: never;
@@ -7592,6 +9233,36 @@ export interface operations {
             };
         };
     };
+    simulation_get_sessions_current_simulation_objects_object_id_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Scene object id or name */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selected object magnetization and energy read-model */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectMetricsResource"];
+                };
+            };
+            /** @description Object or workspace not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     simulation_get_sessions_current_simulation_runs_current: {
         parameters: {
             query?: never;
@@ -7751,7 +9422,14 @@ export interface operations {
                     "application/json": components["schemas"]["StageExecutionResource"];
                 };
             };
-            /** @description No stage execution data */
+            /** @description Stage execution read-model is not available yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -7780,6 +9458,57 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_get_sessions_current_visualization_client_acks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest visualization client acknowledgements */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationClientAckResource"];
+                };
+            };
+        };
+    };
+    visualization_post_sessions_current_visualization_client_acks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualizationClientAckRequest"];
+            };
+        };
+        responses: {
+            /** @description Visualization client acknowledgement recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationClientAckEntry"];
+                };
+            };
+            /** @description Invalid client acknowledgement */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

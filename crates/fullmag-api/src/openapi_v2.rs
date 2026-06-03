@@ -324,6 +324,7 @@ use utoipa::OpenApi;
         crate::schemas::authoring::UniversePatchRequest,
         crate::schemas::authoring::UniverseFitRequest,
         crate::schemas::runtime::CurrentRunResource,
+        crate::schemas::runtime::ResolvedFallbackResource,
         crate::schemas::runtime::StageExecutionResource,
         crate::schemas::runtime::StageExecutionRecordResource,
         crate::schemas::runtime::SolverStatusResource,

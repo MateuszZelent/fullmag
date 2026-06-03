@@ -10,8 +10,7 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::flatten_vectors;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::native_fem::NativeFemBackend;
-use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
-use crate::relaxation_direct_minimizer::{
+use crate::relaxation::direct_minimizer::{
     apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
     direct_minimizer_gradient_norm_sq, direct_minimizer_step_budget,
     nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
@@ -19,7 +18,8 @@ use crate::relaxation_direct_minimizer::{
     projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerControl,
     DirectMinimizerState, DirectMinimizerTrialEvaluation,
 };
-use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
+use crate::relaxation::vector_math::{max_torque_from_field, tangent_gradient_from_field};
+use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 use super::preview::build_fem_cached_preview_fields;

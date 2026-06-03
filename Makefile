@@ -136,7 +136,7 @@ install-cli install-cli-dev install-cli-static:
 				if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
 				managed_runtime_stale=""; \
 				if [ -x "$$managed_runtime_bin" ]; then \
-					managed_runtime_stale="$$(find native/backends/fem crates/fullmag-fem-sys crates/fullmag-runner crates/fullmag-cli scripts docker-compose.yml Cargo.lock -type f -newer "$$managed_runtime_bin" 2>/dev/null | head -n 1)"; \
+					managed_runtime_stale="$$(find backends/fem crates/fullmag-fem-sys crates/fullmag-runner crates/fullmag-cli scripts compose.yaml Cargo.lock -type f -newer "$$managed_runtime_bin" 2>/dev/null | head -n 1)"; \
 					fi; \
 					if [ ! -x "$$managed_runtime_bin" ] || [ "./scripts/export_fem_gpu_runtime.sh" -nt "$$managed_runtime_bin" ] || [ -n "$$managed_runtime_stale" ]; then \
 						echo "Exporting managed FEM GPU host runtime bundle..."; \

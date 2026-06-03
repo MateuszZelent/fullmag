@@ -9,6 +9,26 @@
 #[cfg(feature = "fem-gpu")]
 use fullmag_fem_sys as ffi;
 
+mod availability;
+mod eigen;
+mod plan;
+#[cfg(feature = "fem-gpu")]
+mod runtime_info;
+pub(crate) use availability::{
+    is_cpu_available, is_gpu_available, native_availability, GpuAvailability,
+};
+#[allow(unused_imports)]
+pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
+#[allow(unused_imports)]
+pub(crate) use plan::{
+    native_fem_mfem_device_string_requests_gpu, native_fem_plan_requests_gpu_mfem_device,
+};
+#[cfg(feature = "fem-gpu")]
+pub(crate) use runtime_info::{
+    stage_completion_from_ffi, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
+};
+
 #[cfg(feature = "fem-gpu")]
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 #[cfg(feature = "fem-gpu")]
@@ -16,13 +36,16 @@ use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_ac
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
 #[cfg(feature = "fem-gpu")]
-use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
 #[cfg(feature = "fem-gpu")]
-use fullmag_ir::{StageCompletionIR, StageStopReason};
+use fullmag_ir::StageCompletionIR;
+#[cfg(feature = "fem-gpu")]
+use plan::{
+    has_slonczewski_stt, has_zhang_li_stt, native_fem_gpu_demag_mode,
+    native_fem_precession_enabled, single_precision_rejection,
+};
 
 #[cfg(feature = "fem-gpu")]
 use std::collections::BTreeSet;
@@ -38,357 +61,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
 #[cfg(feature = "fem-gpu")]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
-
-#[cfg(feature = "fem-gpu")]
-fn has_slonczewski_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
-    plan.current_density.is_some()
-        && plan.stt_degree.is_some()
-        && plan.stt_spin_polarization.is_some()
-        && plan.stt_lambda.is_some()
-}
-
-#[cfg(feature = "fem-gpu")]
-fn has_zhang_li_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
-    plan.current_density.is_some() && plan.stt_degree.is_some() && !has_slonczewski_stt(plan)
-}
-
-#[cfg(feature = "fem-gpu")]
-pub(crate) fn native_fem_precession_enabled(plan: &fullmag_ir::FemPlanIR) -> bool {
-    !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref())
-}
-
-pub(crate) fn is_gpu_available() -> bool {
-    native_availability().native_fem_gpu_available
-}
-
-pub(crate) fn is_cpu_available() -> bool {
-    native_availability().native_fem_cpu_available
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) struct GpuAvailability {
-    pub available: bool,
-    pub available_any: bool,
-    pub available_cpu: bool,
-    pub available_gpu: bool,
-    pub built_with_mfem_stack: bool,
-    pub built_with_cuda_runtime: bool,
-    pub built_with_ceed: bool,
-    pub native_fem_cpu_available: bool,
-    pub native_fem_gpu_available: bool,
-    pub native_fem_gpu_full_demag_available: bool,
-    pub mfem_cuda_available: bool,
-    pub hypre_gpu_available: bool,
-    pub libceed_used_hot_path: bool,
-    pub visible_cuda_device_count: i32,
-    pub requested_gpu_index: i32,
-    pub resolved_gpu_index: i32,
-    pub memory_free_bytes: u64,
-    pub memory_total_bytes: u64,
-    pub reason: String,
-    pub reason_cpu: String,
-    pub reason_gpu: String,
-}
-
-pub(crate) fn native_availability() -> GpuAvailability {
-    #[cfg(feature = "fem-gpu")]
-    {
-        let mut info = ffi::fullmag_fem_availability_info {
-            available: 0,
-            built_with_mfem_stack: 0,
-            built_with_cuda_runtime: 0,
-            built_with_ceed: 0,
-            native_fem_cpu_available: 0,
-            native_fem_gpu_available: 0,
-            native_fem_gpu_full_demag_available: 0,
-            mfem_cuda_available: 0,
-            hypre_gpu_available: 0,
-            libceed_used_hot_path: 0,
-            visible_cuda_device_count: 0,
-            requested_gpu_index: -1,
-            resolved_gpu_index: -1,
-            gpu_memory_free_bytes: 0,
-            gpu_memory_total_bytes: 0,
-            reason: [0; 256],
-            available_any: 0,
-            available_cpu: 0,
-            available_gpu: 0,
-            reason_cpu: [0; 256],
-            reason_gpu: [0; 256],
-        };
-        let rc = unsafe { ffi::fullmag_fem_get_availability_info(&mut info) };
-        if rc != ffi::FULLMAG_FEM_OK {
-            return GpuAvailability {
-                available: false,
-                available_any: false,
-                available_cpu: false,
-                available_gpu: false,
-                built_with_mfem_stack: false,
-                built_with_cuda_runtime: false,
-                built_with_ceed: false,
-                native_fem_cpu_available: false,
-                native_fem_gpu_available: false,
-                native_fem_gpu_full_demag_available: false,
-                mfem_cuda_available: false,
-                hypre_gpu_available: false,
-                libceed_used_hot_path: false,
-                visible_cuda_device_count: 0,
-                requested_gpu_index: -1,
-                resolved_gpu_index: -1,
-                memory_free_bytes: 0,
-                memory_total_bytes: 0,
-                reason: last_global_error_or(
-                    "fullmag_fem_get_availability_info failed without an error message",
-                ),
-                reason_cpu: String::new(),
-                reason_gpu: String::new(),
-            };
-        }
-
-        let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        let reason_cpu = unsafe { CStr::from_ptr(info.reason_cpu.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        let reason_gpu = unsafe { CStr::from_ptr(info.reason_gpu.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-
-        GpuAvailability {
-            available: info.available == 1,
-            available_any: info.available_any == 1,
-            available_cpu: info.available_cpu == 1,
-            available_gpu: info.available_gpu == 1,
-            built_with_mfem_stack: info.built_with_mfem_stack == 1,
-            built_with_cuda_runtime: info.built_with_cuda_runtime == 1,
-            built_with_ceed: info.built_with_ceed == 1,
-            native_fem_cpu_available: info.native_fem_cpu_available == 1,
-            native_fem_gpu_available: info.native_fem_gpu_available == 1,
-            native_fem_gpu_full_demag_available: info.native_fem_gpu_full_demag_available == 1,
-            mfem_cuda_available: info.mfem_cuda_available == 1,
-            hypre_gpu_available: info.hypre_gpu_available == 1,
-            libceed_used_hot_path: info.libceed_used_hot_path == 1,
-            visible_cuda_device_count: info.visible_cuda_device_count,
-            requested_gpu_index: info.requested_gpu_index,
-            resolved_gpu_index: info.resolved_gpu_index,
-            memory_free_bytes: info.gpu_memory_free_bytes,
-            memory_total_bytes: info.gpu_memory_total_bytes,
-            reason,
-            reason_cpu,
-            reason_gpu,
-        }
-    }
-    #[cfg(not(feature = "fem-gpu"))]
-    {
-        GpuAvailability {
-            available: false,
-            available_any: false,
-            available_cpu: false,
-            available_gpu: false,
-            built_with_mfem_stack: false,
-            built_with_cuda_runtime: false,
-            built_with_ceed: false,
-            native_fem_cpu_available: false,
-            native_fem_gpu_available: false,
-            native_fem_gpu_full_demag_available: false,
-            mfem_cuda_available: false,
-            hypre_gpu_available: false,
-            libceed_used_hot_path: false,
-            visible_cuda_device_count: 0,
-            requested_gpu_index: -1,
-            resolved_gpu_index: -1,
-            memory_free_bytes: 0,
-            memory_total_bytes: 0,
-            reason: "fullmag-runner was built without the fem-gpu feature".to_string(),
-            reason_cpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
-            reason_gpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
-        }
-    }
-}
-
-#[cfg(feature = "fem-gpu")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NativeFemDataResidency {
-    HostSourceOfTruth,
-    Mixed,
-    DeviceSourceOfTruth,
-}
-
-#[cfg(feature = "fem-gpu")]
-impl NativeFemDataResidency {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::HostSourceOfTruth => "host_source_of_truth",
-            Self::Mixed => "mixed",
-            Self::DeviceSourceOfTruth => "device_source_of_truth",
-        }
-    }
-
-    fn from_ffi(value: ffi::fullmag_fem_data_residency) -> Self {
-        match value {
-            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_MIXED => Self::Mixed,
-            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH => {
-                Self::DeviceSourceOfTruth
-            }
-            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH => {
-                Self::HostSourceOfTruth
-            }
-        }
-    }
-}
-
-#[cfg(feature = "fem-gpu")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NativeFemGpuStateInfo {
-    pub(crate) allocated: bool,
-    pub(crate) node_count: u64,
-    pub(crate) dof_len: u64,
-    pub(crate) stage_count: u32,
-    pub(crate) device_bytes: u64,
-    pub(crate) reduction_workspace_bytes: u64,
-    pub(crate) source_of_truth: NativeFemDataResidency,
-}
-
-#[cfg(feature = "fem-gpu")]
-impl NativeFemGpuStateInfo {
-    pub(crate) fn from_ffi(info: ffi::fullmag_fem_gpu_state_info) -> Self {
-        Self {
-            allocated: info.allocated != 0,
-            node_count: info.node_count,
-            dof_len: info.dof_len,
-            stage_count: info.stage_count,
-            device_bytes: info.device_bytes,
-            reduction_workspace_bytes: info.reduction_workspace_bytes,
-            source_of_truth: NativeFemDataResidency::from_ffi(info.source_of_truth),
-        }
-    }
-}
-
-#[cfg(feature = "fem-gpu")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NativeFemGpuRkPlanInfo {
-    pub(crate) exchange_only_enabled: bool,
-    pub(crate) stage_count: u32,
-    pub(crate) uses_cuda_kernels: bool,
-    pub(crate) allows_exchange_host_sync: bool,
-    pub(crate) stage_exchange_device_resident: bool,
-    pub(crate) uses_gpu_poisson: bool,
-    pub(crate) exchange_operator_mode: String,
-    pub(crate) demag_operator_mode: String,
-    pub(crate) hypre_execution_policy: String,
-    pub(crate) demag_residency: String,
-    pub(crate) reason: String,
-}
-
-#[cfg(feature = "fem-gpu")]
-impl NativeFemGpuRkPlanInfo {
-    pub(crate) fn from_ffi(info: ffi::fullmag_fem_gpu_rk_plan_info) -> Self {
-        let exchange_operator_mode =
-            unsafe { CStr::from_ptr(info.exchange_operator_mode.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-        let demag_operator_mode = unsafe { CStr::from_ptr(info.demag_operator_mode.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        let hypre_execution_policy =
-            unsafe { CStr::from_ptr(info.hypre_execution_policy.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-        let demag_residency = unsafe { CStr::from_ptr(info.demag_residency.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-        Self {
-            exchange_only_enabled: info.exchange_only_enabled != 0,
-            stage_count: info.stage_count,
-            uses_cuda_kernels: info.uses_cuda_kernels != 0,
-            allows_exchange_host_sync: info.allows_exchange_host_sync != 0,
-            stage_exchange_device_resident: info.stage_exchange_device_resident != 0,
-            uses_gpu_poisson: info.uses_gpu_poisson != 0,
-            exchange_operator_mode,
-            demag_operator_mode,
-            hypre_execution_policy,
-            demag_residency,
-            reason,
-        }
-    }
-}
-
-#[cfg(feature = "fem-gpu")]
-fn single_precision_rejection(plan: &fullmag_ir::FemPlanIR) -> &'static str {
-    if !native_fem_plan_requests_gpu_mfem_device(plan) {
-        "MFEM/libCEED/hypre CPU FEM backend currently supports only double precision; single precision is not implemented"
-    } else {
-        "native FEM GPU backend requires double precision; single-precision CUDA kernels are not yet implemented"
-    }
-}
-
-#[cfg(feature = "fem-gpu")]
-fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
-    if !native_fem_plan_requests_gpu_mfem_device(plan) || !plan.enable_demag {
-        return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32;
-    }
-    match std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("hybrid_cpu_poisson") | Some("hybrid") | Some("compat") => {
-            ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON as i32
-        }
-        _ => ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON as i32,
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> bool {
-    if let Some(device) = plan
-        .mfem_device_string
-        .as_deref()
-        .map(str::trim)
-        .filter(|device| !device.is_empty())
-    {
-        return native_fem_mfem_device_string_requests_gpu(device);
-    }
-
-    match std::env::var("FULLMAG_FEM_MFEM_DEVICE") {
-        Ok(device) => native_fem_mfem_device_string_requests_gpu(device.trim()),
-        Err(_) => false,
-    }
-}
-
-pub(crate) fn native_fem_mfem_device_string_requests_gpu(device: &str) -> bool {
-    let device = device.trim().to_ascii_lowercase();
-    if device.is_empty() {
-        return false;
-    }
-    if device == "cuda"
-        || device == "hip"
-        || device.starts_with("raja-cuda")
-        || device.starts_with("raja-hip")
-        || device.starts_with("occa-cuda")
-        || device.starts_with("ceed-cuda")
-        || device.starts_with("ceed/cuda")
-        || device.contains("/gpu/")
-    {
-        return true;
-    }
-    if device == "cpu"
-        || device == "omp"
-        || device.starts_with("ceed-cpu")
-        || device.starts_with("ceed/cpu")
-        || device.starts_with("ceed-omp")
-        || device.starts_with("ceed/omp")
-        || device.starts_with("raja-omp")
-    {
-        return false;
-    }
-    true
-}
 
 #[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
@@ -1592,21 +1264,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU get_device_info failed"));
         }
 
-        let name = unsafe { CStr::from_ptr(info.name.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-
-        Ok(DeviceInfo {
-            name,
-            compute_capability: format!(
-                "{}.{}",
-                info.compute_capability_major, info.compute_capability_minor
-            ),
-            driver_version: info.driver_version,
-            runtime_version: info.runtime_version,
-            memory_free_bytes: info.gpu_memory_free_bytes,
-            memory_total_bytes: info.gpu_memory_total_bytes,
-        })
+        Ok(DeviceInfo::from_ffi(info))
     }
 
     pub fn stage_completion(&self) -> Result<Option<StageCompletionIR>, RunError> {
@@ -1622,63 +1280,7 @@ impl NativeFemBackend {
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU stage_completion failed"));
         }
-        if completion.has_reason == 0 {
-            return Ok(None);
-        }
-
-        let reason = match completion.reason {
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE => {
-                StageStopReason::Torque
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY => {
-                StageStopReason::Energy
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS => {
-                StageStopReason::MaxSteps
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME => {
-                StageStopReason::MaxPseudotime
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME => {
-                StageStopReason::MaxPhysicalTime
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED => {
-                StageStopReason::UserCancelled
-            }
-            ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR => {
-                StageStopReason::BackendError
-            }
-        };
-
-        let metric_name = if completion.has_metric_name != 0 {
-            let value = unsafe { CStr::from_ptr(completion.metric_name.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        } else {
-            None
-        };
-        let has_metric = metric_name.is_some();
-
-        Ok(Some(StageCompletionIR {
-            status: "completed".to_string(),
-            reason: Some(reason),
-            metric_name,
-            metric_value: if has_metric {
-                Some(completion.metric_value)
-            } else {
-                None
-            },
-            threshold: if has_metric {
-                Some(completion.threshold)
-            } else {
-                None
-            },
-        }))
+        Ok(stage_completion_from_ffi(completion))
     }
 
     fn last_error_or(&self, fallback: &str) -> RunError {
@@ -1703,17 +1305,6 @@ impl Drop for NativeFemBackend {
 }
 
 #[cfg(feature = "fem-gpu")]
-#[derive(Debug, Clone)]
-pub(crate) struct DeviceInfo {
-    pub name: String,
-    pub compute_capability: String,
-    pub driver_version: i32,
-    pub runtime_version: i32,
-    pub memory_free_bytes: u64,
-    pub memory_total_bytes: u64,
-}
-
-#[cfg(feature = "fem-gpu")]
 fn last_global_error_or(fallback: &str) -> String {
     let err = unsafe { ffi::fullmag_fem_backend_last_error(std::ptr::null_mut()) };
     if !err.is_null() {
@@ -1723,90 +1314,6 @@ fn last_global_error_or(fallback: &str) -> String {
         }
     }
     fallback.to_string()
-}
-
-// ---------------------------------------------------------------------------
-// ── GPU Dense Generalized Eigenvalue Solver (Etap A4) ──────────────────────
-// ---------------------------------------------------------------------------
-
-/// Result of a GPU dense eigen solve.
-pub(crate) struct GpuEigenResult {
-    /// Eigenvalues in ascending order.
-    pub eigenvalues: Vec<f64>,
-    /// Eigenvectors stored column-major (column i = eigenvector i).
-    /// Length = n * n_eigenvalues.
-    pub eigenvectors_col_major: Vec<f64>,
-    #[allow(dead_code)]
-    /// Dimension n of the system that was solved.
-    pub n: usize,
-}
-
-/// Solve the real symmetric generalized eigenvalue problem K·x = λ·M·x on the
-/// GPU using cuSolverDN `Dsygvd`.
-///
-/// `k_col_major` and `m_col_major` must be column-major, n×n `f64` slices.
-/// `n` is the matrix dimension, `n_eigenvalues` is how many modes to return.
-///
-/// Returns `Ok(GpuEigenResult)` on success, `Err(String)` with a reason on
-/// failure.  When the GPU/cuSolver stack is not available the error message
-/// contains "UNAVAILABLE" so callers can fall back gracefully.
-pub(crate) fn gpu_eigen_dense_solve(
-    k_col_major: &[f64],
-    m_col_major: &[f64],
-    n: usize,
-    n_eigenvalues: usize,
-) -> Result<GpuEigenResult, String> {
-    #[cfg(feature = "fem-gpu")]
-    {
-        if k_col_major.len() != n * n || m_col_major.len() != n * n {
-            return Err(format!(
-                "gpu_eigen_dense_solve: matrix size mismatch (expected {n}×{n}, got K={}, M={})",
-                k_col_major.len(),
-                m_col_major.len()
-            ));
-        }
-        let ne = n_eigenvalues.min(n);
-        let mut eigenvalues = vec![0.0_f64; ne];
-        let mut eigenvectors = vec![0.0_f64; n * ne];
-        let mut reason_buf = vec![0i8; 512];
-
-        let mut desc = ffi::fullmag_fem_eigen_dense_desc {
-            k_lower_col_major: k_col_major.as_ptr(),
-            m_lower_col_major: m_col_major.as_ptr(),
-            n: n as u32,
-            n_eigenvalues: ne as u32,
-            out_eigenvalues: eigenvalues.as_mut_ptr(),
-            out_eigenvectors: eigenvectors.as_mut_ptr(),
-            out_reason: reason_buf.as_mut_ptr(),
-            reason_len: reason_buf.len() as u32,
-        };
-
-        let rc = unsafe { ffi::fullmag_fem_eigen_dense(&mut desc) };
-
-        let reason = unsafe {
-            std::ffi::CStr::from_ptr(reason_buf.as_ptr())
-                .to_string_lossy()
-                .into_owned()
-        };
-
-        if rc == ffi::FULLMAG_FEM_ERR_UNAVAILABLE {
-            return Err(format!("UNAVAILABLE: {reason}"));
-        }
-        if rc != ffi::FULLMAG_FEM_OK {
-            return Err(format!("GPU eigen solve failed (rc={rc}): {reason}"));
-        }
-
-        Ok(GpuEigenResult {
-            eigenvalues,
-            eigenvectors_col_major: eigenvectors,
-            n,
-        })
-    }
-    #[cfg(not(feature = "fem-gpu"))]
-    {
-        let _ = (k_col_major, m_col_major, n, n_eigenvalues);
-        Err("UNAVAILABLE: fullmag-runner was built without the fem-gpu feature".to_string())
-    }
 }
 
 #[cfg(all(test, feature = "fem-gpu"))]
@@ -3083,7 +2590,7 @@ mod tests {
 
     #[test]
     fn native_fem_poisson_rhs_hot_path_reuses_workspace() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let coeff_start = source
             .find("class MagnetizationCoefficient")
             .expect("MagnetizationCoefficient definition");
@@ -3134,7 +2641,7 @@ mod tests {
 
     #[test]
     fn native_fem_poisson_essential_zeroing_uses_context_tdof_list_directly() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("void zero_poisson_essential_values(")
             .expect("zero_poisson_essential_values definition");
@@ -3156,7 +2663,7 @@ mod tests {
 
     #[test]
     fn native_fem_demag_recovery_reuses_context_workspace() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool recover_demag_field(")
             .expect("recover_demag_field definition");
@@ -3202,7 +2709,7 @@ mod tests {
 
     #[test]
     fn native_fem_hypre_solve_reuses_transfer_vectors() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool solve_poisson_hypre(")
             .expect("solve_poisson_hypre definition");
@@ -3228,7 +2735,7 @@ mod tests {
 
     #[test]
     fn native_fem_hypre_solve_reuses_persistent_warm_start_vector() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool solve_poisson_hypre(")
             .expect("solve_poisson_hypre definition");
@@ -3260,7 +2767,7 @@ mod tests {
 
     #[test]
     fn native_fem_non_pbc_demag_reuses_solution_workspace() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool context_compute_demag_poisson(")
             .expect("context_compute_demag_poisson definition");
@@ -3294,7 +2801,7 @@ mod tests {
 
     #[test]
     fn native_fem_hypre_solve_enables_iterative_mode_for_warm_start() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool solve_poisson_hypre(")
             .expect("solve_poisson_hypre definition");
@@ -3316,7 +2823,7 @@ mod tests {
 
     #[test]
     fn native_fem_hypre_solve_honors_configured_print_level() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool solve_poisson_hypre(")
             .expect("solve_poisson_hypre definition");
@@ -3342,7 +2849,7 @@ mod tests {
 
     #[test]
     fn native_fem_periodic_demag_reduced_solve_reuses_workspace_and_warm_start() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("Periodic demag: solve in reduced class space")
             .expect("periodic demag solve block");
@@ -3375,13 +2882,11 @@ mod tests {
         let sources = [
             (
                 "compute_interfacial_dmi_field(",
-                include_str!(
-                    "../../../native/backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp"
-                ),
+                include_str!("../../../backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp"),
             ),
             (
                 "compute_bulk_dmi_field(",
-                include_str!("../../../native/backends/fem/cpu/mfem/interactions/dmi_bulk.cpp"),
+                include_str!("../../../backends/fem/cpu/mfem/interactions/dmi_bulk.cpp"),
             ),
         ];
 
@@ -3423,7 +2928,7 @@ mod tests {
     #[test]
     fn native_fem_fsal_cached_fields_move_without_copying() {
         let source =
-            include_str!("../../../native/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
+            include_str!("../../../backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
         let start = source
             .find("if (final_stage_cache_valid) {")
             .expect("FSAL final-stage cache block");
@@ -3456,7 +2961,7 @@ mod tests {
     #[test]
     fn native_fem_non_fsal_final_refresh_reuses_stepper_workspace() {
         let source =
-            include_str!("../../../native/backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
+            include_str!("../../../backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp");
         let start = source
             .find("if (final_stage_cache_valid) {")
             .expect("final field publish block");
@@ -3499,7 +3004,7 @@ mod tests {
 
     #[test]
     fn native_fem_disabled_local_terms_are_not_zeroed_each_effective_field_eval() {
-        let bridge_source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let bridge_source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = bridge_source
             .find("bool compute_effective_fields_for_magnetization_impl(")
             .expect("effective field implementation");
@@ -3527,7 +3032,7 @@ mod tests {
             "H_eff is fully overwritten later and must not be pre-zeroed every evaluation"
         );
 
-        let context_source = include_str!("../../../native/backends/fem/src/context.cpp");
+        let context_source = include_str!("../../../backends/fem/src/context.cpp");
         assert!(
             context_source.contains("fill_zero_vector_field(ctx.h_dmi_xyz, ctx.n_nodes)")
                 && context_source
@@ -3540,7 +3045,7 @@ mod tests {
 
     #[test]
     fn native_fem_demag_cache_copy_is_guarded_by_field_refresh_policy() {
-        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
         let start = source
             .find("bool compute_effective_fields_for_magnetization_impl(")
             .expect("effective field implementation");
@@ -3564,7 +3069,7 @@ mod tests {
 
     #[test]
     fn native_fem_dmi_formula_smoke_has_directional_derivative_oracle() {
-        let source = include_str!("../../../native/backends/fem/tests/dmi_weak_residual.cpp");
+        let source = include_str!("../../../backends/fem/tests/dmi_weak_residual.cpp");
 
         assert!(
             source.contains("interfacial_energy_directional_derivative"),
@@ -3586,7 +3091,7 @@ mod tests {
 
     #[test]
     fn native_fem_step_metrics_reuse_effective_field_local_energies() {
-        let source = include_str!("../../../native/backends/fem/cpu/mfem/runtime/step_metrics.cpp");
+        let source = include_str!("../../../backends/fem/cpu/mfem/runtime/step_metrics.cpp");
         let start = source
             .find("void fill_common_step_metrics(")
             .expect("fill_common_step_metrics definition");

@@ -1692,6 +1692,16 @@
               "null"
             ]
           },
+          "resolved_fallback": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedFallbackResource"
+              }
+            ]
+          },
           "resolved_mode": {
             "type": [
               "string",
@@ -6932,6 +6942,33 @@
           "enabled",
           "bounds_min",
           "bounds_max"
+        ],
+        "type": "object"
+      },
+      "ResolvedFallbackResource": {
+        "properties": {
+          "fallback_engine": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "occurred": {
+            "type": "boolean"
+          },
+          "original_engine": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurred",
+          "original_engine",
+          "fallback_engine",
+          "reason",
+          "message"
         ],
         "type": "object"
       },

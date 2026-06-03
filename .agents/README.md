@@ -56,9 +56,12 @@ The canonical backend solver architecture is:
 
 Backend work must identify the affected lane: FDM CPU, FDM GPU, FEM CPU, or FEM
 GPU. FEM production work means MFEM/hypre/libCEED for CPU and GPU, not a new
-standalone in-house FEM solver stack. Historical `native-fem-*` documents are
-migration inputs unless they are explicitly superseded into the backend golden
-masterplan.
+standalone in-house FEM solver stack. The current `backends/fem` tree is the
+production MFEM/hypre/libCEED implementation spine after the controlled
+relocation from `native/backends/fem`. Production FEM must not move into
+`crates`.
+Historical `native-fem-*` documents are context only when they conflict with the
+backend golden masterplan.
 
 FEM demag is a model family, not one generic Poisson bucket. Changes must name
 the strategy being touched, such as Poisson airbox Dirichlet/Robin,

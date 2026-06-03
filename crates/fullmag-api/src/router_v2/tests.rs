@@ -712,6 +712,20 @@ async fn test_router_with_scene_document_and_script_file() -> (axum::Router, Pat
 async fn test_router_with_runtime_read_models() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_backend = "fem".into();
+        snapshot.session.requested_device = "gpu".into();
+        snapshot.session.resolved_backend = Some("fem".into());
+        snapshot.session.resolved_device = Some("cpu".into());
+        snapshot.session.resolved_runtime_family = Some("fem-cpu-native".into());
+        snapshot.session.resolved_engine_id = Some("fem_cpu_native".into());
+        snapshot.session.resolved_fallback = Some(fullmag_runner::ResolvedFallback {
+            occurred: true,
+            original_engine: "fem_native_gpu".into(),
+            fallback_engine: "fem_cpu_native".into(),
+            reason: "native_fem_gpu_unavailable".into(),
+            message: "native FEM GPU was requested but unavailable; resolved to native CPU FEM"
+                .into(),
+        });
         snapshot.run = Some(RunManifest {
             run_id: "run-1".into(),
             session_id: snapshot.session.session_id.clone(),
@@ -8608,6 +8622,23 @@ async fn current_run_endpoint_returns_runtime_summary() {
     assert_eq!(json["run_id"], "run-1");
     assert_eq!(json["status"], "running");
     assert_eq!(json["active_stage_kind"], "relax");
+    assert_eq!(json["requested_backend"], "fem");
+    assert_eq!(json["requested_device"], "gpu");
+    assert_eq!(json["resolved_backend"], "fem");
+    assert_eq!(json["resolved_device"], "cpu");
+    assert_eq!(json["resolved_engine_id"], "fem_cpu_native");
+    assert_eq!(
+        json["resolved_fallback"]["original_engine"],
+        "fem_native_gpu"
+    );
+    assert_eq!(
+        json["resolved_fallback"]["fallback_engine"],
+        "fem_cpu_native"
+    );
+    assert_eq!(
+        json["resolved_fallback"]["reason"],
+        "native_fem_gpu_unavailable"
+    );
 }
 
 #[tokio::test]

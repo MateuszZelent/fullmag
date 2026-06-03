@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ── Optional CUDA ──
 option(FULLMAG_ENABLE_CUDA "Build CUDA FDM backend" ON)
 set(FULLMAG_EXTERNAL_FDM_LIB_DIR "" CACHE PATH "Use an externally built fullmag_fdm instead of building backends/fdm")
+set(FULLMAG_BACKENDS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../backends" CACHE PATH "Root containing Fullmag compiled backend sources")
 
 if(FULLMAG_ENABLE_CUDA)
     include(CheckLanguage)
@@ -24,6 +25,13 @@ if(FULLMAG_ENABLE_CUDA)
 endif()
 
 # ── Subdirectories ──
+if(NOT EXISTS "${FULLMAG_BACKENDS_ROOT}/fdm/CMakeLists.txt")
+    message(FATAL_ERROR "FULLMAG_BACKENDS_ROOT does not contain fdm/CMakeLists.txt: ${FULLMAG_BACKENDS_ROOT}")
+endif()
+if(NOT EXISTS "${FULLMAG_BACKENDS_ROOT}/fem/CMakeLists.txt")
+    message(FATAL_ERROR "FULLMAG_BACKENDS_ROOT does not contain fem/CMakeLists.txt: ${FULLMAG_BACKENDS_ROOT}")
+endif()
+
 if(FULLMAG_EXTERNAL_FDM_LIB_DIR)
     if(EXISTS "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
         set(FULLMAG_EXTERNAL_FDM_LIB "${FULLMAG_EXTERNAL_FDM_LIB_DIR}/libfullmag_fdm.so")
@@ -40,6 +48,6 @@ if(FULLMAG_EXTERNAL_FDM_LIB_DIR)
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include"
     )
 else()
-    add_subdirectory(backends/fdm)
+    add_subdirectory("${FULLMAG_BACKENDS_ROOT}/fdm" "${CMAKE_BINARY_DIR}/backends/fdm")
 endif()
-add_subdirectory(backends/fem)
+add_subdirectory("${FULLMAG_BACKENDS_ROOT}/fem" "${CMAKE_BINARY_DIR}/backends/fem")

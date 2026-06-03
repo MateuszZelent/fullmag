@@ -5,6 +5,15 @@ export interface StatusBarRunReadback {
   resolved_device?: string | null;
   resolved_engine_id?: string | null;
   resolved_runtime_family?: string | null;
+  resolved_fallback?: StatusBarResolvedFallbackReadback | null;
+}
+
+export interface StatusBarResolvedFallbackReadback {
+  occurred?: boolean | null;
+  original_engine?: string | null;
+  fallback_engine?: string | null;
+  reason?: string | null;
+  message?: string | null;
 }
 
 export interface StatusBarEngineModel {
@@ -37,9 +46,11 @@ export function buildStatusBarEngineModel(
   const heading = formatBackendDevice(backend, device);
   const engine = engineId ? describeEngine(engineId) : null;
   const family = normalizeToken(run.resolved_runtime_family);
+  const fallback = normalizeFallback(run.resolved_fallback);
   const hasResolvedRuntime =
     Boolean(engineId) || Boolean(family) || Boolean(resolvedBackend) || Boolean(resolvedDevice);
   const detail =
+    fallback?.detail ??
     engine?.detail ??
     (family
       ? humanizeToken(family)
@@ -64,6 +75,7 @@ export function buildStatusBarEngineModel(
       `resolved_device=${resolvedDevice ?? "unresolved"}`,
       `resolved_engine_id=${engineId ?? "unresolved"}`,
       `resolved_runtime_family=${family ?? "unresolved"}`,
+      `resolved_fallback=${fallback?.title ?? "none"}`,
     ].join("\n"),
   };
 }
@@ -128,6 +140,27 @@ function pendingRuntimeDetail(
   return isAutoToken(requestedBackend) && isAutoToken(requestedDevice)
     ? "selection pending"
     : "resolution pending";
+}
+
+function normalizeFallback(
+  fallback: StatusBarResolvedFallbackReadback | null | undefined,
+): { detail: string; title: string } | null {
+  if (!fallback?.occurred) return null;
+  const original = normalizeToken(fallback.original_engine);
+  const target = normalizeToken(fallback.fallback_engine);
+  const reason = normalizeToken(fallback.reason);
+  const message = normalizeToken(fallback.message);
+  const targetLabel = target ? describeEngine(target)?.detail ?? humanizeToken(target) : "fallback";
+  const detail = `fallback to ${targetLabel}`;
+  const title = [
+    original ? `original_engine=${original}` : null,
+    target ? `fallback_engine=${target}` : null,
+    reason ? `reason=${reason}` : null,
+    message ? `message=${message}` : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+  return { detail, title: title || "occurred" };
 }
 
 function isAutoToken(value: string | null): boolean {

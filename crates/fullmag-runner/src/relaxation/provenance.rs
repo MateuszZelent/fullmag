@@ -1,0 +1,34 @@
+//! Relaxation provenance mapping.
+
+use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
+
+use crate::types::ExecutionProvenance;
+
+fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'static str> {
+    match algorithm {
+        RelaxationAlgorithmIR::ProjectedGradientBb => Some("projected_gradient_bb"),
+        RelaxationAlgorithmIR::NonlinearCg => Some("nonlinear_cg"),
+        RelaxationAlgorithmIR::LlgOverdamped | RelaxationAlgorithmIR::TangentPlaneImplicit => None,
+    }
+}
+
+pub(crate) const BOOTSTRAP_DIRECT_MINIMIZER_REALIZATION: &str =
+    "bootstrap_snapshot_tangent_gradient";
+pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
+
+pub(crate) fn apply_energy_minimizer_provenance(
+    provenance: &mut ExecutionProvenance,
+    relaxation: Option<&RelaxationControlIR>,
+) {
+    let Some(name) = relaxation
+        .and_then(|control| direct_energy_minimizer_name(control.algorithm))
+        .map(str::to_string)
+    else {
+        return;
+    };
+
+    provenance.requested_energy_minimizer = Some(name.clone());
+    provenance.resolved_energy_minimizer = Some(name);
+    provenance.energy_minimizer_realization = Some(BOOTSTRAP_DIRECT_MINIMIZER_REALIZATION.into());
+    provenance.resolved_integrator = None;
+}

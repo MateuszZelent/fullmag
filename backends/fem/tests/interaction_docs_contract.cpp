@@ -23,7 +23,11 @@ std::filesystem::path repo_root() {
     const std::filesystem::path fem_root = this_file.is_absolute()
         ? this_file.parent_path().parent_path()
         : std::filesystem::current_path() / this_file.parent_path().parent_path();
-    return fem_root.parent_path().parent_path().parent_path();
+    return fem_root.parent_path().parent_path();
+}
+
+std::filesystem::path fem_source_root() {
+    return repo_root() / "backends" / "fem";
 }
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -430,7 +434,7 @@ void progress_report_summary_matches_contract_closed_scope() {
 
 void interaction_headers_declare_ownership_boundaries() {
     const std::filesystem::path interactions =
-        repo_root() / "native" / "backends" / "fem" / "cpu" / "mfem" / "interactions";
+        fem_source_root() / "cpu" / "mfem" / "interactions";
 
     for (const auto &entry : std::filesystem::directory_iterator(interactions)) {
         if (!entry.is_regular_file() || entry.path().extension() != ".hpp") {
@@ -446,6 +450,30 @@ void interaction_headers_declare_ownership_boundaries() {
             std::exit(1);
         }
     }
+}
+
+void interaction_contract_uses_canonical_fem_backend_root() {
+    const std::filesystem::path fem_root = fem_source_root();
+    const std::filesystem::path interactions =
+        fem_root / "cpu" / "mfem" / "interactions";
+    const std::filesystem::path retired_interactions =
+        repo_root() / "native" / "backends" / "fem" / "cpu" / "mfem" / "interactions";
+    const std::string cmake = read_text_file(fem_root / "CMakeLists.txt");
+
+    check(fem_root.filename() == "fem", "canonical FEM backend root must be named fem");
+    check(fem_root.parent_path().filename() == "backends", "canonical FEM backend root must live under backends");
+    check(
+        std::filesystem::exists(interactions),
+        "FEM interaction contracts must inspect backends/fem/cpu/mfem/interactions");
+    check(
+        !std::filesystem::exists(retired_interactions),
+        "native/backends/fem/cpu/mfem/interactions must not be recreated as an active implementation tree");
+    check(
+        cmake.find("cpu/mfem/interactions/exchange.cpp") != std::string::npos,
+        "FEM CMake source list must keep interaction implementations under cpu/mfem/interactions");
+    check(
+        cmake.find("native/backends/fem") == std::string::npos,
+        "FEM CMake source list must not refer to the retired native/backends/fem root");
 }
 
 } // namespace
@@ -467,5 +495,6 @@ int main() {
     progress_report_marks_validation_matrix_contract_covered();
     progress_report_summary_matches_contract_closed_scope();
     interaction_headers_declare_ownership_boundaries();
+    interaction_contract_uses_canonical_fem_backend_root();
     return 0;
 }

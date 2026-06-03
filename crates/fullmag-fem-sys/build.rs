@@ -20,11 +20,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=../../native/backends/fem/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=../../native/backends/fem/core");
-    println!("cargo:rerun-if-changed=../../native/backends/fem/cpu");
-    println!("cargo:rerun-if-changed=../../native/backends/fem/src");
-    println!("cargo:rerun-if-changed=../../native/backends/fem/include");
+    println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=../../backends/fem/core");
+    println!("cargo:rerun-if-changed=../../backends/fem/cpu");
+    println!("cargo:rerun-if-changed=../../backends/fem/src");
+    println!("cargo:rerun-if-changed=../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");
     println!("cargo:rerun-if-env-changed=FULLMAG_USE_MFEM_STACK");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_REQUIRE_GPU");

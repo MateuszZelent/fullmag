@@ -31,10 +31,6 @@ mod native_fem;
 mod preview;
 pub mod quantities;
 mod relaxation;
-#[path = "relaxation/direct_minimizer.rs"]
-mod relaxation_direct_minimizer;
-#[path = "relaxation/vector_math.rs"]
-mod relaxation_vector_math;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
@@ -264,6 +260,15 @@ fn fem_engine_kind(engine: dispatch::FemEngine) -> fem::engine::FemEngineKind {
     }
 }
 
+fn attach_resolved_fallback_to_executed_run(
+    executed: &mut types::ExecutedRun,
+    fallback: Option<ResolvedFallback>,
+) {
+    if executed.provenance.resolved_fallback.is_none() {
+        executed.provenance.resolved_fallback = fallback;
+    }
+}
+
 /// Plan and run a problem, writing artifacts to `output_dir`.
 ///
 /// This is the top-level entry point: ProblemIR → plan → execute → artifacts.
@@ -305,10 +310,10 @@ pub fn run_problem(
             )
         }
         BackendPlanIR::Fem(fem) => {
-            let engine = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine;
-            if fem.relaxation.is_some() {
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
+            let mut executed = if fem.relaxation.is_some() {
                 fem::relax::execute_fem_relax(
-                    fem_engine_kind(engine),
+                    fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
@@ -317,14 +322,16 @@ pub fn run_problem(
                 )
             } else {
                 dispatch::execute_fem(
-                    engine,
+                    resolution.engine,
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     None,
                     artifact_writer.clone(),
                 )
-            }
+            }?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -427,7 +434,7 @@ pub fn run_problem_with_callback(
             )
         }
         BackendPlanIR::Fem(fem) => {
-            let engine = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine;
+            let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n,
@@ -436,9 +443,9 @@ pub fn run_problem_with_callback(
                 interrupt_requested: None,
                 on_step: &mut on_step,
             });
-            if fem.relaxation.is_some() {
+            let mut executed = if fem.relaxation.is_some() {
                 fem::relax::execute_fem_relax(
-                    fem_engine_kind(engine),
+                    fem_engine_kind(resolution.engine),
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
@@ -447,14 +454,16 @@ pub fn run_problem_with_callback(
                 )
             } else {
                 dispatch::execute_fem(
-                    engine,
+                    resolution.engine,
                     fem,
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
                 )
-            }
+            }?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -651,7 +660,7 @@ pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
                 interrupt_requested,
                 on_step: &mut on_step,
             });
-            if fem.relaxation.is_some() {
+            let mut executed = if fem.relaxation.is_some() {
                 fem::relax::execute_fem_relax(
                     fem_engine_kind(resolution.engine),
                     fem,
@@ -669,7 +678,9 @@ pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
                     live,
                     artifact_writer.clone(),
                 )
-            }
+            }?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
@@ -1526,7 +1537,10 @@ mod tests {
     use fullmag_ir::{FdmGridAssetIR, GeometryAssetsIR, GeometryEntryIR};
     use serde_json::json;
     use std::fs;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
@@ -1572,7 +1586,46 @@ mod tests {
         ] {
             assert!(
                 vector_math.contains(symbol),
-                "relaxation_vector_math.rs must own {symbol}"
+                "relaxation/vector_math.rs must own {symbol}"
+            );
+        }
+    }
+
+    #[test]
+    fn relaxation_top_level_is_facade_for_focused_modules() {
+        let top_level =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/relaxation.rs"))
+                .expect("read relaxation.rs");
+        assert!(
+            top_level.contains("pub(crate) mod convergence;"),
+            "relaxation.rs should expose convergence/stop criteria through a focused module"
+        );
+        assert!(
+            top_level.contains("pub(crate) mod provenance;"),
+            "relaxation.rs should expose energy-minimizer provenance through a focused module"
+        );
+        assert!(
+            !top_level.contains("pub(crate) fn execute_projected_gradient_bb("),
+            "relaxation.rs must not own projected-gradient BB implementation"
+        );
+        assert!(
+            !top_level.contains("pub(crate) fn execute_nonlinear_cg("),
+            "relaxation.rs must not own nonlinear-CG implementation"
+        );
+        assert!(
+            !top_level.contains("pub(crate) fn apply_energy_minimizer_provenance("),
+            "relaxation.rs must not own energy-minimizer provenance mapping"
+        );
+
+        for path in [
+            "/src/relaxation/convergence.rs",
+            "/src/relaxation/provenance.rs",
+            "/src/relaxation/direct_minimizer.rs",
+        ] {
+            let full_path = format!("{}{}", env!("CARGO_MANIFEST_DIR"), path);
+            assert!(
+                std::path::Path::new(&full_path).exists(),
+                "{path} must exist as a focused relaxation module"
             );
         }
     }
@@ -1604,7 +1657,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1634,7 +1687,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1659,7 +1712,7 @@ mod tests {
         .expect("read relaxation/direct_minimizer.rs");
         assert!(
             module.contains("pub(crate) fn apply_direct_minimizer_step_metrics("),
-            "relaxation_direct_minimizer.rs must own direct-minimizer StepStats metric stamping"
+            "relaxation/direct_minimizer.rs must own direct-minimizer StepStats metric stamping"
         );
     }
 
@@ -1687,7 +1740,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1716,7 +1769,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1749,7 +1802,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1770,7 +1823,7 @@ mod tests {
         .expect("read relaxation/direct_minimizer.rs");
         assert!(
             module.contains("pub(crate) fn nonlinear_cg_descent_direction_dot("),
-            "relaxation_direct_minimizer.rs must own nonlinear-CG descent-direction reset policy"
+            "relaxation/direct_minimizer.rs must own nonlinear-CG descent-direction reset policy"
         );
     }
 
@@ -1794,7 +1847,7 @@ mod tests {
         ] {
             assert!(
                 module.contains(symbol),
-                "relaxation_direct_minimizer.rs must own {symbol}"
+                "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
     }
@@ -1815,7 +1868,7 @@ mod tests {
         .expect("read relaxation/direct_minimizer.rs");
         assert!(
             module.contains("pub(crate) fn direct_minimizer_step_budget("),
-            "relaxation_direct_minimizer.rs must own direct-minimizer step-budget fallback policy"
+            "relaxation/direct_minimizer.rs must own direct-minimizer step-budget fallback policy"
         );
     }
 
@@ -2010,6 +2063,172 @@ mod tests {
     }
 
     #[test]
+    fn native_fem_c_abi_calls_stay_behind_native_fem_wrapper() {
+        let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("read dispatch.rs");
+        assert!(
+            !dispatch.contains("fullmag_fem_sys"),
+            "dispatch.rs must not import the native FEM sys crate directly"
+        );
+        assert!(
+            !dispatch.contains("ffi::fullmag_fem_"),
+            "dispatch.rs must not call native FEM C ABI symbols directly"
+        );
+        assert!(
+            !dispatch.contains("fullmag_fem_"),
+            "dispatch.rs must not own native FEM C ABI symbol routing"
+        );
+
+        let native_fem =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_fem.rs"))
+                .expect("read native_fem.rs");
+        assert!(
+            native_fem.contains("mod availability;"),
+            "native_fem.rs must declare the native FEM availability owner module"
+        );
+        assert!(
+            native_fem.contains("mod eigen;"),
+            "native_fem.rs must declare the native FEM eigen ABI owner module"
+        );
+        assert!(
+            native_fem.contains("mod plan;"),
+            "native_fem.rs must declare the native FEM plan-policy owner module"
+        );
+        assert!(
+            native_fem.contains("mod runtime_info;"),
+            "native_fem.rs must declare the native FEM runtime-info owner module"
+        );
+        assert!(
+            native_fem.contains("pub(crate) use availability::"),
+            "native_fem.rs must re-export native FEM availability helpers without re-owning them"
+        );
+        assert!(
+            native_fem.contains("pub(crate) use plan::"),
+            "native_fem.rs must re-export native FEM plan helpers without re-owning them"
+        );
+        assert!(
+            !native_fem.contains("../../../native/backends/fem"),
+            "native_fem.rs tests must not use the previous native/backends/fem path after relocation"
+        );
+        assert!(
+            native_fem.contains("../../../backends/fem/src/mfem_bridge.cpp"),
+            "native_fem.rs tests must inspect the current backends/fem source tree"
+        );
+        for symbol in [
+            "fn has_slonczewski_stt(",
+            "fn has_zhang_li_stt(",
+            "fn native_fem_gpu_demag_mode(",
+            "fn native_fem_plan_requests_gpu_mfem_device(",
+            "fn native_fem_mfem_device_string_requests_gpu(",
+            "enum NativeFemDataResidency",
+            "struct DeviceInfo",
+            "struct NativeFemGpuStateInfo",
+            "struct NativeFemGpuRkPlanInfo",
+            "struct GpuEigenResult",
+            "fn gpu_eigen_dense_solve(",
+            "ffi::fullmag_fem_eigen_dense",
+            "StageStopReason",
+            "StageCompletionIR {",
+        ] {
+            assert!(
+                !native_fem.contains(symbol),
+                "native_fem.rs must not re-own native FEM plan-policy helper {symbol}"
+            );
+        }
+        for symbol in [
+            "use fullmag_fem_sys as ffi;",
+            "pub(crate) struct NativeFemBackend",
+            "pub fn create(plan: &fullmag_ir::FemPlanIR)",
+            "pub fn step(&mut self, dt: f64)",
+            "ffi::fullmag_fem_backend_create",
+            "ffi::fullmag_fem_backend_step",
+        ] {
+            assert!(
+                native_fem.contains(symbol),
+                "native_fem.rs must own native FEM ABI wrapper symbol {symbol}"
+            );
+        }
+
+        let availability = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/native_fem/availability.rs"
+        ))
+        .expect("read native_fem/availability.rs");
+        for symbol in [
+            "pub(crate) struct GpuAvailability",
+            "pub(crate) fn native_availability(",
+            "pub(crate) fn is_gpu_available(",
+            "pub(crate) fn is_cpu_available(",
+            "ffi::fullmag_fem_get_availability_info",
+        ] {
+            assert!(
+                availability.contains(symbol),
+                "native_fem/availability.rs must own native FEM availability symbol {symbol}"
+            );
+        }
+
+        let eigen = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/native_fem/eigen.rs"
+        ))
+        .expect("read native_fem/eigen.rs");
+        for symbol in [
+            "pub(crate) struct GpuEigenResult",
+            "pub(crate) fn gpu_eigen_dense_solve(",
+            "ffi::fullmag_fem_eigen_dense_desc",
+            "ffi::fullmag_fem_eigen_dense",
+        ] {
+            assert!(
+                eigen.contains(symbol),
+                "native_fem/eigen.rs must own native FEM eigen ABI symbol {symbol}"
+            );
+        }
+
+        let plan = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/native_fem/plan.rs"
+        ))
+        .expect("read native_fem/plan.rs");
+        for symbol in [
+            "pub(super) fn has_slonczewski_stt(",
+            "pub(super) fn has_zhang_li_stt(",
+            "pub(super) fn native_fem_precession_enabled(",
+            "pub(super) fn single_precision_rejection(",
+            "pub(super) fn native_fem_gpu_demag_mode(",
+            "pub(crate) fn native_fem_plan_requests_gpu_mfem_device(",
+            "pub(crate) fn native_fem_mfem_device_string_requests_gpu(",
+        ] {
+            assert!(
+                plan.contains(symbol),
+                "native_fem/plan.rs must own native FEM plan-policy symbol {symbol}"
+            );
+        }
+
+        let runtime_info = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/native_fem/runtime_info.rs"
+        ))
+        .expect("read native_fem/runtime_info.rs");
+        for symbol in [
+            "pub(crate) struct DeviceInfo",
+            "ffi::fullmag_fem_device_info",
+            "pub(crate) enum NativeFemDataResidency",
+            "pub(crate) struct NativeFemGpuStateInfo",
+            "pub(crate) struct NativeFemGpuRkPlanInfo",
+            "ffi::fullmag_fem_gpu_state_info",
+            "ffi::fullmag_fem_gpu_rk_plan_info",
+            "pub(crate) fn stage_completion_from_ffi(",
+            "ffi::fullmag_fem_stage_completion",
+            "StageStopReason",
+        ] {
+            assert!(
+                runtime_info.contains(symbol),
+                "native_fem/runtime_info.rs must own native FEM runtime-info symbol {symbol}"
+            );
+        }
+    }
+
+    #[test]
     fn shared_relaxation_helpers_live_under_relaxation_module_directory() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let root_direct_minimizer =
@@ -2040,12 +2259,26 @@ mod tests {
         let lib = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
         assert!(
-            lib.contains("#[path = \"relaxation/direct_minimizer.rs\"]"),
-            "lib.rs must keep the shared direct-minimizer alias pointed at src/relaxation/"
+            !lib.lines()
+                .any(|line| line.trim() == "mod relaxation_direct_minimizer;"),
+            "lib.rs must not expose shared direct-minimizer through a root alias"
         );
         assert!(
-            lib.contains("#[path = \"relaxation/vector_math.rs\"]"),
-            "lib.rs must keep the shared vector-math alias pointed at src/relaxation/"
+            !lib.lines()
+                .any(|line| line.trim() == "mod relaxation_vector_math;"),
+            "lib.rs must not expose shared vector math through a root alias"
+        );
+
+        let relaxation =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/relaxation.rs"))
+                .expect("read relaxation.rs");
+        assert!(
+            relaxation.contains("pub(crate) mod direct_minimizer;"),
+            "relaxation.rs must expose shared direct-minimizer policy"
+        );
+        assert!(
+            relaxation.contains("pub(crate) mod vector_math;"),
+            "relaxation.rs must expose shared vector math"
         );
     }
 
@@ -2138,6 +2371,164 @@ mod tests {
             }),
         );
         assert_eq!(configured_cpu_threads(&problem), 7);
+    }
+
+    fn fem_session_runtime_problem() -> fullmag_ir::ProblemIR {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: Vec::new(),
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "strip".to_string(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                        [-2.0, -2.0, -2.0],
+                        [2.0, -2.0, -2.0],
+                        [-2.0, 2.0, -2.0],
+                        [-2.0, -2.0, 2.0],
+                    ],
+                    elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                    element_markers: vec![1, 0],
+                    boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                    boundary_markers: vec![1, 99],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+                region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip".to_string(),
+                    marker: 1,
+                }],
+                build_report: None,
+            }),
+        });
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            json!({
+                "device": "auto",
+                "precision": "double",
+            }),
+        );
+        problem
+    }
+
+    fn fem_cpu_runtime_registry(prefix: &str) -> (std::path::PathBuf, RuntimeRegistry) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("{prefix}-{unique}"));
+        let cpu_pack = temp.join("runtimes").join("fem-cpu");
+        fs::create_dir_all(cpu_pack.join("bin")).expect("create fem cpu runtime");
+        fs::write(cpu_pack.join("bin").join("fullmag-fem-cpu-bin"), b"stub")
+            .expect("write fem cpu worker");
+        fs::write(
+            cpu_pack.join("manifest.json"),
+            r#"{
+                "family": "fem-cpu",
+                "version": "0.1.0",
+                "worker": "bin/fullmag-fem-cpu-bin",
+                "engines": [
+                    {
+                        "backend": "fem",
+                        "device": "cpu",
+                        "precision": "double"
+                    }
+                ]
+            }"#,
+        )
+        .expect("write fem cpu manifest");
+        let registry = RuntimeRegistry::discover(&temp.join("runtimes"));
+        (temp, registry)
+    }
+
+    #[test]
+    fn session_runtime_registry_rejects_env_forced_fem_gpu_without_gpu_runtime() {
+        let _env_guard = ENV_LOCK.lock().expect("lock env mutex");
+        let problem = fem_session_runtime_problem();
+        let (temp, registry) =
+            fem_cpu_runtime_registry("fullmag-session-runtime-env-forced-fem-gpu");
+
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "gpu");
+        }
+        let result = resolve_session_runtime_with_registry(&problem, Some(&registry));
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        fs::remove_dir_all(&temp).expect("remove temp runtime tree");
+
+        let err = result.expect_err("forced FEM GPU must not silently fall back to CPU registry");
+        assert!(
+            err.message
+                .contains("no advertised FEM runtime matches device=gpu"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn session_runtime_registry_uses_native_fem_engine_ids_for_auto_gpu_fallback() {
+        let _env_guard = ENV_LOCK.lock().expect("lock env mutex");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let problem = fem_session_runtime_problem();
+        let (temp, registry) =
+            fem_cpu_runtime_registry("fullmag-session-runtime-auto-fem-fallback");
+
+        let runtime = resolve_session_runtime_with_registry(&problem, Some(&registry))
+            .expect("auto FEM registry should resolve CPU fallback");
+        fs::remove_dir_all(&temp).expect("remove temp runtime tree");
+
+        assert_eq!(
+            runtime.resolved_engine_id.as_deref(),
+            Some("fem_cpu_native")
+        );
+        let fallback = runtime
+            .resolved_fallback
+            .expect("auto GPU miss should remain visible");
+        assert_eq!(fallback.original_engine, "fem_native_gpu");
+        assert_eq!(fallback.fallback_engine, "fem_cpu_native");
+        assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn resolved_fallback_is_attached_to_execution_provenance_before_artifacts() {
+        let fallback = ResolvedFallback {
+            occurred: true,
+            original_engine: "fem_native_gpu".to_string(),
+            fallback_engine: "fem_cpu_native".to_string(),
+            reason: "native_fem_gpu_unavailable".to_string(),
+            message: "native FEM GPU unavailable in test".to_string(),
+        };
+        let mut executed = types::ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: Vec::new(),
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        attach_resolved_fallback_to_executed_run(&mut executed, Some(fallback.clone()));
+
+        assert_eq!(executed.provenance.resolved_fallback, Some(fallback));
     }
 
     #[cfg(feature = "cuda")]

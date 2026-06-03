@@ -929,7 +929,11 @@ fn stable_fem_mesh_generation_id(
         "periodic_boundary_pairs",
         &mesh.periodic_boundary_pairs,
     );
-    update_hash_serialized(&mut hasher, "periodic_node_pairs", &mesh.periodic_node_pairs);
+    update_hash_serialized(
+        &mut hasher,
+        "periodic_node_pairs",
+        &mesh.periodic_node_pairs,
+    );
     update_hash_serialized(&mut hasher, "object_segments", object_segments);
     update_hash_serialized(&mut hasher, "mesh_parts", mesh_parts);
     update_hash_str(
@@ -1012,8 +1016,10 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
                 .map(|region| region.element_marker)
                 .collect::<BTreeSet<_>>()
         });
-        let element_markers =
-            normalized_payload_element_markers(&plan.mesh.element_markers, magnetic_markers.as_ref());
+        let element_markers = normalized_payload_element_markers(
+            &plan.mesh.element_markers,
+            magnetic_markers.as_ref(),
+        );
         let generation_id = stable_fem_mesh_generation_id(
             &plan.mesh,
             &element_markers,

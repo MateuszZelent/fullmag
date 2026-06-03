@@ -222,7 +222,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include native/backends/fem native/backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path '*/.fullmag/*' ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_manifest}}' 2>/dev/null | { IFS= read -r line; echo "$line"; } )"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh Cargo.toml Cargo.lock rust-toolchain.toml -type f ! -path '*/.fullmag/*' ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_manifest}}' 2>/dev/null | { IFS= read -r line; echo "$line"; } )"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \
@@ -319,7 +319,7 @@ fem-gpu-py-layer-hole-headless:
 
 # Rebuild the managed FEM host runtime bundle (MFEM + HYPRE + CUDA-enabled build stack).
 # This bundle is used for both FEM CPU and FEM GPU execution paths.
-# Required after source changes to fullmag-plan, fullmag-runner, fullmag-fem-sys, or native/backends/fem.
+# Required after source changes to fullmag-plan, fullmag-runner, fullmag-fem-sys, or backends/fem.
 rebuild-fem-runtime:
     ./scripts/export_fem_gpu_runtime.sh
 

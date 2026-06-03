@@ -90,6 +90,35 @@ describe("statusBarModel", () => {
     });
   });
 
+  it("shows native fallback resolution instead of hiding the requested GPU miss", () => {
+    const model = buildStatusBarEngineModel({
+      requested_backend: "fem",
+      requested_device: "gpu",
+      resolved_backend: "fem",
+      resolved_device: "cpu",
+      resolved_engine_id: "fem_cpu_native",
+      resolved_runtime_family: "fem-cpu-native",
+      resolved_fallback: {
+        occurred: true,
+        original_engine: "fem_native_gpu",
+        fallback_engine: "fem_cpu_native",
+        reason: "native_fem_gpu_unavailable",
+        message: "native FEM GPU unavailable; using native CPU FEM",
+      },
+    });
+
+    expect(model).toMatchObject({
+      detail: "fallback to native MFEM/hypre",
+      label: "FEM CPU",
+      state: "resolved",
+    });
+    expect(model.title).toContain("requested_device=gpu");
+    expect(model.title).toContain("resolved_device=cpu");
+    expect(model.title).toContain("original_engine=fem_native_gpu");
+    expect(model.title).toContain("fallback_engine=fem_cpu_native");
+    expect(model.title).toContain("reason=native_fem_gpu_unavailable");
+  });
+
   it("shows auto runtime selection as pending instead of AUTO AUTO unresolved runtime", () => {
     const model = buildStatusBarEngineModel({
       requested_backend: "auto",

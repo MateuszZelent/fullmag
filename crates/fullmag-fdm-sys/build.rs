@@ -10,11 +10,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fdm.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/CMakeLists.txt");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/api");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/core");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/gpu/cuda");
-    println!("cargo:rerun-if-changed=../../native/backends/fdm/include");
+    println!("cargo:rerun-if-changed=../../backends/fdm/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=../../backends/fdm/api");
+    println!("cargo:rerun-if-changed=../../backends/fdm/core");
+    println!("cargo:rerun-if-changed=../../backends/fdm/gpu/cuda");
+    println!("cargo:rerun-if-changed=../../backends/fdm/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
 
     if std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_none() {

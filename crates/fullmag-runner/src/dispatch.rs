@@ -45,17 +45,9 @@ use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quanti
 #[cfg(feature = "fem-gpu")]
 use crate::relaxation::apply_energy_minimizer_provenance;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::relaxation::llg_overdamped_uses_pure_damping;
+use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(feature = "cuda")]
-use crate::relaxation::relaxation_converged;
-#[cfg(feature = "cuda")]
-use crate::relaxation::relaxation_stop_criteria_satisfied;
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::relaxation::RelaxationEnergyPlateauWindow;
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::relaxation_direct_minimizer::direct_minimizer_control;
-#[cfg(feature = "cuda")]
-use crate::relaxation_direct_minimizer::{
+use crate::relaxation::direct_minimizer::{
     apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
     direct_minimizer_gradient_norm_sq, direct_minimizer_step_budget,
     nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
@@ -63,8 +55,16 @@ use crate::relaxation_direct_minimizer::{
     projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerState,
     DirectMinimizerTrialEvaluation,
 };
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
-use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
+use crate::relaxation::relaxation_converged;
+#[cfg(feature = "cuda")]
+use crate::relaxation::relaxation_stop_criteria_satisfied;
+#[cfg(feature = "cuda")]
+use crate::relaxation::vector_math::{max_torque_from_field, tangent_gradient_from_field};
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::RelaxationEnergyPlateauWindow;
 use crate::runtime_registry::RuntimeRegistry;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
@@ -1567,6 +1567,20 @@ struct RegistryRuntimeMatch {
     fallback: Option<ResolvedFallback>,
 }
 
+fn registry_gpu_to_cpu_fallback_engine_ids(backend: &str) -> (&'static str, &'static str) {
+    match backend {
+        "fdm" => (
+            fdm_engine_id(FdmEngine::CudaFdm),
+            fdm_engine_id(FdmEngine::CpuReference),
+        ),
+        "fem" => (
+            fem_engine_id(FemEngine::NativeGpu),
+            fem_engine_id(FemEngine::CpuNative),
+        ),
+        _ => ("unknown_gpu", "unknown_cpu"),
+    }
+}
+
 fn resolve_registry_runtime_for_backend(
     registry: &RuntimeRegistry,
     backend: &str,
@@ -1592,13 +1606,14 @@ fn resolve_registry_runtime_for_backend(
         });
     }
 
+    let (original_engine, fallback_engine) = registry_gpu_to_cpu_fallback_engine_ids(backend);
     registry.resolve(backend, "cpu", precision).map(|resolved| RegistryRuntimeMatch {
         runtime_family: resolved.runtime_family,
         worker: resolved.worker,
         device: "cpu".to_string(),
         fallback: Some(runtime_fallback(
-            &format!("{backend}_gpu"),
-            &format!("{backend}_cpu"),
+            original_engine,
+            fallback_engine,
             match backend {
                 "fdm" => "fdm_cuda_unavailable",
                 "fem" => "native_fem_gpu_unavailable",

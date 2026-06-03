@@ -274,13 +274,36 @@ target_include_directories(fem_transfer_audit PRIVATE
 )
 add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
 
-add_executable(fem_source_facade_contract tests/source_facade_contract.cpp)
-target_link_libraries(fem_source_facade_contract PRIVATE fullmag_fem)
-target_include_directories(fem_source_facade_contract PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+function(add_fem_source_facade_contract target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE fullmag_fem)
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+add_fem_source_facade_contract(
+    fem_source_facade_contract
+    tests/source_facade_contract.cpp
 )
-add_test(NAME fem_source_facade_contract COMMAND fem_source_facade_contract)
+add_fem_source_facade_contract(
+    fem_source_facade_gpu_state_contract
+    tests/source_facade_gpu_state_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_source_facade_gpu_rk_contract
+    tests/source_facade_gpu_rk_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_source_facade_cuda_kernels_contract
+    tests/source_facade_cuda_kernels_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_source_facade_export_progress_contract
+    tests/source_facade_export_progress_contract.cpp
+)
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)
 target_link_libraries(fem_dmi_weak_residual PRIVATE fullmag_fem)

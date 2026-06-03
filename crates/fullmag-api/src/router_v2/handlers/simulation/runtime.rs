@@ -81,6 +81,7 @@ pub async fn get_current_run(
         resolved_runtime_family: snapshot.session.resolved_runtime_family.clone(),
         resolved_engine_id: snapshot.session.resolved_engine_id.clone(),
         resolved_worker: snapshot.session.resolved_worker.clone(),
+        resolved_fallback: snapshot.session.resolved_fallback.as_ref().map(Into::into),
         active_stage_index: stage
             .and_then(|value| value.active_stage_index)
             .map(|value| value as u32),

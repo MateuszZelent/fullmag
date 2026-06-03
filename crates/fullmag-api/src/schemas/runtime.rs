@@ -5,6 +5,27 @@ use crate::schemas::commands::{RuntimeCommandPrecondition, RuntimeCommandTarget}
 use crate::types::MeshCommandTarget;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ResolvedFallbackResource {
+    pub occurred: bool,
+    pub original_engine: String,
+    pub fallback_engine: String,
+    pub reason: String,
+    pub message: String,
+}
+
+impl From<&fullmag_runner::ResolvedFallback> for ResolvedFallbackResource {
+    fn from(value: &fullmag_runner::ResolvedFallback) -> Self {
+        Self {
+            occurred: value.occurred,
+            original_engine: value.original_engine.clone(),
+            fallback_engine: value.fallback_engine.clone(),
+            reason: value.reason.clone(),
+            message: value.message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CurrentRunResource {
     pub run_id: String,
     pub session_id: String,
@@ -47,6 +68,8 @@ pub struct CurrentRunResource {
     pub resolved_engine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_worker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_fallback: Option<ResolvedFallbackResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_stage_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]

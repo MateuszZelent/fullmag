@@ -38,6 +38,18 @@ std::filesystem::path fdm_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
+void backend_root_is_top_level_backends_tree() {
+    const std::filesystem::path root = fdm_source_root();
+    check(
+        root.filename() == "fdm" && root.parent_path().filename() == "backends",
+        "native FDM source root must be top-level backends/fdm");
+
+    const std::filesystem::path repo_root = root.parent_path().parent_path();
+    check(
+        !std::filesystem::exists(repo_root / "native" / "backends" / "fdm"),
+        "native/backends/fdm must not be recreated as an implementation root");
+}
+
 void expected_owner_paths_exist() {
     const std::filesystem::path root = fdm_source_root();
     const char *expected[] = {
@@ -209,6 +221,7 @@ void old_flat_sources_are_gone() {
 } // namespace
 
 int main() {
+    backend_root_is_top_level_backends_tree();
     expected_owner_paths_exist();
     telemetry_has_runtime_owner();
     streams_have_runtime_owner();

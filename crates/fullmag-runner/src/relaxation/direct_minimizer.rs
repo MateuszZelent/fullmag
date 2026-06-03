@@ -9,7 +9,7 @@
 
 use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
-use crate::relaxation_vector_math::{
+use crate::relaxation::vector_math::{
     add_vec3, global_dot_vec3, max_torque_from_field, normalized_vec3, project_tangent, scale_vec3,
     sub_vec3, tangent_gradient_from_field,
 };

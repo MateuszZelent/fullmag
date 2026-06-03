@@ -37,10 +37,13 @@ interaction, workflow, validation, or backend documentation changes.
 6. Every interaction must own parameters, field or weak form, energy,
    energy-density/observables, validation fixtures, and CPU/GPU realization
    adapters where implemented.
-7. Every workflow must have a discoverable owner: time-domain, relaxation,
-   hysteresis, eigen, and frequency-domain.
+7. Every workflow must have a discoverable owner. Production native numerical
+   workflow behavior belongs under current top-level `backends/*`; Rust runner
+   workflow code is orchestration, ABI, artifacts, preview, and provenance only.
 8. FEM production means MFEM/hypre/libCEED CPU/GPU integration. Do not grow a
-   standalone in-house FEM numerical stack beside it.
+   standalone in-house FEM numerical stack beside it, and do not move
+   production FEM ownership into `crates`. `backends/fem` is the current tree
+   after the controlled relocation from `native/backends/fem`.
 9. FEM demag is a strategy family. Keep `poisson_airbox`,
    `pbc_reduced_poisson`, `fem_bem`, `fmm`, and `mapped_exterior_shell`
    separated by mesh requirements, boundary semantics, runtime realization,
@@ -67,8 +70,10 @@ Update `docs/architecture/backend-golden-masterplan.md` when changing:
 - production physics validation policy.
 
 Update lower-level docs only after checking they do not contradict the
-masterplan. Historical `native-fem-*` docs are migration inputs; accepted target
-docs and agent instructions should use MFEM/hypre/libCEED naming.
+masterplan. Historical `native-fem-*` docs are context only when they conflict;
+accepted target docs and agent instructions should say that `backends/fem` is
+the current MFEM/hypre/libCEED implementation tree, and `native/backends/fem`
+is only the previous path from the controlled relocation.
 
 ## Blocker Policy
 

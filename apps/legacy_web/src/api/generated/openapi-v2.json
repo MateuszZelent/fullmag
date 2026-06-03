@@ -3,6 +3,16 @@
     "schemas": {
       "AirboxLayerPatch": {
         "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
           "opacity": {
             "format": "double",
             "type": [
@@ -61,6 +71,9 @@
       },
       "AirboxLayerState": {
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
           "opacity": {
             "format": "double",
             "type": "number"
@@ -455,6 +468,37 @@
         ],
         "type": "object"
       },
+      "BooleanGeometryCapability": {
+        "properties": {
+          "dsl": {
+            "type": "boolean"
+          },
+          "fdm": {
+            "type": "boolean"
+          },
+          "fem": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GeometrySupportStatus"
+          }
+        },
+        "required": [
+          "op",
+          "fem",
+          "fdm",
+          "dsl",
+          "status",
+          "notes"
+        ],
+        "type": "object"
+      },
       "Bounds2": {
         "properties": {
           "u_max": {
@@ -590,13 +634,108 @@
         ],
         "type": "object"
       },
+      "CheckpointCreateRequest": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/SaveProfile"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CheckpointCreateResponse": {
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/CheckpointEntry"
+          }
+        },
+        "required": [
+          "checkpoint"
+        ],
+        "type": "object"
+      },
       "CheckpointEntry": {
         "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "backend_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "checkpoint_id": {
+            "type": "string"
+          },
+          "checksum": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coordinate_frame": {
             "type": "string"
           },
           "created_at": {
             "type": "string"
+          },
+          "dt": {
+            "format": "double",
+            "type": "number"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "resume_class": {
+            "$ref": "#/components/schemas/RestoreClass"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "step": {
             "format": "int64",
@@ -606,13 +745,26 @@
           "time_s": {
             "format": "double",
             "type": "number"
+          },
+          "vector_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "checkpoint_id",
+          "run_id",
           "step",
           "time_s",
-          "created_at"
+          "dt",
+          "created_at",
+          "source",
+          "format",
+          "vector_count",
+          "coordinate_frame",
+          "resume_class",
+          "artifact_ref"
         ],
         "type": "object"
       },
@@ -627,6 +779,51 @@
         },
         "required": [
           "checkpoints"
+        ],
+        "type": "object"
+      },
+      "CheckpointRestoreRequest": {
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CheckpointRestoreResponse": {
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/CheckpointEntry"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "restore_class": {
+            "$ref": "#/components/schemas/RestoreClass"
+          },
+          "restored_vector_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "checkpoint",
+          "restore_class",
+          "restored_vector_count",
+          "field_revision",
+          "warnings"
         ],
         "type": "object"
       },
@@ -724,6 +921,31 @@
       },
       "CommandDetailResource": {
         "properties": {
+          "accepted_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command_id": {
             "type": "string"
           },
@@ -743,6 +965,12 @@
           "created_at_unix_ms": {
             "minimum": 0,
             "type": "integer"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/CommandDiagnosticReferenceResource"
+            },
+            "type": "array"
           },
           "dispatched_at_unix_ms": {
             "minimum": 0,
@@ -780,6 +1008,12 @@
           "kind": {
             "type": "string"
           },
+          "loaded_state_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_error": {
             "format": "double",
             "type": [
@@ -811,6 +1045,22 @@
               }
             ]
           },
+          "precondition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandPrecondition"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "relax_algorithm": {
             "type": [
               "string",
@@ -824,15 +1074,118 @@
               "null"
             ]
           },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requested_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionReadbackResource"
+              }
+            ]
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionReadbackResource"
+              }
+            ]
+          },
+          "resource_invalidations": {
+            "items": {
+              "$ref": "#/components/schemas/CommandResourceInvalidationResource"
+            },
+            "type": "array"
+          },
+          "resume_from_checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state_transition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
           },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          },
+          "terminal_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "torque_tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "torque_tolerance_apm": {
             "format": "double",
             "type": [
               "number",
@@ -854,6 +1207,78 @@
           "status",
           "created_at_unix_ms"
         ],
+        "type": "object"
+      },
+      "CommandDiagnosticReferenceResource": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_key",
+          "revision",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
+      "CommandExecutionReadbackResource": {
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CommandQueueStatusResource": {
@@ -906,6 +1331,12 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "runtime_controls": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeCommandReadinessResource"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -918,7 +1349,33 @@
           "rejected_count",
           "failed_count",
           "can_accept_commands",
+          "runtime_controls",
           "commands"
+        ],
+        "type": "object"
+      },
+      "CommandResourceInvalidationResource": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_key",
+          "revision",
+          "reason",
+          "state"
         ],
         "type": "object"
       },
@@ -931,6 +1388,12 @@
             "type": "string"
           },
           "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
             "type": [
               "string",
               "null"
@@ -981,6 +1444,18 @@
           "kind": {
             "type": "string"
           },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
@@ -988,6 +1463,16 @@
           },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
           }
         },
         "required": [
@@ -1004,6 +1489,115 @@
           "speed",
           "balanced",
           "smallest"
+        ],
+        "type": "string"
+      },
+      "CpuTelemetryResponse": {
+        "properties": {
+          "load_average_15m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "load_average_1m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "load_average_5m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "logical_cpus": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_total_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "memory_used_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "model_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "process_rss_mb": {
+            "format": "double",
+            "type": "number"
+          },
+          "process_threads": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_time_unix_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "utilization_cpu_percent": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "sample_time_unix_ms",
+          "logical_cpus",
+          "utilization_cpu_percent",
+          "process_cpu_percent",
+          "memory_used_mb",
+          "memory_total_mb",
+          "process_rss_mb",
+          "process_threads"
+        ],
+        "type": "object"
+      },
+      "CrossSectionImageColorScale": {
+        "enum": [
+          "jet",
+          "viridis",
+          "hot",
+          "coolwarm",
+          "plasma",
+          "inferno"
+        ],
+        "type": "string"
+      },
+      "CrossSectionQualityMetric": {
+        "enum": [
+          "gamma",
+          "sicn",
+          "volume",
+          "skewness",
+          "aspect_ratio",
+          "max_angle",
+          "min_edge"
         ],
         "type": "string"
       },
@@ -1096,6 +1690,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "resolved_fallback": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedFallbackResource"
+              }
             ]
           },
           "resolved_mode": {
@@ -1414,7 +2018,8 @@
       "DomainMeta": {
         "properties": {
           "bounds": {
-            "$ref": "#/components/schemas/Bounds3"
+            "$ref": "#/components/schemas/Bounds3",
+            "description": "Physical cell-edge bounds in meters. For structured FDM grids, `min`\nis the grid edge origin and `max` is `origin + shape * spacing`.\nCell centers are offset by `spacing / 2` on non-zero axes."
           },
           "coordinate_system": {
             "type": "string"
@@ -1784,6 +2389,274 @@
         "required": [
           "x_chosen_size",
           "y_chosen_size"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationDemagPolicyMetadata": {
+        "properties": {
+          "absolute_tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "actual_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "boundary_variant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "final_residual_norm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "linear_solver": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preconditioner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "print_level": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "relative_tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "solver_setup_reused": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "timings_ns": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FemCpuRelaxationDemagTimingsNs"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FemCpuRelaxationDemagTimingsNs": {
+        "properties": {
+          "assemble": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "energy": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recover": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solve": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_apply": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_setup": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "assemble",
+          "solve",
+          "solver_setup",
+          "solver_apply",
+          "recover",
+          "energy",
+          "total"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationEnergyTerms": {
+        "properties": {
+          "E_ani": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_demag": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_dmi": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_ex": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_ext": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_total": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "E_ex",
+          "E_demag",
+          "E_ext",
+          "E_ani",
+          "E_dmi",
+          "E_total"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationQualificationMetadata": {
+        "properties": {
+          "assembly_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "benchmark_gate_version": {
+            "type": "string"
+          },
+          "demag_policy": {
+            "$ref": "#/components/schemas/FemCpuRelaxationDemagPolicyMetadata"
+          },
+          "executed_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "final_energy_terms_j": {
+            "$ref": "#/components/schemas/FemCpuRelaxationEnergyTerms"
+          },
+          "final_torque_apm": {
+            "format": "double",
+            "type": "number"
+          },
+          "final_torque_t": {
+            "format": "double",
+            "type": "number"
+          },
+          "norm_defect": {
+            "format": "double",
+            "type": "number"
+          },
+          "physics_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "relaxation_algorithm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solver_mesh_signature": {
+            "type": "string"
+          },
+          "stop_metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stop_metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stop_threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "benchmark_gate_version",
+          "physics_terms",
+          "solver_mesh_signature",
+          "demag_policy",
+          "final_energy_terms_j",
+          "final_torque_apm",
+          "final_torque_t",
+          "norm_defect",
+          "executed_steps"
         ],
         "type": "object"
       },
@@ -2650,6 +3523,15 @@
               "null"
             ]
           },
+          "max_samples": {
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nScoped FEM queries are sampled by scope node index. Unscoped queries\nreturn a contiguous center window for lightweight diagnostics.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scope_id": {
             "description": "Scope identifier for `object` and `part` scopes.",
             "type": [
@@ -2667,6 +3549,140 @@
         },
         "type": "object"
       },
+      "GeometryBackendTarget": {
+        "enum": [
+          "fem",
+          "fdm"
+        ],
+        "type": "string"
+      },
+      "GeometryCapabilitiesResource": {
+        "properties": {
+          "csg_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/BooleanGeometryCapability"
+            },
+            "type": "array"
+          },
+          "primitive_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/PrimitiveGeometryCapability"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "primitive_capabilities",
+          "csg_capabilities"
+        ],
+        "type": "object"
+      },
+      "GeometryDiagnostic": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "code": {
+            "type": "string"
+          },
+          "geometry_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/GeometryDiagnosticSeverity"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "GeometryDiagnosticSeverity": {
+        "enum": [
+          "info",
+          "warning",
+          "error"
+        ],
+        "type": "string"
+      },
+      "GeometryDiagnosticsResource": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "backend_target",
+          "status",
+          "diagnostics"
+        ],
+        "type": "object"
+      },
+      "GeometryProvenanceEntry": {
+        "properties": {
+          "body_id": {
+            "type": "string"
+          },
+          "geometry_path": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "body_id",
+          "object_id",
+          "geometry_path",
+          "source"
+        ],
+        "type": "object"
+      },
       "GeometryRealizationRequest": {
         "properties": {
           "backend_target": {
@@ -2676,6 +3692,172 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "GeometryRealizationSnapshot": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "bodies": {
+            "items": {
+              "$ref": "#/components/schemas/RealizedGeometryBody"
+            },
+            "type": "array"
+          },
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryProvenanceEntry"
+            },
+            "type": "array"
+          },
+          "realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryRegionCandidate"
+            },
+            "type": "array"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_scene_revision",
+          "realization_revision",
+          "backend_target",
+          "status"
+        ],
+        "type": "object"
+      },
+      "GeometryRegionCandidate": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "source_body_id": {
+            "type": "string"
+          },
+          "source_body_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_geometry_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object_id",
+          "source_body_id",
+          "material_ref",
+          "bounds_min",
+          "bounds_max",
+          "source_geometry_path"
+        ],
+        "type": "object"
+      },
+      "GeometrySupportStatus": {
+        "enum": [
+          "production",
+          "preview",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "GeometryValidationResource": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "backend_target",
+          "status",
+          "dirty",
+          "diagnostics"
+        ],
         "type": "object"
       },
       "GpuTelemetryDevice": {
@@ -2978,6 +4160,44 @@
         ],
         "type": "object"
       },
+      "MagnetizationAssetPatchRequest": {
+        "properties": {
+          "asset": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "type": "object"
+      },
+      "MagnetizationAssetResource": {
+        "properties": {
+          "asset": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "asset"
+        ],
+        "type": "object"
+      },
       "MaterialPatchRequest": {
         "properties": {
           "name": {
@@ -3002,6 +4222,16 @@
       "MaterialPropertiesPatchRequest": {
         "properties": {
           "Aex": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NullableF64PatchValue"
+              }
+            ]
+          },
+          "Dbulk": {
             "oneOf": [
               {
                 "type": "null"
@@ -3044,6 +4274,13 @@
       "MaterialPropertiesResource": {
         "properties": {
           "Aex": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dbulk": {
             "format": "double",
             "type": [
               "number",
@@ -3116,6 +4353,14 @@
               "null"
             ]
           },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "last_build_error": {
             "type": [
               "string",
@@ -3131,8 +4376,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Build/pipeline state for build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -3150,6 +4398,14 @@
                 "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
                 "description": "Typed shared-domain build report extracted from the latest build summary when present."
               }
+            ]
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
             ]
           }
         },
@@ -3228,8 +4484,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Detailed build pipeline state for diagnostics and build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -3268,6 +4527,57 @@
           "revision",
           "history"
         ],
+        "type": "object"
+      },
+      "MeshBuildPipelinePhaseResource": {
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_percent": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshCapabilitiesResource": {
@@ -3375,6 +4685,49 @@
         "required": [
           "geometry_name",
           "marker"
+        ],
+        "type": "object"
+      },
+      "MeshHistogramBinElementsResource": {
+        "properties": {
+          "bin_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "mesh_id": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "node_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "part_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mesh_id",
+          "part_id",
+          "metric",
+          "bin_index",
+          "element_indices",
+          "node_indices"
         ],
         "type": "object"
       },
@@ -3486,6 +4839,14 @@
               "null"
             ]
           },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "last_build_error": {
             "type": [
               "string",
@@ -3503,6 +4864,14 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4778,6 +6147,17 @@
           }
         ]
       },
+      "NullableStringPatchValue": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "default": null,
+            "type": "null"
+          }
+        ]
+      },
       "NullableU32PatchValue": {
         "oneOf": [
           {
@@ -4866,6 +6246,43 @@
         ],
         "type": "object"
       },
+      "ObjectEnergySummary": {
+        "properties": {
+          "anisotropy": {
+            "format": "double",
+            "type": "number"
+          },
+          "demag": {
+            "format": "double",
+            "type": "number"
+          },
+          "dmi": {
+            "format": "double",
+            "type": "number"
+          },
+          "exchange": {
+            "format": "double",
+            "type": "number"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          },
+          "zeeman": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "exchange",
+          "demag",
+          "zeeman",
+          "anisotropy",
+          "dmi",
+          "total"
+        ],
+        "type": "object"
+      },
       "ObjectGeometryPatchRequest": {
         "properties": {
           "base_revision": {
@@ -4941,6 +6358,72 @@
         ],
         "type": "object"
       },
+      "ObjectMagnetizationAverage": {
+        "properties": {
+          "mx": {
+            "format": "double",
+            "type": "number"
+          },
+          "my": {
+            "format": "double",
+            "type": "number"
+          },
+          "mz": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mx",
+          "my",
+          "mz"
+        ],
+        "type": "object"
+      },
+      "ObjectMetricsResource": {
+        "properties": {
+          "energies": {
+            "$ref": "#/components/schemas/ObjectEnergySummary"
+          },
+          "has_solver_sample": {
+            "type": "boolean"
+          },
+          "magnetization_average": {
+            "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_seconds": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "object_id",
+          "revision",
+          "source",
+          "has_solver_sample",
+          "step",
+          "time_seconds",
+          "magnetization_average",
+          "energies"
+        ],
+        "type": "object"
+      },
       "ObjectPatchRequest": {
         "properties": {
           "base_revision": {
@@ -4975,6 +6458,12 @@
               "null"
             ]
           },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "region_name": {
             "type": [
               "string",
@@ -4994,6 +6483,45 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "PrimitiveGeometryCapability": {
+        "properties": {
+          "boolean": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dsl": {
+            "type": "boolean"
+          },
+          "fdm": {
+            "type": "boolean"
+          },
+          "fem": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GeometrySupportStatus"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "category",
+          "fem",
+          "fdm",
+          "dsl",
+          "boolean",
+          "status"
+        ],
         "type": "object"
       },
       "QuantityCatalogEntry": {
@@ -5175,6 +6703,69 @@
         ],
         "type": "object"
       },
+      "RealizedGeometryBody": {
+        "properties": {
+          "body_id": {
+            "type": "string"
+          },
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "geometry_kind": {
+            "type": "string"
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "provenance": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "body_id",
+          "object_id",
+          "object_name",
+          "geometry_kind",
+          "material_ref",
+          "visible",
+          "status",
+          "bounds_min",
+          "bounds_max"
+        ],
+        "type": "object"
+      },
       "RecoveryClearResponse": {
         "properties": {
           "cleared": {
@@ -5256,6 +6847,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "magnetization_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NullableStringPatchValue"
+              }
             ]
           },
           "name": {
@@ -5344,6 +6945,33 @@
         ],
         "type": "object"
       },
+      "ResolvedFallbackResource": {
+        "properties": {
+          "fallback_engine": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "occurred": {
+            "type": "boolean"
+          },
+          "original_engine": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurred",
+          "original_engine",
+          "fallback_engine",
+          "reason",
+          "message"
+        ],
+        "type": "object"
+      },
       "ResourceRevisionMap": {
         "properties": {
           "artifact_revision": {
@@ -5424,6 +7052,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "solver_profile_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "stages_revision": {
             "format": "int64",
             "minimum": 0,
@@ -5457,6 +7090,7 @@
           "domain_generation_id",
           "artifacts_revision",
           "engine_log_revision",
+          "solver_profile_revision",
           "display_revision",
           "workspace_revision",
           "mesh_revision",
@@ -5536,6 +7170,229 @@
           "engines"
         ],
         "type": "object"
+      },
+      "RuntimeCommandIntent": {
+        "properties": {
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precondition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandPrecondition"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RuntimeCommandPrecondition": {
+        "properties": {
+          "command_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stage_execution_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RuntimeCommandReadinessResource": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "RuntimeCommandTarget": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "study"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "run"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "current_stage"
+                ],
+                "type": "string"
+              },
+              "stage_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_index"
+                ],
+                "type": "string"
+              },
+              "stage_index": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage_index",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_id"
+                ],
+                "type": "string"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "command_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "command_id"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "command_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SamplingProfile": {
         "enum": [
@@ -5681,6 +7538,150 @@
         ],
         "type": "object"
       },
+      "SceneMaterialResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMetadataResource": {
+        "properties": {
+          "authoring_schema": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_of_truth": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "source_of_truth",
+          "authoring_schema"
+        ],
+        "type": "object"
+      },
+      "SceneObjectResource": {
+        "properties": {
+          "geometry": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "locked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_override": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object_mesh": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "physics_stack": {
+            "items": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "region_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_overrides": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "transform": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "ScenePatchRequest": {
         "properties": {
           "merge_patch": {
@@ -5690,6 +7691,100 @@
         "required": [
           "merge_patch"
         ],
+        "type": "object"
+      },
+      "SceneResource": {
+        "properties": {
+          "current_modules": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "editor": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "magnetization_assets": {
+            "items": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/SceneMaterialResource"
+            },
+            "type": "array"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/SceneObjectResource"
+            },
+            "type": "array"
+          },
+          "outputs": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scene": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMetadataResource"
+              }
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "study": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "universe": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ScriptSourceResponse": {
@@ -5998,6 +8093,27 @@
         ],
         "type": "string"
       },
+      "SliceMeshColorScale": {
+        "enum": [
+          "jet",
+          "viridis",
+          "hot",
+          "coolwarm"
+        ],
+        "type": "string"
+      },
+      "SliceMeshQualityMetric": {
+        "enum": [
+          "gamma",
+          "sicn",
+          "volume",
+          "skewness",
+          "aspect_ratio",
+          "max_angle",
+          "min_edge"
+        ],
+        "type": "string"
+      },
       "SlicePlane": {
         "enum": [
           "xy",
@@ -6072,6 +8188,39 @@
             "format": "int32",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "mesh_color_scale": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceMeshColorScale"
+              }
+            ]
+          },
+          "mesh_filter_expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_quality_metric": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceMeshQualityMetric"
+              }
+            ]
+          },
+          "mesh_shrink_factor": {
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -6212,6 +8361,19 @@
               "null"
             ]
           },
+          "mesh_color_scale": {
+            "$ref": "#/components/schemas/SliceMeshColorScale"
+          },
+          "mesh_filter_expression": {
+            "type": "string"
+          },
+          "mesh_quality_metric": {
+            "$ref": "#/components/schemas/SliceMeshQualityMetric"
+          },
+          "mesh_shrink_factor": {
+            "format": "double",
+            "type": "number"
+          },
           "mode": {
             "$ref": "#/components/schemas/SliceVisualizationMode"
           },
@@ -6290,7 +8452,11 @@
           "projection_reduction",
           "projection_include_air_as_zero",
           "projection_samples",
-          "projection_resolution"
+          "projection_resolution",
+          "mesh_quality_metric",
+          "mesh_color_scale",
+          "mesh_filter_expression",
+          "mesh_shrink_factor"
         ],
         "type": "object"
       },
@@ -6428,6 +8594,273 @@
         ],
         "type": "object"
       },
+      "SolverProfileAggregatesResource": {
+        "properties": {
+          "average_demag_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "average_exchange_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "average_total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_count",
+          "average_total_ns",
+          "max_total_ns",
+          "average_exchange_ns",
+          "average_demag_ns"
+        ],
+        "type": "object"
+      },
+      "SolverProfileCommandConfig": {
+        "properties": {
+          "emit_engine_log": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_samples": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "persist_artifact": {
+            "type": "boolean"
+          },
+          "sample_every": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SolverProfilePhaseResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "percent_of_total": {
+            "format": "double",
+            "type": "number"
+          },
+          "wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "wall_time_ns",
+          "percent_of_total"
+        ],
+        "type": "object"
+      },
+      "SolverProfileResource": {
+        "properties": {
+          "aggregates": {
+            "$ref": "#/components/schemas/SolverProfileAggregatesResource"
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "config": {
+            "$ref": "#/components/schemas/SolverProfileCommandConfig"
+          },
+          "latest_samples": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileStepSampleResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "threading": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolverProfileThreadingResource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "state",
+          "config",
+          "latest_samples",
+          "aggregates",
+          "artifact_refs"
+        ],
+        "type": "object"
+      },
+      "SolverProfileStepSampleResource": {
+        "properties": {
+          "demag_solves": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_subphase_sum_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_subphases": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseResource"
+            },
+            "type": "array"
+          },
+          "dt": {
+            "format": "double",
+            "type": "number"
+          },
+          "missing_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase_sum_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseResource"
+            },
+            "type": "array"
+          },
+          "poisson_final_residual": {
+            "format": "double",
+            "type": "number"
+          },
+          "poisson_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rejected_attempts": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rhs_evaluations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threading": {
+            "$ref": "#/components/schemas/SolverProfileThreadingResource"
+          },
+          "time": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step",
+          "time",
+          "dt",
+          "total_ns",
+          "phase_sum_ns",
+          "missing_ns",
+          "phases",
+          "demag_subphase_sum_ns",
+          "demag_subphases",
+          "rhs_evaluations",
+          "rejected_attempts",
+          "demag_solves",
+          "poisson_iterations",
+          "poisson_final_residual",
+          "threading"
+        ],
+        "type": "object"
+      },
+      "SolverProfileThreadingResource": {
+        "properties": {
+          "effective_omp_threads": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "mfem_device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "openmp_available": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "openmp_compiled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "requested_omp_threads": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "thread_mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requested_omp_threads",
+          "effective_omp_threads",
+          "thread_mode"
+        ],
+        "type": "object"
+      },
       "SolverStatusResource": {
         "properties": {
           "algorithm": {
@@ -6467,7 +8900,29 @@
               "null"
             ]
           },
+          "last_step_updated_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "max_torque": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_Apm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_T": {
             "format": "double",
             "type": [
               "number",
@@ -6565,6 +9020,20 @@
               "null"
             ]
           },
+          "max_torque_Apm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max_torque_T": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "state": {
             "description": "idle | running | paused | finished | error",
             "type": "string"
@@ -6577,6 +9046,61 @@
       },
       "StageExecutionRecordResource": {
         "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loaded_state_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "metric_name": {
             "type": [
               "string",
@@ -6596,6 +9120,29 @@
               "null"
             ]
           },
+          "resume_from_checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "started_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state_transition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
           },
@@ -6608,6 +9155,8 @@
           }
         },
         "required": [
+          "stage_id",
+          "index",
           "status"
         ],
         "type": "object"
@@ -6675,268 +9224,430 @@
       "StructuredCommandRequest": {
         "oneOf": [
           {
-            "properties": {
-              "fixed_timestep": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
-              "integrator": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "run"
-                ],
-                "type": "string"
-              },
-              "max_steps": {
-                "format": "int64",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "until_seconds": {
-                "format": "double",
-                "type": "number"
-              }
-            },
-            "required": [
-              "until_seconds",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "energy_tolerance": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "fixed_timestep": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "relax"
-                ],
-                "type": "string"
-              },
-              "max_error": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "max_steps": {
-                "format": "int64",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "relax_algorithm": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "relax_alpha": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "torque_tolerance": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "until_seconds": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "pause"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "resume"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "stop"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "skip"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "save_vtk"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "solve"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "compute_fields"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "close"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "mesh_build"
-                ],
-                "type": "string"
-              },
-              "mesh_options": {
-                "type": [
-                  "object",
-                  "null"
-                ]
-              },
-              "mesh_reason": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mesh_target": {
-                "oneOf": [
-                  {
-                    "type": "null"
+              {
+                "properties": {
+                  "fixed_timestep": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
-                  {
-                    "$ref": "#/components/schemas/MeshCommandTarget"
+                  "integrator": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "max_steps": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "until_seconds": {
+                    "format": "double",
+                    "type": "number"
                   }
-                ]
+                },
+                "required": [
+                  "until_seconds"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "run"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "energy_tolerance": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "fixed_timestep": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "max_error": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "max_steps": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "relax_algorithm": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "relax_alpha": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance_T": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance_apm": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "until_seconds": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "relax"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "pause"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "resume"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "stop"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "skip"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "save_vtk"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "solve"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "compute_fields"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "compute_energies"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "close"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "mesh_options": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "mesh_reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mesh_target": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/MeshCommandTarget"
+                      }
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "mesh_build"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "profile": {
+                    "$ref": "#/components/schemas/SolverProfileCommandConfig"
+                  }
+                },
+                "required": [
+                  "profile"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "set_solver_profile"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
           }
         ]
       },
       "StructuredGridDescriptor": {
         "properties": {
           "origin": {
+            "description": "Physical grid edge origin in meters. Cell centers are\n`origin + (i + 0.5) * spacing` on non-zero axes.",
             "items": {
               "format": "double",
               "type": "number"
@@ -7041,6 +9752,18 @@
           "requested_mode"
         ],
         "type": "object"
+      },
+      "SurfaceColorSource": {
+        "enum": [
+          "solid",
+          "orientation",
+          "component_x",
+          "component_y",
+          "component_z",
+          "magnitude",
+          "colormap"
+        ],
+        "type": "string"
       },
       "TrimAxisVisualizationAxes": {
         "properties": {
@@ -7446,6 +10169,243 @@
         ],
         "type": "object"
       },
+      "VisualizationCameraPatch": {
+        "properties": {
+          "fov_degrees": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "orthographic_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "projection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationCameraProjection"
+              }
+            ]
+          },
+          "target": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "up": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationCameraProjection": {
+        "enum": [
+          "perspective",
+          "orthographic"
+        ],
+        "type": "string"
+      },
+      "VisualizationCameraState": {
+        "properties": {
+          "fov_degrees": {
+            "format": "double",
+            "type": "number"
+          },
+          "orthographic_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "projection": {
+            "$ref": "#/components/schemas/VisualizationCameraProjection"
+          },
+          "target": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "up": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "projection",
+          "position",
+          "target",
+          "up",
+          "fov_degrees"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckEntry": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_render_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "received_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VisualizationClientAckStatus"
+          },
+          "viewport_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "revision",
+          "status",
+          "received_at_unix_ms"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckRequest": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_render_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VisualizationClientAckStatus"
+          },
+          "viewport_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "revision",
+          "status"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationClientAckEntry"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckStatus": {
+        "enum": [
+          "applied",
+          "rendered",
+          "failed"
+        ],
+        "type": "string"
+      },
       "VisualizationDiagnostics": {
         "properties": {
           "degraded_reasons": {
@@ -7476,6 +10436,16 @@
               },
               {
                 "$ref": "#/components/schemas/AirboxLayerPatch"
+              }
+            ]
+          },
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
               }
             ]
           },
@@ -7557,6 +10527,9 @@
           "airbox": {
             "$ref": "#/components/schemas/AirboxLayerState"
           },
+          "bounds": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
           "points": {
             "$ref": "#/components/schemas/BasicLayerState"
           },
@@ -7593,13 +10566,44 @@
       },
       "VisualizationOverrideState": {
         "properties": {
+          "display": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetDisplayOverride"
+              }
+            ]
+          },
+          "quantity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetQuantityOverride"
+              }
+            ]
+          },
           "scope": {
             "$ref": "#/components/schemas/VisualizationScopeKind"
           },
           "scope_id": {
             "type": "string"
           },
+          "style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetStyleOverride"
+              }
+            ]
+          },
           "visible": {
+            "description": "Compatibility target visibility override. Prefer `display.visible` for new clients.",
             "type": [
               "boolean",
               "null"
@@ -7609,6 +10613,104 @@
         "required": [
           "scope",
           "scope_id"
+        ],
+        "type": "object"
+      },
+      "VisualizationResolvedTargetSettings": {
+        "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          },
+          "bounds_visible": {
+            "type": "boolean"
+          },
+          "geometry_scope": {
+            "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
+          },
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "point_color": {
+            "type": "string"
+          },
+          "points_visible": {
+            "type": "boolean"
+          },
+          "render_mode": {
+            "$ref": "#/components/schemas/VisualizationTargetRenderMode"
+          },
+          "surface_color_source": {
+            "$ref": "#/components/schemas/SurfaceColorSource"
+          },
+          "surface_mono_color": {
+            "type": "string"
+          },
+          "surface_visible": {
+            "type": "boolean"
+          },
+          "vector_alpha": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vector_color_mode": {
+            "$ref": "#/components/schemas/VectorColorMode"
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector_mono_color": {
+            "type": "string"
+          },
+          "vector_thickness": {
+            "format": "double",
+            "type": "number"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "wireframe_color": {
+            "type": "string"
+          },
+          "wireframe_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "wireframe_visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active_quantity_id",
+          "visible",
+          "bounds_visible",
+          "geometry_scope",
+          "opacity",
+          "point_color",
+          "points_visible",
+          "render_mode",
+          "surface_color_source",
+          "surface_mono_color",
+          "surface_visible",
+          "vector_alpha",
+          "vector_budget",
+          "vector_color_mode",
+          "vector_length_scale",
+          "vector_mono_color",
+          "vector_thickness",
+          "vectors_visible",
+          "wireframe_color",
+          "wireframe_opacity",
+          "wireframe_visible"
         ],
         "type": "object"
       },
@@ -7635,6 +10737,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "camera": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationCameraPatch"
+              }
             ]
           },
           "clip": {
@@ -7722,6 +10834,15 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationOverrideState"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -7841,6 +10962,10 @@
             "description": "Compatibility projection for current display clients. Prefer `quantity.auto_contrast`.",
             "type": "boolean"
           },
+          "camera": {
+            "$ref": "#/components/schemas/VisualizationCameraState",
+            "description": "Session-wide viewport camera. All connected clients should converge to this view."
+          },
           "clip": {
             "$ref": "#/components/schemas/ClipVisualizationState",
             "description": "Compatibility projection of the legacy single clip plane."
@@ -7933,6 +11058,10 @@
           "slice_mode": {
             "type": "string"
           },
+          "targets": {
+            "$ref": "#/components/schemas/VisualizationTargetRegistryState",
+            "description": "Complete effective target registry for the current scene and mesh."
+          },
           "trim": {
             "$ref": "#/components/schemas/TrimVisualizationState",
             "description": "Canonical 3-D trim controls for topology-aware viewports."
@@ -7979,6 +11108,7 @@
           "fem",
           "slice",
           "trim",
+          "camera",
           "clip",
           "vector_style",
           "overrides",
@@ -7996,6 +11126,259 @@
           "x_chosen_size",
           "y_chosen_size"
         ],
+        "type": "object"
+      },
+      "VisualizationTargetDisplayOverride": {
+        "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
+              }
+            ]
+          },
+          "opacity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "points": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "surface": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "vectors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorLayerPatch"
+              }
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wireframe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationTargetGeometryScope": {
+        "enum": [
+          "surface",
+          "full"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetQuantityOverride": {
+        "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "active_quantity_id"
+        ],
+        "type": "object"
+      },
+      "VisualizationTargetRegistryEntry": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "override": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationOverrideState"
+              }
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/VisualizationScopeKind"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/VisualizationResolvedTargetSettings"
+          },
+          "source": {
+            "$ref": "#/components/schemas/VisualizationTargetSource"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_id",
+          "label",
+          "source",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "VisualizationTargetRegistryState": {
+        "properties": {
+          "airbox": {
+            "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+            },
+            "type": "array"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "airbox",
+          "objects",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "VisualizationTargetRenderMode": {
+        "enum": [
+          "points",
+          "surface",
+          "surface+edges",
+          "wireframe"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetSource": {
+        "enum": [
+          "airbox",
+          "scene_object",
+          "mesh_part"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetStyleOverride": {
+        "properties": {
+          "point_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "surface_color_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SurfaceColorSource"
+              }
+            ]
+          },
+          "surface_mono_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vector_alpha": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "vector_color_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorColorMode"
+              }
+            ]
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "vector_mono_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vector_thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "wireframe_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkspaceActiveNodeReplaceRequest": {
@@ -8572,6 +11955,22 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_frequency_response_magnetic_sweep_v1",
+        "responses": {
+          "200": {
+            "description": "Driven magnetic response sweep artifact v1"
+          },
+          "404": {
+            "description": "No magnetic response sweep artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/data/artifacts": {
       "get": {
         "operationId": "data_get_sessions_current_data_artifacts",
@@ -8714,6 +12113,32 @@
     "/v2/sessions/current/data/domain/topology": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_topology",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous domain topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -8724,11 +12149,20 @@
           "204": {
             "description": "Not applicable (FDM)"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial binary FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -10701,6 +14135,18 @@
             }
           },
           {
+            "description": "Strong ETag from a previous field-vector response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
             "in": "query",
             "name": "component",
@@ -10735,6 +14181,20 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nScoped FEM queries are sampled by scope node index. Unscoped queries\nreturn a contiguous center window for lightweight diagnostics.",
+            "in": "query",
+            "name": "max_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -10743,6 +14203,9 @@
               "application/octet-stream": {}
             },
             "description": "Binary FMVP v2 field vector"
+          },
+          "204": {
+            "description": "Recognized field quantity is not available yet"
           },
           "304": {
             "description": "Not modified — ETag matched"
@@ -10832,6 +14295,26 @@
         ]
       }
     },
+    "/v2/sessions/current/diagnostics/cpu": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_cpu",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CpuTelemetryResponse"
+                }
+              }
+            },
+            "description": "CPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
     "/v2/sessions/current/diagnostics/engine-log": {
       "get": {
         "operationId": "diagnostics_get_sessions_current_diagnostics_engine_log",
@@ -10871,6 +14354,32 @@
               }
             },
             "description": "GPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/solver-profile": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_solver_profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolverProfileResource"
+                }
+              }
+            },
+            "description": "Opt-in FEM solver phase profile"
+          },
+          "304": {
+            "description": "Solver profile not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
           }
         },
         "tags": [
@@ -11215,6 +14724,30 @@
         "operationId": "meshing_get_sessions_current_meshing_meshes_objects_object_id_topology",
         "parameters": [
           {
+            "description": "Strong ETag from a previous object-topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Canonical scene object id",
             "in": "path",
             "name": "object_id",
@@ -11234,11 +14767,20 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial per-object FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Per-object topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or object mesh"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -11250,6 +14792,30 @@
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_parts_part_id_topology",
         "parameters": [
+          {
+            "description": "Strong ETag from a previous part-topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "Stable FEM mesh part id, for example an airbox part",
             "in": "path",
@@ -11270,11 +14836,274 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial per-part FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Per-part topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace or mesh part"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_polygons",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_wireframe",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary shared-domain FEM cross-section geometry (FMCS)"
+          },
+          "204": {
+            "description": "Not applicable (FDM)"
+          },
+          "304": {
+            "description": "Cross-section geometry not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/image": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_image",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionQualityMetric"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_scale",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionImageColorScale"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rotation_degrees",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wireframe",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "legend",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "shrink_factor",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "filter_expression",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "edge_width",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dpr",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "Server-rendered shared-domain FEM cross-section image"
+          },
+          "204": {
+            "description": "No FEM mesh or no data for the requested metric"
+          },
+          "304": {
+            "description": "Cross-section image not modified for the supplied ETag"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/cross-section/quality": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_cross_section_quality",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position_percent",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CrossSectionQualityMetric"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary shared-domain FEM cross-section quality values (FMQS)"
+          },
+          "204": {
+            "description": "No per-element quality data artifact or requested metric available"
+          },
+          "304": {
+            "description": "Cross-section quality not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for cross-section"
           }
         },
         "tags": [
@@ -11357,6 +15186,45 @@
         ]
       }
     },
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous per-element quality response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary per-element shared-domain mesh quality data (FMMQ)"
+          },
+          "204": {
+            "description": "No per-element quality data artifact available"
+          },
+          "304": {
+            "description": "Per-element mesh quality data not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
     "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields",
@@ -11406,6 +15274,32 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/topology": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_topology",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous shared-domain topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMMT topology reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -11416,11 +15310,20 @@
           "204": {
             "description": "No FEM mesh available"
           },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial shared-domain FEM topology range (FMMT)"
+          },
           "304": {
             "description": "Shared-domain topology not modified for the supplied ETag"
           },
           "404": {
             "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested topology byte range is not satisfiable"
           }
         },
         "tags": [
@@ -11467,6 +15370,75 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/{mesh_id}/parts/{part_id}/histogram-bins/{metric}/{bin_index}/elements": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_mesh_id_parts_part_id_histogram_bins_metric_bin_index_elements",
+        "parameters": [
+          {
+            "description": "Shared-domain mesh id. The aliases shared-domain, shared_domain, and study_domain resolve to the current FEM solver mesh.",
+            "in": "path",
+            "name": "mesh_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable FEM mesh part id, for example airbox",
+            "in": "path",
+            "name": "part_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Histogram metric: characteristic_size, tetra_size, edge_length, volume, sicn, or gamma",
+            "in": "path",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based histogram bin index",
+            "in": "path",
+            "name": "bin_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshHistogramBinElementsResource"
+                }
+              }
+            },
+            "description": "Source element and node indices for a mesh histogram bin"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "400": {
+            "description": "Invalid histogram metric or bin index"
+          },
+          "404": {
+            "description": "No active workspace, mesh, or mesh part"
           }
         },
         "tags": [
@@ -11802,7 +15774,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryCapabilitiesResource"
+                }
               }
             },
             "description": "Backend-owned geometry primitive and CSG capability matrix"
@@ -11823,7 +15797,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryDiagnosticsResource"
+                }
               }
             },
             "description": "Current geometry diagnostics"
@@ -11855,7 +15831,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryDiagnostic"
+                }
               }
             },
             "description": "Current geometry diagnostic"
@@ -11886,7 +15864,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryRealizationSnapshot"
+                }
               }
             },
             "description": "Derived geometry realization snapshot for the current scene"
@@ -11910,7 +15890,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryRealizationSnapshot"
+                }
               }
             },
             "description": "Current derived geometry realization snapshot"
@@ -11931,13 +15913,97 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryValidationResource"
+                }
               }
             },
             "description": "Backend geometry validation diagnostics for the current scene"
           },
           "404": {
             "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/magnetization-assets/{asset_id}": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_magnetization_assets_asset_id",
+        "parameters": [
+          {
+            "description": "Canonical magnetization asset id",
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagnetizationAssetResource"
+                }
+              }
+            },
+            "description": "Canonical magnetization asset"
+          },
+          "404": {
+            "description": "No active workspace or magnetization asset not found"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_magnetization_assets_asset_id",
+        "parameters": [
+          {
+            "description": "Canonical magnetization asset id",
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagnetizationAssetPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagnetizationAssetResource"
+                }
+              }
+            },
+            "description": "Committed canonical magnetization asset"
+          },
+          "400": {
+            "description": "Invalid magnetization asset payload"
+          },
+          "404": {
+            "description": "No active workspace or magnetization asset not found"
+          },
+          "409": {
+            "description": "Base scene revision does not match current scene revision"
           }
         },
         "tags": [
@@ -12344,7 +16410,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Current canonical authoring scene document"
@@ -12373,7 +16441,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Committed canonical authoring scene after merge patch"
@@ -12403,7 +16473,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Committed canonical authoring scene document"
@@ -12719,6 +16791,121 @@
         "tags": [
           "persistence"
         ]
+      },
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_checkpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointCreateResponse"
+                }
+              }
+            },
+            "description": "Checkpoint captured"
+          },
+          "400": {
+            "description": "No live magnetization to capture"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+      "get": {
+        "operationId": "persistence_get_sessions_current_persistence_checkpoints_checkpoint_id",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointEntry"
+                }
+              }
+            },
+            "description": "Session checkpoint"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointRestoreResponse"
+                }
+              }
+            },
+            "description": "Checkpoint restored"
+          },
+          "400": {
+            "description": "Checkpoint is incompatible with the active domain"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
       }
     },
     "/v2/sessions/current/persistence/exports": {
@@ -12946,6 +17133,40 @@
         ]
       }
     },
+    "/v2/sessions/current/simulation/objects/{object_id}/metrics": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_objects_object_id_metrics",
+        "parameters": [
+          {
+            "description": "Scene object id or name",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectMetricsResource"
+                }
+              }
+            },
+            "description": "Selected object magnetization and energy read-model"
+          },
+          "404": {
+            "description": "Object or workspace not found"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
     "/v2/sessions/current/simulation/runs/current": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_runs_current",
@@ -13101,8 +17322,11 @@
             },
             "description": "Current stage execution read-model"
           },
+          "204": {
+            "description": "Stage execution read-model is not available yet"
+          },
           "404": {
-            "description": "No stage execution data"
+            "description": "No active workspace"
           }
         },
         "tags": [
@@ -13130,6 +17354,57 @@
         },
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v2/sessions/current/visualization/client-acks": {
+      "get": {
+        "operationId": "visualization_get_sessions_current_visualization_client_acks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationClientAckResource"
+                }
+              }
+            },
+            "description": "Latest visualization client acknowledgements"
+          }
+        },
+        "tags": [
+          "visualization"
+        ]
+      },
+      "post": {
+        "operationId": "visualization_post_sessions_current_visualization_client_acks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualizationClientAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationClientAckEntry"
+                }
+              }
+            },
+            "description": "Visualization client acknowledgement recorded"
+          },
+          "400": {
+            "description": "Invalid client acknowledgement"
+          }
+        },
+        "tags": [
+          "visualization"
         ]
       }
     },

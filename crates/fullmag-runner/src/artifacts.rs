@@ -1227,7 +1227,9 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ExecutedRun, ExecutionProvenance, FieldSnapshot, RunResult, RunStatus};
+    use crate::types::{
+        ExecutedRun, ExecutionProvenance, FieldSnapshot, ResolvedFallback, RunResult, RunStatus,
+    };
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
         ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
@@ -1515,6 +1517,61 @@ mod tests {
             },
             provenance: ProvenancePlanIR { notes: Vec::new() },
         }
+    }
+
+    #[test]
+    fn metadata_execution_provenance_persists_resolved_fallback() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = test_fem_execution_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-resolved-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "fem_native_gpu".to_string(),
+                    fallback_engine: "fem_cpu_native".to_string(),
+                    reason: "native_fem_gpu_unavailable".to_string(),
+                    message: "native FEM GPU unavailable in test".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        };
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("artifact write should preserve resolved fallback");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        let fallback = &metadata["execution_provenance"]["resolved_fallback"];
+        assert_eq!(fallback["occurred"], true);
+        assert_eq!(fallback["original_engine"], "fem_native_gpu");
+        assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
+        assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
 
     #[test]

@@ -5722,7 +5722,7 @@ def test_run_backend_serializes_adaptive_gpu_rk_acceptance_gate(monkeypatch, tmp
     assert "nvcc" in row["adaptive_gpu_rk_acceptance_blockers"]
     assert row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
     assert row["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
-        "native/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
+        "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
 
 
@@ -10342,7 +10342,7 @@ def test_preflight_requires_cuda_mfem_and_compute_gate_for_adaptive_gpu_rk(tmp_p
     assert gated_with_cuda["adaptive_gpu_rk_acceptance_ready"] is False
     assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
     assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
-        "native/backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
+        "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
     assert gated_with_cuda["adaptive_gpu_rk_acceptance_blockers"] == [
         "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"

@@ -1090,10 +1090,10 @@ def adaptive_gpu_rk_acceptance_blockers(report: Mapping[str, object]) -> list[st
             "nvcc (set PATH, FULLMAG_CUDA_COMPILER, CUDACXX, CUDA_HOME, or CUDA_PATH)"
         )
     if not report.get("gpu_rk_cuda_source_present"):
-        blockers.append("native/backends/fem/gpu/cuda/integrators/rk/rk_step.cu is required")
+        blockers.append("backends/fem/gpu/cuda/integrators/rk/rk_step.cu is required")
     if not report.get("gpu_rk_cmake_wired"):
         blockers.append(
-            "native/backends/fem/CMakeLists.txt must wire gpu/cuda/integrators/rk/rk_step.cu"
+            "backends/fem/CMakeLists.txt must wire gpu/cuda/integrators/rk/rk_step.cu"
         )
     if not report.get("assert_no_hot_loop_compute_sync"):
         blockers.append("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1")

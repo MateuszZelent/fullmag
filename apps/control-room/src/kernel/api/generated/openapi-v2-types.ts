@@ -2323,6 +2323,7 @@ export interface components {
             resolved_backend?: string | null;
             resolved_device?: string | null;
             resolved_engine_id?: string | null;
+            resolved_fallback?: null | components["schemas"]["ResolvedFallbackResource"];
             resolved_mode?: string | null;
             resolved_precision?: string | null;
             resolved_runtime_family?: string | null;
@@ -3673,6 +3674,13 @@ export interface components {
             source: string;
             source_body_ids: string[];
             source_object_ids: string[];
+        };
+        ResolvedFallbackResource: {
+            fallback_engine: string;
+            message: string;
+            occurred: boolean;
+            original_engine: string;
+            reason: string;
         };
         ResourceRevisionMap: {
             /** Format: int64 */

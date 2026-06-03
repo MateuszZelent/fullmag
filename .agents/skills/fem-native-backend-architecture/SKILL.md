@@ -1,20 +1,22 @@
 ---
 name: fem-native-backend-architecture
-description: "Legacy alias: use when modifying or reviewing FEM/MFEM backend architecture, Context ownership, mfem_bridge.cpp, FEM CPU/GPU separation, FEM operator extraction, FEM demag strategy families, exchange, local interactions, workflows, integrators, or FEM solver performance."
+description: "Use when modifying or reviewing the current native FEM/MFEM backend architecture, Context ownership, mfem_bridge.cpp, FEM CPU/GPU separation, FEM operator extraction, FEM demag strategy families, exchange, local interactions, workflows, integrators, or FEM solver performance."
 ---
 
 # FEM/MFEM Backend Architecture
 
 Use this skill for any work touching FEM solver architecture or documentation.
-This is now an MFEM/hypre/libCEED skill. The historical "native FEM" wording is
-only a compatibility alias for older agent prompts and repository file names.
+This skill covers the current `backends/fem` MFEM/hypre/libCEED implementation
+tree. The previous `native/backends/fem` path was production code, not legacy;
+it has been relocated to top-level `backends/fem`, not moved into `crates`.
 
 ## Read First
 
 1. `docs/architecture/backend-golden-masterplan.md`
 2. Relevant interaction or workflow note in `docs/physics/`
 3. Relevant capability entry in `docs/specs/capability-matrix-v0.md`
-4. Historical docs only as migration inputs when needed:
+4. Historical native-FEM docs only for context when needed; the backend golden
+   masterplan wins on target ownership:
    - `docs/adr/0014-native-fem-backend-modularization.md`
    - `docs/specs/native-fem-backend-architecture-v1.md`
    - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
@@ -28,7 +30,7 @@ only a compatibility alias for older agent prompts and repository file names.
    not drift.
 3. Do not build or extend a standalone in-house FEM numerical stack beside
    MFEM/hypre/libCEED. FEM production work means MFEM/hypre/libCEED CPU/GPU
-   integration.
+   integration under current `backends/fem`.
 4. Do not add new physics directly to `mfem_bridge.cpp`. New interactions need
    a dedicated module boundary, validation plan, telemetry, and capability
    status.
@@ -51,9 +53,11 @@ only a compatibility alias for older agent prompts and repository file names.
    Body-only FEM/BEM/FMM paths must not allocate or require volumetric airbox.
 10. Strict FEM GPU requests must fail clearly if device-resident prerequisites
    are missing. Do not silently fallback to `hybrid_cpu_poisson`.
-11. Workflow algorithms must live in workflow owners: time-domain, relaxation,
-   hysteresis, eigen, and frequency-domain. Do not bury them in `execute.rs`,
-   `dispatch.rs`, `Context`, or bridge files.
+11. Workflow algorithms must live in explicit owners. Production FEM numerical
+   workflow behavior belongs under current `backends/fem`; Rust runner
+   workflow code may orchestrate native calls but must not duplicate
+   MFEM/hypre/libCEED implementation. Do not bury new
+   ownership in `execute.rs`, `dispatch.rs`, `Context`, or bridge files.
 12. Distinguish executable status from validated status in capability docs and
    provenance. `production_executable` is not the same as `validated`.
 13. Preserve or add validation: directional derivative for energy-derived

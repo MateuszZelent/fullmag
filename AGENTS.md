@@ -449,7 +449,7 @@ flowchart TD
   IR --> V[Validation + normalization]
   V --> PL[Planning + capability checks]
   PL --> RT[Session / run / stage runtime]
-  RT --> BE[Native backends]
+  RT --> BE[Compiled backends]
   RT --> ART[Artifacts + provenance + live fields]
   ART --> UI[Control room / analysis / export]
 ```
@@ -463,7 +463,7 @@ flowchart TD
 | ProblemIR | canonical lowered semantics | encode UI-only quirks |
 | Planner | validation, capability resolution, backend selection | silently erase user intent |
 | Runtime | sessions, stages, state, fields, artifacts | become solver-specific policy soup |
-| Native backends | high-performance compute | define public product semantics |
+| Compiled backends | high-performance compute | define public product semantics |
 | Control room | observability + live authoring + export | bypass canonical model |
 
 ### 9.1 Control-room API invariant
@@ -624,8 +624,11 @@ Each solver family needs:
 
 FEM is not a standalone in-house FEM numerical stack. Fullmag's production FEM
 architecture means MFEM/hypre/libCEED integration with explicit CPU and GPU
-execution lanes. Historical file names that say "native FEM" are migration
-sources, not the strategic architecture.
+execution lanes under the current `backends/fem` tree after the controlled
+relocation from `native/backends/fem`. Production FEM must not move into
+`crates`. Historical docs or aliases that describe another destination are
+transitional references only; the current compiled FEM backend tree is the
+strategic implementation spine.
 
 FEM demag is a model family, not one Poisson implementation. Keep Poisson
 airbox Dirichlet/Robin, PBC-reduced Poisson, FEM/BEM Fredkin-Koehler, future
@@ -995,7 +998,8 @@ When a file grows past that threshold, split it.
 | `crates/fullmag-py-core` | private Python/Rust bridge |
 | `apps/control-room` | target modular frontend v2 control room |
 | `apps/legacy_web` | legacy frontend reference during v2 migration |
-| `native/` | production native backends |
+| `backends/` | production compiled FDM/FEM backends |
+| `native/` | CMake root, shared native packaging, and compatibility glue; not the solver implementation root |
 | `docs/` | specs, ADRs, physics notes |
 | `.agents/` | agent workflows / skills |
 | `.github/` | mirrored summaries and CI hints |
@@ -1153,7 +1157,7 @@ The following stale concepts should be actively retired when encountered:
 | dense eigensolver as default future path | matrix-free Krylov operator architecture |
 | “relax = run with another stop” | explicit relax semantics and stop reason |
 | monolithic viewport file | split model/hooks/overlays/scene |
-| monolithic native FEM `Context` / `mfem_bridge.cpp` solver | `solver_runtime/*`, `solvers/{fdm,fem}/*`, and `backends/solvers/fem/mfem/{common,cpu,gpu}/*` |
+| monolithic native FEM `Context` / `mfem_bridge.cpp` solver | narrower owners inside `backends/fem/{core,cpu/mfem,gpu/cuda,src,include,tests}`, plus Rust runner orchestration/ABI facades only |
 | generic FEM `demag/` implementation | explicit FEM demag strategy directories: `poisson_airbox`, `pbc_reduced_poisson`, `fem_bem`, `fmm`, and `mapped_exterior_shell` where applicable |
 
 ---

@@ -142,6 +142,7 @@ try {
   await page
     .locator(".fm-explorer .fm-tabs-trigger", { hasText: "Model" })
     .waitFor({ state: "visible", timeout: timeoutMs });
+  await assertStatusBarFallbackReadback();
   await page
     .locator('[data-node-id="model:study"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
@@ -266,6 +267,9 @@ function resourceForPath(pathname) {
   }
   if (pathname === "/v2/sessions/current/simulation/commands") {
     return { commands: [], latest_completed: null, revision: sceneRevision };
+  }
+  if (pathname === "/v2/sessions/current/simulation/runs/current") {
+    return currentRun();
   }
   if (pathname === "/v2/sessions/current/model/geometry/validation") {
     return { diagnostics: [], revision: sceneRevision, valid: true };
@@ -413,6 +417,47 @@ function solverStatus() {
     sim_time_seconds: 0,
     step_index: 0,
     warnings: [],
+  };
+}
+
+function currentRun() {
+  return {
+    active_stage_index: null,
+    active_stage_kind: null,
+    artifact_dir: "/tmp/fullmag-study-authoring-smoke/artifacts/run-1",
+    final_anisotropy_energy: null,
+    final_demag_energy: null,
+    final_dmi_energy: null,
+    final_exchange_energy: null,
+    final_total_energy: null,
+    final_zeeman_energy: null,
+    requested_backend: "fem",
+    requested_device: "gpu",
+    requested_mode: "auto",
+    requested_precision: "double",
+    resolved_backend: "fem",
+    resolved_device: "cpu",
+    resolved_engine_id: "fem_cpu_native",
+    resolved_fallback: {
+      occurred: true,
+      fallback_engine: "fem_cpu_native",
+      message: "Native FEM GPU runtime unavailable; resolved to CPU native.",
+      original_engine: "fem_native_gpu",
+      reason: "native_fem_gpu_unavailable",
+    },
+    resolved_mode: "auto",
+    resolved_precision: "double",
+    resolved_runtime_family: "fem-cpu-native",
+    resolved_worker: null,
+    revision: sceneRevision,
+    run_id: "study-authoring-smoke-run",
+    session_id: "study-authoring-smoke",
+    solver_time_seconds: 0,
+    started_at: "2026-06-03T00:00:00.000Z",
+    status: "idle",
+    status_reason: null,
+    total_stages: scene.study.stages.length,
+    total_steps: 0,
   };
 }
 
@@ -614,6 +659,33 @@ async function waitForTransactionCount(count) {
   }
   if (transactions.length < count) {
     throw new Error(`Expected ${count} transactions, saw ${transactions.length}.`);
+  }
+}
+
+async function assertStatusBarFallbackReadback() {
+  const engine = page.locator(".fm-status-bar__engine");
+  await engine.waitFor({ state: "visible", timeout: timeoutMs });
+  await engine
+    .getByText("FEM CPU", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await engine
+    .getByText("fallback to native MFEM/hypre")
+    .waitFor({ state: "visible", timeout: timeoutMs });
+
+  const title = await engine.getAttribute("title");
+  for (const expected of [
+    "requested_backend=fem",
+    "requested_device=gpu",
+    "resolved_engine_id=fem_cpu_native",
+    "original_engine=fem_native_gpu",
+    "fallback_engine=fem_cpu_native",
+    "reason=native_fem_gpu_unavailable",
+  ]) {
+    if (!title?.includes(expected)) {
+      throw new Error(
+        `Status bar fallback title is missing ${expected}: ${JSON.stringify(title)}`,
+      );
+    }
   }
 }
 
