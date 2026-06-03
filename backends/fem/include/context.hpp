@@ -20,6 +20,7 @@
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
@@ -104,6 +105,8 @@ struct Context {
 
     // ── Unified RK stepper runtime workspace ──
     RkStepperRuntimeState stepper{};
+
+    FemRelaxationRuntimeState relaxation{};
 
     InterruptRuntimeState interrupt{};
 };

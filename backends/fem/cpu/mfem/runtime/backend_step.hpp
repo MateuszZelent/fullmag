@@ -24,4 +24,10 @@ int run_backend_step(
     fullmag_fem_step_stats &out_stats,
     std::string &error);
 
+int run_backend_relaxation_step(
+    Context &ctx,
+    fullmag_fem_relax_algorithm algorithm,
+    fullmag_fem_step_stats &out_stats,
+    std::string &error);
+
 } // namespace fullmag::fem

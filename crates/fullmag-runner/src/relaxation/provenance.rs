@@ -8,13 +8,15 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
     match algorithm {
         RelaxationAlgorithmIR::ProjectedGradientBb => Some("projected_gradient_bb"),
         RelaxationAlgorithmIR::NonlinearCg => Some("nonlinear_cg"),
-        RelaxationAlgorithmIR::LlgOverdamped | RelaxationAlgorithmIR::TangentPlaneImplicit => None,
+        RelaxationAlgorithmIR::TangentPlaneImplicit => Some("tangent_plane_implicit"),
+        RelaxationAlgorithmIR::LlgOverdamped => None,
     }
 }
 
 pub(crate) const BOOTSTRAP_DIRECT_MINIMIZER_REALIZATION: &str =
     "bootstrap_snapshot_tangent_gradient";
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
+pub(crate) const NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION: &str = "native_mfem_backend_relax_step";
 
 pub(crate) fn apply_energy_minimizer_provenance(
     provenance: &mut ExecutionProvenance,

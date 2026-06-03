@@ -106,6 +106,11 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
+    cpu/mfem/relaxation/nonlinear_cg.cpp
+    cpu/mfem/relaxation/projected_gradient_bb.cpp
+    cpu/mfem/relaxation/relaxation_math.cpp
+    cpu/mfem/relaxation/relaxation_step.cpp
+    cpu/mfem/relaxation/tangent_plane_implicit.cpp
     cpu/mfem/runtime/aos_field.cpp
     cpu/mfem/runtime/availability.cpp
     cpu/mfem/runtime/backend_lifecycle.cpp
@@ -303,6 +308,10 @@ add_fem_source_facade_contract(
 add_fem_source_facade_contract(
     fem_source_facade_export_progress_contract
     tests/source_facade_export_progress_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_relaxation_source_contract
+    tests/relaxation_source_contract.cpp
 )
 
 add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)

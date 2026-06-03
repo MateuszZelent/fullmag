@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -97,6 +98,45 @@ int run_backend_step(
 #else
     (void)ctx;
     (void)dt_seconds;
+    (void)out_stats;
+    error = kUnavailableMessage;
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
+int run_backend_relaxation_step(
+    Context &ctx,
+    fullmag_fem_relax_algorithm algorithm,
+    fullmag_fem_step_stats &out_stats,
+    std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    error.clear();
+    ctx.interrupt.step_interrupted = false;
+    ctx.transfer_audit.audit.reset_step_violation();
+    const int status = run_native_relaxation_step(ctx, algorithm, out_stats, error);
+    if (ctx.interrupt.step_interrupted) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
+            nullptr,
+            0.0,
+            0.0);
+        out_stats.dt_seconds = 0.0;
+        return FULLMAG_FEM_ERR_INTERRUPTED;
+    }
+    if (status != FULLMAG_FEM_OK) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
+    }
+    return status;
+#else
+    (void)ctx;
+    (void)algorithm;
     (void)out_stats;
     error = kUnavailableMessage;
     return FULLMAG_FEM_ERR_UNAVAILABLE;

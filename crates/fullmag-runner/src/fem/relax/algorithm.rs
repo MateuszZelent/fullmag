@@ -14,22 +14,21 @@ use super::super::engine::FemEngineKind;
 
 /// Whether a given algorithm is executable on a given FEM engine.
 ///
-/// Does **not** distinguish "production quality" from "bootstrap/wrapper" —
-/// see documentation on each algorithm for quality notes.
+/// This table describes runner-level availability. Native backend lane
+/// restrictions, such as CPU/MFEM-only direct minimizers, are reported by the
+/// backend when the ABI step is executed.
 pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKind) -> bool {
     match (algorithm, engine) {
         // LlgOverdamped is the primary production path on both engines.
         (RelaxationAlgorithmIR::LlgOverdamped, _) => true,
 
-        // Bootstrap wrappers: run on the CPU SoA reference kernel regardless
-        // of the requested engine, so they are technically callable on both
-        // FEM lanes but are not FEM-native.
+        // Direct minimizers are native FEM ABI paths. The current native
+        // implementation accepts CPU/MFEM contexts and rejects GPU-resident
+        // minimization explicitly at the backend boundary.
         (RelaxationAlgorithmIR::ProjectedGradientBb, _) => true,
         (RelaxationAlgorithmIR::NonlinearCg, _) => true,
 
-        // TangentPlaneImplicit: not yet implemented — blocked pending the
-        // FEM tangent-space infrastructure (FEM-TPI milestone).
-        (RelaxationAlgorithmIR::TangentPlaneImplicit, _) => false,
+        (RelaxationAlgorithmIR::TangentPlaneImplicit, _) => true,
     }
 }
 
@@ -40,6 +39,20 @@ pub fn is_direct_minimizer(algorithm: RelaxationAlgorithmIR) -> bool {
         algorithm,
         RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
     )
+}
+
+/// Returns the relaxation control for native FEM algorithms that advance
+/// through `fullmag_fem_backend_relax_step`.
+pub(crate) fn native_step_control(
+    relaxation: Option<&RelaxationControlIR>,
+) -> Option<&RelaxationControlIR> {
+    let control = relaxation?;
+    match control.algorithm {
+        RelaxationAlgorithmIR::ProjectedGradientBb
+        | RelaxationAlgorithmIR::NonlinearCg
+        | RelaxationAlgorithmIR::TangentPlaneImplicit => Some(control),
+        RelaxationAlgorithmIR::LlgOverdamped => None,
+    }
 }
 
 /// Whether this algorithm runs the LLG RHS with the precession term disabled
@@ -71,7 +84,7 @@ pub fn algorithm_description(algorithm: RelaxationAlgorithmIR) -> &'static str {
             "nonlinear conjugate gradient Polak–Ribière+ with backtracking line search"
         }
         RelaxationAlgorithmIR::TangentPlaneImplicit => {
-            "tangent-plane implicit method (FEM-TPI — not yet implemented)"
+            "tangent-plane implicit method on the FEM tangent space"
         }
     }
 }
@@ -95,7 +108,7 @@ pub fn check_algorithm_support(
         return Err(RunError {
             message: format!(
                 "FEM relaxation algorithm `{}` is not yet supported on engine `{}`. \
-                 Supported algorithms: llg_overdamped, projected_gradient_bb, nonlinear_cg.",
+                 Supported algorithms: llg_overdamped, projected_gradient_bb, nonlinear_cg, tangent_plane_implicit.",
                 algorithm_provenance_name(control.algorithm),
                 engine.id(),
             ),
@@ -103,4 +116,48 @@ pub fn check_algorithm_support(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::RelaxStopIR;
+
+    fn control(algorithm: RelaxationAlgorithmIR) -> RelaxationControlIR {
+        RelaxationControlIR {
+            algorithm,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(3),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        }
+    }
+
+    #[test]
+    fn tangent_plane_implicit_is_native_fem_step_algorithm() {
+        let tpi = control(RelaxationAlgorithmIR::TangentPlaneImplicit);
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+            FemEngineKind::CpuNative
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+            FemEngineKind::NativeGpu
+        ));
+        assert_eq!(
+            native_step_control(Some(&tpi)).map(|control| control.algorithm),
+            Some(RelaxationAlgorithmIR::TangentPlaneImplicit)
+        );
+        assert!(check_algorithm_support(Some(&tpi), FemEngineKind::CpuNative).is_ok());
+    }
+
+    #[test]
+    fn llg_overdamped_stays_on_time_integrator_path() {
+        let llg = control(RelaxationAlgorithmIR::LlgOverdamped);
+        assert!(native_step_control(Some(&llg)).is_none());
+        assert!(check_algorithm_support(Some(&llg), FemEngineKind::CpuNative).is_ok());
+    }
 }

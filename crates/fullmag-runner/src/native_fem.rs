@@ -54,6 +54,8 @@ use std::ffi::c_void;
 #[cfg(feature = "fem-gpu")]
 use std::ffi::CStr;
 #[cfg(feature = "fem-gpu")]
+use std::path::{Path, PathBuf};
+#[cfg(feature = "fem-gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // ── Fallback defaults when air_box_config is absent (FEM-040) ────────────
@@ -119,6 +121,74 @@ fn native_fem_object_ids_match(a: &str, b: &str) -> bool {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn managed_fem_runtime_root() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("FULLMAG_FEM_RUNTIME_ROOT").map(PathBuf::from) {
+        if root.join("openmpi/share/openmpi").is_dir() {
+            return Some(root);
+        }
+    }
+    if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT")
+        .map(PathBuf::from)
+        .map(|root| root.join(".fullmag/runtimes/fem-gpu-host"))
+    {
+        if root.join("openmpi/share/openmpi").is_dir() {
+            return Some(root);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe.parent().and_then(Path::parent) {
+            let root = root.to_path_buf();
+            if root.join("openmpi/share/openmpi").is_dir() {
+                return Some(root);
+            }
+        }
+    }
+    let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(".fullmag/runtimes/fem-gpu-host");
+    if dev_root.join("openmpi/share/openmpi").is_dir() {
+        return Some(dev_root);
+    }
+    None
+}
+
+#[cfg(feature = "fem-gpu")]
+fn set_env_if_missing(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    if std::env::var_os(key).is_none() {
+        std::env::set_var(key, value);
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn configure_managed_openmpi_environment() {
+    let Some(runtime_root) = managed_fem_runtime_root() else {
+        return;
+    };
+    let openmpi_root = runtime_root.join("openmpi");
+    if openmpi_root
+        .join("share/openmpi/help-mpi-runtime.txt")
+        .is_file()
+    {
+        set_env_if_missing("OPAL_PREFIX", &openmpi_root);
+        set_env_if_missing(
+            "OMPI_MCA_mca_base_component_path",
+            openmpi_root.join("lib/openmpi3"),
+        );
+        set_env_if_missing("OMPI_MCA_orte_launch_agent", openmpi_root.join("bin/orted"));
+        set_env_if_missing("OMPI_MCA_reachable", "weighted");
+        set_env_if_missing("OMPI_MCA_mca_base_component_show_load_errors", "0");
+        set_env_if_missing("OMPI_MCA_btl", "self");
+        set_env_if_missing("OMPI_MCA_oob", "^tcp");
+    }
+    let pmix_root = runtime_root.join("lib/pmix2");
+    if pmix_root.join("share/pmix/help-pmix-runtime.txt").is_file() {
+        set_env_if_missing("PMIX_PREFIX", &pmix_root);
+        set_env_if_missing("PMIX_EXEC_PREFIX", &pmix_root);
+        set_env_if_missing("PMIX_MCA_pcompress_base_silence_warning", "1");
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 impl NativeFemBackend {
     unsafe extern "C" fn poll_atomic_interrupt_flag(user_data: *mut c_void) -> i32 {
         let flag = user_data.cast::<AtomicBool>();
@@ -140,6 +210,7 @@ impl NativeFemBackend {
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        configure_managed_openmpi_environment();
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
@@ -971,6 +1042,146 @@ impl NativeFemBackend {
             .ok_or_else(|| self.last_error_or("FEM GPU step interrupted without a signal"))
     }
 
+    pub fn relax_step(
+        &mut self,
+        algorithm: fullmag_ir::RelaxationAlgorithmIR,
+        node_count: usize,
+    ) -> Result<Option<StepStats>, RunError> {
+        let ffi_algorithm = match algorithm {
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+                ffi::fullmag_fem_relax_algorithm::FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB
+            }
+            fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
+                ffi::fullmag_fem_relax_algorithm::FULLMAG_FEM_RELAX_NONLINEAR_CG
+            }
+            fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => {
+                ffi::fullmag_fem_relax_algorithm::FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT
+            }
+            fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => {
+                return Err(RunError {
+                    message: "FEM native relaxation step ABI is not used for llg_overdamped"
+                        .to_string(),
+                });
+            }
+        };
+        let mut stats = ffi::fullmag_fem_step_stats {
+            step: 0,
+            time_seconds: 0.0,
+            dt_seconds: 0.0,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
+            exchange_energy_joules: 0.0,
+            demag_energy_joules: 0.0,
+            external_energy_joules: 0.0,
+            anisotropy_energy_joules: 0.0,
+            dmi_energy_joules: 0.0,
+            total_energy_joules: 0.0,
+            magnetoelastic_energy_joules: 0.0,
+            max_effective_field_amplitude: 0.0,
+            max_demag_field_amplitude: 0.0,
+            max_rhs_amplitude: 0.0,
+            max_torque_Apm: 0.0,
+            demag_solve_count: 0,
+            demag_linear_iterations: 0,
+            demag_linear_residual: 0.0,
+            wall_time_ns: 0,
+            exchange_wall_time_ns: 0,
+            demag_wall_time_ns: 0,
+            demag_assemble_wall_time_ns: 0,
+            demag_solve_wall_time_ns: 0,
+            demag_solver_setup_wall_time_ns: 0,
+            demag_solver_apply_wall_time_ns: 0,
+            demag_solver_setup_reused: 0,
+            demag_recover_wall_time_ns: 0,
+            demag_energy_wall_time_ns: 0,
+            rhs_wall_time_ns: 0,
+            extra_energy_wall_time_ns: 0,
+            snapshot_wall_time_ns: 0,
+            error_estimate: 0.0,
+            rejected_attempts: 0,
+            dt_suggested: 0.0,
+            rhs_evaluations: 0,
+            fsal_reused: 0,
+            requested_omp_threads: 0,
+            effective_omp_threads: 0,
+        };
+
+        let rc =
+            unsafe { ffi::fullmag_fem_backend_relax_step(self.handle, ffi_algorithm, &mut stats) };
+        if rc == ffi::FULLMAG_FEM_ERR_INTERRUPTED {
+            return Ok(None);
+        }
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM native relaxation step failed"));
+        }
+
+        let magnetization = self.copy_m(node_count)?;
+        let effective_field = self.copy_h_eff(node_count)?;
+        let torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
+        let mut step_stats = StepStats {
+            step: stats.step,
+            time: stats.time_seconds,
+            dt: stats.dt_seconds,
+            mx: stats.mx,
+            my: stats.my,
+            mz: stats.mz,
+            e_ex: stats.exchange_energy_joules,
+            e_demag: stats.demag_energy_joules,
+            e_ext: stats.external_energy_joules,
+            e_ani: stats.anisotropy_energy_joules,
+            e_dmi: stats.dmi_energy_joules,
+            e_total: stats.total_energy_joules,
+            max_dm_dt: stats.max_rhs_amplitude,
+            max_h_eff: stats.max_effective_field_amplitude,
+            max_h_demag: stats.max_demag_field_amplitude,
+            max_torque_Apm: torque_apm,
+            max_torque_T: torque_apm * crate::MU0,
+            wall_time_ns: stats.wall_time_ns,
+            exchange_wall_time_ns: stats.exchange_wall_time_ns,
+            demag_wall_time_ns: stats.demag_wall_time_ns,
+            demag_assemble_wall_time_ns: stats.demag_assemble_wall_time_ns,
+            demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
+            demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
+            demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
+            demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
+            demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
+            rhs_wall_time_ns: stats.rhs_wall_time_ns,
+            extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
+            snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
+            error_estimate: if stats.error_estimate > 0.0 {
+                Some(stats.error_estimate)
+            } else {
+                None
+            },
+            rejected_attempts: stats.rejected_attempts,
+            dt_suggested: if stats.dt_suggested > 0.0 {
+                Some(stats.dt_suggested)
+            } else {
+                None
+            },
+            rhs_evals: stats.rhs_evaluations,
+            fsal_reused: stats.fsal_reused != 0,
+            demag_solves: stats.demag_solve_count,
+            poisson_iterations: stats.demag_linear_iterations,
+            poisson_final_residual: stats.demag_linear_residual,
+            demag_refreshed: stats.demag_solve_count > 0,
+            requested_fem_omp_threads: stats.requested_omp_threads,
+            effective_fem_omp_threads: stats.effective_omp_threads,
+            ..StepStats::default()
+        };
+        self.attach_transfer_audit(&mut step_stats)?;
+        crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
+        step_stats.per_object_scalars =
+            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
+                single_object_scalars("free", &step_stats)
+            } else {
+                weighted_object_scalars(&step_stats, &self.object_weights)
+            };
+        Ok(Some(step_stats))
+    }
+
     pub fn copy_field(
         &self,
         observable: ffi::fullmag_fem_observable,
@@ -1482,6 +1693,77 @@ mod tests {
             plan_desc_body.contains("precession_enabled: if native_fem_precession_enabled(plan)"),
             "native FEM FFI plan must lower llg_overdamped into the native precession flag"
         );
+    }
+
+    #[test]
+    fn native_fem_cpu_relax_step_algorithms_advance_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM relaxation ABI runtime test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM relaxation create");
+            let initial_stats = backend
+                .snapshot_step_stats(plan.mesh.nodes.len())
+                .expect("initial native FEM relaxation stats");
+            let stats = backend
+                .relax_step(algorithm, plan.mesh.nodes.len())
+                .expect("native FEM relaxation step")
+                .expect("native FEM relaxation step should not be interrupted");
+            let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+            assert_eq!(
+                stats.step, 1,
+                "{algorithm:?} must publish one accepted step"
+            );
+            assert!(stats.dt.is_finite(), "{algorithm:?} dt must be finite");
+            assert!(stats.dt >= 0.0, "{algorithm:?} dt must be non-negative");
+            assert!(
+                stats.e_total.is_finite(),
+                "{algorithm:?} total energy must be finite"
+            );
+            assert!(
+                stats.max_torque_Apm.is_finite(),
+                "{algorithm:?} torque must be finite"
+            );
+            assert!(
+                stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+                "{algorithm:?} must not increase energy beyond tolerance: initial={} final={}",
+                initial_stats.e_total,
+                stats.e_total
+            );
+            for (node, m) in magnetization.iter().enumerate() {
+                let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+                assert_scalar_close(
+                    &format!("{algorithm:?}.m_norm[{node}]"),
+                    norm,
+                    1.0,
+                    5e-12,
+                    1e-12,
+                );
+            }
+        }
     }
 
     #[test]

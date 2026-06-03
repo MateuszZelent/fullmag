@@ -9,9 +9,9 @@
 //! | Algorithm               | CPU MFEM | GPU native | Notes                               |
 //! |-------------------------|----------|------------|-------------------------------------|
 //! | `LlgOverdamped`         | ✓        | ✓          | primary production path             |
-//! | `ProjectedGradientBb`   | ✓        | ✓          | bootstrap wrapper (CPU SoA)         |
-//! | `NonlinearCg`           | ✓        | ✓          | bootstrap wrapper (CPU SoA)         |
-//! | `TangentPlaneImplicit`  | ✗        | ✗          | semantic only — blocked             |
+//! | `ProjectedGradientBb`   | ✓        | ✗          | native MFEM relaxation ABI          |
+//! | `NonlinearCg`           | ✓        | ✗          | native MFEM relaxation ABI          |
+//! | `TangentPlaneImplicit`  | ✓        | ✗          | native MFEM relaxation ABI          |
 
 pub mod algorithm;
 #[cfg(feature = "fem-gpu")]
@@ -47,7 +47,6 @@ use super::engine::FemEngineKind;
 /// # Errors
 ///
 /// Returns [`RunError`] if:
-/// * the plan requests `TangentPlaneImplicit` (not yet implemented),
 /// * the selected engine cannot execute the requested algorithm,
 /// * the backend returns an execution error.
 pub fn execute_fem_relax<'a>(

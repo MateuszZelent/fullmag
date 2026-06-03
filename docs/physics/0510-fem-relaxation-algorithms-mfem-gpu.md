@@ -28,16 +28,21 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner now executes bootstrap FEM CPU-reference plans,
-- `StudyIR::Relaxation` exists and three algorithms are public-executable in at
+- `StudyIR::Relaxation` exists and four algorithms are public-executable in at
   least one maintained runtime lane: `llg_overdamped`, `projected_gradient_bb`,
-  and `nonlinear_cg` (see `0500-fdm-relaxation-algorithms.md` for full
-  specification),
-- FEM `projected_gradient_bb` and `nonlinear_cg` are currently implemented as a
-  bootstrap direct-minimization wrapper over native FEM field/energy snapshots;
-  they are executable but not yet the production FE-metric minimizers described
-  as the long-term target in this note,
-- higher-order FEM tangent-plane relaxation remains defined but not yet
-  public-executable.
+  `nonlinear_cg`, and `tangent_plane_implicit` (see
+  `0500-fdm-relaxation-algorithms.md` for the shared stop semantics),
+- native CPU/MFEM owns executable FEM `projected_gradient_bb` and
+  `nonlinear_cg` steps through the `fullmag_fem_backend_relax_step` ABI, using
+  tangent gradients, Armijo line search, sphere retraction, and FEM
+  lumped-mass inner products,
+- native CPU/MFEM owns executable FEM `tangent_plane_implicit` through the same
+  ABI; it solves a global tangent-plane `mass + step * exchange` linear system
+  and treats the remaining effective-field terms explicitly from the current
+  native snapshot,
+- GPU/libCEED residual kernels, broader preconditioning policy, and
+  full-device-resident tangent-plane solves remain production optimization
+  work, not runner-owned bootstrap paths.
 
 Shared stop/refresh semantics now live in
 `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. This note focuses
@@ -294,22 +299,23 @@ Current executable subset (FEM backend):
 - `algorithm = "llg_overdamped"`
 - `algorithm = "projected_gradient_bb"`
 - `algorithm = "nonlinear_cg"`
+- `algorithm = "tangent_plane_implicit"`
 
-Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use a bootstrap
-nodal tangent-gradient wrapper over native FEM snapshots. They are useful for
-validation and early workflows, but they are not the final mass-metric /
-preconditioned FEM minimizers. `tangent_plane_implicit` remains semantic-only
-and must be disabled in UI until a backend implementation exists.
+Status 2026-06-03: native CPU/MFEM direct-relaxation runs publish
+`requested_energy_minimizer`, `resolved_energy_minimizer`, and
+`energy_minimizer_realization = "native_mfem_backend_relax_step"`, and clear
+`resolved_integrator` so metadata does not imply that Heun/RK time integration
+executed the stage. The Rust runner selects the native ABI and owns stage
+orchestration, artifacts, provenance, and live updates; it does not own FEM
+line-search or tangent-plane algorithms.
 
-Status 2026-05-15: runner provenance now separates this bootstrap direct
-minimization contract from time integration. Direct FEM `projected_gradient_bb`
-and `nonlinear_cg` runs publish `requested_energy_minimizer`,
-`resolved_energy_minimizer`, and `energy_minimizer_realization =
-"bootstrap_snapshot_tangent_gradient"`, and clear `resolved_integrator` so
-metadata does not imply that Heun/RK time integration executed the stage.
-This is a provenance/contract closure only; FE-metric inner products,
-preconditioned native minimizers, and tangent-plane implicit relaxation remain
-open.
+Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use FEM
+lumped-mass inner products and native Armijo line search, but they are not yet
+preconditioned with hypre. `tangent_plane_implicit` is executable on the native
+CPU/MFEM lane through a global tangent-plane `mass + step * exchange` solve; it
+does not yet include a full linearization of demag, DMI, Zeeman, or anisotropy
+inside the implicit operator and is not yet a GPU/libCEED-resident tangent-plane
+solver.
 
 ### 4.2 ProblemIR representation
 
@@ -364,9 +370,10 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - [x] Capability matrix
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on CPU reference)
-- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` bootstrap direct minimization)
-- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` production mass-weighted / preconditioned minimizers)
-- [ ] FEM backend (`tangent_plane_implicit`)
+- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` native mass-weighted minimizers)
+- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` hypre-preconditioned minimizers)
+- [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM mass-plus-exchange tangent-plane solve)
+- [ ] FEM backend (`tangent_plane_implicit` full operator linearization and GPU/libCEED residency)
 - [ ] Hybrid backend
 - [ ] Outputs / observables
 - [ ] Tests / benchmarks

@@ -1,221 +1,257 @@
 # Fullmag
 
-**Fullmag** to rozwijana platforma do symulacji mikromagnetycznych, projektowana jako kompletna aplikacja naukowo-inżynierska: od opisu problemu w Pythonie, przez planowanie wykonania i backendy FDM/FEM, po lokalny panel przeglądarkowy, artefakty, diagnostykę oraz odtwarzalną historię obliczeń.
+<a id="readme-top"></a>
 
-Główna zasada projektu:
+<div align="center">
+  <a href="docs/specs/fullmag-application-architecture-v2.md">
+    <img src="docs/fullmag-logo-traced-optimized.svg" alt="Fullmag logo" width="140" />
+  </a>
 
-> użytkownik opisuje problem fizyczny, a nie układ pamięci solvera, siatkę numeryczną ani szczegóły backendu.
+  <h3 align="center">A physics-first micromagnetics platform for reproducible FDM/FEM simulation workflows</h3>
 
-Fullmag ma być warstwą wspólną dla różnych metod numerycznych, runtime’ów i środowisk obliczeniowych. Ten sam model fizyczny powinien dać się uruchomić na backendzie FDM lub FEM, lokalnie lub przez runtime zarządzany, z zachowaniem jawnego śladu: co użytkownik zadał, co planner wybrał i co solver realnie wykonał.
+  <p align="center">
+    Fullmag is a research software platform for authoring, planning, executing, inspecting, and reproducing micromagnetic simulations across finite-difference and finite-element backends.
+    <br />
+    <a href="docs/specs/fullmag-application-architecture-v2.md"><strong>Explore the architecture »</strong></a>
+    <br />
+    <br />
+    <a href="examples">Examples</a>
+    ·
+    <a href="docs/physics">Physics notes</a>
+    ·
+    <a href="docs/specs">Specifications</a>
+    ·
+    <a href="docs/adr">ADRs</a>
+  </p>
+</div>
 
----
+<div align="center">
 
-## Najważniejsze cele projektu
+![Project status](https://img.shields.io/badge/status-active%20research%20prototype-blue)
+![Python](https://img.shields.io/badge/Python-DSL%20%26%20bindings-3776AB?logo=python&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-control%20plane%20%26%20reference%20solvers-000000?logo=rust&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-control%20room-3178C6?logo=typescript&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-browser%20control%20room-000000?logo=nextdotjs&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-native%20GPU%20paths-76B900?logo=nvidia&logoColor=white)
+![MFEM](https://img.shields.io/badge/MFEM-native%20FEM%20backend-5B6EC4)
+![Horizon Europe](https://img.shields.io/badge/Horizon%20Europe-MSCA%20PF-003399)
 
-Fullmag jest budowany jako platforma, która ma umożliwiać:
-
-1. opis symulacji mikromagnetycznej w kanonicznym Python DSL,
-2. przekształcenie modelu do wspólnego, backend-neutralnego `ProblemIR`,
-3. walidację jednostek, geometrii, oddziaływań, siatki i możliwości backendu,
-4. uruchamianie obliczeń w FDM lub FEM,
-5. wykorzystanie CPU, CUDA/GPU oraz runtime’ów zarządzanych,
-6. obserwację pól i przebiegu obliczeń w lokalnym panelu przeglądarkowym,
-7. zapis artefaktów: pól, energii, skalarów, metadanych i provenance,
-8. eksport lub odtworzenie tej samej symulacji z poziomu kodu.
-
-Projekt nie jest tylko solverem. Docelowo ma być pełną aplikacją do pracy z mikromagnetyką: modelowanie, uruchamianie, diagnostyka, wizualizacja, walidacja i analiza wyników.
-
----
-
-## Model fizyczny
-
-Podstawą symulacji jest równanie Landaua–Lifshitza–Gilberta z opcjonalnymi członami napędzającymi:
-
-```text
-∂m/∂t = -γ μ0 m × H_eff + α m × ∂m/∂t + τ_spin + η_th
-```
-
-gdzie:
-
-- `m` — zredukowana magnetyzacja, `|m| = 1`,
-- `γ` — współczynnik żyromagnetyczny,
-- `μ0` — przenikalność magnetyczna próżni,
-- `α` — tłumienie Gilberta,
-- `H_eff` — pole efektywne,
-- `τ_spin` — opcjonalne momenty spinowe, np. STT,
-- `η_th` — opcjonalny składnik termiczny.
-
-Typowy model pola efektywnego:
-
-```text
-H_eff = H_ex + H_demag + H_Zeeman + H_anis + H_DMI + H_Oe + H_me + ...
-```
-
-Fullmag traktuje oddziaływania jako elementy modelu fizycznego, które powinny mieć spójną semantykę energii, pola, jednostek, operatorów i artefaktów. To jest kluczowe dla utrzymania zgodności między FDM i FEM.
+</div>
 
 ---
 
-## Obsługiwane i projektowane oddziaływania
+## Table of Contents
 
-| Oddziaływanie / zjawisko | Znaczenie fizyczne | Aktualny status w projekcie |
-|---|---|---|
-| Exchange | lokalne sprzężenie wymienne, wygładzanie magnetyzacji | public-executable w FDM i FEM |
-| Demag / dipolar | nielokalne pole magnetostatyczne | public-executable w FDM i FEM; FEM używa ścieżek Poissona/airbox i nadal wymaga ostrożnej walidacji produkcyjnej |
-| Zeeman | pole zewnętrzne | public-executable w FDM i FEM |
-| LLG / time evolution | dynamika magnetyzacji | public-executable w FDM i FEM |
-| Relaxation | relaksacja do stanu bliskiego równowagi | public-executable dla podstawowych algorytmów; część zaawansowanych ścieżek pozostaje bootstrapowa |
-| Slonczewski STT | moment spinowy CPP/MTJ | public-executable dla pojedynczego modułu w FDM CPU/GPU oraz natywnym FEM CPU/GPU |
-| Zhang–Li STT | moment spinowy CIP zależny od gradientów magnetyzacji | public-executable dla pojedynczego modułu w FDM CPU/GPU oraz natywnym FEM CPU/GPU |
-| CurrentTransport `prescribed_density` | zadana gęstość prądu jako źródło dla STT/Oersted | public-executable w FDM i natywnym FEM |
-| OerstedCylinder | analityczne pole Oersteda od prądu cylindrycznego | public-executable w FDM i natywnym FEM dla wybranych obwiedni czasowych |
-| Oersted from current solution | pole Oersteda z zadanego źródła prądowego | public-executable dla `prescribed_density`; pełny solver kontaktowo-przewodnościowy nadal nie jest gotowy |
-| Thermal noise | termiczne pole losowe zgodne z modelem Browna/FDT | obecne w ścieżkach STNO/termicznych; wymaga dalszej walidacji zakresowej dla wszystkich workflow |
-| Interfacial DMI | chiralne oddziaływanie interfejsowe | opisane semantycznie; nie traktować jako public-executable w bazowej macierzy capability |
-| Bulk DMI | objętościowe DMI | opisane semantycznie / planowane |
-| Anizotropia jednoosiowa i kubiczna | energia osi łatwej / krystalograficzna | planowana jako klasyczny brakujący element solvera |
-| Surface anisotropy | anizotropia powierzchniowa/interfejsowa | planowana |
-| Magnetoelastic coupling | sprzężenie magnetyzacja–odkształcenie | wewnętrzny/reference scope; pełna dwustronna magnetoelastyka pozostaje celem roadmapy |
-| SOT | spin–orbit torque | semantic-only |
-| Spin diffusion / drift diffusion | pełniejszy transport spinowy | semantic-only |
-| Periodic / Floquet spin waves | periodyczne/floquetowe problemy fal spinowych | semantic-only w aktualnym publicznym zakresie FEM |
-| NEB | bariera energetyczna i ścieżki przejścia | roadmap / semantic-only |
-| Parameter sweep / optimization | automatyczne przeszukiwanie przestrzeni parametrów | roadmap / semantic-only |
+1. [About The Project](#about-the-project)
+2. [Scientific Scope](#scientific-scope)
+3. [Built With](#built-with)
+4. [Repository Layout](#repository-layout)
+5. [Getting Started](#getting-started)
+6. [Usage](#usage)
+7. [Roadmap](#roadmap)
+8. [Authors and Affiliations](#authors-and-affiliations)
+9. [Contributing](#contributing)
+10. [License](#license)
+11. [Contact](#contact)
+12. [Acknowledgments](#acknowledgments)
 
 ---
 
-## Architektura
+## About The Project
 
-Fullmag rozdziela opis fizyczny od wykonania numerycznego.
+Fullmag is being developed as a full scientific computing application for micromagnetics, not merely as a solver wrapper. Its central design rule is that users should describe a physical problem rather than a numerical memory layout, mesh artifact, or backend-specific execution detail.
+
+The platform is organized around one canonical workflow:
 
 ```text
 Python DSL
    ↓
 ProblemIR
    ↓
-Validation + planning + capability checks
+validation, planning, and capability checks
    ↓
-Session / run / stage runtime
+session / run / stage runtime
    ↓
-FDM backend     FEM backend     future hybrid paths
+FDM backend        FEM backend        future hybrid paths
    ↓
-Artifacts + provenance + live fields
+artifacts, provenance, and live field resources
    ↓
-Browser control room / export / diagnostics
+browser control room, diagnostics, analysis, and export
 ```
 
-### Warstwy projektu
+The same physical model should be expressible in Python, inspectable in the browser control room, lowered to a backend-neutral intermediate representation, and executed through a resolved numerical backend while preserving provenance: what the user requested, what the planner selected, and what the solver actually ran.
 
-| Warstwa | Rola |
+Fullmag currently focuses on:
+
+- canonical micromagnetic model authoring through an embedded Python DSL;
+- shared `ProblemIR` semantics across FDM and FEM execution paths;
+- explicit capability reporting instead of hidden backend fallbacks;
+- local browser-based observation of live fields, stages, diagnostics, and artifacts;
+- reproducible simulation runs with field, scalar, energy, metadata, and provenance outputs;
+- production-oriented native FEM and GPU-oriented FDM/CUDA development paths.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Scientific Scope
+
+The physical core is based on the Landau-Lifshitz-Gilbert equation, optionally extended with spin-torque, thermal, transport, and multiphysics terms:
+
+```text
+dm/dt = -gamma * mu0 * m x H_eff + alpha * m x dm/dt + tau_spin + eta_th
+```
+
+with a typical effective field decomposition:
+
+```text
+H_eff = H_ex + H_demag + H_Zeeman + H_anis + H_DMI + H_Oe + H_me + ...
+```
+
+Fullmag treats interactions as first-class physical model terms. Each term is expected to carry coherent semantics for energy, effective field, units, operators, observables, backend realization, artifacts, and validation.
+
+### Capability snapshot
+
+| Interaction or workflow | Scientific meaning | Current project status |
+|---|---|---|
+| Exchange | Local exchange coupling and magnetization smoothing | Public-executable in FDM and FEM |
+| Demag / dipolar field | Nonlocal magnetostatic field | Public-executable in FDM and FEM; FEM demag requires ongoing production validation |
+| Zeeman field | External applied field | Public-executable in FDM and FEM |
+| LLG dynamics | Magnetization time evolution | Public-executable in FDM and FEM |
+| Relaxation | Relaxation toward near-equilibrium states | Public-executable for core algorithms; advanced paths remain under validation |
+| Slonczewski STT | CPP/MTJ spin-transfer torque | Public-executable for selected FDM and native FEM paths |
+| Zhang-Li STT | CIP spin-transfer torque driven by magnetization gradients | Public-executable for selected FDM and native FEM paths |
+| Prescribed current density | Current source for STT/Oersted terms | Public-executable in FDM and native FEM |
+| Oersted field | Magnetic field generated by current | Public-executable for selected analytical and prescribed-density cases |
+| Thermal noise | Brown/FDT-consistent stochastic thermal field | Present in selected thermal/STNO paths; broader validation is ongoing |
+| Interfacial and bulk DMI | Chiral interactions | Semantically specified; not yet a general public-executable capability |
+| Uniaxial and cubic anisotropy | Easy-axis and crystallographic anisotropy | Planned classical solver capability |
+| Magnetoelastic coupling | Magnetization-strain coupling | Internal/reference scope; full two-way coupling is roadmap work |
+| Spin-orbit torque and spin diffusion | Extended spintronic transport models | Semantic-only in the current public capability matrix |
+| Eigenmodes | Linearized LLG spectral analysis | Bootstrap/reference workflow; production matrix-free implementation is roadmap work |
+| NEB, parameter sweeps, optimization | Engineering workflows and transition paths | Roadmap / semantic-only |
+
+The maturity vocabulary is deliberately explicit:
+
+| Status | Meaning |
 |---|---|
-| Python DSL | publiczny interfejs opisu modelu fizycznego |
-| `ProblemIR` | wspólny, typowany opis problemu niezależny od backendu |
-| Planner | walidacja, normalizacja, wybór backendu i ścieżki wykonania |
-| Runner / session | wykonanie etapów, lifecycle, artefakty, logi, status |
-| FDM backend | regular-grid micromagnetics, szybkie ścieżki CPU/GPU |
-| FEM backend | geometrie nieregularne, MFEM/libCEED/hypre, natywne CPU/GPU |
-| Control room | lokalny panel przeglądarkowy do obserwacji, diagnostyki i eksportu |
-| Docs / physics notes | obowiązkowy zapis semantyki fizycznej i walidacji |
+| `semantic_only` | The API/IR can describe the feature, but no public executable path is provided yet |
+| `reference_executable` | The feature runs on a correctness or bootstrap path |
+| `production_executable` | The feature runs on a target production backend |
+| `validated` | The feature has explicit validation coverage for the stated workload |
 
----
+Presence in the Python API or `ProblemIR` does not imply validated execution on every backend.
 
-## Mapa repozytorium
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-| Ścieżka | Rola |
+## Built With
+
+Fullmag combines a public Python authoring layer, a Rust control and runtime layer, native production backends, and a browser control room.
+
+- [Python](https://www.python.org/) for the public DSL and user-facing simulation scripts.
+- [Rust](https://www.rust-lang.org/) for the control plane, planner, runtime, reference solvers, API, and CLI.
+- [TypeScript](https://www.typescriptlang.org/), [React](https://react.dev/), and [Next.js](https://nextjs.org/) for the local browser control room.
+- [CUDA](https://developer.nvidia.com/cuda-toolkit) for native GPU execution paths.
+- [MFEM](https://mfem.org/), [hypre](https://computing.llnl.gov/projects/hypre-scalable-linear-solvers-multigrid-methods), and [libCEED](https://libceed.org/) for native FEM-oriented development.
+- OpenAPI-driven local HTTP resources for the browser control-plane/data-plane split.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Repository Layout
+
+| Path | Role |
 |---|---|
-| `packages/fullmag-py` | Python DSL i warstwa ładowania skryptów użytkownika |
-| `crates/fullmag-ir` | kanoniczny model `ProblemIR` |
-| `crates/fullmag-plan` | planner i logika capability |
-| `crates/fullmag-cli` | publiczny launcher `fullmag` |
-| `crates/fullmag-api` | lokalne API panelu kontrolnego |
-| `crates/fullmag-runner` | wykonanie sesji, etapów i artefaktów |
-| `crates/fullmag-engine` | referencyjne solvery i logika wykonawcza |
-| `crates/fullmag-py-core` | most Python ↔ Rust |
-| `apps/web` | przeglądarkowy control room |
-| `native/` | natywne backendy produkcyjne |
-| `docs/` | specyfikacje, ADR-y, noty fizyczne, plany walidacji |
-| `examples/` | przykłady uruchamialnych workflow |
-| `tests/` | testy jednostkowe, regresyjne i benchmarkowe |
+| `packages/fullmag-py` | Python DSL and user-script loading layer |
+| `crates/fullmag-ir` | Canonical `ProblemIR` model |
+| `crates/fullmag-plan` | Planner and capability logic |
+| `crates/fullmag-cli` | Public `fullmag` launcher |
+| `crates/fullmag-api` | Local control-room API |
+| `crates/fullmag-runner` | Session, stage, artifact, and runtime execution layer |
+| `crates/fullmag-engine` | Reference solvers and executable physics logic |
+| `crates/fullmag-py-core` | Python/Rust bridge |
+| `apps/control-room` | Current browser control-room application |
+| `apps/web` and `apps/legacy_web` | Historical and transitional browser surfaces |
+| `native/` | Native production backend sources |
+| `docs/physics` | Publication-style physics and numerics notes |
+| `docs/specs` | Long-lived application, API, runtime, and frontend specifications |
+| `docs/adr` | Architecture decision records |
+| `examples/` | Executable and reference workflows |
+| `tests/` | Unit, regression, smoke, and benchmark-oriented tests |
 
----
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-## Przykładowe workflow
+## Getting Started
 
-Repozytorium zawiera przykłady obejmujące różne poziomy dojrzałości.
+### Prerequisites
 
-| Przykład | Zakres |
-|---|---|
-| `examples/exchange_relax.py` | najprostsza relaksacja exchange-only na geometrii `Box` |
-| `examples/exchange_demag_zeeman.py` | FDM: exchange + demag + Zeeman + artefakty pól i energii |
-| `examples/fem_exchange_zeeman.py` | podstawowy przypadek FEM z exchange i polem zewnętrznym |
-| `examples/fem_exchange_demag_zeeman.py` | FEM z exchange, demag i Zeeman |
-| `examples/fem_eigenmodes.py` | bootstrap/reference eigenmodes dla zlinearyzowanego LLG |
-| `examples/dw_track.py` | ścieżka dla ścian domenowych |
-| `examples/fdm_multibody_two_layer_stack.py` | FDM dla wielu ciał / stacków warstwowych |
-| `examples/stno_vortex_ref_minimal.py` | minimalny benchmark STNO w aktualnym publicznym slice |
-| `examples/stno_vortex_mtj_workflow.py` | szerszy workflow STNO/MTJ z artefaktami i postprocessingiem |
+The repository is a multi-language workspace. A typical development environment needs:
 
----
+- a Rust toolchain compatible with `rust-toolchain.toml`;
+- Python 3 for the DSL and examples;
+- Node.js and `pnpm` for the control room;
+- native build dependencies for FEM/GPU paths when those targets are used;
+- Docker or a compatible container runtime for managed runtime workflows.
 
-## Szybki start
-
-### 1. Przygotowanie środowiska
+### Environment
 
 ```bash
 cp .env.example .env
-# opcjonalnie uzupełnij ustawienia środowiskowe
 ```
 
-### 2. Uruchomienie środowiska developerskiego
+Edit `.env` only where local runtime settings are required.
+
+### Development shell
 
 ```bash
 make up
 make shell
 ```
 
-### 3. Build
+### Build
 
 ```bash
 just build fullmag
 ```
 
-Dla ścieżek FEM/GPU można użyć runtime’u zarządzanego:
+For managed native FEM/GPU runtime work:
 
 ```bash
 just build fem-gpu-runtime-host
 ```
 
-### 4. Uruchomienie przykładu
+### Control room
+
+```bash
+just control-room
+# or
+./scripts/dev-control-room.sh
+```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Usage
+
+### Run examples
 
 ```bash
 fullmag examples/exchange_relax.py
 fullmag examples/exchange_demag_zeeman.py
+fullmag examples/fem_exchange_zeeman.py
 fullmag examples/fem_eigenmodes.py --headless
 ```
 
-Tryb interaktywny:
+Interactive control-room mode:
 
 ```bash
 fullmag -i examples/exchange_relax.py
 ```
 
-### 5. Control room
-
-```bash
-just control-room
-# albo
-./scripts/dev-control-room.sh
-```
-
----
-
-## Minimalny przykład Python DSL
+### Minimal Python DSL example
 
 ```python
 import fullmag as fm
 
 strip = fm.Box(size=(200e-9, 20e-9, 5e-9), name="strip")
 
-mat = fm.Material(
+material = fm.Material(
     name="Py",
     Ms=800e3,
     A=13e-12,
@@ -225,7 +261,7 @@ mat = fm.Material(
 magnet = fm.Ferromagnet(
     name="strip",
     geometry=strip,
-    material=mat,
+    material=material,
     m0=fm.texture.random(seed=42),
 )
 
@@ -254,159 +290,91 @@ result = fm.Simulation(problem, backend="fdm").run(until=2e-9)
 print(result.status)
 ```
 
----
+### Typical artifacts
 
-## Artefakty i provenance
+Fullmag is designed to preserve:
 
-Fullmag powinien zawsze zachowywać rozróżnienie między:
+- vector and scalar fields such as `m`, `H_ex`, `H_demag`, `H_ext`, and `H_eff`;
+- energy contributions such as `E_ex`, `E_demag`, `E_ext`, and `E_total`;
+- current-transport artifacts for prescribed-density workflows;
+- scalar histories such as `scalars.csv`;
+- metadata and provenance records describing requested intent and resolved execution reality.
 
-1. tym, co użytkownik opisał w Pythonie,
-2. tym, co zostało zapisane w `ProblemIR`,
-3. tym, co planner uznał za wykonalne,
-4. tym, jaki backend, device i precision zostały wybrane,
-5. tym, co solver realnie wykonał,
-6. tym, jakie pola, energie, skalary i metadane zostały zapisane.
-
-Typowe artefakty:
-
-- `m` — magnetyzacja,
-- `H_ex` — pole wymienne,
-- `H_demag` — pole demagnetyzujące,
-- `H_ext` — pole zewnętrzne,
-- `H_eff` — pole efektywne,
-- `E_ex`, `E_demag`, `E_ext`, `E_total` — wkłady energetyczne,
-- `current_transport/.json` — artefakty prądowe dla `prescribed_density`,
-- `scalars.csv` — przebiegi skalarne,
-- `metadata.json` — informacje o modelu, backendzie i parametrach wykonania.
-
----
-
-## Status dojrzałości
-
-Fullmag używa jawnego słownika statusów. Każda funkcja powinna być opisana jednym z poniższych stanów:
-
-| Status | Znaczenie |
-|---|---|
-| `semantic_only` | API i IR mogą opisać funkcję, ale publiczna ścieżka wykonawcza jej jeszcze nie uruchamia |
-| `reference_executable` | funkcja działa na ścieżce referencyjnej używanej do poprawności |
-| `production_executable` | funkcja działa na docelowej ścieżce produkcyjnej |
-| `validated` | funkcja działa i ma jawne testy/benchmarki dla danego workloadu |
-
-To rozróżnienie jest ważne: obecność klasy w Pythonie lub wpisu w `ProblemIR` nie oznacza jeszcze pełnej implementacji numerycznej w każdym backendzie.
-
----
-
-## Aktualnie najmocniejsze strony projektu
-
-- spójna koncepcja `ProblemIR`,
-- publiczny Python DSL,
-- rozdział modelu fizycznego od wykonania numerycznego,
-- jednoczesne projektowanie FDM i FEM,
-- jawny model capability zamiast ukrywania ograniczeń,
-- silny nacisk na dokumentację fizyki przed implementacją,
-- rozwijane ścieżki CPU/GPU,
-- artefakty i provenance jako część produktu,
-- rosnąca obsługa STNO/STT/Oersted dla FDM i natywnego FEM.
-
----
-
-## Najważniejsze ograniczenia
-
-Aktualny stan nie powinien być przedstawiany jako kompletny solver mikromagnetyczny dla wszystkich znanych efektów. Szczególnie ostrożnie należy komunikować:
-
-- DMI jest w dużej mierze etapem semantycznym/projektowym, a nie pełnym publicznym wykonaniem,
-- anizotropia jednoosiowa/kubiczna nadal jest jednym z kluczowych brakujących elementów klasycznego solvera,
-- pełny transport prądowy `ohmic_poisson` nie jest jeszcze wdrożony,
-- `prescribed_density` nie zastępuje samokonsystentnego solvera kontaktów i przewodnictwa,
-- SOT i spin diffusion są semantic-only,
-- pełna dwustronna magnetoelastyka pozostaje celem roadmapy,
-- FEM eigenmodes istnieje jako ścieżka bootstrap/reference, ale nie jako docelowy matrix-free, produkcyjny moduł,
-- funkcje takie jak NEB, optymalizacja i parameter sweep są roadmapą, nie aktualnym publicznym wykonaniem.
-
----
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Roadmap
 
-### Etap 1 — domknięcie klasycznej mikromagnetyki
+- [ ] Complete the classical micromagnetic model surface: anisotropy, DMI, boundary-condition validation, and stronger FDM/FEM/GPU parity.
+- [ ] Extend current and spintronic workflows: self-consistent current transport, Oersted fields from current solutions, broader STT/SOT support, and spin accumulation.
+- [ ] Harden high-fidelity FEM: demag/open-boundary validation, shared-domain meshing, production GPU paths, and matrix-free eigenmode workflows.
+- [ ] Extend multiphysics support: two-way magnetoelasticity, mechanics coupling, temperature, and Joule heating.
+- [ ] Add engineering workflows: parameter sweeps, optimization studies, NEB, standardized benchmarks, and automated reports.
 
-- anizotropia jednoosiowa,
-- anizotropia kubiczna,
-- DMI interfejsowe i objętościowe,
-- walidacja warunków brzegowych,
-- rozszerzona walidacja demag,
-- spójne testy FDM/FEM/GPU.
+See `docs/plans/` and `docs/specs/` for active design and implementation plans.
 
-### Etap 2 — prąd i spintronika
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-- pełniejszy model `CurrentTransport`,
-- `ohmic_poisson`, kontakty i przewodność zależna od regionu,
-- Oersted z rzeczywistego rozwiązania prądowego,
-- rozszerzenie STT poza pojedynczy moduł,
-- SOT,
-- spin diffusion / spin accumulation.
+## Authors and Affiliations
 
-### Etap 3 — FEM high-fidelity
+| Author | Affiliation |
+|---|---|
+| Mateusz Zelent | Fachbereich Physik and Landesforschungszentrum OPTIMAS, Rheinland-Pfälzische Technische Universität Kaiserslautern-Landau, 67663 Kaiserslautern, Germany |
+| Prof. Maciej Krawczyk | Institute of Spintronics and Quantum Information, Faculty of Physics and Astronomy, Adam Mickiewicz University, Poznań, Poland |
+| Philipp Pirro | Fachbereich Physik and Landesforschungszentrum OPTIMAS, Rheinland-Pfälzische Technische Universität Kaiserslautern-Landau, 67663 Kaiserslautern, Germany |
 
-- mocniejszy FEM demag,
-- lepsze open-boundary treatment,
-- matrix-free eigensolve,
-- linearyzacja operatorów dla eigenmodes,
-- walidacja geometrii 3D.
+Affiliations should be treated as project metadata, not as a statement that every repository file is authored equally by all listed contributors.
 
-### Etap 4 — pełna wielofizyka
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-- dwustronna magnetoelastyka,
-- sprzężenie z mechaniką FEM,
-- termika i Joule heating,
-- coupling manager dla magnetyki, prądu, mechaniki i temperatury.
+## Contributing
 
-### Etap 5 — workflow inżynierskie
+Fullmag is an active research codebase. Contributions should preserve the physics-first architecture:
 
-- parameter sweep,
-- optimization studies,
-- NEB,
-- standardowe benchmarki mikromagnetyczne,
-- raporty automatyczne,
-- workflow dla urządzeń STNO, MTJ, racetrack, skyrmion, multilayer stacks.
+1. Document new physics or numerics in `docs/physics/`.
+2. Add or update the Python DSL surface.
+3. Lower the semantics into `ProblemIR`.
+4. Update planner capability checks and runtime provenance.
+5. Implement the backend path or mark it explicitly as `semantic_only`.
+6. Add artifacts, observables, tests, and validation evidence.
 
----
+For code changes:
 
-## Kryterium „done” dla nowej funkcji
+```bash
+git checkout -b feature/your-feature
+```
 
-Nowa funkcja w Fullmag jest gotowa dopiero wtedy, gdy ma:
+Run the narrow relevant tests first, then the broader gates required by the subsystem you touched. Browser/API work should keep the OpenAPI v2 contract, resource hooks, and control-room facade aligned.
 
-1. notę w `docs/physics/`,
-2. API w Python DSL,
-3. reprezentację w `ProblemIR`,
-4. reguły planera i capability,
-5. implementację backendową albo jawny status `semantic_only`,
-6. artefakty i observables,
-7. testy jednostkowe,
-8. benchmark fizyczny,
-9. walidację jednostek i znaków,
-10. dokumentację użytkową.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-Jeżeli działa tylko backend, ale nie ma API, IR, artefaktów i testów, funkcja nie powinna być oznaczana jako zakończona.
+## License
 
----
+No root-level license file is present in the current checkout. Add an explicit license before public redistribution or reuse outside the intended research collaboration context.
 
-## Dla kogo jest ten projekt
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-Fullmag jest przeznaczony dla:
+## Contact
 
-- badaczy mikromagnetyki,
-- osób pracujących nad spintroniką i magnoniką,
-- projektantów struktur STNO, MTJ, multilayer i racetrack,
-- osób potrzebujących jednego modelu dla FDM i FEM,
-- zespołów wymagających odtwarzalności, provenance i jawnego statusu solvera,
-- użytkowników, którzy chcą pracować w Pythonie, ale korzystać z backendów Rust/CUDA/C++/MFEM.
+Project coordination: Mateusz Zelent, RPTU.
 
----
+Project link: [https://github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag)
 
-## Charakter projektu
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-Fullmag jest projektem ambitnym i aktywnie rozwijanym. Aktualnie najlepiej opisywać go jako:
+## Acknowledgments
 
-> rozwijaną, physics-first platformę mikromagnetyczną z działającymi publicznymi ścieżkami FDM/FEM dla rdzeniowych przypadków oraz jasno rozpisaną roadmapą dla pełnej spintroniki, DMI, wielofizyki, eigenmodes i optymalizacji.
+<div align="center">
+  <img src="https://upload.wikimedia.org/wikipedia/commons/b/b7/Flag_of_Europe.svg" alt="European Union emblem" width="110" />
+  <br />
+  <a href="https://marie-sklodowska-curie-actions.ec.europa.eu/">
+    <img src="https://img.shields.io/badge/Marie%20Sk%C5%82odowska--Curie%20Actions-Horizon%20Europe-003399?style=for-the-badge" alt="Marie Skłodowska-Curie Actions project badge" />
+  </a>
+</div>
 
-Nie należy go opisywać jako w pełni zakończonego zamiennika dla wszystkich dojrzałych solverów. Mocną stroną projektu jest natomiast to, że architektura od początku wymusza jawność: model, backend, capability, artefakty, provenance i ograniczenia są częścią produktu, a nie dodatkiem.
+Mateusz Zelent acknowledges that this project has received funding from the European Union's Framework Programme for Research and Innovation HORIZON-MSCA-2024-PF-01 under the Marie Skłodowska-Curie Grant Agreement Project No. 101208951–CNMA.
+
+Fullmag also builds on the wider scientific software ecosystem for micromagnetics, high-performance numerical methods, finite-element discretization, GPU computing, and reproducible research infrastructure.
+
+The README structure is adapted from [Best-README-Template](https://github.com/othneildrew/Best-README-Template).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>

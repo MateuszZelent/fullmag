@@ -31,6 +31,14 @@ pub enum fullmag_fem_integrator {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_relax_algorithm {
+    FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB = 1,
+    FULLMAG_FEM_RELAX_NONLINEAR_CG = 2,
+    FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT = 3,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_adaptive_config {
     pub atol: f64,
@@ -455,6 +463,12 @@ extern "C" {
     pub fn fullmag_fem_backend_step(
         handle: *mut fullmag_fem_backend,
         dt_seconds: f64,
+        out_stats: *mut fullmag_fem_step_stats,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_relax_step(
+        handle: *mut fullmag_fem_backend,
+        algorithm: fullmag_fem_relax_algorithm,
         out_stats: *mut fullmag_fem_step_stats,
     ) -> i32;
 

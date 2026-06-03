@@ -107,6 +107,31 @@ int fullmag_fem_backend_step(
     return status;
 }
 
+int fullmag_fem_backend_relax_step(
+    fullmag_fem_backend *handle,
+    fullmag_fem_relax_algorithm algorithm,
+    fullmag_fem_step_stats *out_stats
+) {
+    if (handle == nullptr || out_stats == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_relax_step requires non-null handle and out_stats");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    handle->last_error.clear();
+    const int status =
+        fullmag::fem::run_backend_relaxation_step(
+            handle->context,
+            algorithm,
+            *out_stats,
+            handle->last_error);
+    if (status != FULLMAG_FEM_OK && !handle->last_error.empty()) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+    }
+    return status;
+}
+
 int fullmag_fem_backend_set_interrupt_poll(
     fullmag_fem_backend *handle,
     fullmag_fem_interrupt_poll_fn poll_fn,

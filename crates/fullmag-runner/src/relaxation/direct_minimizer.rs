@@ -2,8 +2,8 @@
 //!
 //! Backend code still owns state transfer, observables, live updates, and
 //! artifact recording. This module owns algorithm classification and scalar
-//! parameters shared by the bootstrap FDM/CUDA and native FEM direct
-//! minimizer paths.
+//! parameters shared by FDM direct minimizers and the native FEM relaxation
+//! ABI selection path.
 
 #![allow(dead_code)]
 

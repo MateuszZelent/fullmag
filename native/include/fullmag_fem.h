@@ -81,6 +81,12 @@ typedef enum {
     FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR = 7,
 } fullmag_fem_stage_stop_reason;
 
+typedef enum {
+    FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB = 1,
+    FULLMAG_FEM_RELAX_NONLINEAR_CG = 2,
+    FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT = 3,
+} fullmag_fem_relax_algorithm;
+
 typedef int (*fullmag_fem_interrupt_poll_fn)(void *user_data);
 
 typedef struct {
@@ -410,6 +416,12 @@ fullmag_fem_backend *fullmag_fem_backend_create(
 int fullmag_fem_backend_step(
     fullmag_fem_backend *handle,
     double dt_seconds,
+    fullmag_fem_step_stats *out_stats
+);
+
+int fullmag_fem_backend_relax_step(
+    fullmag_fem_backend *handle,
+    fullmag_fem_relax_algorithm algorithm,
     fullmag_fem_step_stats *out_stats
 );
 
