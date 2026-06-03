@@ -1,6 +1,6 @@
 //! Reference direct-minimization relaxation solvers.
 //!
-//! This module still contains the bootstrap/reference BB and NCG solvers used by
+//! This module contains the reference BB and NCG solvers used by
 //! FDM CPU/reference paths. Production native FEM relaxation remains owned by
 //! `backends/fem`; runner code uses this module only as reference orchestration.
 
@@ -31,6 +31,7 @@ use crate::types::StepStats;
 pub struct RelaxationResult {
     pub final_magnetization: Vec<Vector3>,
     pub steps_taken: u64,
+    pub pseudo_time_s: f64,
     pub final_energy: f64,
     pub final_max_torque: f64,
     pub converged: bool,
@@ -143,6 +144,16 @@ fn copy_scaled_soa_into(src: &VectorFieldSoA, scale_factor: f64, out: &mut Vecto
     }
 }
 
+fn fallback_bb_reset_step_size(
+    reset_consecutive: u64,
+    lambda_default: f64,
+    lambda_min: f64,
+    lambda_max: f64,
+) -> f64 {
+    let divisor = reset_consecutive.saturating_add(1).max(1) as f64;
+    (lambda_default / divisor).clamp(lambda_min, lambda_max)
+}
+
 // ---------------------------------------------------------------------------
 // Projected Gradient + Barzilai–Borwein
 // ---------------------------------------------------------------------------
@@ -179,7 +190,8 @@ fn execute_projected_gradient_bb_soa(
     problem.tangent_gradient_from_soa_field_into(&m, &h_eff, &mut g);
     let mut energy = problem.total_energy_from_soa_ws(&m, ws, &mut energy_scratch);
 
-    let mut lambda: f64 = 1e-6;
+    let lambda_default: f64 = 1e-6;
+    let mut lambda: f64 = lambda_default;
     let lambda_min: f64 = 1e-15;
     let lambda_max: f64 = 1e-3;
     let c_armijo: f64 = 1e-4;
@@ -188,10 +200,12 @@ fn execute_projected_gradient_bb_soa(
     let mut reset_consecutive: u64 = 0;
 
     let mut steps: u64 = 0;
+    let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
 
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
         if control
             .stop
@@ -203,8 +217,8 @@ fn execute_projected_gradient_bb_soa(
         }
 
         let mut trial_lambda = lambda;
-        let mut e_trial;
         let mut backtracks = 0u32;
+        let mut accepted_energy = None;
 
         let g_norm_sq = global_dot_soa(&g, &g);
         if g_norm_sq < 1e-30 {
@@ -214,15 +228,21 @@ fn execute_projected_gradient_bb_soa(
 
         loop {
             scaled_retraction_soa_into(&m, &g, -trial_lambda, &mut m_trial);
-            e_trial = problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
-            if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
-                || backtracks >= max_backtrack
-            {
+            let candidate_energy =
+                problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
+            if candidate_energy <= energy - c_armijo * trial_lambda * g_norm_sq {
+                accepted_energy = Some(candidate_energy);
+                break;
+            }
+            if backtracks >= max_backtrack {
                 break;
             }
             trial_lambda *= 0.5;
             backtracks += 1;
         }
+        let Some(e_trial) = accepted_energy else {
+            break;
+        };
 
         problem.effective_field_into_soa_ws(&m_trial, ws, &mut h_eff_new);
         problem.tangent_gradient_from_soa_field_into(&m_trial, &h_eff_new, &mut g_new);
@@ -268,7 +288,12 @@ fn execute_projected_gradient_bb_soa(
             reset_consecutive = 0;
         } else {
             reset_consecutive += 1;
-            lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
+            lambda = fallback_bb_reset_step_size(
+                reset_consecutive,
+                lambda_default,
+                lambda_min,
+                lambda_max,
+            );
         }
         use_bb1 = !use_bb1;
 
@@ -277,6 +302,7 @@ fn execute_projected_gradient_bb_soa(
         g.copy_from(&g_new);
         energy = e_trial;
         steps += 1;
+        pseudo_time_s += trial_lambda.max(0.0);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -298,6 +324,7 @@ fn execute_projected_gradient_bb_soa(
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
         steps_taken: steps,
+        pseudo_time_s,
         final_energy: energy,
         final_max_torque: final_torque,
         converged,
@@ -319,7 +346,8 @@ fn execute_projected_gradient_bb_aos(
     let mut energy = problem.total_energy_from_vectors_ws(&m, ws);
 
     // Initial step size
-    let mut lambda: f64 = 1e-6;
+    let lambda_default: f64 = 1e-6;
+    let mut lambda: f64 = lambda_default;
     let lambda_min: f64 = 1e-15;
     let lambda_max: f64 = 1e-3;
     let c_armijo: f64 = 1e-4; // sufficient decrease parameter
@@ -328,10 +356,12 @@ fn execute_projected_gradient_bb_aos(
     let mut reset_consecutive: u64 = 0; // Boris-style reset counter
 
     let mut steps: u64 = 0;
+    let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
 
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque(&m, &h_eff);
         if control
             .stop
@@ -344,9 +374,8 @@ fn execute_projected_gradient_bb_aos(
 
         // Take step: m_trial = normalize(m - λ g)
         let mut trial_lambda = lambda;
-        let mut m_trial;
-        let mut e_trial;
         let mut backtracks = 0u32;
+        let mut accepted_trial = None;
 
         // Descent direction directional derivative for Armijo: g · (-g) = -||g||²
         let g_norm_sq = global_dot(&g, &g);
@@ -356,23 +385,28 @@ fn execute_projected_gradient_bb_aos(
         }
 
         loop {
-            m_trial = (0..n)
+            let candidate_m = (0..n)
                 .map(|i| {
                     normalized(sub(m[i], scale(g[i], trial_lambda))).unwrap_or([0.0, 0.0, 0.0])
                 })
                 .collect::<Vec<_>>();
 
-            e_trial = problem.total_energy_from_vectors_ws(&m_trial, ws);
+            let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
 
             // Armijo sufficient decrease: E(trial) <= E(m) - c * λ * ||g||²
-            if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
-                || backtracks >= max_backtrack
-            {
+            if candidate_energy <= energy - c_armijo * trial_lambda * g_norm_sq {
+                accepted_trial = Some((candidate_m, candidate_energy));
+                break;
+            }
+            if backtracks >= max_backtrack {
                 break;
             }
             trial_lambda *= 0.5;
             backtracks += 1;
         }
+        let Some((m_trial, e_trial)) = accepted_trial else {
+            break;
+        };
 
         // Compute gradient at new point
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_trial, ws);
@@ -423,9 +457,13 @@ fn execute_projected_gradient_bb_aos(
         if bb_ok {
             reset_consecutive = 0;
         } else {
-            // Boris-style reset: progressively increase from lambda_min
             reset_consecutive += 1;
-            lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
+            lambda = fallback_bb_reset_step_size(
+                reset_consecutive,
+                lambda_default,
+                lambda_min,
+                lambda_max,
+            );
         }
         use_bb1 = !use_bb1;
 
@@ -435,6 +473,7 @@ fn execute_projected_gradient_bb_aos(
         g = g_new;
         energy = e_trial;
         steps += 1;
+        pseudo_time_s += trial_lambda.max(0.0);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -457,6 +496,7 @@ fn execute_projected_gradient_bb_aos(
     RelaxationResult {
         final_magnetization: m,
         steps_taken: steps,
+        pseudo_time_s,
         final_energy: energy,
         final_max_torque: final_torque,
         converged,
@@ -510,10 +550,12 @@ fn execute_nonlinear_cg_soa(
     let restart_interval: u64 = 50;
 
     let mut steps: u64 = 0;
+    let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
 
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
         if control
             .stop
@@ -541,18 +583,26 @@ fn execute_nonlinear_cg_soa(
             1e-6
         };
 
-        let mut e_new;
         let mut backtracks = 0u32;
+        let mut accepted_energy = None;
 
         loop {
             scaled_retraction_soa_into(&m, &p, lambda, &mut m_new);
-            e_new = problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
-            if e_new <= energy + c_armijo * lambda * p_dot_g || backtracks >= max_backtrack {
+            let candidate_energy =
+                problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
+            if candidate_energy <= energy + c_armijo * lambda * p_dot_g {
+                accepted_energy = Some(candidate_energy);
+                break;
+            }
+            if backtracks >= max_backtrack {
                 break;
             }
             lambda *= 0.5;
             backtracks += 1;
         }
+        let Some(e_new) = accepted_energy else {
+            break;
+        };
 
         problem.effective_field_into_soa_ws(&m_new, ws, &mut h_eff_new);
         problem.tangent_gradient_from_soa_field_into(&m_new, &h_eff_new, &mut g_new);
@@ -593,6 +643,7 @@ fn execute_nonlinear_cg_soa(
         p.copy_from(&p_new);
         energy = e_new;
         steps += 1;
+        pseudo_time_s += lambda.max(0.0);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -614,6 +665,7 @@ fn execute_nonlinear_cg_soa(
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
         steps_taken: steps,
+        pseudo_time_s,
         final_energy: energy,
         final_max_torque: final_torque,
         converged,
@@ -643,10 +695,12 @@ fn execute_nonlinear_cg_aos(
     let restart_interval: u64 = 50; // force CG restart every N steps
 
     let mut steps: u64 = 0;
+    let mut pseudo_time_s = 0.0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let max_pseudotime_s = control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY);
 
-    while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+    while steps < control.stop.max_steps.unwrap_or(u64::MAX) && pseudo_time_s < max_pseudotime_s {
         // Check convergence
         let max_torque = compute_max_torque(&m, &h_eff);
         if control
@@ -678,24 +732,30 @@ fn execute_nonlinear_cg_aos(
             1e-6
         };
 
-        let mut m_new;
-        let mut e_new;
         let mut backtracks = 0u32;
+        let mut accepted_trial = None;
 
         loop {
-            m_new = (0..n)
+            let candidate_m = (0..n)
                 .map(|i| normalized(add(m[i], scale(p[i], lambda))).unwrap_or([0.0, 0.0, 0.0]))
                 .collect::<Vec<_>>();
 
-            e_new = problem.total_energy_from_vectors_ws(&m_new, ws);
+            let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
 
             // Armijo condition
-            if e_new <= energy + c_armijo * lambda * p_dot_g || backtracks >= max_backtrack {
+            if candidate_energy <= energy + c_armijo * lambda * p_dot_g {
+                accepted_trial = Some((candidate_m, candidate_energy));
+                break;
+            }
+            if backtracks >= max_backtrack {
                 break;
             }
             lambda *= 0.5;
             backtracks += 1;
         }
+        let Some((m_new, e_new)) = accepted_trial else {
+            break;
+        };
 
         // New gradient at m_new
         let h_eff_new = problem.effective_field_from_vectors_ws(&m_new, ws);
@@ -746,6 +806,7 @@ fn execute_nonlinear_cg_aos(
         p = p_new;
         energy = e_new;
         steps += 1;
+        pseudo_time_s += lambda.max(0.0);
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -767,6 +828,7 @@ fn execute_nonlinear_cg_aos(
     RelaxationResult {
         final_magnetization: m,
         steps_taken: steps,
+        pseudo_time_s,
         final_energy: energy,
         final_max_torque: final_torque,
         converged,
@@ -844,6 +906,12 @@ mod tests {
         tolerance: f64,
     ) {
         assert_eq!(actual.steps_taken, expected.steps_taken);
+        assert!(
+            (actual.pseudo_time_s - expected.pseudo_time_s).abs() <= tolerance,
+            "pseudo-time differs: actual={}, expected={}",
+            actual.pseudo_time_s,
+            expected.pseudo_time_s
+        );
         assert_eq!(actual.converged, expected.converged);
         assert!(
             (actual.final_energy - expected.final_energy).abs() <= tolerance,
@@ -869,6 +937,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bb_curvature_fallback_resets_from_default_scale() {
+        assert_eq!(
+            fallback_bb_reset_step_size(0, 1.0e-6, 1.0e-15, 1.0e-3),
+            1.0e-6
+        );
+        assert_eq!(
+            fallback_bb_reset_step_size(1, 1.0e-6, 1.0e-15, 1.0e-3),
+            5.0e-7
+        );
+        assert_eq!(
+            fallback_bb_reset_step_size(3, 1.0e-6, 1.0e-15, 1.0e-3),
+            2.5e-7
+        );
     }
 
     #[test]
@@ -900,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn fem_relaxation_provenance_serializes_bootstrap_energy_minimizer() {
+    fn direct_minimizer_provenance_does_not_claim_backend_realization() {
         let control = control(Some(1e-4), Some(1e-18));
         let mut provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
@@ -921,10 +1005,7 @@ mod tests {
             value["resolved_energy_minimizer"],
             serde_json::json!("projected_gradient_bb")
         );
-        assert_eq!(
-            value["energy_minimizer_realization"],
-            serde_json::json!("bootstrap_snapshot_tangent_gradient")
-        );
+        assert!(value.get("energy_minimizer_realization").is_none());
         assert!(value.get("resolved_integrator").is_none());
     }
 

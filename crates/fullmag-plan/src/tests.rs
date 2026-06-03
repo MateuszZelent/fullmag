@@ -75,7 +75,9 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
 
     assert_eq!(target[3], [3.0, 13.0, 103.0]);
     assert_eq!(target[1], [1.0, 11.0, 101.0]);
-    assert_eq!(target[0], [0.0, 0.0, 0.0]);
+    assert_eq!(target[0], [0.0, 10.0, 100.0]);
+    assert_eq!(target[2], [2.0, 12.0, 102.0]);
+    assert_eq!(target[4], [0.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -155,7 +157,14 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
     assert!((target[2][1] - 1.0).abs() <= 1e-12);
     assert!((target[0][0] + 1.0).abs() <= 1e-12);
     assert!(target[0][1].abs() <= 1e-12);
-    assert_eq!(target[1], [0.0, 0.0, 0.0]);
+    assert!(
+        target[1].iter().map(|v| v * v).sum::<f64>() > 0.99,
+        "element-neighbor node 1 must receive an initial texture value"
+    );
+    assert!(
+        target[3].iter().map(|v| v * v).sum::<f64>() > 0.99,
+        "element-neighbor node 3 must receive an initial texture value"
+    );
 }
 
 #[test]
@@ -2947,7 +2956,39 @@ fn nonlinear_cg_is_now_plannable() {
 }
 
 #[test]
-fn tangent_plane_implicit_is_still_gated() {
+fn tangent_plane_implicit_is_now_plannable_for_fem() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.study = fullmag_ir::StudyIR::Relaxation {
+        algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+        dynamics: ir.study.dynamics().clone(),
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: Some(1e-3),
+            energy_tolerance_j: None,
+            max_steps: Some(250),
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let plan = plan(&ir).expect("tangent_plane_implicit should now plan on FEM");
+    match plan.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            let control = fem.relaxation.expect("relaxation control");
+            assert_eq!(
+                control.algorithm,
+                fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+            );
+            assert_eq!(control.stop.max_steps, Some(250));
+        }
+        _ => panic!("expected FEM plan"),
+    }
+}
+
+#[test]
+fn tangent_plane_implicit_is_rejected_for_fdm() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
@@ -2962,9 +3003,11 @@ fn tangent_plane_implicit_is_still_gated() {
         sampling: ir.study.sampling().clone(),
     };
 
-    let err = plan(&ir).expect_err("tangent_plane_implicit should not be executable yet");
+    let err = plan(&ir).expect_err("tangent_plane_implicit should be FEM-only");
     assert!(err.reasons.iter().any(|reason| {
-        reason.contains("tangent_plane_implicit") && reason.contains("not yet executable")
+        reason.contains("tangent_plane_implicit")
+            && reason.contains("FEM-only")
+            && reason.contains("backend='fem'")
     }));
 }
 

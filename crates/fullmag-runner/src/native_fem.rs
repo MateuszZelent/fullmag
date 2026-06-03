@@ -65,6 +65,149 @@ const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
 
 #[cfg(feature = "fem-gpu")]
+fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
+    if slice.is_empty() {
+        std::ptr::null()
+    } else {
+        slice.as_ptr()
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn assign_runtime_marker_range(
+    markers: &mut [Option<u32>],
+    start: usize,
+    count: usize,
+    marker: u32,
+    source: &str,
+) -> Result<usize, RunError> {
+    let end = start.checked_add(count).ok_or_else(|| RunError {
+        message: format!("invalid native FEM marker range from {source}: range overflows"),
+    })?;
+    if end > markers.len() {
+        return Err(RunError {
+            message: format!(
+                "invalid native FEM marker range from {source}: element range {}..{} exceeds mesh element count {}",
+                start,
+                end,
+                markers.len()
+            ),
+        });
+    }
+
+    let mut newly_assigned = 0usize;
+    for (offset, slot) in markers[start..end].iter_mut().enumerate() {
+        match *slot {
+            Some(existing) if existing != marker => {
+                return Err(RunError {
+                    message: format!(
+                        "conflicting native FEM marker inference at element {}: {} vs {} from {}",
+                        start + offset,
+                        existing,
+                        marker,
+                        source
+                    ),
+                });
+            }
+            Some(_) => {}
+            None => {
+                *slot = Some(marker);
+                newly_assigned += 1;
+            }
+        }
+    }
+    Ok(newly_assigned)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn infer_native_runtime_element_markers(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Option<Vec<u32>>, RunError> {
+    if !plan.mesh.element_markers.is_empty() {
+        return Ok(None);
+    }
+
+    let element_count = plan.mesh.elements.len();
+    if element_count == 0 {
+        return Ok(Some(Vec::new()));
+    }
+
+    let mut inferred = vec![None; element_count];
+    let mut assigned = 0usize;
+
+    for segment in &plan.object_segments {
+        if segment.element_count == 0 {
+            continue;
+        }
+        let marker = if segment.object_id == "__air__" { 0 } else { 1 };
+        assigned += assign_runtime_marker_range(
+            &mut inferred,
+            segment.element_start as usize,
+            segment.element_count as usize,
+            marker,
+            &format!("object_segment '{}'", segment.object_id),
+        )?;
+    }
+
+    for part in &plan.mesh_parts {
+        let marker = match part.role {
+            fullmag_ir::FemMeshPartRole::MagneticObject => 1,
+            fullmag_ir::FemMeshPartRole::Air => 0,
+            _ => continue,
+        };
+        match &part.element_selector {
+            fullmag_ir::FemMeshPartSelector::ElementRange { start, count } => {
+                assigned += assign_runtime_marker_range(
+                    &mut inferred,
+                    *start as usize,
+                    *count as usize,
+                    marker,
+                    &format!("mesh_part '{}'", part.id),
+                )?;
+            }
+            fullmag_ir::FemMeshPartSelector::ElementMarkerSet { .. } => {
+                return Err(RunError {
+                    message: format!(
+                        "cannot infer native FEM runtime markers for mesh_part '{}' from ElementMarkerSet because mesh.element_markers is empty",
+                        part.id
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if assigned == 0 {
+        if plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Err(RunError {
+                message:
+                    "native FEM shared-domain airbox plan has empty element_markers and no element-range mesh_parts/object_segments"
+                        .to_string(),
+            });
+        }
+        return Ok(None);
+    }
+
+    if let Some(unassigned) = inferred.iter().position(|marker| marker.is_none()) {
+        if plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Err(RunError {
+                message: format!(
+                    "cannot infer complete native FEM runtime markers: mesh_parts/object_segments leave element {} unclassified in shared-domain airbox mesh",
+                    unassigned
+                ),
+            });
+        }
+    }
+
+    Ok(Some(
+        inferred
+            .into_iter()
+            .map(|marker| marker.unwrap_or(1))
+            .collect(),
+    ))
+}
+
+#[cfg(feature = "fem-gpu")]
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
@@ -160,6 +303,16 @@ fn set_env_if_missing(key: &str, value: impl AsRef<std::ffi::OsStr>) {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn configure_openmpi_loopback_oob_if_missing() {
+    set_env_if_missing("OMPI_MCA_oob", "tcp");
+    if std::env::var_os("OMPI_MCA_oob_tcp_if_include").is_none()
+        && std::env::var_os("OMPI_MCA_oob_tcp_if_exclude").is_none()
+    {
+        std::env::set_var("OMPI_MCA_oob_tcp_if_include", "lo");
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn configure_managed_openmpi_environment() {
     let Some(runtime_root) = managed_fem_runtime_root() else {
         return;
@@ -175,15 +328,28 @@ fn configure_managed_openmpi_environment() {
             openmpi_root.join("lib/openmpi3"),
         );
         set_env_if_missing("OMPI_MCA_orte_launch_agent", openmpi_root.join("bin/orted"));
+        set_env_if_missing("OMPI_MCA_ess", "singleton");
+        set_env_if_missing("OMPI_MCA_plm", "isolated");
+        set_env_if_missing("OMPI_MCA_pmix", "isolated");
+        set_env_if_missing("OMPI_MCA_ras", "simulator");
+        set_env_if_missing("OMPI_MCA_rmaps", "seq");
+        set_env_if_missing("OMPI_MCA_routed", "direct");
         set_env_if_missing("OMPI_MCA_reachable", "weighted");
         set_env_if_missing("OMPI_MCA_mca_base_component_show_load_errors", "0");
         set_env_if_missing("OMPI_MCA_btl", "self");
-        set_env_if_missing("OMPI_MCA_oob", "^tcp");
+        configure_openmpi_loopback_oob_if_missing();
     }
     let pmix_root = runtime_root.join("lib/pmix2");
     if pmix_root.join("share/pmix/help-pmix-runtime.txt").is_file() {
         set_env_if_missing("PMIX_PREFIX", &pmix_root);
         set_env_if_missing("PMIX_EXEC_PREFIX", &pmix_root);
+        set_env_if_missing("PMIX_DATADIR", pmix_root.join("share"));
+        set_env_if_missing("PMIX_PKGDATADIR", pmix_root.join("share/pmix"));
+        set_env_if_missing("PMIX_LIBDIR", pmix_root.join("lib"));
+        set_env_if_missing(
+            "PMIX_MCA_mca_base_component_path",
+            pmix_root.join("lib/pmix"),
+        );
         set_env_if_missing("PMIX_MCA_pcompress_base_silence_warning", "1");
     }
 }
@@ -211,6 +377,18 @@ impl NativeFemBackend {
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
         configure_managed_openmpi_environment();
+        let inferred_element_markers = infer_native_runtime_element_markers(plan)?;
+        let runtime_plan;
+        let plan = if let Some(element_markers) = inferred_element_markers {
+            runtime_plan = {
+                let mut runtime_plan = plan.clone();
+                runtime_plan.mesh.element_markers = element_markers;
+                runtime_plan
+            };
+            &runtime_plan
+        } else {
+            plan
+        };
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
@@ -268,17 +446,15 @@ impl NativeFemBackend {
             n_nodes: plan.mesh.nodes.len() as u32,
             elements: elements_flat.as_ptr(),
             n_elements: plan.mesh.elements.len() as u32,
-            element_markers: plan.mesh.element_markers.as_ptr(),
-            boundary_faces: boundary_flat.as_ptr(),
+            element_markers: optional_slice_ptr(&plan.mesh.element_markers),
+            boundary_faces: optional_slice_ptr(&boundary_flat),
             n_boundary_faces: plan.mesh.boundary_faces.len() as u32,
-            boundary_markers: plan.mesh.boundary_markers.as_ptr(),
-            periodic_node_pairs: periodic_pairs_flat.as_ptr(),
+            boundary_markers: optional_slice_ptr(&plan.mesh.boundary_markers),
+            periodic_node_pairs: optional_slice_ptr(&periodic_pairs_flat),
             n_periodic_node_pairs: plan.mesh.periodic_node_pairs.len() as u32,
-            periodic_boundary_pair_markers: if periodic_boundary_pair_markers_flat.is_empty() {
-                std::ptr::null()
-            } else {
-                periodic_boundary_pair_markers_flat.as_ptr()
-            },
+            periodic_boundary_pair_markers: optional_slice_ptr(
+                &periodic_boundary_pair_markers_flat,
+            ),
             periodic_boundary_pair_count: plan.mesh.periodic_boundary_pairs.len() as u32,
         };
 
@@ -1534,10 +1710,33 @@ mod tests {
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
         AdaptiveTimeStepIR, AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision,
-        FemPlanIR, IntegratorChoice, MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR,
-        MeshPeriodicNodePairIR, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR,
-        ResolvedFemDemagIR,
+        FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice,
+        MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR,
+        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFemDemagIR,
     };
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn make_test_plan() -> FemPlanIR {
         FemPlanIR {
@@ -1642,6 +1841,64 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn native_runtime_markers_infer_airbox_ranges_when_element_markers_are_empty() {
+        let mut plan = make_test_plan();
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.element_markers.clear();
+        plan.object_segments.clear();
+        plan.mesh_parts = vec![
+            FemMeshPartIR {
+                id: "part:magnet".to_string(),
+                label: "magnet".to_string(),
+                role: FemMeshPartRole::MagneticObject,
+                object_id: Some("magnet".to_string()),
+                geometry_id: Some("magnet_geom".to_string()),
+                material_id: None,
+                element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+                boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                    start: 0,
+                    count: 0,
+                },
+                node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 4 },
+                boundary_face_indices: Vec::new(),
+                node_indices: Vec::new(),
+                surface_faces: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+                parent_id: None,
+            },
+            FemMeshPartIR {
+                id: "part:air".to_string(),
+                label: "Airbox".to_string(),
+                role: FemMeshPartRole::Air,
+                object_id: None,
+                geometry_id: None,
+                material_id: None,
+                element_selector: FemMeshPartSelector::ElementRange { start: 1, count: 1 },
+                boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                    start: 0,
+                    count: 0,
+                },
+                node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 4 },
+                boundary_face_indices: Vec::new(),
+                node_indices: Vec::new(),
+                surface_faces: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+                parent_id: None,
+            },
+        ];
+
+        let markers = infer_native_runtime_element_markers(&plan)
+            .expect("native marker inference should succeed")
+            .expect("shared-domain marker inference should return explicit markers");
+
+        assert_eq!(markers, vec![1, 0]);
     }
 
     #[test]
@@ -1763,6 +2020,531 @@ mod tests {
                     1e-12,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn native_fem_forced_hypre_relax_step_returns_controlled_result_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM forced-Hypre relaxation test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        let _direct_solver_guard = EnvVarGuard::set(
+            "FULLMAG_FEM_DIRECT_MINIMIZER_PRECONDITIONER_SOLVER",
+            "hypre",
+        );
+        let _tpi_solver_guard = EnvVarGuard::set("FULLMAG_FEM_TPI_LINEAR_SOLVER", "hypre");
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM forced-Hypre relaxation create");
+            match backend.relax_step(algorithm, plan.mesh.nodes.len()) {
+                Ok(Some(stats)) => {
+                    assert_eq!(
+                        stats.step, 1,
+                        "{algorithm:?} forced-Hypre must publish one accepted step when Hypre is available"
+                    );
+                    assert!(
+                        stats.e_total.is_finite(),
+                        "{algorithm:?} forced-Hypre total energy must be finite"
+                    );
+                }
+                Ok(None) => panic!("{algorithm:?} forced-Hypre relaxation was interrupted"),
+                Err(error) => {
+                    assert!(
+                        error
+                            .message
+                            .contains("OpenMPI singleton socket support"),
+                        "{algorithm:?} forced-Hypre must return a controlled OpenMPI preflight error, got: {}",
+                        error.message
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_fem_cpu_relax_step_publishes_max_steps_completion_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM direct-minimizer completion create");
+            let stats = backend
+                .relax_step(algorithm, plan.mesh.nodes.len())
+                .expect("native FEM direct-minimizer completion step")
+                .expect("native FEM direct-minimizer completion step should not be interrupted");
+            let completion = backend
+                .stage_completion()
+                .expect("native FEM direct-minimizer stage completion")
+                .expect("native FEM direct minimizer must publish completion after max_steps");
+
+            assert_eq!(
+                stats.step, 1,
+                "{algorithm:?} must publish one accepted step"
+            );
+            assert_eq!(
+                completion.reason,
+                Some(fullmag_ir::StageStopReason::MaxSteps),
+                "{algorithm:?} completion reason"
+            );
+            assert_eq!(
+                completion.metric_name.as_deref(),
+                Some("steps"),
+                "{algorithm:?} completion metric"
+            );
+            assert_eq!(
+                completion.metric_value,
+                Some(1.0),
+                "{algorithm:?} completion metric value"
+            );
+            assert_eq!(
+                completion.threshold,
+                Some(1.0),
+                "{algorithm:?} completion threshold"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_cpu_relax_step_reports_initial_torque_completion_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer initial torque completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.external_field = Some([0.0, 0.0, 2.0e5]);
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e30),
+                    energy_tolerance_j: None,
+                    max_steps: Some(5),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM direct-minimizer initial torque completion create");
+            let stats = backend
+                .relax_step(algorithm, plan.mesh.nodes.len())
+                .expect("native FEM direct-minimizer initial torque completion step")
+                .expect("native FEM direct-minimizer initial torque completion step should not be interrupted");
+            let completion = backend
+                .stage_completion()
+                .expect("native FEM direct-minimizer initial torque stage completion")
+                .expect("native FEM direct minimizer must publish initial torque completion");
+
+            assert_eq!(
+                stats.step, 0,
+                "{algorithm:?} initial torque completion must not publish a fake accepted step"
+            );
+            assert_eq!(
+                completion.reason,
+                Some(fullmag_ir::StageStopReason::Torque),
+                "{algorithm:?} completion reason"
+            );
+            assert_eq!(
+                completion.metric_name.as_deref(),
+                Some("max_torque_Apm"),
+                "{algorithm:?} torque metric"
+            );
+            assert!(
+                completion.metric_value.unwrap_or(f64::INFINITY)
+                    <= completion.threshold.unwrap_or(f64::NEG_INFINITY),
+                "{algorithm:?} torque metric must satisfy threshold: {:?}",
+                completion
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_cpu_relax_step_reports_gradient_completion_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer gradient completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.external_field = None;
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(5),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM direct-minimizer gradient completion create");
+            let stats = backend
+                .relax_step(algorithm, plan.mesh.nodes.len())
+                .expect("native FEM direct-minimizer gradient completion step")
+                .expect("native FEM direct-minimizer gradient completion step should not be interrupted");
+            let completion = backend
+                .stage_completion()
+                .expect("native FEM direct-minimizer gradient stage completion")
+                .expect("native FEM direct minimizer must publish gradient completion");
+
+            assert_eq!(
+                stats.step, 0,
+                "{algorithm:?} gradient completion must not publish a fake accepted step"
+            );
+            assert_eq!(
+                completion.reason,
+                Some(fullmag_ir::StageStopReason::Gradient),
+                "{algorithm:?} completion reason"
+            );
+            assert_eq!(
+                completion.metric_name.as_deref(),
+                Some("tangent_gradient_norm_sq"),
+                "{algorithm:?} gradient metric"
+            );
+            assert!(
+                completion.metric_value.unwrap_or(f64::INFINITY)
+                    <= completion.threshold.unwrap_or(f64::NEG_INFINITY),
+                "{algorithm:?} gradient metric must satisfy threshold: {:?}",
+                completion
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_tpi_advances_with_local_anisotropy_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM TPI anisotropy test: CPU MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.initial_magnetization = vec![[0.6, 0.0, 0.8]; plan.mesh.nodes.len()];
+        plan.external_field = Some([0.0, 0.0, 0.0]);
+        plan.material.uniaxial_anisotropy = Some(5.0e4);
+        plan.material.uniaxial_anisotropy_k2 = Some(1.0e4);
+        plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        plan.material.cubic_anisotropy_kc1 = Some(100.0);
+        plan.material.cubic_anisotropy_kc2 = Some(10.0);
+        plan.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+        plan.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+            .expect("native FEM TPI anisotropy create");
+        let initial_stats = backend
+            .snapshot_step_stats(plan.mesh.nodes.len())
+            .expect("initial native FEM TPI anisotropy stats");
+        let stats = backend
+            .relax_step(
+                RelaxationAlgorithmIR::TangentPlaneImplicit,
+                plan.mesh.nodes.len(),
+            )
+            .expect("native FEM TPI anisotropy step")
+            .expect("native FEM TPI anisotropy step should not be interrupted");
+        let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+        assert_eq!(
+            stats.step, 1,
+            "TPI anisotropy must publish one accepted step"
+        );
+        assert!(stats.dt.is_finite(), "TPI anisotropy dt must be finite");
+        assert!(
+            stats.e_ani.is_finite(),
+            "TPI anisotropy energy must be finite"
+        );
+        assert!(
+            stats.e_ani.abs() > 0.0,
+            "active local anisotropy must contribute a non-zero energy"
+        );
+        assert!(
+            stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+            "TPI anisotropy must not increase energy beyond tolerance: initial={} final={}",
+            initial_stats.e_total,
+            stats.e_total
+        );
+        for (node, m) in magnetization.iter().enumerate() {
+            let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            assert_scalar_close(
+                &format!("TPI anisotropy.m_norm[{node}]"),
+                norm,
+                1.0,
+                5e-12,
+                1e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_tpi_advances_with_zeeman_curvature_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM TPI Zeeman test: CPU MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        plan.external_field = Some([0.0, 0.0, 2.0e5]);
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+            .expect("native FEM TPI Zeeman create");
+        let initial_stats = backend
+            .snapshot_step_stats(plan.mesh.nodes.len())
+            .expect("initial native FEM TPI Zeeman stats");
+        let stats = backend
+            .relax_step(
+                RelaxationAlgorithmIR::TangentPlaneImplicit,
+                plan.mesh.nodes.len(),
+            )
+            .expect("native FEM TPI Zeeman step")
+            .expect("native FEM TPI Zeeman step should not be interrupted");
+        let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+        assert_eq!(stats.step, 1, "TPI Zeeman must publish one accepted step");
+        assert!(stats.dt.is_finite(), "TPI Zeeman dt must be finite");
+        assert!(stats.e_ext.is_finite(), "TPI Zeeman energy must be finite");
+        assert!(
+            stats.e_ext < initial_stats.e_ext,
+            "TPI Zeeman must reduce external-field energy: initial={} final={}",
+            initial_stats.e_ext,
+            stats.e_ext
+        );
+        assert!(
+            stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+            "TPI Zeeman must not increase total energy beyond tolerance: initial={} final={}",
+            initial_stats.e_total,
+            stats.e_total
+        );
+        for (node, m) in magnetization.iter().enumerate() {
+            let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            assert_scalar_close(
+                &format!("TPI Zeeman.m_norm[{node}]"),
+                norm,
+                1.0,
+                5e-12,
+                1e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_tpi_advances_with_dmi_operator_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM TPI DMI test: CPU MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.external_field = Some([0.0, 0.0, 0.0]);
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        ];
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.dmi_interface_normal = Some([0.0, 0.0, 1.0]);
+        plan.bulk_dmi = Some(2.0e-3);
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+            .expect("native FEM TPI DMI create");
+        let initial_stats = backend
+            .snapshot_step_stats(plan.mesh.nodes.len())
+            .expect("initial native FEM TPI DMI stats");
+        let stats = backend
+            .relax_step(
+                RelaxationAlgorithmIR::TangentPlaneImplicit,
+                plan.mesh.nodes.len(),
+            )
+            .expect("native FEM TPI DMI step")
+            .expect("native FEM TPI DMI step should not be interrupted");
+        let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+        assert_eq!(stats.step, 1, "TPI DMI must publish one accepted step");
+        assert!(stats.dt.is_finite(), "TPI DMI dt must be finite");
+        assert!(stats.e_dmi.is_finite(), "TPI DMI energy must be finite");
+        assert!(
+            stats.e_dmi.abs() > 0.0,
+            "active DMI must contribute a non-zero energy"
+        );
+        assert!(
+            stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+            "TPI DMI must not increase total energy beyond tolerance: initial={} final={}",
+            initial_stats.e_total,
+            stats.e_total
+        );
+        for (node, m) in magnetization.iter().enumerate() {
+            let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            assert_scalar_close(&format!("TPI DMI.m_norm[{node}]"), norm, 1.0, 5e-12, 1e-12);
+        }
+    }
+
+    #[test]
+    fn native_fem_tpi_advances_with_demag_operator_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!("skipping native FEM TPI demag test: CPU MFEM stack unavailable");
+            return;
+        }
+
+        let mut plan = make_test_plan();
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.external_field = Some([0.0, 0.0, 0.0]);
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        ];
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        plan.air_box_config = None;
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh;
+        plan.mesh.boundary_faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        plan.mesh.boundary_markers = vec![1, 1, 1, 1];
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::TangentPlaneImplicit,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+            .expect("native FEM TPI demag create");
+        let initial_stats = backend
+            .snapshot_step_stats(plan.mesh.nodes.len())
+            .expect("initial native FEM TPI demag stats");
+        let stats = backend
+            .relax_step(
+                RelaxationAlgorithmIR::TangentPlaneImplicit,
+                plan.mesh.nodes.len(),
+            )
+            .expect("native FEM TPI demag step")
+            .expect("native FEM TPI demag step should not be interrupted");
+        let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+        assert_eq!(stats.step, 1, "TPI demag must publish one accepted step");
+        assert!(stats.dt.is_finite(), "TPI demag dt must be finite");
+        assert!(stats.e_demag.is_finite(), "TPI demag energy must be finite");
+        assert!(
+            stats.e_demag.abs() > 0.0,
+            "active demag must contribute a non-zero energy"
+        );
+        assert!(
+            stats.demag_solves > 0,
+            "accepted TPI demag step must perform native demag solves"
+        );
+        assert!(
+            stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+            "TPI demag must not increase total energy beyond tolerance: initial={} final={}",
+            initial_stats.e_total,
+            stats.e_total
+        );
+        for (node, m) in magnetization.iter().enumerate() {
+            let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            assert_scalar_close(
+                &format!("TPI demag.m_norm[{node}]"),
+                norm,
+                1.0,
+                5e-12,
+                1e-12,
+            );
         }
     }
 
@@ -2296,6 +3078,44 @@ mod tests {
         }
     }
 
+    struct NativeParityRelaxStep {
+        initial_stats: StepStats,
+        m: Vec<[f64; 3]>,
+        h_eff: Vec<[f64; 3]>,
+        stats: StepStats,
+        completion: fullmag_ir::StageCompletionIR,
+        device_name: String,
+    }
+
+    fn run_native_parity_relax_step(
+        plan: &FemPlanIR,
+        algorithm: RelaxationAlgorithmIR,
+    ) -> NativeParityRelaxStep {
+        let mut backend = NativeFemBackend::create_with_initial_effective_field(plan, true)
+            .expect("native fem relaxation parity create");
+        let node_count = plan.mesh.nodes.len();
+        let initial_stats = backend
+            .snapshot_step_stats(node_count)
+            .expect("native fem relaxation parity initial stats");
+        let stats = backend
+            .relax_step(algorithm, node_count)
+            .expect("native fem relaxation parity step")
+            .expect("native fem relaxation parity step should not be interrupted");
+        let completion = backend
+            .stage_completion()
+            .expect("native fem relaxation parity stage completion")
+            .expect("native fem relaxation parity must publish stage completion");
+        let device_name = backend.device_info().expect("device info").name;
+        NativeParityRelaxStep {
+            initial_stats,
+            m: backend.copy_m(node_count).expect("copy m"),
+            h_eff: backend.copy_h_eff(node_count).expect("copy H_eff"),
+            stats,
+            completion,
+            device_name,
+        }
+    }
+
     fn assert_same_parity_mesh(cpu_plan: &FemPlanIR, gpu_plan: &FemPlanIR) {
         assert_eq!(cpu_plan.mesh.mesh_name, gpu_plan.mesh.mesh_name);
         assert_eq!(cpu_plan.mesh.nodes, gpu_plan.mesh.nodes);
@@ -2806,6 +3626,118 @@ mod tests {
                 "RHS evaluation count mismatch for {integrator:?}"
             );
         }
+    }
+
+    #[test]
+    fn native_fem_gpu_projected_gradient_bb_relax_step_when_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+        let cpu =
+            run_native_parity_relax_step(&cpu_plan, RelaxationAlgorithmIR::ProjectedGradientBb);
+        let gpu =
+            run_native_parity_relax_step(&gpu_plan, RelaxationAlgorithmIR::ProjectedGradientBb);
+
+        assert!(
+            cpu.device_name.contains("cpu") || cpu.device_name.contains("mfem"),
+            "CPU relaxation provenance device was {}",
+            cpu.device_name
+        );
+        assert!(
+            gpu.device_name.contains("cuda")
+                || gpu.device_name.contains("NVIDIA")
+                || gpu.device_name.contains("GeForce")
+                || gpu.device_name.contains("RTX"),
+            "GPU relaxation provenance device was {}",
+            gpu.device_name
+        );
+
+        for (label, run) in [("cpu", &cpu), ("gpu", &gpu)] {
+            assert_eq!(
+                run.stats.step, 1,
+                "{label} PG-BB must publish one accepted step"
+            );
+            assert!(run.stats.dt.is_finite(), "{label} PG-BB dt must be finite");
+            assert!(run.stats.dt > 0.0, "{label} PG-BB dt must be positive");
+            assert!(
+                run.stats.e_total.is_finite(),
+                "{label} PG-BB total energy must be finite"
+            );
+            assert!(
+                run.stats.e_total
+                    <= run.initial_stats.e_total + run.initial_stats.e_total.abs() * 1e-8 + 1e-24,
+                "{label} PG-BB must not increase energy beyond tolerance: initial={} final={}",
+                run.initial_stats.e_total,
+                run.stats.e_total
+            );
+            assert_eq!(
+                run.completion.reason,
+                Some(fullmag_ir::StageStopReason::MaxSteps),
+                "{label} PG-BB completion reason"
+            );
+            assert_eq!(
+                run.completion.metric_name.as_deref(),
+                Some("steps"),
+                "{label} PG-BB completion metric"
+            );
+            assert_eq!(
+                run.completion.metric_value,
+                Some(1.0),
+                "{label} PG-BB completion metric value"
+            );
+            assert_eq!(
+                run.completion.threshold,
+                Some(1.0),
+                "{label} PG-BB completion threshold"
+            );
+            for (node, m) in run.m.iter().enumerate() {
+                let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+                assert_scalar_close(
+                    &format!("{label}.PG-BB.m_norm[{node}]"),
+                    norm,
+                    1.0,
+                    5e-12,
+                    1e-12,
+                );
+            }
+            for (node, h_eff) in run.h_eff.iter().enumerate() {
+                for (component, value) in h_eff.iter().enumerate() {
+                    assert!(
+                        value.is_finite(),
+                        "{label}.PG-BB.H_eff[{node}][{component}] must be finite"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            gpu.stats.hot_loop_host_sync_count > 0,
+            "GPU PG-BB must expose audited host sync while Armijo/BB decisions remain host-driven"
+        );
+        assert_eq!(
+            gpu.stats.hot_loop_exchange_host_sync_count, 0,
+            "GPU PG-BB must not perform exchange host sync inside the native relaxation hot loop"
+        );
+        assert!(
+            gpu.stats.hot_loop_compute_host_sync_count > 0,
+            "GPU PG-BB host sync must be classified as compute-side readback"
+        );
     }
 
     #[test]
@@ -3575,6 +4507,28 @@ mod tests {
             expected_report.max_rhs_amplitude,
             5e-8,
             1e-9,
+        );
+    }
+
+    #[test]
+    fn managed_openmpi_defaults_use_isolated_single_rank_launch() {
+        let source = include_str!("native_fem.rs");
+
+        assert!(
+            source.contains("set_env_if_missing(\"OMPI_MCA_ess\", \"singleton\")")
+                && source.contains("set_env_if_missing(\"OMPI_MCA_plm\", \"isolated\")")
+                && source.contains("set_env_if_missing(\"OMPI_MCA_pmix\", \"isolated\")"),
+            "managed native FEM OpenMPI setup must use singleton/isolated launch components"
+        );
+        assert!(
+            source.contains("set_env_if_missing(\"OMPI_MCA_ras\", \"simulator\")")
+                && source.contains("set_env_if_missing(\"OMPI_MCA_rmaps\", \"seq\")")
+                && source.contains("set_env_if_missing(\"OMPI_MCA_routed\", \"direct\")"),
+            "managed native FEM OpenMPI setup must avoid distributed host discovery for single-rank runs"
+        );
+        assert!(
+            source.contains("configure_openmpi_loopback_oob_if_missing()"),
+            "managed native FEM OpenMPI setup must retain loopback OOB fallback"
         );
     }
 

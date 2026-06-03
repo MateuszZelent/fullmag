@@ -12,7 +12,7 @@
 
 use fullmag_ir::{
     BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR, FemMeshPartSelector, FemPlanIR,
-    OutputIR, ProblemIR,
+    OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
@@ -348,6 +348,127 @@ fn markers_from_element_selector(
     }
 }
 
+fn assign_runtime_marker_range(
+    markers: &mut [Option<u32>],
+    start: usize,
+    count: usize,
+    marker: u32,
+    source: &str,
+) -> Result<usize, RunError> {
+    let end = start.checked_add(count).ok_or_else(|| RunError {
+        message: format!("invalid FEM mesh_parts range from {source}: element range overflows"),
+    })?;
+    if end > markers.len() {
+        return Err(RunError {
+            message: format!(
+                "invalid FEM mesh_parts range from {source}: element range {}..{} exceeds mesh element count {}",
+                start,
+                end,
+                markers.len()
+            ),
+        });
+    }
+
+    let mut newly_assigned = 0usize;
+    for (offset, slot) in markers[start..end].iter_mut().enumerate() {
+        match *slot {
+            Some(existing) if existing != marker => {
+                return Err(RunError {
+                    message: format!(
+                        "conflicting FEM runtime magnetic marker inference at element {}: {} vs {} from {}",
+                        start + offset,
+                        existing,
+                        marker,
+                        source
+                    ),
+                });
+            }
+            Some(_) => {}
+            None => {
+                *slot = Some(marker);
+                newly_assigned += 1;
+            }
+        }
+    }
+    Ok(newly_assigned)
+}
+
+fn inferred_runtime_markers_without_element_markers(
+    plan: &FemPlanIR,
+) -> Result<Option<Vec<u32>>, RunError> {
+    let element_count = plan.mesh.elements.len();
+    if element_count == 0 {
+        return Ok(Some(Vec::new()));
+    }
+
+    let mut inferred = vec![None; element_count];
+    let mut assigned = 0usize;
+
+    for segment in &plan.object_segments {
+        if segment.element_count == 0 {
+            continue;
+        }
+        let marker = if segment.object_id == "__air__" { 0 } else { 1 };
+        assigned += assign_runtime_marker_range(
+            &mut inferred,
+            segment.element_start as usize,
+            segment.element_count as usize,
+            marker,
+            &format!("object_segment '{}'", segment.object_id),
+        )?;
+    }
+
+    for part in &plan.mesh_parts {
+        let marker = match part.role {
+            fullmag_ir::FemMeshPartRole::MagneticObject => 1,
+            fullmag_ir::FemMeshPartRole::Air => 0,
+            _ => continue,
+        };
+        match &part.element_selector {
+            FemMeshPartSelector::ElementRange { start, count } => {
+                assigned += assign_runtime_marker_range(
+                    &mut inferred,
+                    *start as usize,
+                    *count as usize,
+                    marker,
+                    &format!("mesh_part '{}'", part.id),
+                )?;
+            }
+            FemMeshPartSelector::ElementMarkerSet { .. } => {
+                return Err(RunError {
+                    message: format!(
+                        "cannot infer FEM runtime magnetic markers for mesh_part '{}' from ElementMarkerSet because mesh.element_markers is empty",
+                        part.id
+                    ),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if assigned == 0 {
+        return Ok(None);
+    }
+
+    if let Some(unassigned) = inferred.iter().position(|marker| marker.is_none()) {
+        if plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
+            return Err(RunError {
+                message: format!(
+                    "cannot infer complete FEM runtime magnetic markers: mesh_parts/object_segments leave element {} unclassified in shared-domain airbox mesh",
+                    unassigned
+                ),
+            });
+        }
+    }
+
+    Ok(Some(
+        inferred
+            .into_iter()
+            .map(|marker| marker.unwrap_or(1))
+            .collect(),
+    ))
+}
+
 fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
     if plan.mesh.element_markers.is_empty() {
         return BTreeSet::new();
@@ -368,7 +489,7 @@ fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
 fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
     let markers = &plan.mesh.element_markers;
     if markers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(inferred_runtime_markers_without_element_markers(plan)?.unwrap_or_default());
     }
 
     let distinct_nonzero = markers
@@ -455,7 +576,66 @@ fn normalized_fem_plan_for_runtime(plan: &FemPlanIR) -> Result<FemPlanIR, RunErr
     let normalized_markers = normalized_runtime_element_markers(plan)?;
     let mut normalized = plan.clone();
     normalized.mesh.element_markers = normalized_markers;
+    validate_runtime_initial_magnetization(&normalized)?;
     Ok(normalized)
+}
+
+fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunError> {
+    let node_count = plan.mesh.nodes.len();
+    if plan.initial_magnetization.len() != node_count {
+        return Err(RunError {
+            message: format!(
+                "invalid FEM plan: initial_magnetization has {} vectors but mesh has {} nodes",
+                plan.initial_magnetization.len(),
+                node_count
+            ),
+        });
+    }
+
+    let mut active_nodes = vec![plan.mesh.element_markers.is_empty(); node_count];
+    for (element_index, element) in plan.mesh.elements.iter().enumerate() {
+        let marker = plan
+            .mesh
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1);
+        if marker == 0 {
+            continue;
+        }
+        for node in element {
+            let node = *node as usize;
+            if node >= node_count {
+                return Err(RunError {
+                    message: format!(
+                        "invalid FEM plan: element {} references node {} outside mesh node count {}",
+                        element_index, node, node_count
+                    ),
+                });
+            }
+            active_nodes[node] = true;
+        }
+    }
+
+    for (node, (active, value)) in active_nodes
+        .iter()
+        .zip(plan.initial_magnetization.iter())
+        .enumerate()
+    {
+        if !*active {
+            continue;
+        }
+        let norm2 = value[0] * value[0] + value[1] * value[1] + value[2] * value[2];
+        if !(norm2 > 0.0) || !norm2.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "invalid FEM plan: active magnetic node {} has zero or invalid initial magnetization {:?}",
+                    node, value
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Resolve which FDM engine to use based on environment and availability.
@@ -613,6 +793,79 @@ fn native_fem_cpu_unavailable_error(
             context, availability.reason
         ),
     }
+}
+
+const FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON: &str = "fem_gpu_relaxation_algorithm_cpu_only";
+
+fn fem_gpu_cpu_only_relaxation_algorithm(plan: &FemPlanIR) -> Option<RelaxationAlgorithmIR> {
+    let algorithm = plan.relaxation.as_ref()?.algorithm;
+    crate::fem::relax::algorithm::requires_cpu_mfem_relaxation_lane(algorithm).then_some(algorithm)
+}
+
+fn fem_gpu_relaxation_cpu_only_fallback_message(algorithm: RelaxationAlgorithmIR) -> String {
+    format!(
+        "FEM relaxation algorithm `{}` is implemented for the CPU/MFEM lane; \
+         falling back to MFEM/libCEED/hypre CPU FEM because full GPU/libCEED \
+         device-resident relaxation is under development \
+         (fallback_reason={})",
+        crate::fem::relax::algorithm::algorithm_provenance_name(algorithm),
+        FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON
+    )
+}
+
+fn fem_gpu_relaxation_cpu_only_error(algorithm: RelaxationAlgorithmIR) -> RunError {
+    RunError {
+        message: format!(
+            "native FEM GPU execution was requested, but FEM relaxation algorithm `{}` \
+             is implemented for the CPU/MFEM lane; full GPU/libCEED device-resident \
+             relaxation is under development (fallback_reason={})",
+            crate::fem::relax::algorithm::algorithm_provenance_name(algorithm),
+            FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON
+        ),
+    }
+}
+
+fn apply_fem_gpu_plan_constraints(
+    plan: &FemPlanIR,
+    mut resolution: EngineResolution<FemEngine>,
+    forced_gpu: bool,
+) -> Result<EngineResolution<FemEngine>, RunError> {
+    if resolution.engine != FemEngine::NativeGpu {
+        return Ok(resolution);
+    }
+
+    if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(plan) {
+        if forced_gpu {
+            return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
+        }
+        let message = fem_gpu_relaxation_cpu_only_fallback_message(algorithm);
+        runtime_warn_once(&message);
+        resolution.engine = FemEngine::CpuNative;
+        resolution.fallback = Some(runtime_fallback(
+            fem_engine_id(FemEngine::NativeGpu),
+            fem_engine_id(FemEngine::CpuNative),
+            FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+            message,
+        ));
+        return Ok(resolution);
+    }
+
+    if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
+        let message = format!(
+            "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
+            plan.mesh.nodes.len(),
+            min_nodes
+        );
+        resolution.engine = FemEngine::CpuNative;
+        resolution.fallback = Some(runtime_fallback(
+            fem_engine_id(FemEngine::NativeGpu),
+            fem_engine_id(FemEngine::CpuNative),
+            "fem_gpu_small_mesh_policy",
+            message,
+        ));
+    }
+
+    Ok(resolution)
 }
 
 fn resolve_fem_engine_with_availability(
@@ -905,6 +1158,41 @@ fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
+            if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
+                if explicit_selection {
+                    return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
+                }
+                let cpu_resolved = resolve_registry_runtime_for_backend(
+                    registry,
+                    "fem",
+                    "cpu",
+                    &requested_precision,
+                )
+                .ok_or_else(|| RunError {
+                    message:
+                        "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
+                            .to_string(),
+                })?;
+                let message = fem_gpu_relaxation_cpu_only_fallback_message(algorithm);
+                fallback = Some(runtime_fallback(
+                    fem_engine_id(FemEngine::NativeGpu),
+                    fem_engine_id(FemEngine::CpuNative),
+                    FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON,
+                    message,
+                ));
+                return Ok(DispatchEngineResolution {
+                    engine: DispatchEngine::Fem(FemEngine::CpuNative),
+                    fallback,
+                    runtime_family: Some(cpu_resolved.runtime_family),
+                    worker: Some(cpu_resolved.worker),
+                    resolved_backend: "fem".to_string(),
+                    resolved_device: "cpu".to_string(),
+                    resolved_precision: requested_precision,
+                });
+            }
+        }
+
+        if let Some(fem_plan) = plan {
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(fem_plan) {
                 if explicit_selection {
                     return Err(RunError {
@@ -1042,24 +1330,11 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
                     .to_string(),
         });
     }
-    let mut resolution = resolve_fem_engine_with_trail(problem)?;
-    if resolution.engine == FemEngine::NativeGpu {
-        if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
-            let message = format!(
-                "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
-                plan.mesh.nodes.len(),
-                min_nodes
-            );
-            resolution.engine = FemEngine::CpuNative;
-            resolution.fallback = Some(runtime_fallback(
-                fem_engine_id(FemEngine::NativeGpu),
-                fem_engine_id(FemEngine::CpuNative),
-                "fem_gpu_small_mesh_policy",
-                message,
-            ));
-        }
-    }
-    Ok(resolution)
+    apply_fem_gpu_plan_constraints(
+        plan,
+        resolve_fem_engine_with_trail(problem)?,
+        fem_gpu_execution_forced(),
+    )
 }
 
 pub(crate) fn snapshot_fdm_preview(
@@ -1647,10 +1922,11 @@ fn runtime_fem_order(problem: &ProblemIR) -> u32 {
 }
 
 fn fem_gpu_execution_forced() -> bool {
-    matches!(
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("gpu") | Some("all_in_gpu")
-    )
+    all_in_gpu_fem_env_requested()
+        || matches!(
+            std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+            Some("gpu") | Some("cuda") | Some("all_in_gpu")
+        )
 }
 
 fn env_flag_enabled(value: Option<String>) -> bool {
@@ -2655,13 +2931,55 @@ fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRk
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
+    plan: &FemPlanIR,
+    gpu_rk_plan: &NativeFemGpuRkPlanInfo,
+) -> bool {
+    let exchange_device_resident = gpu_rk_plan.exchange_only_enabled
+        && gpu_rk_plan.stage_exchange_device_resident
+        && matches!(
+            gpu_rk_plan.exchange_operator_mode.as_str(),
+            "legacy_sparse_gpu" | "partial_assembly_gpu"
+        );
+    let demag_device_resident = !plan.enable_demag
+        || (gpu_rk_plan.uses_gpu_poisson
+            && gpu_rk_plan.demag_operator_mode == "device_hypre_poisson"
+            && gpu_rk_plan.hypre_execution_policy == "device"
+            && gpu_rk_plan.demag_residency == "device");
+
+    exchange_device_resident && demag_device_resident
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_relaxation_allows_compute_sync(plan: &FemPlanIR) -> bool {
+    matches!(
+        plan.relaxation.as_ref().map(|control| control.algorithm),
+        Some(RelaxationAlgorithmIR::ProjectedGradientBb)
+    )
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_hot_loop_sync_allowed_for_plan(plan: &FemPlanIR, stats: &StepStats) -> bool {
+    let classified_sync = stats
+        .hot_loop_exchange_host_sync_count
+        .saturating_add(stats.hot_loop_compute_host_sync_count);
+    if stats.hot_loop_host_sync_count > classified_sync {
+        return false;
+    }
+    if stats.hot_loop_exchange_host_sync_count > 0 {
+        return false;
+    }
+    stats.hot_loop_compute_host_sync_count == 0 || native_fem_relaxation_allows_compute_sync(plan)
+}
+
+#[cfg(feature = "fem-gpu")]
 fn native_fem_data_residency(
-    _plan: &FemPlanIR,
+    plan: &FemPlanIR,
     stats: Option<&StepStats>,
     gpu_state: Option<&NativeFemGpuStateInfo>,
 ) -> &'static str {
     if stats
-        .map(|entry| entry.hot_loop_host_sync_count > 0)
+        .map(|entry| !native_fem_hot_loop_sync_allowed_for_plan(plan, entry))
         .unwrap_or(false)
     {
         return NativeFemDataResidency::HostSourceOfTruth.as_str();
@@ -2698,10 +3016,10 @@ fn native_fem_gpu_qualification_status(
         };
     };
     let hot_loop_clean = stats
-        .map(|entry| entry.hot_loop_host_sync_count == 0)
+        .map(|entry| native_fem_hot_loop_sync_allowed_for_plan(plan, entry))
         .unwrap_or(true);
     if native_fem_execution_mode(plan) == "all_in_gpu_legacy_sparse"
-        && native_fem_gpu_rk_plan_is_strict_device_resident(rk_plan)
+        && native_fem_gpu_rk_plan_is_device_resident_for_plan(plan, rk_plan)
         && hot_loop_clean
     {
         "production_executable"
@@ -2931,11 +3249,10 @@ fn execute_native_fem(
             live.as_mut(),
             &mut artifacts,
             &mut steps,
-            &mut energy_plateau,
             last_preview_revision,
         )?;
         latest_stats = outcome.latest_stats;
-        backend_completion = None;
+        backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
     } else {
@@ -3145,11 +3462,16 @@ fn record_cuda_final_outputs(
         return Ok(());
     };
 
-    let need_scalar = default_scalar_trace
-        || steps
-            .last()
-            .map(|stats| !same_time(stats.time, latest_stats.time))
-            .unwrap_or(true);
+    let has_current_scalar = steps
+        .last()
+        .map(|stats| stats.step == latest_stats.step && same_time(stats.time, latest_stats.time))
+        .unwrap_or(false);
+    let need_scalar = !has_current_scalar
+        && (default_scalar_trace
+            || steps
+                .last()
+                .map(|stats| !same_time(stats.time, latest_stats.time))
+                .unwrap_or(true));
     if need_scalar {
         let mut final_stats = latest_stats.clone();
         if scalar_outputs_request_average_m(scalar_schedules) {
@@ -3848,6 +4170,54 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn native_fem_runtime_contract_allows_pgbb_scalar_readbacks_without_losing_device_residency() {
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.enable_demag = false;
+        plan.relaxation = Some(relaxation_control(
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+        ));
+        let stats = StepStats {
+            hot_loop_host_sync_count: 2,
+            hot_loop_compute_host_sync_count: 2,
+            hot_loop_exchange_host_sync_count: 0,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            Some(&rk_plan),
+        );
+
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("device_source_of_truth")
+        );
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("production_executable")
+        );
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(2));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(2));
+        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn native_fem_runtime_contract_records_gpu_rk_plan_info() {
         let mut plan = tiny_fem_plan();
         plan.mfem_device_string = Some("cuda".to_string());
@@ -4388,6 +4758,269 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fem-gpu")]
+    fn relaxation_control(algorithm: RelaxationAlgorithmIR) -> RelaxationControlIR {
+        RelaxationControlIR {
+            algorithm,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(3),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_gpu_auto_falls_back_to_cpu_for_cpu_mfem_relaxation_algorithm() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(relaxation_control(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ));
+
+        let resolution = apply_fem_gpu_plan_constraints(
+            &plan,
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("auto GPU should fall back to CPU/MFEM for CPU-only relaxation");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        let fallback = resolution.fallback.expect("fallback should be recorded");
+        assert!(fallback.occurred);
+        assert_eq!(fallback.original_engine, "fem_native_gpu");
+        assert_eq!(fallback.fallback_engine, "fem_cpu_native");
+        assert_eq!(fallback.reason, FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON);
+        assert!(fallback.message.contains("tangent_plane_implicit"));
+        assert!(fallback.message.contains("CPU/MFEM"));
+        assert!(fallback.message.contains("GPU/libCEED"));
+        assert!(fallback.message.contains("under development"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_direct_minimizer_execute_fem_forwards_backend_completion() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer execute_fem completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        let mut plan = tiny_fem_plan();
+        plan.external_field = Some([0.0, 0.0, 2.0e5]);
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let executed = execute_fem(FemEngine::CpuNative, &plan, 1.0e-12, &[], None, None)
+            .expect("native FEM direct-minimizer execute_fem completion");
+        let completion = executed
+            .result
+            .completion
+            .expect("execute_fem must surface native direct-minimizer completion");
+
+        assert_eq!(
+            completion.reason,
+            Some(fullmag_ir::StageStopReason::MaxSteps)
+        );
+        assert_eq!(completion.metric_name.as_deref(), Some("steps"));
+        assert_eq!(completion.metric_value, Some(1.0));
+        assert_eq!(completion.threshold, Some(1.0));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_direct_minimizer_execute_fem_forwards_gradient_completion() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer execute_fem gradient completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        let mut plan = tiny_fem_plan();
+        plan.external_field = None;
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(5),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let executed = execute_fem(FemEngine::CpuNative, &plan, 1.0e-12, &[], None, None)
+            .expect("native FEM direct-minimizer execute_fem gradient completion");
+        let completion = executed
+            .result
+            .completion
+            .expect("execute_fem must surface native gradient completion");
+
+        assert_eq!(
+            completion.reason,
+            Some(fullmag_ir::StageStopReason::Gradient)
+        );
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("tangent_gradient_norm_sq")
+        );
+        assert!(
+            completion.metric_value.unwrap_or(f64::INFINITY)
+                <= completion.threshold.unwrap_or(f64::NEG_INFINITY),
+            "{completion:?}"
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_direct_minimizer_execute_fem_forwards_initial_torque_completion() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer execute_fem initial torque completion test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        let mut plan = tiny_fem_plan();
+        plan.external_field = Some([0.0, 0.0, 2.0e5]);
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e30),
+                energy_tolerance_j: None,
+                max_steps: Some(5),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        let executed = execute_fem(FemEngine::CpuNative, &plan, 1.0e-12, &[], None, None)
+            .expect("native FEM direct-minimizer execute_fem initial torque completion");
+        let completion = executed
+            .result
+            .completion
+            .expect("execute_fem must surface native initial torque completion");
+
+        assert_eq!(completion.reason, Some(fullmag_ir::StageStopReason::Torque));
+        assert_eq!(completion.metric_name.as_deref(), Some("max_torque_Apm"));
+        assert!(
+            completion.metric_value.unwrap_or(f64::INFINITY)
+                <= completion.threshold.unwrap_or(f64::NEG_INFINITY),
+            "{completion:?}"
+        );
+        assert_eq!(
+            executed.result.steps.last().map(|stats| stats.step),
+            Some(0),
+            "initial torque completion must surface the native zero-step snapshot"
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn forced_fem_gpu_rejects_cpu_mfem_relaxation_algorithm() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(relaxation_control(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+        ));
+
+        let err = apply_fem_gpu_plan_constraints(
+            &plan,
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+        )
+        .expect_err("forced GPU must not silently fall back for CPU-only relaxation");
+
+        assert!(err.message.contains("tangent_plane_implicit"), "{}", err.message);
+        assert!(
+            err.message
+                .contains(FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("GPU/libCEED"), "{}", err.message);
+        assert!(err.message.contains("under development"), "{}", err.message);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn llg_overdamped_relaxation_keeps_native_gpu_resolution() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::LlgOverdamped));
+
+        let resolution = apply_fem_gpu_plan_constraints(
+            &plan,
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("LLG overdamped is supported on native FEM GPU");
+
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn projected_gradient_bb_relaxation_keeps_native_gpu_resolution() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(relaxation_control(
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+        ));
+
+        let resolution = apply_fem_gpu_plan_constraints(
+            &plan,
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("projected-gradient BB is supported on native FEM GPU");
+
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn nonlinear_cg_relaxation_keeps_native_gpu_resolution() {
+        let mut plan = tiny_fem_plan();
+        plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::NonlinearCg));
+
+        let resolution = apply_fem_gpu_plan_constraints(
+            &plan,
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("nonlinear-CG is supported on native FEM GPU");
+
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
     #[test]
     fn normalized_runtime_markers_fallback_to_object_segments_when_region_materials_missing() {
         let mut plan = tiny_fem_plan();
@@ -4526,5 +5159,98 @@ mod tests {
         let normalized =
             normalized_runtime_element_markers(&plan).expect("mesh_parts should disambiguate");
         assert_eq!(normalized, vec![1, 1, 0]);
+    }
+
+    #[test]
+    fn normalized_fem_plan_rebuilds_airbox_markers_from_mesh_parts() {
+        let mut plan = tiny_fem_plan();
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.element_markers.clear();
+        plan.object_segments.clear();
+        plan.mesh_parts = vec![
+            FemMeshPartIR {
+                id: "part:magnet".to_string(),
+                label: "magnet".to_string(),
+                role: FemMeshPartRole::MagneticObject,
+                object_id: Some("magnet".to_string()),
+                geometry_id: Some("magnet_geom".to_string()),
+                material_id: None,
+                element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+                boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                    start: 0,
+                    count: 0,
+                },
+                node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 4 },
+                boundary_face_indices: Vec::new(),
+                node_indices: Vec::new(),
+                surface_faces: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+                parent_id: None,
+            },
+            FemMeshPartIR {
+                id: "part:air".to_string(),
+                label: "Airbox".to_string(),
+                role: FemMeshPartRole::Air,
+                object_id: None,
+                geometry_id: None,
+                material_id: None,
+                element_selector: FemMeshPartSelector::ElementRange { start: 1, count: 1 },
+                boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                    start: 0,
+                    count: 0,
+                },
+                node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 4 },
+                boundary_face_indices: Vec::new(),
+                node_indices: Vec::new(),
+                surface_faces: Vec::new(),
+                bounds_min: None,
+                bounds_max: None,
+                parent_id: None,
+            },
+        ];
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ];
+
+        let normalized =
+            normalized_fem_plan_for_runtime(&plan).expect("air-only zero node should be inactive");
+
+        assert_eq!(normalized.mesh.element_markers, vec![1, 0]);
+    }
+
+    #[test]
+    fn normalized_fem_plan_rejects_zero_initial_on_active_magnetic_node() {
+        let mut plan = tiny_fem_plan();
+        plan.mesh.nodes.push([2.0, 0.0, 0.0]);
+        plan.mesh.elements = vec![[0, 1, 2, 3], [1, 2, 3, 4]];
+        plan.mesh.element_markers = vec![1, 0];
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ];
+
+        let error = normalized_fem_plan_for_runtime(&plan)
+            .expect_err("active magnetic node 1 has zero magnetization");
+        assert!(
+            error
+                .message
+                .contains("active magnetic node 1 has zero or invalid initial magnetization"),
+            "{}",
+            error.message
+        );
+
+        plan.initial_magnetization[1] = [1.0, 0.0, 0.0];
+        normalized_fem_plan_for_runtime(&plan)
+            .expect("zero magnetization on air-only node 4 should be accepted");
     }
 }

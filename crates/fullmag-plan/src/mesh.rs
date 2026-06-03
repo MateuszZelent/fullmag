@@ -3,9 +3,11 @@ use fullmag_ir::{
     FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
     FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUniverseMetadata};
@@ -28,6 +30,50 @@ const AIRBOX_DEFAULT_SHAPE: &str = "bbox";
 const AIRBOX_DEFAULT_ROBIN_BETA_MODE: &str = "dipole";
 /// Default Robin beta factor.
 const AIRBOX_DEFAULT_ROBIN_BETA_FACTOR: f64 = 2.0;
+
+static MAG_TEXTURE_SAMPLE_LOG_KEYS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+
+fn texture_vector_log_key(values: &[f64]) -> String {
+    values
+        .iter()
+        .map(|value| format!("{value:.17e}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn preset_texture_sample_log_key(
+    magnet_name: &str,
+    mesh_name: &str,
+    n_nodes: usize,
+    preset_kind: &str,
+    preset_params: &BTreeMap<String, Value>,
+    mapping: &fullmag_ir::TextureMappingIR,
+    texture_transform: &fullmag_ir::TextureTransform3DIR,
+) -> String {
+    format!(
+        "{}|{}|{}|{}|{:?}|{}/{}/{}|T:{}|R:{}|S:{}|P:{}",
+        magnet_name,
+        mesh_name,
+        n_nodes,
+        preset_kind,
+        preset_params,
+        mapping.space,
+        mapping.projection,
+        mapping.clamp_mode,
+        texture_vector_log_key(&texture_transform.translation),
+        texture_vector_log_key(&texture_transform.rotation_quat),
+        texture_vector_log_key(&texture_transform.scale),
+        texture_vector_log_key(&texture_transform.pivot)
+    )
+}
+
+fn should_log_preset_texture_sample_once(key: String) -> bool {
+    let log_keys = MAG_TEXTURE_SAMPLE_LOG_KEYS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    match log_keys.lock() {
+        Ok(mut seen) => seen.insert(key),
+        Err(_) => true,
+    }
+}
 
 pub(crate) fn mesh_has_air_elements(mesh: &MeshIR) -> bool {
     mesh.element_markers
@@ -210,22 +256,33 @@ pub(crate) fn initial_vectors_for_magnet(
             mapping,
             texture_transform,
         }) => {
-            eprintln!(
-                "[fullmag-plan][mag-texture] sampling preset '{}' for magnet '{}' on mesh '{}' (nodes={}) mapping=({}/{}/{}) T=[{:+.3e},{:+.3e},{:+.3e}]m S=[{:+.3e},{:+.3e},{:+.3e}]",
-                preset_kind,
+            let log_key = preset_texture_sample_log_key(
                 magnet_name,
                 mesh_name,
                 n_nodes,
-                mapping.space,
-                mapping.projection,
-                mapping.clamp_mode,
-                texture_transform.translation[0],
-                texture_transform.translation[1],
-                texture_transform.translation[2],
-                texture_transform.scale[0],
-                texture_transform.scale[1],
-                texture_transform.scale[2],
+                preset_kind,
+                preset_params,
+                mapping,
+                texture_transform,
             );
+            if should_log_preset_texture_sample_once(log_key) {
+                eprintln!(
+                    "[fullmag-plan][mag-texture] sampling preset '{}' for magnet '{}' on mesh '{}' (nodes={}) mapping=({}/{}/{}) T=[{:+.3e},{:+.3e},{:+.3e}]m S=[{:+.3e},{:+.3e},{:+.3e}]",
+                    preset_kind,
+                    magnet_name,
+                    mesh_name,
+                    n_nodes,
+                    mapping.space,
+                    mapping.projection,
+                    mapping.clamp_mode,
+                    texture_transform.translation[0],
+                    texture_transform.translation[1],
+                    texture_transform.translation[2],
+                    texture_transform.scale[0],
+                    texture_transform.scale[1],
+                    texture_transform.scale[2],
+                );
+            }
             let world = sample_points_world.ok_or_else(|| {
                 format!(
                     "magnet '{}' uses preset_texture '{}' but planner was not given sample points for mesh '{}'",
@@ -1283,4 +1340,56 @@ pub(crate) fn merge_fem_meshes(
         )
     })?;
     Ok((merged, object_segments))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::{TextureMappingIR, TextureTransform3DIR};
+
+    #[test]
+    fn preset_texture_sampling_log_key_tracks_mesh_and_texture_identity() {
+        let mapping = TextureMappingIR::default();
+        let transform = TextureTransform3DIR::default();
+        let mut params = BTreeMap::new();
+        params.insert("radius".to_string(), serde_json::json!(3.0e-7));
+
+        let key = preset_texture_sample_log_key(
+            "arch_waveguide",
+            "study_domain",
+            9500,
+            "neel_skyrmion",
+            &params,
+            &mapping,
+            &transform,
+        );
+        assert_eq!(
+            key,
+            preset_texture_sample_log_key(
+                "arch_waveguide",
+                "study_domain",
+                9500,
+                "neel_skyrmion",
+                &params,
+                &mapping,
+                &transform,
+            )
+        );
+        assert_ne!(
+            key,
+            preset_texture_sample_log_key(
+                "arch_waveguide",
+                "study_domain",
+                9501,
+                "neel_skyrmion",
+                &params,
+                &mapping,
+                &transform,
+            )
+        );
+
+        let once_key = format!("preset-texture-log-dedup-test-{}", std::process::id());
+        assert!(should_log_preset_texture_sample_once(once_key.clone()));
+        assert!(!should_log_preset_texture_sample_once(once_key));
+    }
 }

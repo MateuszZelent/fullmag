@@ -11,6 +11,10 @@
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -29,7 +33,100 @@ struct FemBemHypreCache {
     std::unique_ptr<mfem::HypreParVector> x_par;
     bool setup_done = false;
 };
+
+bool fem_bem_forced_hypre_solver()
+{
+    const char *solver = std::getenv("FULLMAG_FEM_FEM_BEM_LINEAR_SOLVER");
+    return solver != nullptr &&
+        (std::strcmp(solver, "hypre") == 0 || std::strcmp(solver, "HYPRE") == 0);
+}
+
+bool fem_bem_forced_serial_solver()
+{
+    const char *solver = std::getenv("FULLMAG_FEM_FEM_BEM_LINEAR_SOLVER");
+    return solver != nullptr &&
+        (std::strcmp(solver, "mfem_serial") == 0 ||
+         std::strcmp(solver, "serial") == 0 ||
+         std::strcmp(solver, "MFEM_SERIAL") == 0 ||
+         std::strcmp(solver, "SERIAL") == 0);
+}
+
+bool should_use_hypre_fem_bem_solver()
+{
+    if (fem_bem_forced_hypre_solver()) {
+        return true;
+    }
+    if (fem_bem_forced_serial_solver()) {
+        return false;
+    }
+    int initialized = 0;
+    MPI_Initialized(&initialized);
+    return initialized != 0;
+}
 #endif
+
+bool solve_demag_fem_bem_serial_system(
+    const Context &ctx,
+    mfem::SparseMatrix &op,
+    const mfem::Vector &rhs,
+    mfem::Vector &solution,
+    int &iterations,
+    double &residual,
+    std::string &error)
+{
+    if (solution.Size() != rhs.Size()) {
+        solution.SetSize(rhs.Size());
+        solution = 0.0;
+    }
+
+    const int max_iterations = std::max(1, static_cast<int>(ctx.demag.solver.max_iterations));
+    const double rel_tol =
+        ctx.demag.solver.relative_tolerance > 0.0 ? ctx.demag.solver.relative_tolerance : 1.0e-8;
+    const double abs_tol =
+        ctx.demag.solver.has_absolute_tolerance && ctx.demag.solver.absolute_tolerance > 0.0
+            ? ctx.demag.solver.absolute_tolerance
+            : 1.0e-24;
+
+    if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
+        mfem::DSmoother preconditioner(op);
+        mfem::GMRESSolver solver;
+        solver.SetRelTol(rel_tol);
+        solver.SetAbsTol(abs_tol);
+        solver.SetMaxIter(max_iterations);
+        solver.SetKDim(50);
+        solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        solver.SetPreconditioner(preconditioner);
+        solver.SetOperator(op);
+        solver.Mult(rhs, solution);
+    } else {
+        mfem::GSSmoother preconditioner(op);
+        mfem::CGSolver solver;
+        solver.SetRelTol(rel_tol);
+        solver.SetAbsTol(abs_tol);
+        solver.SetMaxIter(max_iterations);
+        solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        solver.SetPreconditioner(preconditioner);
+        solver.SetOperator(op);
+        solver.Mult(rhs, solution);
+    }
+
+    mfem::Vector check(rhs.Size());
+    op.Mult(solution, check);
+    check -= rhs;
+    residual = check.Norml2();
+    iterations = 0;
+    if (!std::isfinite(residual) || !std::isfinite(solution.Norml2())) {
+        error = "FEM/BEM demag serial sparse solve produced non-finite values";
+        return false;
+    }
+    const double residual_limit =
+        std::max(abs_tol, rel_tol * std::max(1.0, rhs.Norml2()));
+    if (residual > residual_limit) {
+        error = "FEM/BEM demag serial sparse solve did not converge";
+        return false;
+    }
+    return true;
+}
 
 void destroy_fem_bem_hypre_cache(FemBemHypreCache *&cache)
 {
@@ -62,6 +159,10 @@ bool solve_demag_fem_bem_sparse_system(
     iterations = 0;
     residual = 0.0;
 #ifdef MFEM_USE_MPI
+    if (!should_use_hypre_fem_bem_solver()) {
+        return solve_demag_fem_bem_serial_system(
+            ctx, op, rhs, solution, iterations, residual, error);
+    }
     ensure_mpi_initialized();
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(op.NumRows());
     HYPRE_BigInt row_starts[2] = {0, glob_size};
@@ -164,14 +265,9 @@ bool solve_demag_fem_bem_sparse_system(
     }
     return true;
 #else
-    (void)ctx;
-    (void)op;
-    (void)rhs;
-    (void)solution;
     (void)cache;
-    error =
-        "FEM/BEM demag requires an MPI/Hypre-enabled MFEM runtime in this initial dense-reference implementation";
-    return false;
+    return solve_demag_fem_bem_serial_system(
+        ctx, op, rhs, solution, iterations, residual, error);
 #endif
 }
 #endif

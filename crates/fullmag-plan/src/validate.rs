@@ -24,6 +24,7 @@ pub(crate) fn resolve_auto_backend(problem: &ProblemIR) -> BackendTarget {
 
 pub(crate) fn planned_study_controls(
     problem: &ProblemIR,
+    resolved_backend: BackendTarget,
     errors: &mut Vec<String>,
 ) -> (
     IntegratorChoice,
@@ -77,14 +78,36 @@ pub(crate) fn planned_study_controls(
     };
 
     let relaxation = problem.study.relaxation().map(|control| {
-        if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
-            && control.algorithm != RelaxationAlgorithmIR::ProjectedGradientBb
-            && control.algorithm != RelaxationAlgorithmIR::NonlinearCg
-        {
-            errors.push(format!(
-                "relaxation algorithm '{}' is defined but not yet executable in the current public runner; only 'llg_overdamped', 'projected_gradient_bb', and 'nonlinear_cg' are currently supported",
-                control.algorithm.as_str()
-            ));
+        match resolved_backend {
+            BackendTarget::Fem => {
+                if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
+                    && control.algorithm != RelaxationAlgorithmIR::ProjectedGradientBb
+                    && control.algorithm != RelaxationAlgorithmIR::NonlinearCg
+                    && control.algorithm != RelaxationAlgorithmIR::TangentPlaneImplicit
+                {
+                    errors.push(format!(
+                        "relaxation algorithm '{}' is defined but not yet executable in the current FEM runner; supported FEM relaxation algorithms are 'llg_overdamped', 'projected_gradient_bb', 'nonlinear_cg', and 'tangent_plane_implicit'",
+                        control.algorithm.as_str()
+                    ));
+                }
+            }
+            BackendTarget::Fdm => {
+                if control.algorithm == RelaxationAlgorithmIR::TangentPlaneImplicit {
+                    errors.push(
+                        "relaxation algorithm 'tangent_plane_implicit' is FEM-only in the current public runner; request backend='fem' to use the native MFEM tangent-plane implicit implementation"
+                            .to_string(),
+                    );
+                } else if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped
+                    && control.algorithm != RelaxationAlgorithmIR::ProjectedGradientBb
+                    && control.algorithm != RelaxationAlgorithmIR::NonlinearCg
+                {
+                    errors.push(format!(
+                        "relaxation algorithm '{}' is defined but not yet executable in the current FDM runner; supported FDM relaxation algorithms are 'llg_overdamped', 'projected_gradient_bb', and 'nonlinear_cg'",
+                        control.algorithm.as_str()
+                    ));
+                }
+            }
+            _ => {}
         }
         control
     });

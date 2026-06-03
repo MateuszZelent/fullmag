@@ -103,6 +103,7 @@ pub enum fullmag_fem_stage_stop_reason {
     FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME = 5,
     FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED = 6,
     FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR = 7,
+    FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT = 8,
 }
 
 pub type fullmag_fem_interrupt_poll_fn = Option<unsafe extern "C" fn(*mut c_void) -> i32>;

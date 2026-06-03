@@ -54,7 +54,7 @@ std::filesystem::path fem_source_root() {
 }
 
 std::filesystem::path repo_root() {
-    return fem_source_root().parent_path().parent_path().parent_path();
+    return fem_source_root().parent_path().parent_path();
 }
 
 void llg_rhs_is_owned_by_integrator_module() {

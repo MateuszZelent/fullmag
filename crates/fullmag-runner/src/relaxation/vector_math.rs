@@ -1,10 +1,9 @@
 //! Shared vector math for direct-minimization relaxation paths.
 //!
 //! These helpers implement tangent-space projection and torque metrics used by
-//! bootstrap projected-gradient and nonlinear-CG relaxation on FDM and FEM
-//! runner paths. Backend-specific code owns state movement and observables;
-//! this module owns only backend-neutral vector algebra on reduced
-//! magnetization and effective-field samples.
+//! reduced-vector direct-minimization paths. Backend-specific code owns state
+//! movement, observables, and accepted-step policy; this module owns only
+//! backend-neutral vector algebra on magnetization and effective-field samples.
 
 #![allow(dead_code)]
 

@@ -73,8 +73,13 @@ For FEM, `body.mesh.thin_film(...)` lowers to existing mesh controls:
 - body `maximum_element_size` and `minimum_element_size`,
 - `mesh_strategy="thin_film_tetrahedral"` for provenance,
 - through-thickness layer intent,
+- COMSOL-like `curvature_factor` and `narrow_region_resolution` intent through
+  the same canonical controls as `body.mesh(...)`,
 - interface/surface transition sizing,
 - edge and corner distance fields with independent transition spans.
+- rectangular flat-arch edge/corner bands in the magnetic body, so a flat
+  `ArchWaveguide` uses the same deterministic in-plane edge/corner policy as a
+  `Box` instead of relying only on recovered CAD curve endpoints.
 - airbox rectangular-envelope grading from the object bounds to the explicit
   airbox bounds, so diagonal/corner air regions do not become an uncontrolled
   far-field plateau after the near-interface halo.

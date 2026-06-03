@@ -138,6 +138,7 @@ export interface MeshObjectConfigReplaceRequest {
 }
 export interface MeshObjectConfigResource {
   config?: JsonObject | null;
+  effective_config?: JsonObject | null;
   object_id: string;
   revision: number;
 }
@@ -146,6 +147,7 @@ export interface MeshUniverseConfigReplaceRequest {
 }
 export interface MeshUniverseConfigResource {
   config?: JsonObject | null;
+  effective_config?: JsonObject | null;
   revision: number;
 }
 export interface MeshSharedDomainConfigReplaceRequest {

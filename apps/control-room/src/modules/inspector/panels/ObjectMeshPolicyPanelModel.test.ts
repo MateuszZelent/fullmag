@@ -47,7 +47,9 @@ describe("ObjectMeshPolicyPanelModel", () => {
         ],
         boundary_layer_target_surface_tags: [7, 8],
         boundary_layer_thickness: 2e-9,
+        corner_transition_distance: "airbox_boundary",
         compute_quality: true,
+        edge_transition_distance: "airbox_boundary",
         maximum_element_size: 5e-9,
         mesh_strategy: "swept_prism",
         optimize: "Netgen",
@@ -60,6 +62,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
         sweep_source: "bottom",
         through_thickness_distribution: "fixed",
         through_thickness_elements: 1,
+        transition_distance: "airbox_boundary",
       },
       object_id: "free-layer",
       revision: 7,
@@ -81,7 +84,9 @@ describe("ObjectMeshPolicyPanelModel", () => {
         '[\n  {\n    "geometry": "free-layer",\n    "mode": "all_boundary_surfaces"\n  }\n]',
       boundaryLayerTargetSurfaceTags: "7, 8",
       boundaryLayerThickness: "2e-9",
+      cornerTransitionDistance: "airbox_boundary",
       computeQuality: "true",
+      edgeTransitionDistance: "airbox_boundary",
       meshStrategy: "swept_prism",
       optimize: "Netgen",
       optimizeIterations: "2",
@@ -94,10 +99,53 @@ describe("ObjectMeshPolicyPanelModel", () => {
       sweepSource: "bottom",
       throughThicknessDistribution: "fixed",
       throughThicknessElements: "1",
+      transitionDistance: "airbox_boundary",
     });
     expect(draftKeyForObjectMeshPolicyResource("free-layer", present)).toContain(
       "free-layer:7:",
     );
+  });
+
+  it("shows effective object defaults without copying them into raw policy JSON", () => {
+    const resource: MeshObjectConfigResource = {
+      config: null,
+      effective_config: {
+        algorithm_2d: 6,
+        algorithm_3d: 1,
+        compute_quality: true,
+        narrow_regions: 0,
+        optimize_iterations: 1,
+        per_element_quality: true,
+        size_factor: 1,
+        size_from_curvature: 0,
+        smoothing_steps: 1,
+      },
+      object_id: "free-layer",
+      revision: 9,
+    };
+
+    expect(
+      draftFromObjectMeshPolicyResource(resource, {
+        effectiveTarget: {
+          maximum_element_size: 4e-8,
+          minimum_element_size: 1e-8,
+        },
+      }),
+    ).toMatchObject({
+      algorithm2d: "6",
+      algorithm3d: "1",
+      computeQuality: "true",
+      configText: "{}",
+      maximumElementSize: "4e-8",
+      minimumElementSize: "1e-8",
+      narrowRegions: "0",
+      optimizeIterations: "1",
+      perElementQuality: "true",
+      present: false,
+      sizeFactor: "1",
+      sizeFromCurvature: "0",
+      smoothingSteps: "1",
+    });
   });
 
   it("hydrates structured fields from script-exported numeric strings", () => {
@@ -234,6 +282,13 @@ describe("ObjectMeshPolicyPanelModel", () => {
         boundaryLayerThickness: "2e-9",
         computeQuality: "true",
         interfaceMaximumElementSize: "2e-9",
+        transitionDistance: "airbox_boundary",
+        edgeMaximumElementSize: "1e-8",
+        edgeThickness: "2e-8",
+        edgeTransitionDistance: "airbox_boundary",
+        cornerMaximumElementSize: "8e-9",
+        cornerExtent: "1.5e-8",
+        cornerTransitionDistance: "120e-9",
         maximumElementSize: "5e-9",
         meshStrategy: "swept_prism",
         narrowRegions: "2",
@@ -268,12 +323,20 @@ describe("ObjectMeshPolicyPanelModel", () => {
           boundary_layer_thickness: 2e-9,
           compute_quality: true,
           interface_hmax: 2e-9,
+          transition_distance: "airbox_boundary",
+          edge_maximum_element_size: 1e-8,
+          edge_thickness: 2e-8,
+          edge_transition_distance: "airbox_boundary",
+          corner_maximum_element_size: 8e-9,
+          corner_extent: 1.5e-8,
+          corner_transition_distance: 120e-9,
           maximum_element_size: 5e-9,
           mesh_strategy: "swept_prism",
           narrow_regions: 2,
           optimize: "Netgen",
           optimize_iterations: 3,
           per_element_quality: true,
+          size_factor: 1,
           size_from_curvature: 16,
           source: "mesh.msh",
           smoothing_steps: 2,
@@ -282,6 +345,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
           sweep_source: "bottom",
           through_thickness_distribution: "fixed",
           through_thickness_elements: 1,
+          through_thickness_symmetric: false,
         },
       },
     });
@@ -330,6 +394,14 @@ describe("ObjectMeshPolicyPanelModel", () => {
     ).toEqual({
       request: {
         config: {
+          algorithm_2d: 6,
+          algorithm_3d: 1,
+          compute_quality: true,
+          narrow_regions: 0,
+          optimize_iterations: 1,
+          per_element_quality: true,
+          size_factor: 1,
+          size_from_curvature: 0,
           size_fields: [
             {
               kind: "Box",
@@ -358,6 +430,8 @@ describe("ObjectMeshPolicyPanelModel", () => {
               },
             },
           ],
+          smoothing_steps: 1,
+          through_thickness_symmetric: false,
         },
       },
     });
@@ -409,6 +483,14 @@ describe("ObjectMeshPolicyPanelModel", () => {
     ).toEqual({
       request: {
         config: {
+          algorithm_2d: 6,
+          algorithm_3d: 1,
+          compute_quality: true,
+          narrow_regions: 0,
+          optimize_iterations: 1,
+          per_element_quality: true,
+          size_factor: 1,
+          size_from_curvature: 0,
           size_fields: [
             {
               kind: "SurfaceDistanceThreshold",
@@ -435,6 +517,8 @@ describe("ObjectMeshPolicyPanelModel", () => {
               },
             },
           ],
+          smoothing_steps: 1,
+          through_thickness_symmetric: false,
         },
       },
     });

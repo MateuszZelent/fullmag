@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { JsonObject } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
@@ -24,7 +25,7 @@ import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
+import { FormField, type FormFieldHelp } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   asRecord,
@@ -63,6 +64,149 @@ function errorMessage(error: unknown): string {
 type UpdateObjectMeshPolicyDraft = (
   patch: Partial<ObjectMeshPolicyDraft>,
 ) => void;
+
+const OBJECT_MESH_HELP: Record<string, FormFieldHelp> = {
+  algorithm2d: {
+    description: "Gmsh 2D surface meshing algorithm used before tetrahedralization.",
+    details: [
+      "6 is the Frontal-Delaunay default used by the current mesh policy.",
+      "Change only when debugging surface triangulation or reproducing a backend-specific mesh.",
+    ],
+  },
+  algorithm3d: {
+    description: "Gmsh 3D volume meshing algorithm for tetrahedra.",
+    details: [
+      "1 selects Delaunay in the current FEM shared-domain path.",
+      "HXT and other methods can be faster or stricter, but may fail on thin-film geometries.",
+    ],
+  },
+  boundaryLayerCount: {
+    description: "Number of boundary-layer elements generated on selected curves or surfaces.",
+    details: ["Requires boundary-layer selectors or explicit Gmsh tags."],
+  },
+  boundaryLayerStretching: {
+    description: "Growth ratio between consecutive boundary-layer elements.",
+  },
+  boundaryLayerTags: {
+    description: "Raw Gmsh entity tags used as boundary-layer targets.",
+    details: ["Prefer selectors when possible; raw tags are fragile across geometry rebuilds."],
+  },
+  boundaryLayerSelectors: {
+    description: "JSON selector list that resolves boundary-layer target entities from geometry semantics.",
+  },
+  boundaryLayerThickness: {
+    description: "Total physical thickness of the boundary-layer stack.",
+  },
+  calibrateFor: {
+    description: "High-level calibration family for automatic mesh-size presets.",
+  },
+  computeQuality: {
+    description: "Requests aggregate mesh quality diagnostics after mesh generation.",
+  },
+  coreRelaxation: {
+    description: "Adds an object-local size field that relaxes from fine surface/edge sizing to a coarser object core.",
+  },
+  cornerExtent: {
+    description: "Near-corner region that receives corner refinement before the corner transition ramp starts.",
+    details: ["For rectangular thin films this targets the in-plane corner features."],
+  },
+  cornerMaximumElementSize: {
+    description: "Maximum element size requested at object corners.",
+    details: ["Must be less than or equal to the edge maximum element size."],
+  },
+  cornerTransitionDistance: {
+    description: "Distance over which corner refinement grows back to the far-field size.",
+    details: [
+      "Use a positive length in meters for a fixed ramp.",
+      "Use airbox_boundary to automatically extend the ramp to the outer airbox boundary.",
+    ],
+  },
+  curvatureFactor: {
+    description: "Curvature-driven sizing factor. Lower values generally add more elements on curved surfaces.",
+  },
+  edgeMaximumElementSize: {
+    description: "Maximum element size requested along object edges.",
+    details: ["This is the main parameter for densifying the airbox near waveguide edges."],
+  },
+  edgeThickness: {
+    description: "Thickness of the finest edge-refinement band before the transition ramp starts.",
+  },
+  edgeTransitionDistance: {
+    description: "Distance over which edge refinement grows back to the far-field size.",
+    details: [
+      "Use a positive length in meters for a fixed ramp.",
+      "Use airbox_boundary to automatically extend the ramp to the outer airbox boundary.",
+    ],
+  },
+  interfaceMaximumElementSize: {
+    description: "Maximum element size at the magnetic object and air interface.",
+  },
+  interfaceThickness: {
+    description: "Thickness of the near-interface band that keeps interface sizing active.",
+  },
+  manualBox: {
+    description: "Adds or edits one explicit Gmsh Box size field in the object policy.",
+  },
+  maximumElementGrowthRate: {
+    description: "Maximum requested element-size growth between neighboring refinement regions.",
+  },
+  maximumElementSize: {
+    description: "Coarse object-volume target size away from local refinement zones.",
+  },
+  meshStrategy: {
+    description: "Requested meshing strategy for the selected object.",
+    details: ["thin_film_tetrahedral is the current feature-aware path for thin films."],
+  },
+  minimumElementSize: {
+    description: "Lower bound for object mesh sizing. Local requests below this can be clamped.",
+  },
+  narrowRegionResolution: {
+    description: "Resolution target for narrow geometric regions when automatic narrow-region sizing is active.",
+  },
+  narrowRegions: {
+    description: "Gmsh narrow-region option. 0 disables it; positive values enable Gmsh narrow-region sizing.",
+  },
+  optimize: {
+    description: "Optional Gmsh optimizer to run after mesh generation.",
+  },
+  optimizeIterations: {
+    description: "Number of optimizer iterations requested when an optimizer is selected.",
+  },
+  order: {
+    description: "Finite-element order for the generated object mesh.",
+  },
+  perElementQuality: {
+    description: "Requests per-element quality arrays in addition to aggregate quality diagnostics.",
+  },
+  sizeFactor: {
+    description: "Multiplier applied to preset-derived mesh sizes.",
+  },
+  sizeFromCurvature: {
+    description: "Gmsh curvature sizing option. 0 disables curvature-derived sizing.",
+  },
+  sizePreset: {
+    description: "Named mesh-size preset that fills common hmin/hmax/growth settings.",
+  },
+  smoothingSteps: {
+    description: "Number of Gmsh smoothing passes after meshing.",
+  },
+  source: {
+    description: "Optional external mesh source path for imported mesh workflows.",
+  },
+  sweep: {
+    description: "Thin-film through-thickness sweep controls. These determine how many layers are placed across film thickness.",
+  },
+  transitionDistance: {
+    description: "Interface transition distance from near-interface sizing to bulk/far-field sizing.",
+    details: [
+      "Use a positive length in meters for a fixed ramp.",
+      "Use airbox_boundary to grade to the outer airbox boundary when supported.",
+    ],
+  },
+  transitionGrowth: {
+    description: "Requested growth rate for transition sizing fields.",
+  },
+};
 
 function ObjectMeshPolicySummarySection({
   hasConfig,
@@ -141,21 +285,21 @@ function ObjectMeshPresetSection({
 }) {
   return (
     <InspectorSection value="preset" title="Mesh Size Presets" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Calibrate for" type="select" value={draft.calibrateFor} onChange={(event) => updateDraft({ calibrateFor: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.calibrateFor} label="Calibrate for" type="select" value={draft.calibrateFor} onChange={(event) => updateDraft({ calibrateFor: event.target.value })}>
         {MESH_SIZE_CALIBRATIONS.map((cal) => (
           <option key={cal} value={cal}>
             {cal || "Inherited"}
           </option>
         ))}
       </FormField>
-      <FormField disabled={!draft.present} label="Size preset" type="select" value={draft.sizePreset} onChange={(event) => updateDraft({ sizePreset: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizePreset} label="Size preset" type="select" value={draft.sizePreset} onChange={(event) => updateDraft({ sizePreset: event.target.value })}>
         {MESH_SIZE_PRESETS.map((preset) => (
           <option key={preset} value={preset}>
             {preset ? preset.replace(/_/g, " ") : "Inherited"}
           </option>
         ))}
       </FormField>
-      <FormField disabled={!draft.present} label="Size factor" type="number" value={draft.sizeFactor} onChange={(event) => updateDraft({ sizeFactor: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFactor} label="Size factor" type="number" value={draft.sizeFactor} onChange={(event) => updateDraft({ sizeFactor: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -169,15 +313,15 @@ function ObjectMeshSizeSemanticsSection({
 }) {
   return (
     <InspectorSection value="semantics" title="Element Size Parameters" badge="solver policy">
-      <FormField disabled={!draft.present} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
-      <FormField disabled={!draft.present} label="Curvature factor" type="number" value={draft.curvatureFactor} onChange={(event) => updateDraft({ curvatureFactor: event.target.value })} />
-      <FormField disabled={!draft.present} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
-      <FormField disabled={!draft.present} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
-      <FormField disabled={!draft.present} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
-      <FormField disabled={!draft.present} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
-      <FormField disabled={!draft.present} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementSize} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.minimumElementSize} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.maximumElementGrowthRate} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.curvatureFactor} label="Curvature factor" type="number" value={draft.curvatureFactor} onChange={(event) => updateDraft({ curvatureFactor: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sizeFromCurvature} label="Size from curvature" type="number" value={draft.sizeFromCurvature} onChange={(event) => updateDraft({ sizeFromCurvature: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegions} label="Narrow regions" type="number" value={draft.narrowRegions} onChange={(event) => updateDraft({ narrowRegions: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.narrowRegionResolution} label="Narrow region resolution" type="number" value={draft.narrowRegionResolution} onChange={(event) => updateDraft({ narrowRegionResolution: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.order} label="FEM order" type="number" value={draft.order} onChange={(event) => updateDraft({ order: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.source} label="Mesh source" type="text" value={draft.source} onChange={(event) => updateDraft({ source: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -191,33 +335,34 @@ function ObjectMeshSweepStrategySection({
 }) {
   return (
     <InspectorSection value="strategy" title="Thin-Film Sweep Strategy" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Mesh strategy" type="select" value={draft.meshStrategy} onChange={(event) => updateDraft({ meshStrategy: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.meshStrategy} label="Mesh strategy" type="select" value={draft.meshStrategy} onChange={(event) => updateDraft({ meshStrategy: event.target.value })}>
         <option value="">Inherited</option>
         <option value="auto">Auto</option>
         <option value="free_tetrahedral">Free tetrahedral</option>
         <option value="swept_prism">Swept prism</option>
         <option value="swept_hex">Swept hex</option>
+        <option value="thin_film_tetrahedral">Thin-film tetrahedral</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Through-thickness elements" type="number" value={draft.throughThicknessElements} onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })} />
-      <FormField disabled={!draft.present} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Through-thickness elements" type="number" value={draft.throughThicknessElements} onChange={(event) => updateDraft({ throughThicknessElements: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Thickness distribution" type="select" value={draft.throughThicknessDistribution} onChange={(event) => updateDraft({ throughThicknessDistribution: event.target.value })}>
         <option value="">Inherited</option>
         <option value="fixed">Fixed</option>
         <option value="linear">Linear</option>
         <option value="exponential">Exponential</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
-      <FormField disabled={!draft.present} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Thickness element ratio" type="number" value={draft.throughThicknessElementRatio} onChange={(event) => updateDraft({ throughThicknessElementRatio: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Symmetric thickness" type="select" value={draft.throughThicknessSymmetric} onChange={(event) => updateDraft({ throughThicknessSymmetric: event.target.value })}>
         <option value="">Inherited</option>
         <option value="true">Enabled</option>
         <option value="false">Disabled</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep face meshing" type="select" value={draft.sweepFaceMeshing} onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}>
         <option value="">Inherited</option>
         <option value="triangular">Triangular</option>
         <option value="quadrilateral">Quadrilateral</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
-      <FormField disabled={!draft.present} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.sweep} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -231,10 +376,10 @@ function ObjectMeshInterfaceTransitionSection({
 }) {
   return (
     <InspectorSection value="interface" title="Interface And Transition Refinement" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Interface max. element size" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} label="Interface thickness" type="number" unit="m" value={draft.interfaceThickness} onChange={(event) => updateDraft({ interfaceThickness: event.target.value })} />
-      <FormField disabled={!draft.present} label="Transition distance" type="number" unit="m" value={draft.transitionDistance} onChange={(event) => updateDraft({ transitionDistance: event.target.value })} />
-      <FormField disabled={!draft.present} label="Transition growth" type="number" value={draft.transitionGrowth} onChange={(event) => updateDraft({ transitionGrowth: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.interfaceMaximumElementSize} label="Interface max. element size" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.interfaceThickness} label="Interface thickness" type="number" unit="m" value={draft.interfaceThickness} onChange={(event) => updateDraft({ interfaceThickness: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.transitionDistance} hint="Positive meters or airbox_boundary" label="Transition distance" mono={false} type="text" value={draft.transitionDistance} onChange={(event) => updateDraft({ transitionDistance: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.transitionGrowth} label="Transition growth" type="number" value={draft.transitionGrowth} onChange={(event) => updateDraft({ transitionGrowth: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -252,33 +397,33 @@ function ObjectMeshBackendParametersSection({
 }) {
   return (
     <InspectorSection value="backend" title="Backend Mesh Parameters" badge="structured">
-      <FormField disabled={!draft.present} label="Gmsh 2D algorithm" type="number" value={draft.algorithm2d} onChange={(event) => updateDraft({ algorithm2d: event.target.value })} />
-      <FormField disabled={!draft.present} label="Gmsh 3D algorithm" type="number" value={draft.algorithm3d} onChange={(event) => updateDraft({ algorithm3d: event.target.value })} />
-      <FormField disabled={!draft.present} label="Smoothing steps" type="number" value={draft.smoothingSteps} onChange={(event) => updateDraft({ smoothingSteps: event.target.value })} />
-      <FormField disabled={!draft.present} label="Optimizer" type="select" value={draft.optimize} onChange={(event) => updateDraft({ optimize: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.algorithm2d} label="Gmsh 2D algorithm" type="number" value={draft.algorithm2d} onChange={(event) => updateDraft({ algorithm2d: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.algorithm3d} label="Gmsh 3D algorithm" type="number" value={draft.algorithm3d} onChange={(event) => updateDraft({ algorithm3d: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.smoothingSteps} label="Smoothing steps" type="number" value={draft.smoothingSteps} onChange={(event) => updateDraft({ smoothingSteps: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.optimize} label="Optimizer" type="select" value={draft.optimize} onChange={(event) => updateDraft({ optimize: event.target.value })}>
         <option value="">Inherited</option>
         <option value="Netgen">Netgen</option>
         <option value="HighOrder">High order</option>
         <option value="Relocate3D">Relocate 3D</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Optimizer iterations" type="number" value={draft.optimizeIterations} onChange={(event) => updateDraft({ optimizeIterations: event.target.value })} />
-      <FormField disabled={!draft.present} label="Compute quality" type="select" value={draft.computeQuality} onChange={(event) => updateDraft({ computeQuality: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.optimizeIterations} label="Optimizer iterations" type="number" value={draft.optimizeIterations} onChange={(event) => updateDraft({ optimizeIterations: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.computeQuality} label="Compute quality" type="select" value={draft.computeQuality} onChange={(event) => updateDraft({ computeQuality: event.target.value })}>
         <option value="">Inherited</option>
         <option value="true">Enabled</option>
         <option value="false">Disabled</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Per-element quality" type="select" value={draft.perElementQuality} onChange={(event) => updateDraft({ perElementQuality: event.target.value })}>
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.perElementQuality} label="Per-element quality" type="select" value={draft.perElementQuality} onChange={(event) => updateDraft({ perElementQuality: event.target.value })}>
         <option value="">Inherited</option>
         <option value="true">Enabled</option>
         <option value="false">Disabled</option>
       </FormField>
-      <FormField disabled={!draft.present} label="Boundary-layer count" type="number" value={draft.boundaryLayerCount} onChange={(event) => updateDraft({ boundaryLayerCount: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer thickness" type="number" unit="m" value={draft.boundaryLayerThickness} onChange={(event) => updateDraft({ boundaryLayerThickness: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer stretching" type="number" value={draft.boundaryLayerStretching} onChange={(event) => updateDraft({ boundaryLayerStretching: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer surface tags" type="text" value={draft.boundaryLayerTargetSurfaceTags} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceTags: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer curve tags" type="text" value={draft.boundaryLayerTargetCurveTags} onChange={(event) => updateDraft({ boundaryLayerTargetCurveTags: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer surface selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetSurfaceSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceSelectors: event.target.value })} />
-      <FormField disabled={!draft.present} label="Boundary-layer curve selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetCurveSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetCurveSelectors: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerCount} label="Boundary-layer count" type="number" value={draft.boundaryLayerCount} onChange={(event) => updateDraft({ boundaryLayerCount: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerThickness} label="Boundary-layer thickness" type="number" unit="m" value={draft.boundaryLayerThickness} onChange={(event) => updateDraft({ boundaryLayerThickness: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerStretching} label="Boundary-layer stretching" type="number" value={draft.boundaryLayerStretching} onChange={(event) => updateDraft({ boundaryLayerStretching: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerTags} label="Boundary-layer surface tags" type="text" value={draft.boundaryLayerTargetSurfaceTags} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceTags: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerTags} label="Boundary-layer curve tags" type="text" value={draft.boundaryLayerTargetCurveTags} onChange={(event) => updateDraft({ boundaryLayerTargetCurveTags: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerSelectors} label="Boundary-layer surface selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetSurfaceSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetSurfaceSelectors: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.boundaryLayerSelectors} label="Boundary-layer curve selectors" rows={4} type="textarea" value={draft.boundaryLayerTargetCurveSelectors} onChange={(event) => updateDraft({ boundaryLayerTargetCurveSelectors: event.target.value })} />
       <MeshResourceFields
         fields={[
           { label: "Size-field count", value: String(sizeFieldsLength) },
@@ -308,14 +453,14 @@ function ObjectMeshCoreRelaxationSection({
           updateDraft({ coreRelaxationEnabled: event.target.checked })
         }
       />
-      <FormField disabled={disabled} label="Geometry name" type="text" value={draft.coreRelaxationGeometryName} onChange={(event) => updateDraft({ coreRelaxationGeometryName: event.target.value })} />
-      <FormField disabled={disabled} label="Core maximum element size" type="number" unit="m" value={draft.coreRelaxationMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationMaximumElementSize: event.target.value })} />
-      <FormField disabled={disabled} label="Surface maximum element size" type="number" unit="m" value={draft.coreRelaxationSurfaceMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationSurfaceMaximumElementSize: event.target.value })} />
-      <FormField disabled={disabled} label="Surface distance" type="number" unit="m" value={draft.coreRelaxationSurfaceDistance} onChange={(event) => updateDraft({ coreRelaxationSurfaceDistance: event.target.value })} />
-      <FormField disabled={disabled} label="Edge maximum element size" type="number" unit="m" value={draft.coreRelaxationEdgeMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationEdgeMaximumElementSize: event.target.value })} />
-      <FormField disabled={disabled} label="Edge distance" type="number" unit="m" value={draft.coreRelaxationEdgeDistance} onChange={(event) => updateDraft({ coreRelaxationEdgeDistance: event.target.value })} />
-      <FormField disabled={disabled} label="Surface sampling" type="number" value={draft.coreRelaxationSamplingSurface} onChange={(event) => updateDraft({ coreRelaxationSamplingSurface: event.target.value })} />
-      <FormField disabled={disabled} label="Edge sampling" type="number" value={draft.coreRelaxationSamplingEdge} onChange={(event) => updateDraft({ coreRelaxationSamplingEdge: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Geometry name" type="text" value={draft.coreRelaxationGeometryName} onChange={(event) => updateDraft({ coreRelaxationGeometryName: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Core maximum element size" type="number" unit="m" value={draft.coreRelaxationMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Surface maximum element size" type="number" unit="m" value={draft.coreRelaxationSurfaceMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationSurfaceMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Surface distance" type="number" unit="m" value={draft.coreRelaxationSurfaceDistance} onChange={(event) => updateDraft({ coreRelaxationSurfaceDistance: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Edge maximum element size" type="number" unit="m" value={draft.coreRelaxationEdgeMaximumElementSize} onChange={(event) => updateDraft({ coreRelaxationEdgeMaximumElementSize: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Edge distance" type="number" unit="m" value={draft.coreRelaxationEdgeDistance} onChange={(event) => updateDraft({ coreRelaxationEdgeDistance: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Surface sampling" type="number" value={draft.coreRelaxationSamplingSurface} onChange={(event) => updateDraft({ coreRelaxationSamplingSurface: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.coreRelaxation} label="Edge sampling" type="number" value={draft.coreRelaxationSamplingEdge} onChange={(event) => updateDraft({ coreRelaxationSamplingEdge: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -339,14 +484,14 @@ function ObjectMeshManualSizeFieldSection({
           updateDraft({ manualBoxSizeFieldEnabled: event.target.checked })
         }
       />
-      <FormField disabled={disabled} label="Box VIn" type="number" unit="m" value={draft.manualBoxSizeFieldVIn} onChange={(event) => updateDraft({ manualBoxSizeFieldVIn: event.target.value })} />
-      <FormField disabled={disabled} label="Box VOut" type="number" unit="m" value={draft.manualBoxSizeFieldVOut} onChange={(event) => updateDraft({ manualBoxSizeFieldVOut: event.target.value })} />
-      <FormField disabled={disabled} label="Box X min" type="number" unit="m" value={draft.manualBoxSizeFieldXMin} onChange={(event) => updateDraft({ manualBoxSizeFieldXMin: event.target.value })} />
-      <FormField disabled={disabled} label="Box X max" type="number" unit="m" value={draft.manualBoxSizeFieldXMax} onChange={(event) => updateDraft({ manualBoxSizeFieldXMax: event.target.value })} />
-      <FormField disabled={disabled} label="Box Y min" type="number" unit="m" value={draft.manualBoxSizeFieldYMin} onChange={(event) => updateDraft({ manualBoxSizeFieldYMin: event.target.value })} />
-      <FormField disabled={disabled} label="Box Y max" type="number" unit="m" value={draft.manualBoxSizeFieldYMax} onChange={(event) => updateDraft({ manualBoxSizeFieldYMax: event.target.value })} />
-      <FormField disabled={disabled} label="Box Z min" type="number" unit="m" value={draft.manualBoxSizeFieldZMin} onChange={(event) => updateDraft({ manualBoxSizeFieldZMin: event.target.value })} />
-      <FormField disabled={disabled} label="Box Z max" type="number" unit="m" value={draft.manualBoxSizeFieldZMax} onChange={(event) => updateDraft({ manualBoxSizeFieldZMax: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box VIn" type="number" unit="m" value={draft.manualBoxSizeFieldVIn} onChange={(event) => updateDraft({ manualBoxSizeFieldVIn: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box VOut" type="number" unit="m" value={draft.manualBoxSizeFieldVOut} onChange={(event) => updateDraft({ manualBoxSizeFieldVOut: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box X min" type="number" unit="m" value={draft.manualBoxSizeFieldXMin} onChange={(event) => updateDraft({ manualBoxSizeFieldXMin: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box X max" type="number" unit="m" value={draft.manualBoxSizeFieldXMax} onChange={(event) => updateDraft({ manualBoxSizeFieldXMax: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Y min" type="number" unit="m" value={draft.manualBoxSizeFieldYMin} onChange={(event) => updateDraft({ manualBoxSizeFieldYMin: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Y max" type="number" unit="m" value={draft.manualBoxSizeFieldYMax} onChange={(event) => updateDraft({ manualBoxSizeFieldYMax: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Z min" type="number" unit="m" value={draft.manualBoxSizeFieldZMin} onChange={(event) => updateDraft({ manualBoxSizeFieldZMin: event.target.value })} />
+      <FormField disabled={disabled} help={OBJECT_MESH_HELP.manualBox} label="Box Z max" type="number" unit="m" value={draft.manualBoxSizeFieldZMax} onChange={(event) => updateDraft({ manualBoxSizeFieldZMax: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -360,10 +505,12 @@ function ObjectMeshEdgeCornerSection({
 }) {
   return (
     <InspectorSection value="edge" title="Edge And Corner Refinement" collapsible defaultCollapsed={true}>
-      <FormField disabled={!draft.present} label="Edge max. element size" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} label="Edge thickness" type="number" unit="m" value={draft.edgeThickness} onChange={(event) => updateDraft({ edgeThickness: event.target.value })} />
-      <FormField disabled={!draft.present} label="Corner max. element size" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
-      <FormField disabled={!draft.present} label="Corner extent" type="number" unit="m" value={draft.cornerExtent} onChange={(event) => updateDraft({ cornerExtent: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeMaximumElementSize} label="Edge max. element size" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeThickness} label="Edge thickness" type="number" unit="m" value={draft.edgeThickness} onChange={(event) => updateDraft({ edgeThickness: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.edgeTransitionDistance} hint="Positive meters or airbox_boundary" label="Edge transition distance" mono={false} type="text" value={draft.edgeTransitionDistance} onChange={(event) => updateDraft({ edgeTransitionDistance: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerMaximumElementSize} label="Corner max. element size" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerExtent} label="Corner extent" type="number" unit="m" value={draft.cornerExtent} onChange={(event) => updateDraft({ cornerExtent: event.target.value })} />
+      <FormField disabled={!draft.present} help={OBJECT_MESH_HELP.cornerTransitionDistance} hint="Positive meters or airbox_boundary" label="Corner transition distance" mono={false} type="text" value={draft.cornerTransitionDistance} onChange={(event) => updateDraft({ cornerTransitionDistance: event.target.value })} />
     </InspectorSection>
   );
 }
@@ -496,11 +643,18 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const sizeField = useObjectMeshSizeFieldResource(objectId);
   const topology = useObjectTopologyResource(objectId);
   const resource = policy.data ?? defaultObjectMeshPolicyResource(objectId ?? "");
+  const reportRecord = asRecord(report.data?.report);
+  const effectiveTarget = asRecord(recordField(reportRecord, "effective_target")) as JsonObject | null;
   const baseDraft = useMemo(
-    () => draftFromObjectMeshPolicyResource(resource),
-    [resource],
+    () =>
+      draftFromObjectMeshPolicyResource(resource, {
+        effectiveTarget,
+      }),
+    [effectiveTarget, resource],
   );
-  const draftKey = draftKeyForObjectMeshPolicyResource(objectId, resource);
+  const draftKey = draftKeyForObjectMeshPolicyResource(objectId, resource, {
+    effectiveTarget,
+  });
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
     key: draftKey,
@@ -508,8 +662,6 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const reportRecord = asRecord(report.data?.report);
-  const effectiveTarget = asRecord(recordField(reportRecord, "effective_target"));
   const sizeFieldRecord = asRecord(sizeField.data?.size_field);
   const sizeFields = Array.isArray(recordField(sizeFieldRecord, "size_fields"))
     ? (recordField(sizeFieldRecord, "size_fields") as unknown[])
@@ -584,6 +736,23 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  async function buildMesh(): Promise<void> {
+    if (!objectId) {
+      setFeedback({ kind: "error", message: "No selected scene object." });
+      return;
+    }
+
+    setFeedback({
+      kind: "success",
+      message: "Mesh rebuild submitted. The Mesh Build progress dialog will track the command.",
+    });
+    try {
+      await commands.execute("mesh.build-selected", commandContext);
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    }
+  }
+
   return (
     <Accordion
       className="fm-inspector-panel"
@@ -631,7 +800,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         feedback={feedback}
         objectId={objectId}
         onApply={() => void applyPolicy()}
-        onBuild={() => void commands.execute("mesh.build-selected", commandContext)}
+        onBuild={() => void buildMesh()}
         onRevert={() => {
           setDraftState({ draft: baseDraft, key: draftKey });
           setFeedback(null);

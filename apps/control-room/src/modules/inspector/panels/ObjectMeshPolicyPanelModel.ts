@@ -34,10 +34,12 @@ export interface ObjectMeshPolicyDraft {
   coreRelaxationSurfaceMaximumElementSize: string;
   cornerExtent: string;
   cornerMaximumElementSize: string;
+  cornerTransitionDistance: string;
   configText: string;
   curvatureFactor: string;
   edgeMaximumElementSize: string;
   edgeThickness: string;
+  edgeTransitionDistance: string;
   interfaceMaximumElementSize: string;
   interfaceThickness: string;
   manualBoxSizeFieldEnabled: boolean;
@@ -87,8 +89,16 @@ export function formatObjectMeshPolicyConfig(
 
 export function draftFromObjectMeshPolicyResource(
   resource: MeshObjectConfigResource,
+  options: {
+    effectiveTarget?: JsonObject | null | undefined;
+  } = {},
 ): ObjectMeshPolicyDraft {
-  const config = resource.config ?? {};
+  const config = {
+    ...defaultObjectMeshPolicyConfig(),
+    ...targetConfigFromEffectiveObject(options.effectiveTarget),
+    ...(resource.effective_config ?? {}),
+    ...(resource.config ?? {}),
+  };
   const manualBox = readManualBoxSizeField(config.size_fields);
   const coreRelaxation = readObjectCoreRelaxationSizeField(config.size_fields);
 
@@ -123,11 +133,17 @@ export function draftFromObjectMeshPolicyResource(
       coreRelaxation.surfaceMaximumElementSize,
     cornerExtent: readNumberText(config.corner_extent),
     cornerMaximumElementSize: readNumberText(config.corner_maximum_element_size),
+    cornerTransitionDistance: readTransitionDistanceText(
+      config.corner_transition_distance,
+    ),
     calibrateFor: readStringText(config.calibrate_for),
     configText: formatObjectMeshPolicyConfig(resource.config),
     curvatureFactor: readNumberText(config.curvature_factor),
     edgeMaximumElementSize: readNumberText(config.edge_maximum_element_size),
     edgeThickness: readNumberText(config.edge_thickness),
+    edgeTransitionDistance: readTransitionDistanceText(
+      config.edge_transition_distance,
+    ),
     interfaceMaximumElementSize: readNumberText(
       config.interface_hmax ?? config.interface_maximum_element_size,
     ),
@@ -171,7 +187,7 @@ export function draftFromObjectMeshPolicyResource(
     ),
     throughThicknessElements: readNumberText(config.through_thickness_elements),
     throughThicknessSymmetric: readBooleanText(config.through_thickness_symmetric),
-    transitionDistance: readNumberText(config.transition_distance),
+    transitionDistance: readTransitionDistanceText(config.transition_distance),
     transitionGrowth: readNumberText(config.transition_growth),
   };
 }
@@ -179,17 +195,57 @@ export function draftFromObjectMeshPolicyResource(
 export function draftKeyForObjectMeshPolicyResource(
   objectId: string | null | undefined,
   resource: MeshObjectConfigResource,
+  options: {
+    effectiveTarget?: JsonObject | null | undefined;
+  } = {},
 ): string {
+  const effectiveTarget = targetConfigFromEffectiveObject(options.effectiveTarget);
   return [
     objectId ?? "",
     resource.revision,
     formatObjectMeshPolicyConfig(resource.config),
+    formatObjectMeshPolicyConfig(resource.effective_config),
+    formatObjectMeshPolicyConfig(effectiveTarget),
   ].join(":");
+}
+
+function defaultObjectMeshPolicyConfig(): JsonObject {
+  return {
+    algorithm_2d: 6,
+    algorithm_3d: 1,
+    build_requested: false,
+    compute_quality: true,
+    mode: "inherit",
+    narrow_regions: 0,
+    optimize_iterations: 1,
+    per_element_quality: true,
+    size_factor: 1,
+    size_from_curvature: 0,
+    smoothing_steps: 1,
+    through_thickness_symmetric: false,
+  };
+}
+
+function targetConfigFromEffectiveObject(
+  target: JsonObject | null | undefined,
+): JsonObject {
+  if (!target) return {};
+  const config: JsonObject = {};
+  const hmax = target.maximum_element_size ?? target.hmax;
+  const hmin = target.minimum_element_size ?? target.hmin;
+  const growthRate = target.growth_rate ?? target.maximum_element_growth_rate;
+  if (isFiniteNumberLike(hmax)) config.maximum_element_size = hmax;
+  if (isFiniteNumberLike(hmin)) config.minimum_element_size = hmin;
+  if (isFiniteNumberLike(growthRate)) {
+    config.maximum_element_growth_rate = growthRate;
+  }
+  return config;
 }
 
 export function buildObjectMeshPolicyReplaceRequest({
   cornerExtent,
   cornerMaximumElementSize,
+  cornerTransitionDistance,
   algorithm2d,
   algorithm3d,
   boundaryLayerCount,
@@ -213,6 +269,7 @@ export function buildObjectMeshPolicyReplaceRequest({
   curvatureFactor,
   edgeMaximumElementSize,
   edgeThickness,
+  edgeTransitionDistance,
   interfaceMaximumElementSize,
   interfaceThickness,
   manualBoxSizeFieldEnabled,
@@ -267,6 +324,7 @@ export function buildObjectMeshPolicyReplaceRequest({
     text: string,
     label: string,
     integer?: boolean,
+    allowZero?: boolean,
   ]> = [
     ["algorithm_2d", algorithm2d, "Gmsh 2D algorithm", true],
     ["algorithm_3d", algorithm3d, "Gmsh 3D algorithm", true],
@@ -279,8 +337,8 @@ export function buildObjectMeshPolicyReplaceRequest({
     ],
     ["curvature_factor", curvatureFactor, "Curvature factor"],
     ["narrow_region_resolution", narrowRegionResolution, "Narrow region resolution"],
-    ["narrow_regions", narrowRegions, "Narrow regions", true],
-    ["size_from_curvature", sizeFromCurvature, "Size from curvature", true],
+    ["narrow_regions", narrowRegions, "Narrow regions", true, true],
+    ["size_from_curvature", sizeFromCurvature, "Size from curvature", true, true],
     ["size_factor", sizeFactor, "Size factor"],
     ["order", order, "FEM order", true],
     ["smoothing_steps", smoothingSteps, "Smoothing steps", true],
@@ -309,7 +367,6 @@ export function buildObjectMeshPolicyReplaceRequest({
     ],
     ["interface_hmax", interfaceMaximumElementSize, "Interface maximum element size"],
     ["interface_thickness", interfaceThickness, "Interface thickness"],
-    ["transition_distance", transitionDistance, "Transition distance"],
     ["transition_growth", transitionGrowth, "Transition growth"],
     ["edge_maximum_element_size", edgeMaximumElementSize, "Edge maximum element size"],
     ["edge_thickness", edgeThickness, "Edge thickness"],
@@ -321,12 +378,49 @@ export function buildObjectMeshPolicyReplaceRequest({
     ["corner_extent", cornerExtent, "Corner extent"],
   ];
 
-  for (const [key, text, label, integer] of numericFields) {
-    const parsed = parsePositiveNumber(text, label, integer);
+  for (const [key, text, label, integer, allowZero] of numericFields) {
+    const parsed = parsePositiveNumber(text, label, integer, allowZero);
     if (!parsed.ok) return { error: parsed.error };
     applyOptionalNumber(value, key, parsed.value);
   }
   delete value.interface_maximum_element_size;
+
+  const transitionDistanceValue = parseTransitionDistance(
+    transitionDistance,
+    "Transition distance",
+  );
+  if (!transitionDistanceValue.ok) return { error: transitionDistanceValue.error };
+  applyOptionalTransitionDistance(
+    value,
+    "transition_distance",
+    transitionDistanceValue.value,
+  );
+
+  const edgeTransitionDistanceValue = parseTransitionDistance(
+    edgeTransitionDistance,
+    "Edge transition distance",
+  );
+  if (!edgeTransitionDistanceValue.ok) {
+    return { error: edgeTransitionDistanceValue.error };
+  }
+  applyOptionalTransitionDistance(
+    value,
+    "edge_transition_distance",
+    edgeTransitionDistanceValue.value,
+  );
+
+  const cornerTransitionDistanceValue = parseTransitionDistance(
+    cornerTransitionDistance,
+    "Corner transition distance",
+  );
+  if (!cornerTransitionDistanceValue.ok) {
+    return { error: cornerTransitionDistanceValue.error };
+  }
+  applyOptionalTransitionDistance(
+    value,
+    "corner_transition_distance",
+    cornerTransitionDistanceValue.value,
+  );
 
   applyOptionalString(value, "mesh_strategy", meshStrategy);
   applyOptionalString(value, "optimize", optimize);
@@ -778,6 +872,13 @@ function isEditableManualBoxSizeField(
   return draftSource === UNMARKED_MANUAL_BOX_SOURCE && source === null;
 }
 
+function isFiniteNumberLike(value: unknown): value is number | string {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && Number.isFinite(Number(trimmed));
+}
+
 function readNumberText(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -788,6 +889,11 @@ function readNumberText(value: unknown): string {
     return Number.isFinite(Number(trimmed)) ? trimmed : "";
   }
   return "";
+}
+
+function readTransitionDistanceText(value: unknown): string {
+  if (value === "airbox_boundary") return "airbox_boundary";
+  return readNumberText(value);
 }
 
 function readStringText(value: unknown): string {
@@ -814,14 +920,18 @@ function parsePositiveNumber(
   value: string,
   label: string,
   integer = false,
+  allowZero = false,
 ): { ok: true; value: number | null } | { error: string; ok: false } {
   const trimmed = value.trim();
   if (!trimmed) return { ok: true, value: null };
 
   const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const tooSmall = allowZero ? parsed < 0 : parsed <= 0;
+  if (!Number.isFinite(parsed) || tooSmall) {
     return {
-      error: `${label} must be greater than 0.`,
+      error: allowZero
+        ? `${label} must be greater than or equal to 0.`
+        : `${label} must be greater than 0.`,
       ok: false,
     };
   }
@@ -833,6 +943,27 @@ function parsePositiveNumber(
   }
 
   return { ok: true, value: parsed };
+}
+
+function parseTransitionDistance(
+  value: string,
+  label: string,
+):
+  | { ok: true; value: "airbox_boundary" | number | null }
+  | { error: string; ok: false } {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: null };
+  if (trimmed === "airbox_boundary") {
+    return { ok: true, value: "airbox_boundary" };
+  }
+  const parsed = parsePositiveNumber(trimmed, label);
+  if (!parsed.ok) {
+    return {
+      error: `${label} must be a positive number or airbox_boundary.`,
+      ok: false,
+    };
+  }
+  return { ok: true, value: parsed.value };
 }
 
 function parseRequiredPositiveNumber(
@@ -927,6 +1058,19 @@ function applyOptionalNumber(
   config: JsonObject,
   key: string,
   value: number | null,
+): void {
+  if (value === null) {
+    delete config[key];
+    return;
+  }
+
+  config[key] = value;
+}
+
+function applyOptionalTransitionDistance(
+  config: JsonObject,
+  key: string,
+  value: "airbox_boundary" | number | null,
 ): void {
   if (value === null) {
     delete config[key];

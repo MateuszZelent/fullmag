@@ -17,6 +17,8 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/relaxation/nonlinear_cg.hpp"
+#include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 namespace fullmag::fem {
@@ -114,6 +116,52 @@ int run_backend_relaxation_step(
     error.clear();
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
+    if (ctx.gpu_state.device.lifecycle.allocated &&
+        (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB ||
+         algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG)) {
+        int gpu_status = FULLMAG_FEM_OK;
+        {
+            TransferAuditScope hot_loop(
+                ctx.transfer_audit.audit,
+                TransferAuditScopeKind::HotLoop);
+            if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB) {
+                gpu_status =
+                    gpu_relax_projected_gradient_bb_step(ctx, out_stats, error);
+            } else {
+                gpu_status =
+                    gpu_relax_nonlinear_cg_step(ctx, out_stats, error);
+            }
+        }
+        if (ctx.transfer_audit.audit.hot_loop_violation) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            error = ctx.transfer_audit.audit.hot_loop_violation_message;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (ctx.interrupt.step_interrupted) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
+                nullptr,
+                0.0,
+                0.0);
+            out_stats.dt_seconds = 0.0;
+            return FULLMAG_FEM_ERR_INTERRUPTED;
+        }
+        if (gpu_status != FULLMAG_FEM_OK) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+        }
+        return gpu_status;
+    }
     const int status = run_native_relaxation_step(ctx, algorithm, out_stats, error);
     if (ctx.interrupt.step_interrupted) {
         set_stage_completion(

@@ -3,7 +3,7 @@ use crate::types::{
     ExecutedRun, ExecutionProvenance, FemMeshPayload, LivePreviewField, LivePreviewRequest,
     RunError, StepAction, StepStats, StepUpdate,
 };
-use fullmag_ir::ProblemIR;
+use fullmag_ir::{ExecutionPlanIR, ProblemIR};
 use std::sync::atomic::AtomicBool;
 
 /// Geometry information stored by a backend, used for final step updates.
@@ -49,16 +49,21 @@ pub(crate) trait InteractiveBackend {
     /// without needing to rebuild.
     fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError>;
 
+    /// Check whether the backend is compatible with an already materialized
+    /// execution plan.
+    fn matches_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError>;
+
     /// The geometry of the backend (grid for FDM, mesh for FEM).
     fn geometry(&self) -> BackendGeometry;
 
     /// Execute a simulation segment with live preview streaming.
     ///
-    /// The backend plans the problem internally and delegates to the
-    /// appropriate engine-specific execute path.
+    /// The backend consumes an already materialized execution plan so
+    /// interactive compute does not re-sample initial textures.
     fn execute_streaming(
         &mut self,
         problem: &ProblemIR,
+        plan: &ExecutionPlanIR,
         until_seconds: f64,
         field_every_n: u64,
         display_selection: &(dyn Fn() -> crate::DisplaySelectionState + Send + Sync),

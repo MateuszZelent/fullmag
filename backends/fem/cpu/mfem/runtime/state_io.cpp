@@ -10,12 +10,14 @@
 #include "context.hpp"
 #include "core/fem_field_buffers.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fullmag::fem {
@@ -159,12 +161,17 @@ int context_upload_magnetization_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
-    ctx.state.m_xyz.assign(m_xyz, m_xyz + static_cast<size_t>(len));
+    std::vector<double> uploaded_m(m_xyz, m_xyz + static_cast<size_t>(len));
+    project_static_periodic_aos(ctx, uploaded_m);
+    if (!normalize_active_magnetization_aos(ctx, uploaded_m, error)) {
+        error = "upload_magnetization: " + error;
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     if (ctx.gpu_state.device.lifecycle.allocated) {
         if (!gpu_state_upload_magnetization_aos(
                 ctx.gpu_state.device,
-                ctx.state.m_xyz.data(),
-                static_cast<uint64_t>(ctx.state.m_xyz.size()),
+                uploaded_m.data(),
+                static_cast<uint64_t>(uploaded_m.size()),
                 ctx.transfer_audit.audit,
                 error)) {
             return FULLMAG_FEM_ERR_INTERNAL;
@@ -172,6 +179,7 @@ int context_upload_magnetization_f64(
     } else {
         record_host_to_device(ctx.transfer_audit.audit, sizeof(double) * len);
     }
+    ctx.state.m_xyz = std::move(uploaded_m);
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.demag.cache_valid = false;

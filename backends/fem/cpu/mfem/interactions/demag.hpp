@@ -138,6 +138,23 @@ bool compute_demag_field_for_magnetization(
     bool allow_interrupt,
     PhaseTimings *timings,
     std::string &error);
+
+/*
+ * Execute a fresh demag solve for linear-response operator actions.
+ *
+ * This bypasses frozen-field cache reuse/storage even when a demag refresh
+ * interval is configured. It restores public demag visual/cache telemetry that
+ * is mutated as a side effect of the shared Poisson/FEM-BEM solve machinery,
+ * leaving only reusable solver warm-start state intact.
+ */
+bool compute_fresh_demag_field_for_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    bool allow_interrupt,
+    PhaseTimings *timings,
+    std::string &error);
 #endif
 
 } // namespace fullmag::fem

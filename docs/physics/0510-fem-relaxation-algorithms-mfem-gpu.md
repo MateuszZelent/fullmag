@@ -3,7 +3,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-04-15
+- Last updated: 2026-06-03
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -24,25 +24,49 @@ for the FEM backend beyond explicit damped LLG alone.
 
 Current repo status relevant to this note:
 
-- the planner can now construct a bootstrap `FemPlanIR` from a precomputed `MeshIR`,
+- the planner can construct a `FemPlanIR` from a precomputed `MeshIR`,
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
-- the runner now executes bootstrap FEM CPU-reference plans,
+- the runner executes FEM relaxation through the maintained native FEM lanes,
 - `StudyIR::Relaxation` exists and four algorithms are public-executable in at
   least one maintained runtime lane: `llg_overdamped`, `projected_gradient_bb`,
   `nonlinear_cg`, and `tangent_plane_implicit` (see
   `0500-fdm-relaxation-algorithms.md` for the shared stop semantics),
 - native CPU/MFEM owns executable FEM `projected_gradient_bb` and
   `nonlinear_cg` steps through the `fullmag_fem_backend_relax_step` ABI, using
-  tangent gradients, Armijo line search, sphere retraction, and FEM
-  lumped-mass inner products,
+  tangent gradients, Armijo line search, sphere retraction, FEM lumped-mass
+  inner products, and exchange-plus-mass preconditioned gradient directions
+  with Hypre/AMG when the MFEM/Hypre runtime is available,
 - native CPU/MFEM owns executable FEM `tangent_plane_implicit` through the same
-  ABI; it solves a global tangent-plane `mass + step * exchange` linear system
-  and treats the remaining effective-field terms explicitly from the current
-  native snapshot,
+  ABI; it solves a global tangent-plane linear system with `mass + step *
+  exchange` plus local uniaxial/cubic anisotropy, Zeeman tangent curvature, and
+  matrix-free DMI weak-residual and demag fresh-solve actions, while other
+  time-dependent supplied terms remain explicit from the current native
+  snapshot,
 - GPU/libCEED residual kernels, broader preconditioning policy, and
-  full-device-resident tangent-plane solves remain production optimization
-  work, not runner-owned bootstrap paths.
+  full-device-resident tangent-plane solves are under development, not
+  runner-owned fallback paths.
+- native CUDA `projected_gradient_bb` building-block kernels now live under
+  `backends/fem/gpu/cuda/relaxation/`: tangent-gradient projection from
+  `H_eff`, FEM lumped-mass metric reductions, and normalized nodal retraction.
+  `pgbb.cpp` also owns the native GPU PG-BB preflight/step boundary reached
+  from `run_backend_relaxation_step` when a GPU state is allocated. The CUDA
+  branch contains the device-resident Armijo accepted-step loop and BB1/BB2
+  step-size update. Public runner capability now advertises PG-BB on
+  `fem_native_gpu`; runtime provenance keeps controlled compute scalar
+  readbacks for Armijo/BB decisions distinct from rejected exchange hot-loop
+  host sync.
+- native CUDA `nonlinear_cg` now lives under
+  `backends/fem/gpu/cuda/relaxation/`: it owns device-resident tangent-gradient
+  reduction, FEM mass-metric dot products, normalized retraction, Armijo
+  accepted-step loop, persistent search-direction state, PR+ update, rollback,
+  and the native GPU NCG preflight/step boundary reached from
+  `run_backend_relaxation_step` when a GPU state is allocated.
+- runner capability checks keep only `tangent_plane_implicit` on the CPU/MFEM
+  lane. In automatic runtime selection, TPI falls back to the CPU/MFEM lane with
+  explicit provenance; forced GPU selection remains a clear under-development
+  error while its full GPU/libCEED device-resident tangent-plane solve is under
+  development.
 
 Shared stop/refresh semantics now live in
 `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. This note focuses
@@ -56,7 +80,7 @@ For FEM, relaxation is especially important because:
 
 Recommended algorithm families:
 
-1. overdamped LLG with adaptive explicit integrator (bootstrap),
+1. overdamped LLG with adaptive explicit integrator,
 2. projected gradient / Barzilai–Borwein on FE nodal spheres,
 3. nonlinear conjugate gradient with FE-aware preconditioning,
 4. tangent-plane linearly implicit relaxation (recommended production target),
@@ -148,7 +172,7 @@ See:
 
 #### 3.2.1 Algorithm A — overdamped LLG with adaptive explicit RK
 
-This is the easiest bootstrap because it reuses the dynamic RHS machinery.
+This is the easiest baseline because it reuses the dynamic RHS machinery.
 Use adaptive DOPRI54 or similar once explicit RK support exists.
 
 When a relaxation stage needs a pseudo-time execution budget for scheduling,
@@ -191,7 +215,7 @@ Compute a mass-projected gradient
 M_L g = -G(u),
 \]
 
-preferably with lumped mass for bootstrap speed.
+preferably with lumped mass for efficient diagonal-mass updates.
 Take a projected step
 
 \[
@@ -234,6 +258,11 @@ m_n \cdot v_n = 0,
 \]
 
 using a linearized or semi-implicit system built from the exchange, demag, DMI, and Zeeman operators.
+The current CPU/MFEM implementation includes exchange, local uniaxial/cubic
+anisotropy, Zeeman curvature, DMI weak-residual action, and demag fresh-solve
+linear response in that implicit tangent operator. The remaining production gap
+is the full GPU/libCEED/device-resident tangent-plane solve path, not the
+CPU/MFEM demag operator action.
 Then update via
 
 \[
@@ -310,12 +339,19 @@ orchestration, artifacts, provenance, and live updates; it does not own FEM
 line-search or tangent-plane algorithms.
 
 Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use FEM
-lumped-mass inner products and native Armijo line search, but they are not yet
-preconditioned with hypre. `tangent_plane_implicit` is executable on the native
-CPU/MFEM lane through a global tangent-plane `mass + step * exchange` solve; it
-does not yet include a full linearization of demag, DMI, Zeeman, or anisotropy
-inside the implicit operator and is not yet a GPU/libCEED-resident tangent-plane
-solver.
+lumped-mass inner products, native Armijo line search, and
+exchange-plus-mass preconditioned gradients. The preconditioner uses
+HyprePCG/BoomerAMG when available and falls back to serial MFEM CG with a
+Gauss-Seidel smoother otherwise. `tangent_plane_implicit` is executable on the
+native CPU/MFEM lane through a global tangent-plane `mass + step * exchange`
+solve; it includes local anisotropy, Zeeman curvature, DMI weak-residual
+action, and demag fresh-solve linear response in the implicit operator, but is
+not yet a GPU/libCEED-resident tangent-plane solver.
+CPU/MFEM relaxation qualification artifacts carry an `algorithm_policy` block
+with the resolved native realization, FEM mass metric, line-search policy, and
+preconditioner/linear-solver contract. They intentionally do not report an
+actual per-step Hypre-vs-serial preconditioner selection until the native ABI
+exports that runtime measurement.
 
 ### 4.2 ProblemIR representation
 
@@ -362,6 +398,28 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - tangent-plane linear solve convergence benchmark,
 - CPU fallback vs GPU partial-assembly parity.
 
+### 5.4 GPU/libCEED implementation entry point
+
+GPU/libCEED relaxation production units belong under
+`backends/fem/gpu/cuda/relaxation/`, not in a Rust-side solver. The executable
+device-resident direct-minimizer slice currently covers projected-gradient BB
+and nonlinear CG:
+
+- reuse the existing GPU effective-field pipeline for exchange, local fields,
+  DMI, demag, and energy reductions,
+- use the native CUDA tangent-gradient, FEM metric-reduction, and normalized
+  retraction kernels from `pgbb_kernels.cu`,
+- keep Armijo/BB step control inside `pgbb.cpp` without host field copies in
+  the hot loop beyond scalar energy/curvature decisions,
+- publish through the existing `fullmag_fem_backend_relax_step` ABI only after
+  CUDA parity and transfer-audit gates prove that the accepted-step loop has no
+  hidden device-host synchronization beyond scalar convergence decisions.
+
+The tangent-plane implicit GPU/libCEED solve is under development and remains
+outside the active GPU solver set for now. Automatic FEM GPU selection falls
+back to the production CPU/MFEM TPI lane; forced GPU TPI selection fails with a
+clear under-development diagnostic.
+
 ## 6. Completeness checklist
 
 - [x] Python API
@@ -369,11 +427,13 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - [x] Planner
 - [x] Capability matrix
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
-- [x] FEM backend (`llg_overdamped` on CPU reference)
+- [x] FEM backend (`llg_overdamped` on native CPU/MFEM and supported native GPU time-integration lanes)
 - [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` native mass-weighted minimizers)
-- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` hypre-preconditioned minimizers)
-- [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM mass-plus-exchange tangent-plane solve)
-- [ ] FEM backend (`tangent_plane_implicit` full operator linearization and GPU/libCEED residency)
+- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` exchange-plus-mass preconditioned minimizers with Hypre/AMG when available)
+- [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM tangent-plane solve with exchange, local anisotropy, Zeeman, DMI, and demag linear-response actions)
+- [x] FEM GPU backend (`projected_gradient_bb` native CUDA tangent-gradient, mass-metric reduction, normalized-retraction kernels, Armijo/BB step source, native preflight/step boundary, and runner availability)
+- [x] FEM GPU backend (`nonlinear_cg` native CUDA tangent-gradient, mass-metric dot products, normalized retraction, Armijo/PR+ step source, persistent direction state, native preflight/step boundary, and runner availability)
+- [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED device-resident tangent-plane solve; under development)
 - [ ] Hybrid backend
 - [ ] Outputs / observables
 - [ ] Tests / benchmarks

@@ -40,9 +40,10 @@ Interpretation:
 - `corner_transition_distance`: optional air-side transition distance from
   component boundary endpoints back toward the far-field airbox target.
 
-For `Box` and `Translate(Box)`, the two largest dimensions define the in-plane
-axes. The smallest dimension is treated as thickness. Refinement spans the full
-thickness; it does not create separate top/bottom surface shells.
+For `Box`, `Translate(Box)`, and flat `ArchWaveguide` objects with
+`arch_height = 0`, the two largest dimensions define the in-plane axes. The
+smallest dimension is treated as thickness. Refinement spans the full thickness;
+it does not create separate top/bottom surface shells.
 
 For non-box component-aware geometries, edge and corner controls lower to
 distance fields from recovered component boundary curves and curve endpoints.
@@ -54,6 +55,7 @@ can refine the neighboring airbox around sharp magnetic edges.
 V1 supports:
 - `Box`
 - `Translate(Box)`
+- flat `ArchWaveguide` (`arch_height = 0`)
 - FEM shared-domain meshing with component-aware volume identity
 
 V2 additionally supports component-aware edge/corner distance fields for
@@ -82,6 +84,15 @@ For rectangular boxes, refinement is lowered into local background mesh-size
 fields restricted to the ferromagnet volume:
 - four edge-aligned sub-boxes
 - four corner sub-boxes
+
+For flat arch waveguides, the same rectangular in-plane semantics are lowered
+into analytic edge-distance and corner-distance fields restricted to the
+ferromagnet volume. This avoids relying on recovered CAD curve endpoints for the
+magnetic-body refinement while keeping air-side edge/corner plumes as explicit
+boundary-curve and endpoint distance fields.
+The body-local analytic fields are emitted only when the requested edge/corner
+size is finer than the magnetic-body bulk size; otherwise they are a no-op and
+only the air-side plume is kept.
 
 For non-box component-aware geometries, refinement is lowered into unrestricted
 distance fields from component boundary curves and curve endpoints. These fields

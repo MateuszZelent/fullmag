@@ -49,8 +49,12 @@ void managed_runtime_export_keeps_mfem_headers_linkable() {
         export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/share/openmpi/help-mpi-runtime.txt") !=
                 std::string::npos &&
             export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_ess_singleton.so") !=
+                std::string::npos &&
+            export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_plm_isolated.so") !=
+                std::string::npos &&
+            export_script.find(".fullmag/runtimes/fem-gpu-host/openmpi/lib/openmpi3/mca_pmix_isolated.so") !=
                 std::string::npos,
-        "FEM runtime export must validate OpenMPI help files and runtime components");
+        "FEM runtime export must validate OpenMPI help files and singleton/isolated runtime components");
     check(
         export_script.find(".fullmag/runtimes/fem-gpu-host/lib/pmix2/lib/pmix/mca_pcompress_zlib.so") !=
                 std::string::npos &&
@@ -63,6 +67,31 @@ void managed_runtime_export_keeps_mfem_headers_linkable() {
             export_script.find("managed FEM runtime is missing PMIx runtime component") !=
                 std::string::npos,
         "managed FEM launcher must fail fast when exported MPI runtime components are missing");
+    check(
+        export_script.find("copy_native_library_group()") != std::string::npos &&
+            export_script.find("copy_native_library_group \"$FEM_LIB\" libfullmag_fem") !=
+                std::string::npos &&
+            export_script.find("copy_native_library_group \"$FDM_LIB\" libfullmag_fdm") !=
+                std::string::npos,
+        "FEM runtime export must copy native library real files before symlinks");
+    check(
+        export_script.find("OMPI_MCA_btl=\"${OMPI_MCA_btl:-self}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_ess=\"${OMPI_MCA_ess:-singleton}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_plm=\"${OMPI_MCA_plm:-isolated}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_pmix=\"${OMPI_MCA_pmix:-isolated}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_ras=\"${OMPI_MCA_ras:-simulator}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_oob=\"${OMPI_MCA_oob:-tcp}\"") != std::string::npos &&
+            export_script.find("OMPI_MCA_oob_tcp_if_include=lo") != std::string::npos,
+        "managed FEM launcher must force singleton OpenMPI onto isolated local launch with local TCP OOB fallback");
+    check(
+        export_script.find("PMIX_DATADIR=\"${RUNTIME_ROOT}/lib/pmix2/share\"") !=
+                std::string::npos &&
+            export_script.find("PMIX_PKGDATADIR=\"${RUNTIME_ROOT}/lib/pmix2/share/pmix\"") !=
+                std::string::npos &&
+            export_script.find(
+                "PMIX_MCA_mca_base_component_path=\"${RUNTIME_ROOT}/lib/pmix2/lib/pmix\"") !=
+                std::string::npos,
+        "managed FEM launcher must point PMIx at bundled data and component directories");
     check(
         export_script.find("/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so") !=
             std::string::npos &&

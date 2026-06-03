@@ -64,8 +64,8 @@ pub enum RelaxationAlgorithmIR {
     /// transport, periodic restarts, and Armijo backtracking.  Public-executable
     /// on FDM.
     NonlinearCg,
-    /// FEM-only linearly implicit tangent-plane relaxation.  Semantic-only;
-    /// execution deferred until FEM tangent-space infrastructure is ready.
+    /// FEM-only linearly implicit tangent-plane relaxation.  Public-executable
+    /// on the native CPU/MFEM backend; GPU/libCEED execution is still pending.
     TangentPlaneImplicit,
 }
 

@@ -13,8 +13,6 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
     }
 }
 
-pub(crate) const BOOTSTRAP_DIRECT_MINIMIZER_REALIZATION: &str =
-    "bootstrap_snapshot_tangent_gradient";
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
 pub(crate) const NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION: &str = "native_mfem_backend_relax_step";
 
@@ -31,6 +29,6 @@ pub(crate) fn apply_energy_minimizer_provenance(
 
     provenance.requested_energy_minimizer = Some(name.clone());
     provenance.resolved_energy_minimizer = Some(name);
-    provenance.energy_minimizer_realization = Some(BOOTSTRAP_DIRECT_MINIMIZER_REALIZATION.into());
+    provenance.energy_minimizer_realization = None;
     provenance.resolved_integrator = None;
 }

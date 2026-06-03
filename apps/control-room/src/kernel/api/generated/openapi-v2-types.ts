@@ -3107,9 +3107,9 @@ export interface components {
         };
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
-            mesh_adaptivity_state?: Record<string, never> | null;
+            mesh_adaptivity_state?: unknown;
             /** @description Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`. */
-            mesh_capabilities?: Record<string, never> | null;
+            mesh_capabilities?: unknown;
             /** Format: int64 */
             revision: number;
         };
@@ -3180,15 +3180,26 @@ export interface components {
             source_scene_revision?: number | null;
         };
         MeshObjectConfigEntryResource: {
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
             object_id: string;
             object_name: string;
         };
         MeshObjectConfigReplaceRequest: {
-            config?: Record<string, never> | null;
+            config?: {
+                [key: string]: unknown;
+            } | null;
         };
         MeshObjectConfigResource: {
-            config?: Record<string, never> | null;
+            /** @description User-authored per-object mesh policy exactly as committed in the scene. */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Effective policy projection with backend defaults merged for inspectors. */
+            effective_config?: {
+                [key: string]: unknown;
+            } | null;
             object_id: string;
             /** Format: int64 */
             revision: number;
@@ -3229,7 +3240,9 @@ export interface components {
         };
         MeshOperationStatusResource: {
             actual_method?: string | null;
-            details?: Record<string, never> | null;
+            details?: {
+                [key: string]: unknown;
+            } | null;
             kind: string;
             reason?: string | null;
             requested: boolean;
@@ -3364,7 +3377,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             /** @description Solver-domain shared mesh policy. */
-            shared_domain_config: Record<string, never>;
+            shared_domain_config: unknown;
             solver_mesh?: null | components["schemas"]["MeshSolverMeshResource"];
             /** @description Solver-domain universe mesh policy. This endpoint owns mesh semantics, not build diagnostics. */
             universe_config?: Record<string, never> | null;
@@ -3389,7 +3402,9 @@ export interface components {
             config: Record<string, never>;
         };
         MeshSharedDomainConfigResource: {
-            config: Record<string, never>;
+            config: {
+                [key: string]: unknown;
+            };
             /** Format: int64 */
             revision: number;
         };
@@ -3411,12 +3426,12 @@ export interface components {
             source_scene_revision?: number | null;
         };
         MeshSharedDomainQualityResource: {
-            quality?: Record<string, never> | null;
+            quality?: unknown;
             /** Format: int64 */
             revision: number;
         };
         MeshSharedDomainReportResource: {
-            report?: Record<string, never> | null;
+            report?: unknown;
             /** Format: int64 */
             revision: number;
         };
@@ -3432,13 +3447,13 @@ export interface components {
         };
         MeshSummaryResource: {
             /** @description Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`. */
-            effective_airbox_target?: Record<string, never> | null;
+            effective_airbox_target?: unknown;
             /** @description Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`. */
-            effective_per_object_targets?: Record<string, never> | null;
+            effective_per_object_targets?: unknown;
             /** @description Transitional dashboard quality summary. Detailed quality diagnostics are owned by `meshing/meshes/*\/quality`. */
-            mesh_quality_summary?: Record<string, never> | null;
+            mesh_quality_summary?: unknown;
             /** @description Lightweight dashboard mesh counts/shape summary. Detailed topology lives in mesh topology resources. */
-            mesh_summary?: Record<string, never> | null;
+            mesh_summary?: unknown;
             /** Format: int64 */
             revision: number;
         };
@@ -3463,10 +3478,19 @@ export interface components {
             warnings?: string[];
         };
         MeshUniverseConfigReplaceRequest: {
-            config: Record<string, never>;
+            config: {
+                [key: string]: unknown;
+            };
         };
         MeshUniverseConfigResource: {
-            config?: Record<string, never> | null;
+            /** @description User-authored universe mesh policy exactly as committed in the scene. */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Effective policy projection with backend defaults merged for inspectors. */
+            effective_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Format: int64 */
             revision: number;
         };

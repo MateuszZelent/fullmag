@@ -1,9 +1,9 @@
 # ── FEM Backend ──
 # Builds libfullmag_fem as a shared library.
-# Current stage: ABI + dispatch scaffold.
-# Real MFEM/libCEED/hypre sources will be added behind FULLMAG_USE_MFEM_STACK.
+# Current stage: canonical native FEM backend with CPU/MFEM production
+# relaxation and gated CUDA runtime sources behind FULLMAG_ENABLE_CUDA.
 
-option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend scaffold" ON)
+option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 
 set(FEM_PUBLIC_HEADERS
@@ -32,6 +32,9 @@ set(FEM_SOURCES
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
     gpu/cuda/reductions/reduction_workspace_memory.cpp
+    gpu/cuda/relaxation/nonlinear_cg.cpp
+    gpu/cuda/relaxation/pgbb.cpp
+    gpu/cuda/relaxation/relaxation_memory.cpp
     gpu/cuda/state/device_memory.cpp
     gpu/cuda/state/gpu_state.cpp
     gpu/cuda/state/magnetization_memory.cpp
@@ -206,6 +209,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
+            gpu/cuda/relaxation/pgbb_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu

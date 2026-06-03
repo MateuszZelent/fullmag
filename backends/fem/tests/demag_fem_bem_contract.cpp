@@ -56,7 +56,22 @@ std::filesystem::path fem_source_root() {
 }
 
 std::filesystem::path repo_root() {
-    return fem_source_root().parent_path().parent_path().parent_path();
+    auto path = fem_source_root();
+    for (int depth = 0; depth < 8; ++depth) {
+        if (std::filesystem::exists(path / "Cargo.toml") &&
+            std::filesystem::exists(path / "justfile")) {
+            return path;
+        }
+        if (!path.has_parent_path()) {
+            break;
+        }
+        path = path.parent_path();
+    }
+    std::fprintf(
+        stderr,
+        "FAIL: unable to locate repository root from %s\n",
+        fem_source_root().string().c_str());
+    std::exit(1);
 }
 
 fullmag::fem::Context unit_tet_context() {
@@ -422,9 +437,11 @@ void fem_bem_sparse_solve_is_owned_by_linear_solve_module() {
 
     const char *symbols[] = {
         "bool solve_demag_fem_bem_sparse_system(",
+        "bool solve_demag_fem_bem_serial_system(",
+        "bool should_use_hypre_fem_bem_solver(",
         "void destroy_fem_bem_hypre_cache(",
         "struct FemBemHypreCache",
-        "FEM/BEM demag requires an MPI/Hypre-enabled MFEM runtime",
+        "FULLMAG_FEM_FEM_BEM_LINEAR_SOLVER",
     };
     for (const char *symbol : symbols) {
         check(

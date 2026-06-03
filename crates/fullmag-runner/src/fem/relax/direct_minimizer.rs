@@ -12,7 +12,6 @@ use crate::dispatch::flatten_vectors;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
-use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 use super::preview::build_fem_cached_preview_fields;
@@ -20,6 +19,7 @@ use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
     pub(crate) latest_stats: Option<StepStats>,
+    pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
 }
@@ -33,10 +33,10 @@ pub(crate) fn execute_direct_minimizer(
     mut live: Option<&mut LiveStepConsumer<'_>>,
     artifacts: &mut ArtifactRecorder,
     steps: &mut Vec<StepStats>,
-    energy_plateau: &mut RelaxationEnergyPlateauWindow,
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
+    let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
     let mut accepted_steps = 0u64;
@@ -119,20 +119,11 @@ pub(crate) fn execute_direct_minimizer(
             break;
         }
 
-        if control
-            .stop
-            .torque_tolerance_apm
-            .is_some_and(|threshold| current_stats.max_torque_Apm <= threshold)
-        {
-            break;
-        }
-
         let Some(mut accepted_stats) = backend.relax_step(control.algorithm, node_count)? else {
             cancelled = true;
             break;
         };
         accepted_steps += 1;
-        let torque_apm = accepted_stats.max_torque_Apm;
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
         artifacts.record_scalar(&accepted_stats)?;
@@ -144,14 +135,15 @@ pub(crate) fn execute_direct_minimizer(
             break;
         }
 
-        let energy_plateau_range = energy_plateau.record(current_stats.e_total);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
+        if let Some(completion) = backend.stage_completion()? {
+            backend_completion = Some(completion);
             break;
         }
     }
 
     Ok(DirectMinimizerExecution {
         latest_stats,
+        backend_completion,
         cancelled,
         paused,
     })

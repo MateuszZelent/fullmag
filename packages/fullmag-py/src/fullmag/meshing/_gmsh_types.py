@@ -10,6 +10,10 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
+FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
+
+
 @dataclass(frozen=True, slots=True)
 class MeshQualityReport:
     """Per-element quality metrics extracted from Gmsh.
@@ -542,7 +546,11 @@ class MeshData:
         resolved_eps = (
             float(eps_volume)
             if eps_volume is not None
-            else max(np.finfo(np.float64).tiny, (scale if scale > 0.0 else 1.0) ** 3 * 1e-18)
+            else max(
+                np.finfo(np.float64).tiny,
+                FEM_TOPOLOGY_VOLUME_EPS,
+                (scale if scale > 0.0 else 1.0) ** 3 * 1e-18,
+            )
         )
         bad_volume = np.flatnonzero(np.abs(volumes) <= resolved_eps)
         if bad_volume.size:

@@ -14,22 +14,37 @@ use super::super::engine::FemEngineKind;
 
 /// Whether a given algorithm is executable on a given FEM engine.
 ///
-/// This table describes runner-level availability. Native backend lane
-/// restrictions, such as CPU/MFEM-only direct minimizers, are reported by the
-/// backend when the ABI step is executed.
+/// This table describes runner-level availability. Keep it aligned with the
+/// native backend lanes: projected-gradient BB and nonlinear-CG are implemented
+/// on the CPU/MFEM and native CUDA lanes. TPI is production on the CPU/MFEM lane;
+/// the GPU/libCEED tangent-plane solver is under development.
 pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKind) -> bool {
     match (algorithm, engine) {
         // LlgOverdamped is the primary production path on both engines.
         (RelaxationAlgorithmIR::LlgOverdamped, _) => true,
 
-        // Direct minimizers are native FEM ABI paths. The current native
-        // implementation accepts CPU/MFEM contexts and rejects GPU-resident
-        // minimization explicitly at the backend boundary.
-        (RelaxationAlgorithmIR::ProjectedGradientBb, _) => true,
-        (RelaxationAlgorithmIR::NonlinearCg, _) => true,
+        // PG-BB has production native FEM ABI paths on CPU/MFEM and CUDA.
+        (RelaxationAlgorithmIR::ProjectedGradientBb, FemEngineKind::CpuNative) => true,
+        (RelaxationAlgorithmIR::ProjectedGradientBb, FemEngineKind::NativeGpu) => true,
 
-        (RelaxationAlgorithmIR::TangentPlaneImplicit, _) => true,
+        // NCG has native FEM ABI paths on CPU/MFEM and CUDA.
+        (RelaxationAlgorithmIR::NonlinearCg, FemEngineKind::CpuNative) => true,
+        (RelaxationAlgorithmIR::NonlinearCg, FemEngineKind::NativeGpu) => true,
+
+        // TPI solves a global MFEM tangent-plane system on the CPU/MFEM lane.
+        // The GPU/libCEED tangent-plane solver is intentionally under development.
+        (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::CpuNative) => true,
+
+        (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::NativeGpu) => false,
     }
+}
+
+/// Whether the algorithm currently requires the CPU/MFEM native relaxation lane.
+pub fn requires_cpu_mfem_relaxation_lane(algorithm: RelaxationAlgorithmIR) -> bool {
+    matches!(
+        algorithm,
+        RelaxationAlgorithmIR::TangentPlaneImplicit
+    )
 }
 
 /// Whether the algorithm uses the direct energy-minimization code path
@@ -105,12 +120,21 @@ pub fn check_algorithm_support(
     };
 
     if !algorithm_supported(control.algorithm, engine) {
+        let supported = match engine {
+            FemEngineKind::CpuNative => {
+                "llg_overdamped, projected_gradient_bb, nonlinear_cg, tangent_plane_implicit"
+            }
+            FemEngineKind::NativeGpu => "llg_overdamped, projected_gradient_bb, nonlinear_cg",
+        };
         return Err(RunError {
             message: format!(
                 "FEM relaxation algorithm `{}` is not yet supported on engine `{}`. \
-                 Supported algorithms: llg_overdamped, projected_gradient_bb, nonlinear_cg, tangent_plane_implicit.",
+                 Supported algorithms on this engine: {}. \
+                 CPU/MFEM owns the production tangent_plane_implicit implementation; \
+                 its full GPU/libCEED device-resident algorithm is under development.",
                 algorithm_provenance_name(control.algorithm),
                 engine.id(),
+                supported,
             ),
         });
     }
@@ -143,7 +167,7 @@ mod tests {
             RelaxationAlgorithmIR::TangentPlaneImplicit,
             FemEngineKind::CpuNative
         ));
-        assert!(algorithm_supported(
+        assert!(!algorithm_supported(
             RelaxationAlgorithmIR::TangentPlaneImplicit,
             FemEngineKind::NativeGpu
         ));
@@ -155,9 +179,81 @@ mod tests {
     }
 
     #[test]
+    fn projected_gradient_bb_is_native_fem_cpu_and_gpu_algorithm() {
+        let pgbb = control(RelaxationAlgorithmIR::ProjectedGradientBb);
+        assert!(!requires_cpu_mfem_relaxation_lane(
+            RelaxationAlgorithmIR::ProjectedGradientBb
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            FemEngineKind::CpuNative
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            FemEngineKind::NativeGpu
+        ));
+        assert_eq!(
+            native_step_control(Some(&pgbb)).map(|control| control.algorithm),
+            Some(RelaxationAlgorithmIR::ProjectedGradientBb)
+        );
+        assert!(check_algorithm_support(Some(&pgbb), FemEngineKind::CpuNative).is_ok());
+        assert!(check_algorithm_support(Some(&pgbb), FemEngineKind::NativeGpu).is_ok());
+    }
+
+    #[test]
+    fn nonlinear_cg_is_native_fem_cpu_and_gpu_algorithm() {
+        let ncg = control(RelaxationAlgorithmIR::NonlinearCg);
+        assert!(!requires_cpu_mfem_relaxation_lane(
+            RelaxationAlgorithmIR::NonlinearCg
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::NonlinearCg,
+            FemEngineKind::CpuNative
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::NonlinearCg,
+            FemEngineKind::NativeGpu
+        ));
+        assert_eq!(
+            native_step_control(Some(&ncg)).map(|control| control.algorithm),
+            Some(RelaxationAlgorithmIR::NonlinearCg)
+        );
+        assert!(check_algorithm_support(Some(&ncg), FemEngineKind::CpuNative).is_ok());
+        assert!(check_algorithm_support(Some(&ncg), FemEngineKind::NativeGpu).is_ok());
+    }
+
+    #[test]
+    fn tangent_plane_implicit_is_not_reported_as_gpu_supported() {
+        let control = control(RelaxationAlgorithmIR::TangentPlaneImplicit);
+        assert!(requires_cpu_mfem_relaxation_lane(
+            RelaxationAlgorithmIR::TangentPlaneImplicit
+        ));
+        assert!(algorithm_supported(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+            FemEngineKind::CpuNative
+        ));
+        assert!(!algorithm_supported(
+            RelaxationAlgorithmIR::TangentPlaneImplicit,
+            FemEngineKind::NativeGpu
+        ));
+        let err = check_algorithm_support(Some(&control), FemEngineKind::NativeGpu)
+            .expect_err("TPI must not advertise GPU support before the global GPU solver exists");
+        assert!(err.message.contains("fem_native_gpu"), "{}", err.message);
+        assert!(
+            err.message.contains("tangent_plane_implicit")
+                && err.message.contains("CPU/MFEM")
+                && err.message.contains("GPU/libCEED")
+                && err.message.contains("under development"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
     fn llg_overdamped_stays_on_time_integrator_path() {
         let llg = control(RelaxationAlgorithmIR::LlgOverdamped);
         assert!(native_step_control(Some(&llg)).is_none());
         assert!(check_algorithm_support(Some(&llg), FemEngineKind::CpuNative).is_ok());
+        assert!(check_algorithm_support(Some(&llg), FemEngineKind::NativeGpu).is_ok());
     }
 }

@@ -104,6 +104,8 @@ from fullmag.meshing._gmsh_extraction import (
 )
 from fullmag.meshing._gmsh_fields import (
     _add_axis_aligned_box_distance_threshold_field,
+    _add_curvature_surface_field,
+    _add_narrow_region_field,
     validate_size_field_config,
 )
 from fullmag.meshing._gmsh_selectors import (
@@ -197,6 +199,26 @@ class MeshScaffoldTests(unittest.TestCase):
                     [1.0, 0.0, 0.0],
                     [2.0, 0.0, 0.0],
                     [3.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros((0,), dtype=np.int32),
+        )
+
+        with self.assertRaisesRegex(ValueError, "degenerate tetra volume"):
+            mesh.validate_strict()
+
+    def test_meshdata_validate_strict_rejects_fem_topology_floor_tets(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [9.0e-11, 0.0, 0.0],
+                    [0.0, 9.0e-11, 0.0],
+                    [0.0, 0.0, 9.0e-11],
                 ],
                 dtype=np.float64,
             ),
@@ -2672,6 +2694,153 @@ class MeshScaffoldTests(unittest.TestCase):
             )
         )
 
+    def test_curvature_factor_field_targets_only_curved_surfaces(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next = 1
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+
+            def add(self, kind: str) -> int:
+                current = self._next
+                self._next += 1
+                self.kinds[current] = kind
+                return current
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+        fake_field_api = _FakeFieldApi()
+
+        class _FakeModel:
+            mesh = type("FakeMesh", (), {"field": fake_field_api})()
+
+            @staticmethod
+            def getParametrizationBounds(dim: int, tag: int) -> tuple[list[float], list[float]]:
+                return [0.0, 0.0], [1.0, 1.0]
+
+            @staticmethod
+            def getCurvature(dim: int, tag: int, coords: list[float]) -> list[float]:
+                count = len(coords) // 2
+                return ([0.0] * count) if tag == 1 else ([2.0] * count)
+
+        fake_gmsh = type("FakeGmsh", (), {"model": _FakeModel()})()
+
+        field_id = _add_curvature_surface_field(
+            fake_gmsh,
+            curvature_samples=8,
+            hmax=1.0,
+            curvature_factor=0.4,
+            component_surface_tags={"body": [1, 2]},
+        )
+
+        self.assertIsNotNone(field_id)
+        distance_ids = [
+            field_id
+            for field_id, kind in fake_field_api.kinds.items()
+            if kind == "Distance"
+        ]
+        threshold_ids = [
+            field_id
+            for field_id, kind in fake_field_api.kinds.items()
+            if kind == "Threshold"
+        ]
+        self.assertEqual(len(distance_ids), 1)
+        self.assertEqual(fake_field_api.numbers[(distance_ids[0], "SurfacesList")], [2.0])
+        self.assertEqual(len(threshold_ids), 1)
+        self.assertAlmostEqual(fake_field_api.numbers[(threshold_ids[0], "SizeMin")], 0.2)
+
+    def test_curvature_factor_field_skips_flat_surfaces(self) -> None:
+        class _FakeFieldApi:
+            def add(self, kind: str) -> int:
+                raise AssertionError("flat curvature should not create size fields")
+
+        class _FakeModel:
+            mesh = type("FakeMesh", (), {"field": _FakeFieldApi()})()
+
+            @staticmethod
+            def getParametrizationBounds(dim: int, tag: int) -> tuple[list[float], list[float]]:
+                return [0.0, 0.0], [1.0, 1.0]
+
+            @staticmethod
+            def getCurvature(dim: int, tag: int, coords: list[float]) -> list[float]:
+                return [0.0] * (len(coords) // 2)
+
+        fake_gmsh = type("FakeGmsh", (), {"model": _FakeModel()})()
+
+        field_id = _add_curvature_surface_field(
+            fake_gmsh,
+            curvature_samples=8,
+            hmax=1.0,
+            curvature_factor=0.4,
+            component_surface_tags={"body": [1]},
+        )
+
+        self.assertIsNone(field_id)
+
+    def test_narrow_region_field_adds_component_volume_span_constraint(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self._next = 1
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], float | list[float]] = {}
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                current = self._next
+                self._next += 1
+                self.kinds[current] = kind
+                return current
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = float(value)
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                if isinstance(values, list):
+                    self.numbers[(field_id, key)] = [float(v) for v in values]
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+        fake_field_api = _FakeFieldApi()
+
+        class _FakeModel:
+            mesh = type("FakeMesh", (), {"field": fake_field_api})()
+
+            @staticmethod
+            def getBoundingBox(dim: int, tag: int) -> tuple[float, float, float, float, float, float]:
+                if dim == 3 and tag == 11:
+                    return (0.0, 0.0, 0.0, 100e-9, 40e-9, 6e-9)
+                raise ValueError("unexpected entity")
+
+        fake_gmsh = type("FakeGmsh", (), {"model": _FakeModel()})()
+
+        field_id = _add_narrow_region_field(
+            fake_gmsh,
+            n_resolve=5,
+            hmax=20e-9,
+            hmin=0.5e-9,
+            component_surface_tags={"body": [1]},
+            component_volume_tags={"body": [11]},
+        )
+
+        self.assertIsNotNone(field_id)
+        constant_ids = [
+            field_id
+            for field_id, kind in fake_field_api.kinds.items()
+            if kind == "Constant"
+        ]
+        self.assertEqual(len(constant_ids), 1)
+        constant_id = constant_ids[0]
+        self.assertEqual(fake_field_api.numbers[(constant_id, "VolumesList")], [11.0])
+        self.assertAlmostEqual(fake_field_api.numbers[(constant_id, "VIn")], 1.2e-9)
+        self.assertAlmostEqual(fake_field_api.numbers[(constant_id, "VOut")], 20e-9)
+        self.assertIn("Min", fake_field_api.kinds.values())
+
     def test_size_field_schema_rejects_missing_required_params(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing required params: DistMax"):
             validate_size_field_config(
@@ -3012,6 +3181,53 @@ class MeshScaffoldTests(unittest.TestCase):
         expr = fake_field_api.strings[(field_id, "F")]
         self.assertIn("log(20 / 2)", expr)
         self.assertIn("log(1.45)", expr)
+
+    def test_axis_aligned_box_airbox_boundary_ramp_uses_per_face_clearance(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self.next_id = 0
+                self.strings: dict[tuple[int, str], str] = {}
+
+            def add(self, kind: str) -> int:
+                self.next_id += 1
+                return self.next_id
+
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
+
+        fake_field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {
+                "model": type(
+                    "FakeModel",
+                    (),
+                    {"mesh": type("FakeMesh", (), {"field": fake_field_api})()},
+                )(),
+            },
+        )()
+
+        field_id = _add_axis_aligned_box_distance_threshold_field(
+            fake_gmsh,
+            bounds_min=(-1.0, -1.0, -0.5),
+            bounds_max=(1.0, 1.0, 0.5),
+            airbox_bounds_min=(-3.0, -2.0, -1.5),
+            airbox_bounds_max=(3.0, 2.0, 1.5),
+            size_min=2.0,
+            size_max=20.0,
+            dist_min=0.25,
+            dist_max=2.0,
+        )
+
+        self.assertIsNotNone(field_id)
+        expr = fake_field_api.strings[(field_id, "F")]
+        self.assertNotIn("Sqrt(", expr)
+        self.assertIn("Max(-1 - x, 0)", expr)
+        self.assertIn("Max(x - 1, 0)", expr)
+        self.assertIn("Max(-0.5 - z, 0)", expr)
+        self.assertIn("/ 1.75", expr)
+        self.assertIn("/ 0.75", expr)
 
     def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
         try:
@@ -4688,6 +4904,75 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(fields[4]["params"]["XMax"], -4.25)
         self.assertAlmostEqual(fields[4]["params"]["YMax"], -1.25)
 
+    def test_flat_arch_perimeter_refinement_uses_component_scoped_sub_boxes(self) -> None:
+        arch = fm.ArchWaveguide(
+            length=10.0,
+            width=4.0,
+            height=1.0,
+            arch_height=0.0,
+            name="flat_arch",
+        )
+        fields = _build_perimeter_refinement_fields(
+            [arch],
+            default_hmax=20e-9,
+            override_by_name={
+                "flat_arch": {
+                    "edge_hmax": "5e-9",
+                    "edge_thickness": "1.0",
+                    "corner_hmax": "3e-9",
+                    "corner_extent": "0.75",
+                },
+            },
+            component_aware=True,
+        )
+
+        self.assertEqual(len(fields), 4)
+        body_fields = [
+            field
+            for field in fields
+            if field["kind"] == "ComponentRestrictedRectangularPerimeter"
+        ]
+        self.assertEqual(len(body_fields), 2)
+        self.assertEqual(body_fields[0]["params"]["GeometryName"], "flat_arch")
+        self.assertEqual(body_fields[0]["params"]["Mode"], "edge")
+        self.assertEqual(body_fields[0]["params"]["AxisA"], 0)
+        self.assertEqual(body_fields[0]["params"]["AxisB"], 1)
+        self.assertAlmostEqual(body_fields[0]["params"]["Extent"], 1.0)
+        self.assertEqual(body_fields[1]["params"]["Mode"], "corner")
+        self.assertAlmostEqual(body_fields[1]["params"]["Extent"], 0.75)
+        self.assertEqual(fields[2]["kind"], "EdgeDistanceThreshold")
+        self.assertEqual(fields[3]["kind"], "CornerDistanceThreshold")
+
+    def test_flat_arch_perimeter_refinement_skips_body_no_op_fields(self) -> None:
+        arch = fm.ArchWaveguide(
+            length=10.0,
+            width=4.0,
+            height=1.0,
+            arch_height=0.0,
+            name="flat_arch",
+        )
+        fields = _build_perimeter_refinement_fields(
+            [arch],
+            default_hmax=1e-6,
+            override_by_name={
+                "flat_arch": {
+                    "hmax": "40e-9",
+                    "edge_hmax": "40e-9",
+                    "edge_thickness": "40e-9",
+                    "edge_transition_distance": "airbox_boundary",
+                    "corner_hmax": "40e-9",
+                    "corner_extent": "40e-9",
+                    "corner_transition_distance": "airbox_boundary",
+                },
+            },
+            airbox_bounds=((-10.0, -8.0, -2.0), (10.0, 8.0, 2.0)),
+            component_aware=True,
+        )
+
+        kinds = [field["kind"] for field in fields]
+        self.assertNotIn("ComponentRestrictedRectangularPerimeter", kinds)
+        self.assertEqual(kinds, ["EdgeDistanceThreshold", "CornerDistanceThreshold"])
+
     def test_box_edge_corner_refinement_emits_air_side_distance_fields(self) -> None:
         left = fm.Box(10.0, 4.0, 1.0, name="left")
         fields = _build_perimeter_refinement_fields(
@@ -4871,6 +5156,14 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(corner_fields), 1)
         self.assertAlmostEqual(transition_fields[0]["params"]["DistMin"], 40e-9)
         self.assertAlmostEqual(transition_fields[0]["params"]["DistMax"], 750e-9)
+        self.assertEqual(
+            transition_fields[0]["params"]["AirboxBoundsMin"],
+            [-2000e-9, -1250e-9, -300e-9],
+        )
+        self.assertEqual(
+            transition_fields[0]["params"]["AirboxBoundsMax"],
+            [2000e-9, 1250e-9, 300e-9],
+        )
         self.assertAlmostEqual(edge_fields[0]["params"]["DistMin"], 40e-9)
         self.assertAlmostEqual(edge_fields[0]["params"]["DistMax"], 750e-9)
         expected_corner_distance = ((750e-9) ** 2 + (750e-9) ** 2 + (280e-9) ** 2) ** 0.5

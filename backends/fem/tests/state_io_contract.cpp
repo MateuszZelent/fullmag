@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -121,6 +122,9 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
 void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 2;
+    ctx.mesh.periodic_reduced_node = {0u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u};
+    ctx.mesh.periodic_reduced_node_count = 1u;
     ctx.zeeman.has_external_field = true;
     ctx.exchange.enabled = false;
     ctx.demag.enabled = false;
@@ -138,22 +142,30 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     ctx.thermal_brown.last_refresh_dt = 3.0;
 
     const double m_xyz[] = {
-        0.0, 0.0, 1.0,
-        1.0, 0.0, 0.0,
+        0.0, 0.0, 5.0,
+        2.0, 0.0, 0.0,
     };
     std::string error;
     check(
         fullmag::fem::context_upload_magnetization_f64(ctx, m_xyz, 6, error) ==
             FULLMAG_FEM_OK,
         "host-resident magnetization upload should succeed");
-    check(ctx.state.m_xyz == std::vector<double>(m_xyz, m_xyz + 6), "magnetization copied");
+    const std::vector<double> expected_m = {
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0,
+    };
+    check(ctx.state.m_xyz == expected_m, "magnetization normalized and periodic-projected");
     check(!ctx.stepper.workspace.fsal_valid, "FSAL cache invalidated");
     check(ctx.adaptive_dt.prev_error_norm == 1.0, "adaptive previous error reset");
     check(!ctx.demag.cache_valid, "demag cache invalidated");
     check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
     check(ctx.exchange.h_xyz == std::vector<double>(6, 0.0), "disabled exchange field zeroed");
     check(ctx.demag.h_xyz == std::vector<double>(6, 0.0), "disabled demag field zeroed");
-    check(ctx.effective_field.h_xyz == ctx.zeeman.h_ext_xyz, "fallback H_eff seeded from external field");
+    const std::vector<double> expected_h_eff = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    check(ctx.effective_field.h_xyz == expected_h_eff, "H_eff seeded and periodic-projected from external field");
     check(ctx.thermal_brown.sigma == 0.0, "thermal sigma reset");
     check(ctx.thermal_brown.last_refresh_time == -1.0, "thermal refresh time reset");
     check(ctx.thermal_brown.last_refresh_dt == -1.0, "thermal refresh dt reset");
@@ -166,11 +178,29 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
         "host-resident upload must record H2D transfer audit");
 }
 
+void upload_rejects_zero_active_magnetization() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.zeeman.has_external_field = false;
+    ctx.exchange.enabled = false;
+    ctx.demag.enabled = false;
+    const double m_xyz[] = {0.0, 0.0, 0.0};
+    std::string error;
+    check(
+        fullmag::fem::context_upload_magnetization_f64(ctx, m_xyz, 3, error) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "zero active upload must be rejected");
+    check(
+        error.find("zero or invalid magnetization norm") != std::string::npos,
+        "zero active upload error string");
+}
+
 } // namespace
 
 int main() {
     context_state_io_is_owned_by_runtime_module();
     observable_copy_prefers_visual_demag_and_effective_fields();
     upload_magnetization_updates_host_state_and_invalidates_runtime_caches();
+    upload_rejects_zero_active_magnetization();
     return 0;
 }

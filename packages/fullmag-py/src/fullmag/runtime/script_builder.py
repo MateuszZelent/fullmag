@@ -1437,11 +1437,9 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
         "size_from_curvature",
         "smoothing_steps",
         "optimize_iterations",
-        "curvature_factor",
         "growth_rate",
         "maximum_element_growth_rate",
         "narrow_regions",
-        "narrow_region_resolution",
         "transition_growth",
         "boundary_layer_count",
         "boundary_layer_thickness",
@@ -1486,6 +1484,18 @@ def _render_thin_film_mesh_kwargs(mesh_config: dict[str, object]) -> list[str] |
     order_value = mesh_config.get("order")
     if isinstance(order_value, (int, float)):
         kwargs.append(f"order={int(order_value)}")
+
+    curvature_factor_value = _number_or_none(mesh_config.get("curvature_factor"))
+    if curvature_factor_value is not None:
+        kwargs.append(f"curvature_factor={_py_number(curvature_factor_value)}")
+
+    narrow_region_resolution_value = _number_or_none(
+        mesh_config.get("narrow_region_resolution")
+    )
+    if narrow_region_resolution_value is not None:
+        kwargs.append(
+            f"narrow_region_resolution={_py_number(narrow_region_resolution_value)}"
+        )
 
     interface_hmax_value = _number_or_none(mesh_config.get("interface_hmax"))
     if interface_hmax_value is not None:

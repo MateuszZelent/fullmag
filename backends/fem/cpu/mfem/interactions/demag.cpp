@@ -19,6 +19,53 @@
 
 namespace fullmag::fem {
 
+#if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+struct FreshDemagSolveSideEffects {
+    std::vector<double> h_visual_xyz;
+    double cached_robin_boundary_energy = 0.0;
+    uint64_t call_count = 0;
+    int last_iterations = 0;
+    double last_residual = 0.0;
+    uint64_t last_setup_wall_time_ns = 0;
+    uint64_t last_solver_apply_wall_time_ns = 0;
+    uint64_t step_solver_apply_wall_time_ns = 0;
+    bool last_solver_setup_reused = false;
+    uint32_t solves_current_step = 0;
+
+    explicit FreshDemagSolveSideEffects(const Context &ctx)
+        : h_visual_xyz(ctx.demag.h_visual_xyz)
+        , cached_robin_boundary_energy(ctx.demag.cached_robin_boundary_energy)
+        , call_count(ctx.demag.call_count)
+        , last_iterations(ctx.poisson_demag.last_iterations)
+        , last_residual(ctx.poisson_demag.last_residual)
+        , last_setup_wall_time_ns(ctx.poisson_demag.last_setup_wall_time_ns)
+        , last_solver_apply_wall_time_ns(ctx.poisson_demag.last_solver_apply_wall_time_ns)
+        , step_solver_apply_wall_time_ns(ctx.poisson_demag.step_solver_apply_wall_time_ns)
+        , last_solver_setup_reused(ctx.poisson_demag.last_solver_setup_reused)
+        , solves_current_step(ctx.poisson_demag.solves_current_step)
+    {
+    }
+
+    void restore(Context &ctx) const
+    {
+        ctx.demag.h_visual_xyz = h_visual_xyz;
+        ctx.demag.cached_robin_boundary_energy = cached_robin_boundary_energy;
+        ctx.demag.call_count = call_count;
+        ctx.poisson_demag.last_iterations = last_iterations;
+        ctx.poisson_demag.last_residual = last_residual;
+        ctx.poisson_demag.last_setup_wall_time_ns = last_setup_wall_time_ns;
+        ctx.poisson_demag.last_solver_apply_wall_time_ns = last_solver_apply_wall_time_ns;
+        ctx.poisson_demag.step_solver_apply_wall_time_ns = step_solver_apply_wall_time_ns;
+        ctx.poisson_demag.last_solver_setup_reused = last_solver_setup_reused;
+        ctx.poisson_demag.solves_current_step = solves_current_step;
+    }
+};
+
+} // namespace
+#endif
+
 void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
     ctx.demag.enabled = plan.enable_demag != 0;
@@ -148,6 +195,38 @@ bool compute_demag_field_for_magnetization(
         demag_poisson_store_refreshed_field_cache(ctx, h_demag_xyz);
     }
     return true;
+}
+
+bool compute_fresh_demag_field_for_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    bool allow_interrupt,
+    PhaseTimings *timings,
+    std::string &error)
+{
+    demag_energy = 0.0;
+    const FreshDemagSolveSideEffects side_effects(ctx);
+
+    bool ok = false;
+    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+        if (!ctx.demag_fem_bem.ready) {
+            error = "Native FEM Fredkin-Koehler demag operator is not ready";
+        } else {
+            ok = context_compute_demag_fem_bem(
+                ctx, m_xyz, h_demag_xyz, demag_energy, allow_interrupt, timings, error);
+        }
+    } else if (demag_poisson_operator_ready_for_fresh_solve(
+                   ctx.demag.realization,
+                   ctx.poisson_demag.ready,
+                   error)) {
+        ok = context_compute_demag_poisson(
+            ctx, m_xyz, h_demag_xyz, demag_energy, allow_interrupt, timings, error);
+    }
+
+    side_effects.restore(ctx);
+    return ok;
 }
 #endif
 

@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import type {
+  JsonObject,
   LiveStatusResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
@@ -32,7 +33,7 @@ import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
+import { FormField, type FormFieldHelp } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   asRecord,
@@ -72,6 +73,41 @@ type AirboxMeshPolicyPatchHandler = (patch: AirboxMeshPolicyPatch) => void;
 type AirboxMeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]
 >[number];
+
+const AIRBOX_MESH_HELP: Record<string, FormFieldHelp> = {
+  center: {
+    description: "Manual airbox center coordinate in meters.",
+    details: ["Used when the airbox geometry is manually constrained by the universe policy."],
+  },
+  curvatureFactor: {
+    description: "Curvature-driven sizing factor for the airbox/domain mesh where curvature sizing is active.",
+  },
+  grading: {
+    description: "Element-size grading profile from refined regions to the coarse far-field airbox.",
+    details: ["geometric is the COMSOL-like default for smooth growth."],
+  },
+  growthRate: {
+    description: "Maximum requested growth rate for the airbox size transition.",
+  },
+  hmax: {
+    description: "Coarsest target element size in the far-field airbox.",
+  },
+  hmin: {
+    description: "Smallest allowed airbox element size. Fine edge/interface requests can be clamped by this value.",
+  },
+  mode: {
+    description: "Airbox sizing mode. Auto derives the domain from scene geometry and universe settings.",
+  },
+  narrowRegionResolution: {
+    description: "Resolution target for narrow air/domain regions when automatic narrow-region sizing is active.",
+  },
+  padding: {
+    description: "Additional airbox padding around scene geometry in meters.",
+  },
+  size: {
+    description: "Manual airbox extent in meters along the selected axis.",
+  },
+};
 
 type AirboxMeshPolicyRuntimeStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -150,11 +186,17 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
     enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
   const resource = policy.data ?? defaultUniverseMeshPolicyResource();
+  const effectiveAirbox = asRecord(summary.data?.effective_airbox_target) as JsonObject | null;
   const baseDraft = useMemo(
-    () => draftFromUniverseMeshPolicyResource(resource),
-    [resource],
+    () =>
+      draftFromUniverseMeshPolicyResource(resource, {
+        effectiveTarget: effectiveAirbox,
+      }),
+    [effectiveAirbox, resource],
   );
-  const draftKey = draftKeyForUniverseMeshPolicyResource(resource);
+  const draftKey = draftKeyForUniverseMeshPolicyResource(resource, {
+    effectiveTarget: effectiveAirbox,
+  });
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
     key: draftKey,
@@ -162,7 +204,6 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
-  const effectiveAirbox = asRecord(summary.data?.effective_airbox_target);
   const qualityRecord = asRecord(quality.data?.quality);
   const qualityStatistics = normalizeMeshQualityStatistics(quality.data?.quality);
   const airboxPart = useMemo(
@@ -333,6 +374,7 @@ function AirboxMeshPolicyControlsSection({
       badge="FEM domain"
     >
       <FormField
+        help={AIRBOX_MESH_HELP.hmax}
         label="Maximum element size"
         type="number"
         unit="m"
@@ -340,6 +382,7 @@ function AirboxMeshPolicyControlsSection({
         onChange={(event) => onChange({ airboxHmax: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.hmin}
         label="Minimum element size"
         type="number"
         unit="m"
@@ -347,18 +390,21 @@ function AirboxMeshPolicyControlsSection({
         onChange={(event) => onChange({ airboxHmin: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.growthRate}
         label="Maximum element growth rate"
         type="number"
         value={draft.airboxGrowthRate}
         onChange={(event) => onChange({ airboxGrowthRate: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.curvatureFactor}
         label="Curvature factor"
         type="number"
         value={draft.curvatureFactor}
         onChange={(event) => onChange({ curvatureFactor: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.narrowRegionResolution}
         label="Resolution of narrow regions"
         type="number"
         value={draft.narrowRegionResolution}
@@ -367,6 +413,7 @@ function AirboxMeshPolicyControlsSection({
         }
       />
       <FormField
+        help={AIRBOX_MESH_HELP.grading}
         label="Element grading"
         type="select"
         value={draft.airboxGrading}
@@ -402,6 +449,7 @@ function AirboxMeshPolicyGeometrySection({
       defaultCollapsed={true}
     >
       <FormField
+        help={AIRBOX_MESH_HELP.mode}
         label="Domain mode"
         type="select"
         value={draft.airboxMode}
@@ -412,6 +460,7 @@ function AirboxMeshPolicyGeometrySection({
         <option value="manual">Manual</option>
       </FormField>
       <FormField
+        help={AIRBOX_MESH_HELP.padding}
         label="Padding X"
         type="number"
         unit="m"
@@ -419,6 +468,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ paddingX: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.padding}
         label="Padding Y"
         type="number"
         unit="m"
@@ -426,6 +476,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ paddingY: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.padding}
         label="Padding Z"
         type="number"
         unit="m"
@@ -433,6 +484,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ paddingZ: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.size}
         label="Size X"
         type="number"
         unit="m"
@@ -440,6 +492,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ airboxSizeX: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.size}
         label="Size Y"
         type="number"
         unit="m"
@@ -447,6 +500,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ airboxSizeY: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.size}
         label="Size Z"
         type="number"
         unit="m"
@@ -454,6 +508,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ airboxSizeZ: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.center}
         label="Center X"
         type="number"
         unit="m"
@@ -461,6 +516,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ airboxCenterX: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.center}
         label="Center Y"
         type="number"
         unit="m"
@@ -468,6 +524,7 @@ function AirboxMeshPolicyGeometrySection({
         onChange={(event) => onChange({ airboxCenterY: event.target.value })}
       />
       <FormField
+        help={AIRBOX_MESH_HELP.center}
         label="Center Z"
         type="number"
         unit="m"

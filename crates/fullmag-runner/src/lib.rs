@@ -278,9 +278,24 @@ pub fn run_problem(
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    run_planned_problem(problem, &plan, until_seconds, output_dir)
+}
+
+/// Run a problem with an already materialized execution plan.
+///
+/// Interactive frontends use this to preserve the materialize -> wait ->
+/// compute contract: once the mesh and initial state have been planned, the
+/// compute click should execute that snapshot instead of re-sampling initial
+/// textures by planning the same `ProblemIR` again.
+pub fn run_planned_problem(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+) -> Result<RunResult, RunError> {
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
-        artifacts::build_field_context(problem, &plan),
+        artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
@@ -358,7 +373,7 @@ pub fn run_problem(
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
         problem,
-        &plan,
+        plan,
         &executed,
         Some(&pipeline_summary),
     ) {
@@ -391,9 +406,28 @@ pub fn run_problem_with_callback(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    run_planned_problem_with_callback(
+        problem,
+        &plan,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        &mut on_step,
+    )
+}
+
+/// Run a problem with an already materialized execution plan and live callback.
+pub fn run_planned_problem_with_callback(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
-        artifacts::build_field_context(problem, &plan),
+        artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
@@ -490,7 +524,7 @@ pub fn run_problem_with_callback(
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
         problem,
-        &plan,
+        plan,
         &executed,
         Some(&pipeline_summary),
     ) {
@@ -603,9 +637,35 @@ pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+        problem,
+        &plan,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        &mut on_step,
+    )
+}
+
+/// Run a problem with an already materialized execution plan and live-preview
+/// callback.
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
-        artifacts::build_field_context(problem, &plan),
+        artifacts::build_field_context(problem, plan),
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
@@ -707,7 +767,7 @@ pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
         problem,
-        &plan,
+        plan,
         &executed,
         Some(&pipeline_summary),
     ) {
@@ -1018,9 +1078,22 @@ pub fn create_interactive_runtime(
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    create_planned_interactive_runtime(problem, &plan, continuation_magnetization)
+}
+
+/// Create a unified `InteractiveRuntime` from an already materialized plan.
+pub fn create_planned_interactive_runtime(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
-        BackendPlanIR::Fdm(_) => Box::new(InteractiveFdmPreviewRuntime::create(problem)?),
-        BackendPlanIR::Fem(_) => Box::new(InteractiveFemPreviewRuntime::create(problem)?),
+        BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
+            problem, fdm,
+        )?),
+        BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
+            problem, fem,
+        )?),
         _ => {
             return Err(RunError {
                 message: "interactive runtime requires FDM or FEM execution plan".to_string(),
@@ -1071,6 +1144,29 @@ pub fn run_problem_with_interactive_runtime_live_preview_interruptible(
 ) -> Result<RunResult, RunError> {
     runtime.execute_streaming(
         problem,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_interactive_runtime_live_preview_interruptible(
+    runtime: &mut InteractiveRuntime,
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    runtime.execute_planned_streaming(
+        problem,
+        plan,
         until_seconds,
         output_dir,
         field_every_n,
@@ -1135,6 +1231,13 @@ pub fn snapshot_problem_vector_fields(
 
 pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    resolve_planned_runtime_engine(problem, &plan)
+}
+
+pub fn resolve_planned_runtime_engine(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<RuntimeEngineInfo, RunError> {
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => {
             let engine = dispatch::resolve_fdm_engine(problem)?;
@@ -1249,6 +1352,13 @@ fn fem_eigen_session_runtime_defaults(
 
 pub fn resolve_runtime_capabilities(problem: &ProblemIR) -> Result<BackendCapabilities, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    resolve_planned_runtime_capabilities(problem, &plan)
+}
+
+pub fn resolve_planned_runtime_capabilities(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<BackendCapabilities, RunError> {
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
@@ -1550,6 +1660,66 @@ mod tests {
         assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"
+        );
+    }
+
+    #[test]
+    fn capability_matrix_records_native_fem_relaxation_realization() {
+        let matrix = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/specs/capability-matrix-v0.md"
+        ))
+        .expect("read capability matrix");
+
+        let row = |feature: &str| -> &str {
+            matrix
+                .lines()
+                .find(|line| line.starts_with(&format!("| `{feature}`")))
+                .unwrap_or_else(|| panic!("missing capability matrix row for {feature}"))
+        };
+
+        let pgbb = row("Relaxation(projected_gradient_bb)");
+        assert!(pgbb.contains("fem_cpu_native"), "{pgbb}");
+        assert!(pgbb.contains("fem_native_gpu"), "{pgbb}");
+        assert!(pgbb.contains("fullmag_fem_backend_relax_step"), "{pgbb}");
+        assert!(pgbb.contains("native CUDA"), "{pgbb}");
+        assert!(pgbb.contains("transfer-audit"), "{pgbb}");
+        assert!(
+            !pgbb.contains("fem_gpu_relaxation_algorithm_cpu_only"),
+            "{pgbb}"
+        );
+        assert!(!pgbb.contains("GPU forced unsupported"), "{pgbb}");
+        assert!(
+            !pgbb.contains("bootstrap") && !pgbb.contains("semantic-only"),
+            "{pgbb}"
+        );
+
+        let ncg = row("Relaxation(nonlinear_cg)");
+        assert!(ncg.contains("fem_cpu_native"), "{ncg}");
+        assert!(ncg.contains("fem_native_gpu"), "{ncg}");
+        assert!(ncg.contains("fullmag_fem_backend_relax_step"), "{ncg}");
+        assert!(ncg.contains("HyprePCG/BoomerAMG"), "{ncg}");
+        assert!(
+            !ncg.contains("fem_gpu_relaxation_algorithm_cpu_only"),
+            "{ncg}"
+        );
+        assert!(!ncg.contains("GPU forced unsupported"), "{ncg}");
+        assert!(
+            !ncg.contains("bootstrap") && !ncg.contains("semantic-only"),
+            "{ncg}"
+        );
+
+        let tpi = row("Relaxation(tangent_plane_implicit)");
+        assert!(tpi.contains("fem_cpu_native"), "{tpi}");
+        assert!(tpi.contains("native CPU/MFEM ABI"), "{tpi}");
+        assert!(tpi.contains("demag fresh-solve linear response"), "{tpi}");
+        assert!(
+            tpi.contains("fem_gpu_relaxation_algorithm_cpu_only"),
+            "{tpi}"
+        );
+        assert!(
+            !tpi.contains("execution deferred") && !tpi.contains("planned | planned"),
+            "{tpi}"
         );
     }
 
@@ -1899,6 +2069,31 @@ mod tests {
                 "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
+        assert!(
+            module.contains("Result<Option<DirectMinimizerAcceptedTrial<T>>, E>")
+                && module.contains("return Ok(None);"),
+            "direct-minimizer line search must reject exhausted Armijo searches instead of returning an accepted trial"
+        );
+    }
+
+    #[test]
+    fn direct_minimizer_reference_rejects_exhausted_armijo_searches() {
+        let reference = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/relaxation/direct_minimizer_reference.rs"
+        ))
+        .expect("read relaxation/direct_minimizer_reference.rs");
+
+        assert!(
+            !reference.contains("|| backtracks >= max_backtrack"),
+            "FDM CPU/reference direct minimizers must not accept the last trial after exhausted Armijo backtracking"
+        );
+        assert!(
+            reference.matches("accepted_energy = Some").count() >= 2
+                && reference.matches("accepted_trial = Some").count() >= 2
+                && reference.matches("let Some(").count() >= 4,
+            "FDM CPU/reference direct minimizers must explicitly break without updating state when line search fails"
+        );
     }
 
     #[test]

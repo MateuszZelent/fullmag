@@ -106,7 +106,7 @@
 .fm-ribbon-group::before {
   position: absolute;
   top: 8px;
-  bottom: 19px;
+  bottom: 25px;
   left: 0;
   width: 2px;
   border-radius: var(--fm-radius-xs);
@@ -196,7 +196,7 @@
   display: flex;
   width: var(--fm-ribbon-action-width);
   min-width: var(--fm-ribbon-action-width);
-  height: 44px;
+  height: 56px;
   flex-shrink: 0;
   flex-direction: column;
   align-items: center;
@@ -208,7 +208,7 @@
   background: transparent;
   color: var(--fm-text-secondary);
   cursor: pointer;
-  padding: 3px var(--fm-space-1) 4px;
+  padding: 4px var(--fm-space-1) 6px;
   transition:
     background-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast),

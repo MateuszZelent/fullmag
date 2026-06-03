@@ -492,6 +492,14 @@ impl InteractiveFdmPreviewRuntime {
         Self::from_fdm_plan(fdm, engine)
     }
 
+    pub(crate) fn create_from_plan(
+        problem: &ProblemIR,
+        plan: &FdmPlanIR,
+    ) -> Result<Self, RunError> {
+        let engine = dispatch::resolve_fdm_engine(problem)?;
+        Self::from_fdm_plan(plan, engine)
+    }
+
     fn from_fdm_plan(plan: &FdmPlanIR, engine: FdmEngine) -> Result<Self, RunError> {
         let inner = match engine {
             FdmEngine::CpuReference => {
@@ -702,6 +710,19 @@ impl InteractiveFemPreviewRuntime {
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
         Self::from_fem_plan(fem, resolution.engine, resolution.fallback)
+    }
+
+    pub(crate) fn create_from_plan(
+        problem: &ProblemIR,
+        plan: &FemPlanIR,
+    ) -> Result<Self, RunError> {
+        let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan)?;
+        eprintln!(
+            "[fullmag-runner] interactive FEM engine: resolved_engine_id={} fallback={:?}",
+            dispatch::fem_engine_label(resolution.engine),
+            resolution.fallback.as_ref().map(|f| &f.reason),
+        );
+        Self::from_fem_plan(plan, resolution.engine, resolution.fallback)
     }
 
     fn from_fem_plan(
@@ -4362,6 +4383,13 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
         Ok(self.matches_plan(fdm))
     }
 
+    fn matches_plan(&self, plan: &fullmag_ir::ExecutionPlanIR) -> Result<bool, RunError> {
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.matches_plan(fdm))
+    }
+
     fn geometry(&self) -> BackendGeometry {
         let grid = match &self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(r) => r.original_grid,
@@ -4373,7 +4401,8 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
 
     fn execute_streaming(
         &mut self,
-        problem: &ProblemIR,
+        _problem: &ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
         until_seconds: f64,
         field_every_n: u64,
         display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
@@ -4381,7 +4410,6 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        let plan = fullmag_plan::plan(problem)?;
         let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
             return Err(RunError {
                 message: "InteractiveBackend(FDM)::execute_streaming requires FDM plan".into(),
@@ -4437,6 +4465,13 @@ impl InteractiveBackend for InteractiveFemPreviewRuntime {
         Ok(self.matches_plan(fem))
     }
 
+    fn matches_plan(&self, plan: &fullmag_ir::ExecutionPlanIR) -> Result<bool, RunError> {
+        let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+            return Ok(false);
+        };
+        Ok(self.matches_plan(fem))
+    }
+
     fn geometry(&self) -> BackendGeometry {
         let mesh = match &self.inner {
             InteractiveFemPreviewRuntimeInner::Cpu(r) => r.mesh.clone(),
@@ -4448,7 +4483,8 @@ impl InteractiveBackend for InteractiveFemPreviewRuntime {
 
     fn execute_streaming(
         &mut self,
-        problem: &ProblemIR,
+        _problem: &ProblemIR,
+        plan: &fullmag_ir::ExecutionPlanIR,
         until_seconds: f64,
         field_every_n: u64,
         display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
@@ -4456,7 +4492,6 @@ impl InteractiveBackend for InteractiveFemPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        let plan = fullmag_plan::plan(problem)?;
         let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
             return Err(RunError {
                 message: "InteractiveBackend(FEM)::execute_streaming requires FEM plan".into(),

@@ -785,7 +785,7 @@ pub(crate) fn execute_reference_fdm(
         steps.push(make_step_stats(
             step_count,
             state.time_seconds,
-            0.0,
+            result.pseudo_time_s,
             wall_elapsed,
             &observables,
         ));

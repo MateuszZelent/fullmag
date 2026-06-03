@@ -121,6 +121,21 @@ all airbox paths on the same grading contract:
   `corner_transition_distance="airbox_boundary"`: resolve perimeter plume spans
   from the object edge/endpoint shell to the relevant side/corner airbox span
 
+COMSOL-like object size controls are interpreted as follows:
+
+- `curvature_factor`: a dimensionless bound `h <= factor * R` on curved
+  object surfaces where `R` is the sampled local radius of curvature. Fullmag
+  still enables Gmsh's native curvature sizing, but the supplemental
+  surface-near field is restricted to surfaces with nonzero sampled curvature;
+  flat faces must not be refined solely because this control is active.
+- `narrow_region_resolution`: a dimensionless strength mapped to an element
+  count across body-local narrow regions. The current FEM realization combines
+  a distance-to-magnetic-body-surface estimate with a component-volume
+  bounding-box narrow-span constraint `h <= min_span / n_resolve`, both
+  restricted to magnetic volumes. It does not refine airbox gaps from
+  distance-to-body; airbox-side edge/corner plumes are controlled separately by
+  `edge_transition_distance` and `corner_transition_distance`.
+
 ## 3.1 Legacy implementation (problematic)
 
 File: `_gmsh_airbox.py`, lines 178-187:
@@ -228,14 +243,21 @@ numeric behavior or the local `3 * h_body` transition default. If the token is
 requested without rectangular airbox bounds, the planner must raise an error
 instead of silently inventing an airbox boundary.
 
-For explicit rectangular airboxes, the implementation combines the local
-surface-distance grading with a rectangular bbox envelope. Both fields start at
-`h_inner` near the object bounds and reach `h_outer` at their controlled outer
-span. They are combined with `Max`, not `Min`: the local field preserves the
-fine interface halo, while the envelope prevents the local distance field from
-over-constraining the outer airbox faces and corners below the requested
-far-field target. Other independent refinement fields may still be combined
-outside this airbox pair with the normal global `Min` stack.
+Mesh validation must also reject elements below the FEM topology determinant
+floor before exporting `MeshIR` to the solver. The Python meshing pipeline uses
+the same determinant threshold as the Rust FEM topology builder
+(`|det J| <= 1e-30 m^3`, equivalently `|V| <= 1e-30 / 6 m^3`) so Delaunay/HXT
+slivers trigger the meshing retry path instead of failing later during initial
+state diagnostics.
+
+For explicit rectangular airboxes, the `airbox_boundary` transition uses a
+per-side normalized rectangular ramp instead of one Euclidean distance. For each
+object-to-airbox face clearance `g_i`, the ramp is
+`clamp((delta_i - DistMin) / (g_i - DistMin), 0, 1)`, and the field uses the
+maximum over the six side ramps. This keeps the requested near-interface shell
+at the object while allowing the field to reach `h_outer` on every airbox face,
+including thin `z` clearances. Other independent refinement fields may still be
+combined outside this airbox transition with the normal global `Min` stack.
 
 ### 4.5 Air-side edge and corner constraints
 

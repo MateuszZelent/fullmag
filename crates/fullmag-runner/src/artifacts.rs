@@ -5,8 +5,9 @@ use fullmag_ir::BackendPlanIR;
 use sha2::{Digest, Sha256};
 
 use crate::types::{
-    ExecutedRun, FemCpuRelaxationDemagPolicyMetadata, FemCpuRelaxationDemagTimingsNs,
-    FemCpuRelaxationEnergyTerms, FemCpuRelaxationQualificationMetadata, StepStats,
+    ExecutedRun, FemCpuRelaxationAlgorithmPolicyMetadata, FemCpuRelaxationDemagPolicyMetadata,
+    FemCpuRelaxationDemagTimingsNs, FemCpuRelaxationEnergyTerms,
+    FemCpuRelaxationQualificationMetadata, StepStats,
 };
 
 use std::collections::{BTreeSet, HashMap};
@@ -149,6 +150,7 @@ fn fem_cpu_relaxation_qualification_metadata(
             solver_setup_reused: json_bool(demag_runtime, "solver_setup_reused"),
             timings_ns: demag_timings_ns(demag_runtime),
         },
+        algorithm_policy: fem_cpu_relaxation_algorithm_policy_metadata(fem, provenance),
         assembly_mode: provenance.fem_assembly_mode.clone(),
         relaxation_algorithm: fem
             .relaxation
@@ -175,6 +177,64 @@ fn fem_cpu_relaxation_qualification_metadata(
         executed_steps: last.step,
     };
     serde_json::to_value(metadata).unwrap_or(serde_json::Value::Null)
+}
+
+fn fem_cpu_relaxation_algorithm_policy_metadata(
+    fem: &fullmag_ir::FemPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+) -> Option<FemCpuRelaxationAlgorithmPolicyMetadata> {
+    let control = fem.relaxation.as_ref()?;
+    let gpu_status = provenance
+        .fem_gpu_qualification_status
+        .clone()
+        .or_else(|| Some("direct_minimizers_cpu_mfem_only".to_string()));
+    match control.algorithm {
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+            Some(FemCpuRelaxationAlgorithmPolicyMetadata {
+                realization: provenance.energy_minimizer_realization.clone(),
+                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                line_search: Some("native_armijo_backtracking_bb1_bb2".to_string()),
+                preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
+                linear_solver_policy: Some(
+                    "HyprePCG/BoomerAMG when available; serial MFEM CG fallback".to_string(),
+                ),
+                tangent_operator: None,
+                gpu_status,
+            })
+        }
+        fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
+            Some(FemCpuRelaxationAlgorithmPolicyMetadata {
+                realization: provenance.energy_minimizer_realization.clone(),
+                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                line_search: Some("native_armijo_backtracking_pr_plus_restart".to_string()),
+                preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
+                linear_solver_policy: Some(
+                    "HyprePCG/BoomerAMG when available; serial MFEM CG fallback".to_string(),
+                ),
+                tangent_operator: None,
+                gpu_status,
+            })
+        }
+        fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => {
+            Some(FemCpuRelaxationAlgorithmPolicyMetadata {
+                realization: provenance.energy_minimizer_realization.clone(),
+                metric: Some("fem_lumped_mass_inner_product".to_string()),
+                line_search: Some("native_armijo_backtracking".to_string()),
+                preconditioner: Some(
+                    "native_tangent_plane_linear_solve_preconditioner".to_string(),
+                ),
+                linear_solver_policy: Some(
+                    "MFEM/Hypre Krylov solver with non-SPD fallback for indefinite terms"
+                        .to_string(),
+                ),
+                tangent_operator: Some(
+                    "mass_exchange_local_anisotropy_zeeman_dmi_demag_linear_response".to_string(),
+                ),
+                gpu_status,
+            })
+        }
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => None,
+    }
 }
 
 fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -228,6 +288,7 @@ fn stage_stop_reason_as_str(reason: &fullmag_ir::StageStopReason) -> &'static st
         fullmag_ir::StageStopReason::MaxPhysicalTime => "max_physical_time",
         fullmag_ir::StageStopReason::UserCancelled => "user_cancelled",
         fullmag_ir::StageStopReason::BackendError => "backend_error",
+        fullmag_ir::StageStopReason::Gradient => "gradient",
     }
 }
 
@@ -1716,6 +1777,88 @@ mod tests {
         assert_eq!(typed.schema_version, "fem_cpu_relaxation_qualification.v1");
         assert_eq!(typed.demag_policy.linear_solver.as_deref(), Some("CG"));
         assert_eq!(typed.final_energy_terms_j.e_total, 6.0);
+    }
+
+    #[test]
+    fn fem_cpu_relaxation_qualification_metadata_reports_direct_minimizer_policy() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            energy_minimizer_realization: Some(
+                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
+            ),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            fem_gpu_qualification_status: Some("direct_minimizers_cpu_mfem_only".to_string()),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 3,
+                    e_ex: 1.0,
+                    e_total: 1.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+
+        assert_eq!(metadata["relaxation_algorithm"], "projected_gradient_bb");
+        assert_eq!(
+            metadata["algorithm_policy"]["realization"],
+            crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION
+        );
+        assert_eq!(
+            metadata["algorithm_policy"]["metric"],
+            "fem_lumped_mass_inner_product"
+        );
+        assert_eq!(
+            metadata["algorithm_policy"]["preconditioner"],
+            "exchange_plus_mass_tangent_gradient"
+        );
+        assert_eq!(
+            metadata["algorithm_policy"]["gpu_status"],
+            "direct_minimizers_cpu_mfem_only"
+        );
+
+        let typed: crate::types::FemCpuRelaxationQualificationMetadata =
+            serde_json::from_value(metadata).expect("qualification metadata should be typed");
+        let policy = typed
+            .algorithm_policy
+            .expect("direct minimizer metadata must carry an algorithm policy");
+        assert_eq!(
+            policy.linear_solver_policy.as_deref(),
+            Some("HyprePCG/BoomerAMG when available; serial MFEM CG fallback")
+        );
     }
 
     #[test]

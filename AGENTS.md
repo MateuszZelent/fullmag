@@ -211,6 +211,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - FEM/MFEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
 - FEM CPU and FEM GPU implementations must share backend-neutral physics contracts while using separate MFEM/hypre/libCEED runtime realizations; do not duplicate equations, signs, units, or observable semantics per device.
 - Any FEM/MFEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
+- FEM/MFEM/CUDA/hypre/libCEED builds and runtime verification must use the container-backed `just` recipes (`just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, or managed run recipes). Host-side `cargo`/`cmake` checks are only auxiliary smoke tests and must not be reported as final FEM GPU verification.
 
 ---
 

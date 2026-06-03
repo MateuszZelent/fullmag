@@ -1,6 +1,6 @@
 //! Mesh resource endpoints.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -165,14 +165,10 @@ pub async fn get_mesh_semantics(
         .objects
         .iter()
         .map(|object| {
-            let config = current_object_mesh_config(object)
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    ApiError::internal(format!(
-                        "failed to serialize object mesh semantics config: {error}"
-                    ))
-                })?;
+            let config = optional_json_object_map(
+                current_object_mesh_config(object),
+                "object mesh semantics config",
+            )?;
             Ok(MeshObjectConfigEntryResource {
                 object_id: object.id.clone(),
                 object_name: object.name.clone(),
@@ -351,15 +347,16 @@ pub async fn get_mesh_universe_config(
 ) -> Result<Json<MeshUniverseConfigResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let scene = current_scene_document(&snapshot)?;
-    let config = current_universe_mesh_config(scene)
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| {
-            ApiError::internal(format!("failed to serialize universe mesh config: {error}"))
-        })?;
+    let config_state = current_universe_mesh_config(scene);
+    let effective_config = Some(json_object_map(
+        effective_universe_mesh_config(config_state)?,
+        "effective universe mesh config",
+    )?);
+    let config = optional_json_object_map(config_state, "universe mesh config")?;
     Ok(Json(MeshUniverseConfigResource {
         revision: snapshot.mesh_revision,
         config,
+        effective_config,
     }))
 }
 
@@ -379,7 +376,10 @@ pub async fn replace_mesh_universe_config(
     Json(req): Json<MeshUniverseConfigReplaceRequest>,
 ) -> Result<Json<MeshUniverseConfigResource>, ApiError> {
     let config: ScriptBuilderUniverseState =
-        serde_json::from_value(req.config).map_err(|error| {
+        serde_json::from_value(serde_json::to_value(req.config).map_err(|error| {
+            ApiError::bad_request(format!("invalid universe mesh config payload: {error}"))
+        })?)
+        .map_err(|error| {
             ApiError::bad_request(format!("invalid universe mesh config payload: {error}"))
         })?;
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
@@ -390,15 +390,23 @@ pub async fn replace_mesh_universe_config(
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     let config = current_universe_mesh_config(&committed)
         .ok_or_else(|| ApiError::internal("committed universe mesh config missing"))?;
-    let config = serde_json::to_value(config).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to serialize committed universe mesh config: {error}"
-        ))
-    })?;
+    let effective_config = Some(json_object_map(
+        effective_universe_mesh_config(Some(config))?,
+        "effective committed universe mesh config",
+    )?);
+    let config = json_object_map(
+        serde_json::to_value(config).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to serialize committed universe mesh config: {error}"
+            ))
+        })?,
+        "committed universe mesh config",
+    )?;
     let revision = current_snapshot(&state).await?.mesh_revision;
     Ok(Json(MeshUniverseConfigResource {
         revision,
         config: Some(config),
+        effective_config,
     }))
 }
 
@@ -464,11 +472,14 @@ pub async fn get_mesh_shared_domain_config(
 ) -> Result<Json<MeshSharedDomainConfigResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let scene = current_scene_document(&snapshot)?;
-    let config = serde_json::to_value(&scene.study.shared_domain_mesh).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to serialize shared-domain mesh config: {error}"
-        ))
-    })?;
+    let config = json_object_map(
+        serde_json::to_value(&scene.study.shared_domain_mesh).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to serialize shared-domain mesh config: {error}"
+            ))
+        })?,
+        "shared-domain mesh config",
+    )?;
     Ok(Json(MeshSharedDomainConfigResource {
         revision: snapshot.mesh_revision,
         config,
@@ -490,20 +501,29 @@ pub async fn replace_mesh_shared_domain_config(
     State(state): State<Arc<AppState>>,
     Json(req): Json<MeshSharedDomainConfigReplaceRequest>,
 ) -> Result<Json<MeshSharedDomainConfigResource>, ApiError> {
-    let config: ScriptBuilderMeshState = serde_json::from_value(req.config).map_err(|error| {
-        ApiError::bad_request(format!(
-            "invalid shared-domain mesh config payload: {error}"
-        ))
-    })?;
+    let config: ScriptBuilderMeshState =
+        serde_json::from_value(serde_json::to_value(req.config).map_err(|error| {
+            ApiError::bad_request(format!(
+                "invalid shared-domain mesh config payload: {error}"
+            ))
+        })?)
+        .map_err(|error| {
+            ApiError::bad_request(format!(
+                "invalid shared-domain mesh config payload: {error}"
+            ))
+        })?;
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     scene.study.shared_domain_mesh = config.clone();
     scene.study.mesh_defaults = config.clone();
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
-    let config = serde_json::to_value(&committed.study.shared_domain_mesh).map_err(|error| {
-        ApiError::internal(format!(
-            "failed to serialize committed shared-domain mesh config: {error}"
-        ))
-    })?;
+    let config = json_object_map(
+        serde_json::to_value(&committed.study.shared_domain_mesh).map_err(|error| {
+            ApiError::internal(format!(
+                "failed to serialize committed shared-domain mesh config: {error}"
+            ))
+        })?,
+        "committed shared-domain mesh config",
+    )?;
     let revision = current_snapshot(&state).await?.mesh_revision;
     Ok(Json(MeshSharedDomainConfigResource { revision, config }))
 }
@@ -1329,16 +1349,17 @@ pub async fn get_mesh_object_config(
         .iter()
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
-    let config = current_object_mesh_config(object)
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| {
-            ApiError::internal(format!("failed to serialize object mesh config: {error}"))
-        })?;
+    let config_state = current_object_mesh_config(object);
+    let effective_config = Some(json_object_map(
+        effective_object_mesh_config(config_state)?,
+        "effective object mesh config",
+    )?);
+    let config = optional_json_object_map(config_state, "object mesh config")?;
     Ok(Json(MeshObjectConfigResource {
         revision: snapshot.mesh_revision,
         object_id,
         config,
+        effective_config,
     }))
 }
 
@@ -1363,6 +1384,11 @@ pub async fn replace_mesh_object_config(
 ) -> Result<Json<MeshObjectConfigResource>, ApiError> {
     let config = req
         .config
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            ApiError::bad_request(format!("invalid object mesh config payload: {error}"))
+        })?
         .map(serde_json::from_value::<ScriptBuilderPerGeometryMeshState>)
         .transpose()
         .map_err(|error| {
@@ -1382,19 +1408,18 @@ pub async fn replace_mesh_object_config(
         .iter()
         .find(|entry| entry.id == object_id)
         .ok_or_else(|| ApiError::internal(format!("committed object missing: {object_id}")))?;
-    let config = current_object_mesh_config(object)
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "failed to serialize committed object mesh config: {error}"
-            ))
-        })?;
+    let config_state = current_object_mesh_config(object);
+    let effective_config = Some(json_object_map(
+        effective_object_mesh_config(config_state)?,
+        "effective committed object mesh config",
+    )?);
+    let config = optional_json_object_map(config_state, "committed object mesh config")?;
     let revision = current_snapshot(&state).await?.mesh_revision;
     Ok(Json(MeshObjectConfigResource {
         revision,
         object_id,
         config,
+        effective_config,
     }))
 }
 
@@ -1925,6 +1950,87 @@ fn current_object_mesh_config(object: &SceneObject) -> Option<&ScriptBuilderPerG
         .object_mesh
         .as_ref()
         .or(object.mesh_override.as_ref())
+}
+
+fn json_object_map(value: Value, context: &str) -> Result<BTreeMap<String, Value>, ApiError> {
+    serde_json::from_value(value)
+        .map_err(|error| ApiError::internal(format!("failed to serialize {context}: {error}")))
+}
+
+fn optional_json_object_map<T: Serialize>(
+    value: Option<&T>,
+    context: &str,
+) -> Result<Option<BTreeMap<String, Value>>, ApiError> {
+    value
+        .map(|entry| {
+            serde_json::to_value(entry)
+                .map_err(|error| {
+                    ApiError::internal(format!("failed to serialize {context}: {error}"))
+                })
+                .and_then(|value| json_object_map(value, context))
+        })
+        .transpose()
+}
+
+fn effective_universe_mesh_config(
+    config: Option<&ScriptBuilderUniverseState>,
+) -> Result<Value, ApiError> {
+    let mut effective = json!({
+        "mode": "auto",
+        "padding": [0.0, 0.0, 0.0],
+        "airbox_growth_rate": 1.3,
+        "airbox_grading": "geometric",
+    });
+    if let Some(config) = config {
+        merge_json_object(
+            &mut effective,
+            serde_json::to_value(config).map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to serialize effective universe mesh config: {error}"
+                ))
+            })?,
+        );
+    }
+    Ok(effective)
+}
+
+fn effective_object_mesh_config(
+    config: Option<&ScriptBuilderPerGeometryMeshState>,
+) -> Result<Value, ApiError> {
+    let mut effective = json!({
+        "mode": "inherit",
+        "algorithm_2d": 6,
+        "algorithm_3d": 1,
+        "size_factor": 1.0,
+        "size_from_curvature": 0,
+        "narrow_regions": 0,
+        "smoothing_steps": 1,
+        "optimize_iterations": 1,
+        "compute_quality": true,
+        "per_element_quality": true,
+        "through_thickness_symmetric": false,
+        "build_requested": false,
+    });
+    if let Some(config) = config {
+        merge_json_object(
+            &mut effective,
+            serde_json::to_value(config).map_err(|error| {
+                ApiError::internal(format!(
+                    "failed to serialize effective object mesh config: {error}"
+                ))
+            })?,
+        );
+    }
+    Ok(effective)
+}
+
+fn merge_json_object(target: &mut Value, overlay: Value) {
+    let (Some(target), Some(overlay)) = (target.as_object_mut(), overlay.as_object()) else {
+        return;
+    };
+    for (key, value) in overlay {
+        target.insert(key.clone(), value.clone());
+    }
 }
 
 fn resolve_interface_owners(

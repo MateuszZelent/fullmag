@@ -222,10 +222,11 @@ fn remap_segment_object_ids(
             let seg_id = segment.object_id.as_str();
             let mut mapped_object_id = geometry_to_object_id.get(seg_id).copied();
             if mapped_object_id.is_none() && seg_id.ends_with("_geom") {
-                mapped_object_id = geometry_to_object_id.get(&seg_id[..seg_id.len() - 5]).copied();
+                mapped_object_id = geometry_to_object_id
+                    .get(&seg_id[..seg_id.len() - 5])
+                    .copied();
             }
-            let Some(mapped_object_id) = mapped_object_id
-            else {
+            let Some(mapped_object_id) = mapped_object_id else {
                 return Err(PlanError {
                     reasons: vec![format!(
                         "FEM object segment '{}' does not map to any magnet/object id",
@@ -258,8 +259,22 @@ fn segment_node_indices_from_parts(
         .iter()
         .find(|part| {
             part.role == fullmag_ir::FemMeshPartRole::MagneticObject
-                && (part.object_id.as_deref().map(|id| plan_object_ids_match(id, segment.object_id.as_str())).unwrap_or(false)
-                    || part.geometry_id.as_deref().map(|id| segment.geometry_id.as_deref().map(|g_id| plan_object_ids_match(id, g_id)).unwrap_or(false)).unwrap_or(false))
+                && (part
+                    .object_id
+                    .as_deref()
+                    .map(|id| plan_object_ids_match(id, segment.object_id.as_str()))
+                    .unwrap_or(false)
+                    || part
+                        .geometry_id
+                        .as_deref()
+                        .map(|id| {
+                            segment
+                                .geometry_id
+                                .as_deref()
+                                .map(|g_id| plan_object_ids_match(id, g_id))
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false))
                 && !part.node_indices.is_empty()
         })
         .map(|part| {
@@ -300,6 +315,60 @@ fn segment_node_indices(
     Ok((start..end).collect())
 }
 
+fn segment_element_node_indices(
+    mesh: &fullmag_ir::MeshIR,
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Result<Vec<usize>, PlanError> {
+    let element_start = segment.element_start as usize;
+    let element_end = element_start.saturating_add(segment.element_count as usize);
+    if element_end > mesh.elements.len() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM object segment '{}' element range {}..{} exceeds mesh element count {}",
+                segment.object_id,
+                element_start,
+                element_end,
+                mesh.elements.len()
+            )],
+        });
+    }
+
+    let mut indices = mesh.elements[element_start..element_end]
+        .iter()
+        .flat_map(|element| element.iter().copied())
+        .map(|index| index as usize)
+        .collect::<Vec<_>>();
+    indices.sort_unstable();
+    indices.dedup();
+    if let Some(index) = indices
+        .iter()
+        .copied()
+        .find(|index| *index >= mesh.nodes.len())
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM object segment '{}' references node index {} outside mesh node count {}",
+                segment.object_id,
+                index,
+                mesh.nodes.len()
+            )],
+        });
+    }
+    Ok(indices)
+}
+
+fn domain_initial_node_indices(
+    mesh: &fullmag_ir::MeshIR,
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Result<Vec<usize>, PlanError> {
+    let mut indices = segment_node_indices(mesh_parts, segment, mesh.nodes.len())?;
+    indices.extend(segment_element_node_indices(mesh, segment)?);
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
+}
+
 pub(crate) fn assign_domain_initial_for_segment(
     target: &mut [[f64; 3]],
     mesh: &fullmag_ir::MeshIR,
@@ -307,7 +376,7 @@ pub(crate) fn assign_domain_initial_for_segment(
     segment: &fullmag_ir::FemObjectSegmentIR,
     entry: &MagnetPlanningEntry,
 ) -> Result<(), PlanError> {
-    let node_indices = segment_node_indices(mesh_parts, segment, mesh.nodes.len())?;
+    let node_indices = domain_initial_node_indices(mesh, mesh_parts, segment)?;
     if let Some(fullmag_ir::InitialMagnetizationIR::SampledField { values }) =
         entry.initial_magnetization.as_ref()
     {
@@ -361,19 +430,19 @@ fn assign_material_ids_to_mesh_parts(
             .geometry_id
             .as_deref()
             .and_then(|geometry_id| {
-                geometry_to_magnet.get(geometry_id)
-                    .copied()
-                    .or_else(|| {
-                        let clean_geo = geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
-                        geometry_to_magnet.get(clean_geo).copied()
-                    })
+                geometry_to_magnet.get(geometry_id).copied().or_else(|| {
+                    let clean_geo = geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
+                    geometry_to_magnet.get(clean_geo).copied()
+                })
             })
             .is_some();
         if matches_object || matches_geometry {
             let material_name = magnet_materials
                 .get(candidate_object_id)
                 .or_else(|| {
-                    let clean_candidate = candidate_object_id.strip_suffix("_geom").unwrap_or(candidate_object_id);
+                    let clean_candidate = candidate_object_id
+                        .strip_suffix("_geom")
+                        .unwrap_or(candidate_object_id);
                     magnet_materials.get(clean_candidate)
                 })
                 .map(|material| material.name.clone())
@@ -381,12 +450,11 @@ fn assign_material_ids_to_mesh_parts(
                     part.geometry_id
                         .as_deref()
                         .and_then(|geometry_id| {
-                            geometry_to_magnet.get(geometry_id)
-                                .copied()
-                                .or_else(|| {
-                                    let clean_geo = geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
-                                    geometry_to_magnet.get(clean_geo).copied()
-                                })
+                            geometry_to_magnet.get(geometry_id).copied().or_else(|| {
+                                let clean_geo =
+                                    geometry_id.strip_suffix("_geom").unwrap_or(geometry_id);
+                                geometry_to_magnet.get(clean_geo).copied()
+                            })
                         })
                         .and_then(|magnet_name| magnet_materials.get(magnet_name))
                         .map(|material| material.name.clone())
@@ -920,7 +988,7 @@ pub(crate) fn plan_fem(
         relaxation,
         adaptive_timestep,
         field_refresh,
-    ) = planned_study_controls(problem, &mut errors);
+    ) = planned_study_controls(problem, resolved_backend, &mut errors);
 
     let requested_static_pbc = problem
         .pbc
@@ -954,11 +1022,9 @@ pub(crate) fn plan_fem(
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
             let mut initial = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
-                let Some(segment) = domain_asset
-                    .object_segments
-                    .iter()
-                    .find(|segment| plan_object_ids_match(&segment.object_id, &entry.geometry_name))
-                else {
+                let Some(segment) = domain_asset.object_segments.iter().find(|segment| {
+                    plan_object_ids_match(&segment.object_id, &entry.geometry_name)
+                }) else {
                     return Err(PlanError {
                         reasons: vec![format!(
                             "shared-domain FEM mesh asset is missing a segment for geometry '{}'",
@@ -1046,7 +1112,9 @@ pub(crate) fn plan_fem(
             if let Some(ref geo_id) = part.object_id.clone() {
                 let mut mapped = geometry_to_object_id.get(geo_id.as_str()).copied();
                 if mapped.is_none() && geo_id.ends_with("_geom") {
-                    mapped = geometry_to_object_id.get(&geo_id[..geo_id.len() - 5]).copied();
+                    mapped = geometry_to_object_id
+                        .get(&geo_id[..geo_id.len() - 5])
+                        .copied();
                 }
                 if let Some(mapped) = mapped {
                     part.object_id = Some(mapped.to_string());
@@ -1794,11 +1862,9 @@ pub(crate) fn plan_fem_eigen(
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
             let mut equilibrium = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
-                let Some(segment) = domain_asset
-                    .object_segments
-                    .iter()
-                    .find(|segment| plan_object_ids_match(&segment.object_id, &entry.geometry_name))
-                else {
+                let Some(segment) = domain_asset.object_segments.iter().find(|segment| {
+                    plan_object_ids_match(&segment.object_id, &entry.geometry_name)
+                }) else {
                     return Err(PlanError {
                         reasons: vec![format!(
                             "shared-domain FEM mesh asset is missing a segment for geometry '{}'",

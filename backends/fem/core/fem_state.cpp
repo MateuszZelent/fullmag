@@ -11,6 +11,9 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 
+#include <utility>
+#include <vector>
+
 namespace fullmag::fem {
 
 bool initialize_state_plan_fields(
@@ -28,12 +31,17 @@ bool initialize_state_plan_fields(
         return false;
     }
 
-    ctx.state.step_count = 0;
-    ctx.state.current_time = 0.0;
-    ctx.state.m_xyz.assign(
+    std::vector<double> initial_m(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
-    project_static_periodic_aos(ctx, ctx.state.m_xyz);
+    project_static_periodic_aos(ctx, initial_m);
+    if (!normalize_active_magnetization_aos(ctx, initial_m, error)) {
+        error = "initial magnetization normalization failed: " + error;
+        return false;
+    }
+    ctx.state.step_count = 0;
+    ctx.state.current_time = 0.0;
+    ctx.state.m_xyz = std::move(initial_m);
     return true;
 }
 

@@ -39,7 +39,8 @@ struct DemagRecoveryWorkspace {
     };
 
     explicit DemagRecoveryWorkspace(mfem::FiniteElementSpace *fes)
-        : potential(fes)
+        : fes(fes)
+        , potential(fes)
         , robin_boundary_tmp(fes->GetNDofs())
     {}
 
@@ -63,6 +64,7 @@ struct DemagRecoveryWorkspace {
         }
     }
 
+    mfem::FiniteElementSpace *fes = nullptr;
     mfem::GridFunction potential;
     std::vector<double> node_weight;
     Scratch serial_scratch;
@@ -128,12 +130,15 @@ bool recover_demag_poisson_field(
     uint64_t *energy_wall_time_ns,
     std::string &error)
 {
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
     auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
-    if (fes == nullptr || mesh == nullptr) {
+    auto *demag_recovery_workspace =
+        static_cast<DemagRecoveryWorkspace *>(ctx.poisson_demag.recovery_workspace);
+    if (demag_recovery_workspace == nullptr || demag_recovery_workspace->fes == nullptr ||
+        mesh == nullptr) {
         error = "Poisson FE space or mesh is null during H_demag recovery";
         return false;
     }
+    mfem::FiniteElementSpace *fes = demag_recovery_workspace->fes;
 
     const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
     const size_t field_len = node_count * 3u;
@@ -274,12 +279,6 @@ bool recover_demag_poisson_field(
 #endif
     const bool parallel_recover = recover_threads > 1 && mesh->GetNE() >= 2000;
 
-    auto *demag_recovery_workspace =
-        static_cast<DemagRecoveryWorkspace *>(ctx.poisson_demag.recovery_workspace);
-    if (demag_recovery_workspace == nullptr) {
-        error = "Demag recovery workspace is null during H_demag recovery";
-        return false;
-    }
     demag_recovery_workspace->prepare(
         node_count,
         recover_threads,

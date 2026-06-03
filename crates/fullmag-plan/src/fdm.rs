@@ -315,7 +315,7 @@ pub(crate) fn plan_fdm(
         relaxation,
         adaptive_timestep,
         field_refresh,
-    ) = planned_study_controls(problem, &mut errors);
+    ) = planned_study_controls(problem, resolved_backend, &mut errors);
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -1263,7 +1263,7 @@ pub(crate) fn plan_fdm_multilayer(
         relaxation,
         adaptive_timestep,
         field_refresh,
-    ) = planned_study_controls(problem, &mut errors);
+    ) = planned_study_controls(problem, resolved_backend, &mut errors);
     if adaptive_timestep.is_some() {
         errors.push(
             "the public multilayer FDM runner does not yet support adaptive_timestep".to_string(),

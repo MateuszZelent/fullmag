@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use fullmag_ir::{BackendPlanIR, FemDomainMeshModeIR};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, FemDomainMeshModeIR};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -539,6 +539,11 @@ impl InteractiveRuntimeHost {
         }
     }
 
+    pub(super) fn replace_base_problem(&mut self, base_problem: ProblemIR) {
+        self.base_problem = base_problem;
+        self.runtime = None;
+    }
+
     pub(super) fn handle_display_sync(
         &mut self,
         command: &SessionCommand,
@@ -627,13 +632,19 @@ impl InteractiveRuntimeHost {
     pub(super) fn ensure_runtime_for_problem(
         &mut self,
         problem: &ProblemIR,
+        plan: &ExecutionPlanIR,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
         if !self.runtime_capable {
             return Ok(());
         }
-        ensure_interactive_preview_runtime(&mut self.runtime, problem, continuation_magnetization)?;
+        ensure_interactive_preview_runtime(
+            &mut self.runtime,
+            problem,
+            plan,
+            continuation_magnetization,
+        )?;
         self.publish_runtime_engine_metadata(live_workspace);
         Ok(())
     }
@@ -706,8 +717,10 @@ impl InteractiveRuntimeHost {
         }
 
         if self.runtime.is_none() {
-            match create_interactive_preview_runtime(&self.base_problem, continuation_magnetization)
-            {
+            match create_interactive_preview_runtime_from_problem(
+                &self.base_problem,
+                continuation_magnetization,
+            ) {
                 Ok(runtime) => {
                     self.runtime = Some(runtime);
                     self.publish_runtime_engine_metadata(live_workspace);
@@ -829,6 +842,19 @@ fn refresh_interactive_preview_snapshot(
 
 fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<fullmag_runner::InteractiveRuntime> {
+    fullmag_runner::create_planned_interactive_runtime(
+        base_problem,
+        plan,
+        continuation_magnetization,
+    )
+    .map_err(|error| anyhow!(error.to_string()))
+}
+
+fn create_interactive_preview_runtime_from_problem(
+    base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
     fullmag_runner::create_interactive_runtime(base_problem, continuation_magnetization)
@@ -838,14 +864,16 @@ fn create_interactive_preview_runtime(
 fn ensure_interactive_preview_runtime(
     runtime: &mut Option<fullmag_runner::InteractiveRuntime>,
     problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
-    let needs_rebuild = runtime.as_ref().map_or(true, |current| {
-        !current.matches_problem(problem).unwrap_or(true)
-    });
+    let needs_rebuild = runtime
+        .as_ref()
+        .map_or(true, |current| !current.matches_plan(plan).unwrap_or(true));
     if needs_rebuild {
         *runtime = Some(create_interactive_preview_runtime(
             problem,
+            plan,
             continuation_magnetization,
         )?);
     }

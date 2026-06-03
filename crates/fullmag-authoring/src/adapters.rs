@@ -160,7 +160,11 @@ pub fn scene_document_to_script_builder(
                 bounds_max: object.geometry.bounds_max,
                 material,
                 magnetization,
-                physics_stack: ensure_object_physics_stack(&object.physics_stack, material_dind, material_dbulk),
+                physics_stack: ensure_object_physics_stack(
+                    &object.physics_stack,
+                    material_dind,
+                    material_dbulk,
+                ),
                 mesh: object
                     .object_mesh
                     .clone()
@@ -775,7 +779,11 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         region_name: geometry.region_name.clone(),
         magnetization_ref: Some(magnetization_id_for_geometry(&geometry.name)),
         region_overrides: BTreeMap::new(),
-        physics_stack: ensure_object_physics_stack(&geometry.physics_stack, geometry.material.dind, geometry.material.dbulk),
+        physics_stack: ensure_object_physics_stack(
+            &geometry.physics_stack,
+            geometry.material.dind,
+            geometry.material.dbulk,
+        ),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
         notes: None,

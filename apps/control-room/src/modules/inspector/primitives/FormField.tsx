@@ -1,4 +1,23 @@
+import { HelpCircle } from "lucide-react";
 import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
+
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/shared/ui/Dialog";
+import { Button } from "@/shared/ui/Button";
+
+export interface FormFieldHelp {
+  description: string;
+  details?: readonly string[];
+  title?: string;
+}
 
 interface BaseFieldProps {
   /** Displayed above (stacked) or beside (inline) the control. */
@@ -7,6 +26,8 @@ interface BaseFieldProps {
   unit?: string;
   /** Muted hint text below the control. */
   hint?: string;
+  /** Opens an inspector help dialog for domain-specific parameter semantics. */
+  help?: FormFieldHelp | string;
   /** When true, renders label left + control right (default: stacked). */
   inline?: boolean;
   disabled?: boolean;
@@ -38,13 +59,80 @@ export type FormFieldProps =
   | SelectFieldProps
   | CheckboxFieldProps;
 
+function FormFieldLabel({
+  fieldId,
+  help,
+  label,
+}: {
+  fieldId: string;
+  help?: FormFieldHelp | string;
+  label: string;
+}) {
+  return (
+    <div className="fm-inspector-form-field__label-row">
+      <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+      <FormFieldHelpButton help={help} label={label} />
+    </div>
+  );
+}
+
+function FormFieldHelpButton({
+  help,
+  label,
+}: {
+  help?: FormFieldHelp | string;
+  label: string;
+}) {
+  if (!help) return null;
+  const normalized: FormFieldHelp =
+    typeof help === "string" ? { description: help } : help;
+  const title = normalized.title ?? label;
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          aria-label={`Explain ${label}`}
+          className="fm-inspector-form-field__help"
+          type="button"
+        >
+          <HelpCircle aria-hidden="true" size={14} />
+        </button>
+      </DialogTrigger>
+      <DialogContent aria-describedby="fm-inspector-field-help-description">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription id="fm-inspector-field-help-description">
+            {normalized.description}
+          </DialogDescription>
+        </DialogHeader>
+        {normalized.details && normalized.details.length > 0 ? (
+          <div className="fm-dialog__body">
+            <ul className="fm-inspector-field-help__list">
+              {normalized.details.map((detail) => (
+                <li key={detail}>{detail}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button size="sm" type="button" variant="primary">
+              Close
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /**
  * Unified form field primitive for the inspector panels.
  * Renders label + control + optional unit/hint with consistent Catppuccin styling.
  * All input/textarea/select/checkbox controls use fm-inspector-* CSS classes.
  */
 export function FormField(props: FormFieldProps) {
-  const { label, unit, hint, inline = true, disabled } = props;
+  const { label, unit, hint, help, inline = true, disabled } = props;
   const fieldId = useId();
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
@@ -54,7 +142,7 @@ export function FormField(props: FormFieldProps) {
     const { checked, onChange } = props;
     return (
       <div className={wrapClass}>
-        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
         <div className="fm-inspector-form-field__control">
           <label className="fm-inspector-checkbox-wrap">
             <input
@@ -79,7 +167,7 @@ export function FormField(props: FormFieldProps) {
     };
     return (
       <div className={wrapClass}>
-        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
         <div className="fm-inspector-form-field__control">
           <select
             {...(rest as object)}
@@ -107,7 +195,7 @@ export function FormField(props: FormFieldProps) {
     };
     return (
       <div className="fm-inspector-form-field">
-        <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+        <FormFieldLabel fieldId={fieldId} help={help} label={label} />
         <div className="fm-inspector-form-field__control">
           <textarea
             {...(rest as object)}
@@ -140,7 +228,7 @@ export function FormField(props: FormFieldProps) {
     .join(" ");
   return (
     <div className={wrapClass}>
-      <label htmlFor={fieldId} className="fm-inspector-form-field__label">{label}</label>
+      <FormFieldLabel fieldId={fieldId} help={help} label={label} />
       <div className="fm-inspector-form-field__control">
         <input
           {...(rest as object)}

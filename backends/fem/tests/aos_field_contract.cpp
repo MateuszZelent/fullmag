@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -55,6 +56,7 @@ void aos_helpers_are_owned_by_runtime_module() {
         "void unpack_aos_to_components(",
         "void unpack_aos_to_existing_components(",
         "void pack_components_to_aos(",
+        "bool normalize_active_magnetization_aos(",
         "void project_static_periodic_aos(",
     };
     for (const char *symbol : symbols) {
@@ -91,6 +93,37 @@ void aos_pack_unpack_and_existing_resize_contract() {
     check(packed == aos, "pack components to AoS");
 }
 
+void active_magnetization_normalization_respects_mask() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 3;
+    ctx.mesh.magnetic_node_mask = {1u, 0u, 1u};
+    std::vector<double> m = {
+        3.0, 4.0, 0.0,
+        2.0, 0.0, 0.0,
+        0.0, 0.0, -5.0,
+    };
+    std::string error;
+    check(
+        fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+        error.c_str());
+    check(std::abs(m[0] - 0.6) < 1.0e-15, "active node 0 mx normalized");
+    check(std::abs(m[1] - 0.8) < 1.0e-15, "active node 0 my normalized");
+    check(m[3] == 2.0, "inactive node is left unchanged");
+    check(m[8] == -1.0, "active node 2 normalized");
+
+    m = {
+        1.0, 0.0, 0.0,
+        2.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    check(
+        !fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+        "zero active magnetization must be rejected");
+    check(
+        error.find("zero or invalid magnetization norm") != std::string::npos,
+        "zero active magnetization error string");
+}
+
 void periodic_projection_copies_representative_vectors() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -124,6 +157,7 @@ void periodic_projection_copies_representative_vectors() {
 int main() {
     aos_helpers_are_owned_by_runtime_module();
     aos_pack_unpack_and_existing_resize_contract();
+    active_magnetization_normalization_respects_mask();
     periodic_projection_copies_representative_vectors();
     return 0;
 }

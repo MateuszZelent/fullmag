@@ -31,6 +31,7 @@ export interface AirboxMeshPolicyDraft {
 export function defaultUniverseMeshPolicyResource(): MeshUniverseConfigResource {
   return {
     config: null,
+    effective_config: null,
     revision: 0,
   };
 }
@@ -44,15 +45,23 @@ export function formatUniverseMeshPolicyConfig(
 
 export function draftFromUniverseMeshPolicyResource(
   resource: MeshUniverseConfigResource,
+  options: {
+    effectiveTarget?: JsonObject | null | undefined;
+  } = {},
 ): AirboxMeshPolicyDraft {
-  const config = resource.config ?? {};
+  const config = {
+    ...defaultUniverseMeshPolicyConfig(),
+    ...targetConfigFromEffectiveAirbox(options.effectiveTarget),
+    ...(resource.effective_config ?? {}),
+    ...(resource.config ?? {}),
+  };
 
   return {
     airboxGrading: readAirboxGrading(config.airbox_grading),
     airboxGrowthRate: readNumberText(config.airbox_growth_rate),
     airboxHmax: readNumberText(config.airbox_hmax),
     airboxHmin: readNumberText(config.airbox_hmin),
-    configText: formatUniverseMeshPolicyConfig(config),
+    configText: formatUniverseMeshPolicyConfig(resource.config),
     curvatureFactor: readNumberText(config.curvature_factor),
     narrowRegionResolution: readNumberText(config.narrow_region_resolution),
     paddingX: readVec3Component(config.padding, 0),
@@ -68,12 +77,41 @@ export function draftFromUniverseMeshPolicyResource(
   };
 }
 
+function defaultUniverseMeshPolicyConfig(): JsonObject {
+  return {
+    airbox_grading: "geometric",
+    airbox_growth_rate: 1.3,
+    mode: "auto",
+    padding: [0, 0, 0],
+  };
+}
+
+function targetConfigFromEffectiveAirbox(
+  target: JsonObject | null | undefined,
+): JsonObject {
+  if (!target) return {};
+  const config: JsonObject = {};
+  const hmax = target.maximum_element_size ?? target.hmax;
+  const hmin = target.minimum_element_size ?? target.hmin;
+  const growthRate = target.growth_rate ?? target.maximum_element_growth_rate;
+  if (isFiniteNumberLike(hmax)) config.airbox_hmax = hmax;
+  if (isFiniteNumberLike(hmin)) config.airbox_hmin = hmin;
+  if (isFiniteNumberLike(growthRate)) config.airbox_growth_rate = growthRate;
+  return config;
+}
+
 export function draftKeyForUniverseMeshPolicyResource(
   resource: MeshUniverseConfigResource,
+  options: {
+    effectiveTarget?: JsonObject | null | undefined;
+  } = {},
 ): string {
+  const effectiveTarget = targetConfigFromEffectiveAirbox(options.effectiveTarget);
   return [
     resource.revision,
     formatUniverseMeshPolicyConfig(resource.config),
+    formatUniverseMeshPolicyConfig(resource.effective_config),
+    formatUniverseMeshPolicyConfig(effectiveTarget),
   ].join(":");
 }
 
@@ -177,6 +215,13 @@ function readAirboxGrading(value: unknown): AirboxGradingMode {
   return AIRBOX_GRADING_MODES.includes(value as AirboxGradingMode)
     ? (value as AirboxGradingMode)
     : "auto";
+}
+
+function isFiniteNumberLike(value: unknown): value is number | string {
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && Number.isFinite(Number(trimmed));
 }
 
 function readNumberText(value: unknown): string {

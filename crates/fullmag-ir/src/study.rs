@@ -284,6 +284,7 @@ pub enum StageStopReason {
     MaxPhysicalTime,
     UserCancelled,
     BackendError,
+    Gradient,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

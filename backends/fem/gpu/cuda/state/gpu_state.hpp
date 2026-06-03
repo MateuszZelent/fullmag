@@ -19,6 +19,7 @@
 #include "gpu/cuda/mesh/mesh_metrics_state.hpp"
 #include "gpu/cuda/mesh/mesh_regions_state.hpp"
 #include "gpu/cuda/reductions/reduction_workspace_state.hpp"
+#include "gpu/cuda/relaxation/relaxation_state.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 #include "gpu/cuda/state/lifecycle_state.hpp"
 #include "gpu/cuda/state/magnetization_state.hpp"
@@ -52,6 +53,7 @@ struct FemGpuState {
     FemGpuMeshMetricsDeviceState mesh_metrics{};
     FemGpuMeshRegionDeviceState mesh_regions{};
     FemGpuReductionWorkspaceDeviceState reductions{};
+    FemGpuRelaxationDeviceState relaxation{};
 };
 
 uint32_t gpu_state_stage_count(fullmag_fem_integrator integrator);

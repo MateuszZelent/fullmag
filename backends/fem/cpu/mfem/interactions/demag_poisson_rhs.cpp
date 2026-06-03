@@ -112,13 +112,15 @@ private:
 
 struct PoissonRhsWorkspace {
     PoissonRhsWorkspace(Context &ctx, mfem::FiniteElementSpace *fes)
-        : m_coeff(ctx, fes)
+        : fes(fes)
+        , m_coeff(ctx, fes)
         , rhs_form(fes)
         , rhs_true(fes->GetTrueVSize())
     {
         rhs_form.AddDomainIntegrator(new mfem::DomainLFGradIntegrator(m_coeff));
     }
 
+    mfem::FiniteElementSpace *fes = nullptr;
     MagnetizationCoefficient m_coeff;
     mfem::LinearForm rhs_form;
     mfem::Vector rhs_true;
@@ -163,14 +165,13 @@ bool assemble_demag_poisson_rhs(
     mfem::Vector *&rhs,
     std::string &error)
 {
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
-    if (fes == nullptr) {
+    auto *workspace =
+        static_cast<PoissonRhsWorkspace *>(ctx.poisson_demag.rhs_workspace);
+    if (workspace == nullptr || workspace->fes == nullptr) {
         error = "Poisson FE space is null during RHS assembly";
         return false;
     }
 
-    auto *workspace =
-        static_cast<PoissonRhsWorkspace *>(ctx.poisson_demag.rhs_workspace);
     if (workspace == nullptr ||
         ctx.poisson_demag.rhs_form == nullptr ||
         ctx.poisson_demag.rhs_vec == nullptr) {
@@ -178,6 +179,7 @@ bool assemble_demag_poisson_rhs(
         return false;
     }
 
+    mfem::FiniteElementSpace *fes = workspace->fes;
     mfem::LinearForm &b = workspace->rhs_form;
     mfem::Vector &rhs_true = workspace->rhs_true;
     workspace->m_coeff.SetMagnetization(m_xyz);

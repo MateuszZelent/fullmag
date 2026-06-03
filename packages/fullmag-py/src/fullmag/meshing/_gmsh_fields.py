@@ -19,6 +19,9 @@ from ._gmsh_selectors import resolve_entity_selectors
 from ._mesh_targets import _geometry_name_aliases
 
 
+_NO_OP_FIELD_SIZE = 1.0e22
+
+
 def _coerce_growth_rate(value: object) -> float | None:
     try:
         growth_rate = float(value)
@@ -51,6 +54,7 @@ FIELD_SCHEMAS: dict[str, set[str]] = {
     "Box": {"VIn", "VOut", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
     "ComponentVolumeConstant": {"GeometryName", "VIn"},
     "ComponentRestrictedBox": {"GeometryName", "VIn", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
+    "ComponentRestrictedRectangularPerimeter": {"GeometryName", "VIn", "Extent", "Mode", "AxisA", "AxisB", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
     "ComponentRestrictedCylinder": {"GeometryName", "VIn", "Radius", "XCenter", "YCenter"},
     "SurfaceDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
     "InterfaceShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
@@ -159,6 +163,7 @@ def _apply_mesh_options(
             hmax,
             hscale,
             hmin=opts.hmin,
+            curvature_factor=resolved_size_controls.get("curvature_factor"),
             component_surface_tags=component_surface_tags,
         )
         if fid is not None:
@@ -172,6 +177,7 @@ def _apply_mesh_options(
     if resolved_narrow_regions > 0:
         fid = _add_narrow_region_field(
             gmsh, resolved_narrow_regions, hmax, hscale,
+            hmin=opts.hmin,
             component_surface_tags=component_surface_tags,
             component_volume_tags=component_volume_tags,
         )
@@ -279,15 +285,24 @@ def _add_narrow_region_field(
     n_resolve: int,
     hmax: float,
     hscale: float = 1.0,
+    *,
+    hmin: float | None = None,
     component_surface_tags: dict[str, list[int]] | None = None,
     component_volume_tags: dict[str, list[int]] | None = None,
 ) -> int | None:
     """Add a size field that refines narrow regions of the geometry.
 
-    Uses a Distance field from boundary surfaces: the local wall
-    thickness is approximately ``2 × dist_to_nearest_boundary``.
-    The target element size is ``thickness / n_resolve``, clamped to
-    ``[hmax * 0.05, hmax]`` (scaled by *hscale*).
+    Uses two complementary constraints:
+
+    - a Distance field from boundary surfaces, where the local wall thickness is
+      approximately ``2 × dist_to_nearest_boundary``;
+    - for component-aware shared-domain meshes, a per-volume bounding-box
+      narrow-span constraint, where the target size is ``min_span / n_resolve``.
+
+    Both targets are clamped to ``[max(hmin, hmax * 0.05), hmax]`` in mesh
+    units.  The volume constraint prevents the middle of a thin film from
+    returning to the far-field target when the nearest-surface distance reaches
+    half the film thickness.
 
     When *component_surface_tags* is provided (shared-domain mesh with
     airbox), only the ferromagnetic component surfaces are used.  This
@@ -306,44 +321,214 @@ def _add_narrow_region_field(
     if n_resolve < 1:
         return None
 
+    field_ids: list[int] = []
+
     # Prefer component surfaces (bodies only) so the airbox boundary
     # is not treated as a narrow-region wall.
+    surf_tags: list[int] = []
     if component_surface_tags:
-        surf_tags: list[int] = []
         for tags in component_surface_tags.values():
             surf_tags.extend(tags)
-        if not surf_tags:
-            return None
     else:
         surfaces = gmsh.model.getEntities(2)
-        if not surfaces:
-            return None
-        surf_tags = [t for _, t in surfaces]
+        if surfaces:
+            surf_tags = [t for _, t in surfaces]
 
-    f_dist = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", surf_tags)
-    gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
+    lower_size, upper_size = _narrow_region_size_bounds(
+        hmax=hmax,
+        hscale=hscale,
+        hmin=hmin,
+    )
 
-    hmin_val = hmax * 0.05 * hscale
-    hmax_val = hmax * hscale
-    # target_h = 2*dist / n_resolve, clamped to [hmin_val, hmax_val]
-    expr = f"Min(Max(2*F{f_dist}/{n_resolve}, {hmin_val}), {hmax_val})"
-    f_math = gmsh.model.mesh.field.add("MathEval")
-    gmsh.model.mesh.field.setString(f_math, "F", expr)
+    if surf_tags:
+        f_dist = gmsh.model.mesh.field.add("Distance")
+        gmsh.model.mesh.field.setNumbers(f_dist, "SurfacesList", surf_tags)
+        gmsh.model.mesh.field.setNumber(f_dist, "Sampling", 20)
 
-    # Restrict to body volumes only: in the airbox, distance-to-body
-    # is not a narrow-region measurement and would over-refine.
-    if component_volume_tags:
-        body_vol_tags: list[int] = []
-        for tags in component_volume_tags.values():
-            body_vol_tags.extend(tags)
+        # target_h = 2*dist / n_resolve, clamped to [lower_size, upper_size]
+        expr = f"Min(Max(2*F{f_dist}/{n_resolve}, {lower_size}), {upper_size})"
+        f_math = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(f_math, "F", expr)
+
+        # Restrict to body volumes only: in the airbox, distance-to-body
+        # is not a narrow-region measurement and would over-refine.
+        body_vol_tags = _flatten_unique_tags(component_volume_tags)
         if body_vol_tags:
             f_restrict = gmsh.model.mesh.field.add("Restrict")
             gmsh.model.mesh.field.setNumber(f_restrict, "InField", f_math)
             gmsh.model.mesh.field.setNumbers(f_restrict, "VolumesList", body_vol_tags)
-            return f_restrict
+            field_ids.append(f_restrict)
+        else:
+            field_ids.append(f_math)
 
-    return f_math
+    field_ids.extend(
+        _add_component_volume_narrow_span_fields(
+            gmsh,
+            n_resolve=n_resolve,
+            lower_size=lower_size,
+            upper_size=upper_size,
+            component_volume_tags=component_volume_tags,
+        )
+    )
+
+    if not field_ids:
+        return None
+    if len(field_ids) == 1:
+        return field_ids[0]
+
+    f_min = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(f_min, "FieldsList", field_ids)
+    return f_min
+
+
+def _narrow_region_size_bounds(
+    *,
+    hmax: float,
+    hscale: float,
+    hmin: float | None,
+) -> tuple[float, float]:
+    upper_size = float(hmax) * hscale
+    lower_size = upper_size * 0.05
+    if hmin is not None and hmin > 0.0:
+        lower_size = max(lower_size, float(hmin) * hscale)
+    return min(lower_size, upper_size), upper_size
+
+
+def _flatten_unique_tags(tags_by_name: dict[str, list[int]] | None) -> list[int]:
+    if not tags_by_name:
+        return []
+    tags: set[int] = set()
+    for values in tags_by_name.values():
+        tags.update(int(tag) for tag in values)
+    return sorted(tags)
+
+
+def _add_component_volume_narrow_span_fields(
+    gmsh: Any,
+    *,
+    n_resolve: int,
+    lower_size: float,
+    upper_size: float,
+    component_volume_tags: dict[str, list[int]] | None,
+) -> list[int]:
+    volume_tags = _flatten_unique_tags(component_volume_tags)
+    if not volume_tags:
+        return []
+
+    fields: list[int] = []
+    for volume_tag in volume_tags:
+        try:
+            bbox = gmsh.model.getBoundingBox(3, int(volume_tag))
+        except AttributeError:
+            return []
+        except Exception:
+            continue
+        if len(bbox) != 6:
+            continue
+        spans = [
+            float(bbox[3]) - float(bbox[0]),
+            float(bbox[4]) - float(bbox[1]),
+            float(bbox[5]) - float(bbox[2]),
+        ]
+        positive_spans = [
+            span for span in spans if np.isfinite(span) and span > 0.0
+        ]
+        if not positive_spans:
+            continue
+        target = max(lower_size, min(upper_size, min(positive_spans) / float(n_resolve)))
+        if target >= upper_size:
+            continue
+        field_id = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumbers(field_id, "VolumesList", [int(volume_tag)])
+        gmsh.model.mesh.field.setNumber(field_id, "VIn", target)
+        gmsh.model.mesh.field.setNumber(field_id, "VOut", upper_size)
+        gmsh.model.mesh.field.setNumber(field_id, "IncludeBoundary", 1)
+        gmsh.model.mesh.field.setNumber(field_id, "IncludeEmbedded", 1)
+        fields.append(field_id)
+    return fields
+
+
+def _sample_surface_curvature_radius(
+    gmsh: Any,
+    surface_tag: int,
+    *,
+    samples_per_axis: int,
+) -> float | None:
+    try:
+        bounds_min, bounds_max = gmsh.model.getParametrizationBounds(2, int(surface_tag))
+    except AttributeError:
+        raise
+    except Exception:
+        return None
+
+    if len(bounds_min) < 2 or len(bounds_max) < 2:
+        return None
+    u_min, v_min = float(bounds_min[0]), float(bounds_min[1])
+    u_max, v_max = float(bounds_max[0]), float(bounds_max[1])
+    if not all(np.isfinite(value) for value in (u_min, v_min, u_max, v_max)):
+        return None
+    if u_max <= u_min or v_max <= v_min:
+        return None
+
+    sample_count = max(1, min(int(samples_per_axis), 5))
+    fractions = [(index + 1.0) / (sample_count + 1.0) for index in range(sample_count)]
+    parametric_coords: list[float] = []
+    for u_fraction in fractions:
+        u_value = u_min + (u_max - u_min) * u_fraction
+        for v_fraction in fractions:
+            v_value = v_min + (v_max - v_min) * v_fraction
+            parametric_coords.extend([u_value, v_value])
+
+    try:
+        curvatures = gmsh.model.getCurvature(2, int(surface_tag), parametric_coords)
+    except AttributeError:
+        raise
+    except Exception:
+        return None
+
+    finite_curvatures = [
+        abs(float(curvature))
+        for curvature in curvatures
+        if np.isfinite(float(curvature)) and abs(float(curvature)) > 0.0
+    ]
+    if not finite_curvatures:
+        return None
+    max_curvature = max(finite_curvatures)
+    if max_curvature <= 0.0:
+        return None
+    return 1.0 / max_curvature
+
+
+def _curvature_limited_surfaces(
+    gmsh: Any,
+    surface_tags: Sequence[int],
+    *,
+    curvature_factor: float,
+    hmax_scaled: float,
+    hscale: float,
+    samples_per_axis: int,
+) -> tuple[list[int], float | None] | None:
+    target_surfaces: list[int] = []
+    target_min: float | None = None
+    for surface_tag in surface_tags:
+        try:
+            radius_scaled = _sample_surface_curvature_radius(
+                gmsh,
+                int(surface_tag),
+                samples_per_axis=samples_per_axis,
+            )
+        except AttributeError:
+            return None
+        if radius_scaled is None:
+            continue
+        if hscale <= 0.0:
+            continue
+        target = float(curvature_factor) * (radius_scaled / hscale)
+        if target * hscale >= hmax_scaled:
+            continue
+        target_surfaces.append(int(surface_tag))
+        target_min = target if target_min is None else min(target_min, target)
+    return target_surfaces, target_min
 
 
 def _add_curvature_surface_field(
@@ -353,6 +538,7 @@ def _add_curvature_surface_field(
     hscale: float = 1.0,
     *,
     hmin: float | None = None,
+    curvature_factor: object = None,
     component_surface_tags: dict[str, list[int]] | None = None,
 ) -> int | None:
     """Add an explicit surface-near field for rounded-feature refinement.
@@ -380,10 +566,34 @@ def _add_curvature_surface_field(
             return None
         surf_tags = [int(tag) for _, tag in surfaces]
 
-    target_min = hmax / float(max(curvature_samples, 1))
+    target_surfaces = surf_tags
+    target_min: float | None = None
+    if curvature_factor is not None:
+        try:
+            factor_value = float(curvature_factor)
+        except (TypeError, ValueError):
+            factor_value = 0.0
+        if factor_value > 0.0:
+            limited = _curvature_limited_surfaces(
+                gmsh,
+                surf_tags,
+                curvature_factor=factor_value,
+                hmax_scaled=float(hmax) * hscale,
+                hscale=hscale,
+                samples_per_axis=max(1, min(int(curvature_samples), 5)),
+            )
+            if limited is not None:
+                target_surfaces, target_min = limited
+                if not target_surfaces or target_min is None:
+                    return None
+
+    if target_min is None:
+        target_min = hmax / float(max(curvature_samples, 1))
     target_min = max(target_min, hmax * 0.05)
     if hmin is not None and hmin > 0.0:
         target_min = max(target_min, float(hmin))
+    if target_min >= hmax:
+        return None
 
     # Keep the influence local.  The global SmoothRatio / transition fields
     # handle far-field grading; this field only makes rounded surfaces visible
@@ -391,7 +601,7 @@ def _add_curvature_surface_field(
     influence = min(hmax, max(target_min * 3.0, hmax * 0.25))
     return _add_surface_threshold_field(
         gmsh,
-        surface_tags=surf_tags,
+        surface_tags=target_surfaces,
         size_min=target_min,
         size_max=hmax,
         dist_min=0.0,
@@ -867,6 +1077,86 @@ def _add_component_restricted_box_field(
     return restricted
 
 
+def _add_component_restricted_rectangular_perimeter_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    vin: float,
+    vout: float,
+    extent: float,
+    mode: str,
+    axis_a: int,
+    axis_b: int,
+    xmin: float,
+    xmax: float,
+    ymin: float,
+    ymax: float,
+    zmin: float,
+    zmax: float,
+    component_volume_tags: dict[str, list[int]] | None,
+    hscale: float = 1.0,
+) -> int | None:
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if not volume_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered component volumes for '{geometry_name}', skipping rectangular perimeter refinement"
+        )
+        return None
+
+    if extent <= 0.0:
+        return None
+    axes = ("x", "y", "z")
+    bounds_min = [float(xmin) * hscale, float(ymin) * hscale, float(zmin) * hscale]
+    bounds_max = [float(xmax) * hscale, float(ymax) * hscale, float(zmax) * hscale]
+    try:
+        coord_a = axes[int(axis_a)]
+        coord_b = axes[int(axis_b)]
+        min_a = bounds_min[int(axis_a)]
+        max_a = bounds_max[int(axis_a)]
+        min_b = bounds_min[int(axis_b)]
+        max_b = bounds_max[int(axis_b)]
+    except (IndexError, ValueError):
+        emit_progress(
+            f"Gmsh: warning - invalid rectangular perimeter axes for '{geometry_name}', skipping"
+        )
+        return None
+
+    da = (
+        f"Min({coord_a} - {_math_number(min_a)}, "
+        f"{_math_number(max_a)} - {coord_a})"
+    )
+    db = (
+        f"Min({coord_b} - {_math_number(min_b)}, "
+        f"{_math_number(max_b)} - {coord_b})"
+    )
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode == "corner":
+        metric = f"Max({da}, {db})"
+    elif normalized_mode == "edge":
+        metric = f"Min({da}, {db})"
+    else:
+        emit_progress(
+            f"Gmsh: warning - invalid rectangular perimeter mode {mode!r} for '{geometry_name}', skipping"
+        )
+        return None
+
+    extent_scaled = float(extent) * hscale
+    ramp = f"Min(Max(({metric}) / {_math_number(extent_scaled)}, 0), 1)"
+    vin_scaled = float(vin) * hscale
+    vout_scaled = float(vout) * hscale
+    expr = (
+        f"{_math_number(vin_scaled)} + "
+        f"({_math_number(vout_scaled)} - {_math_number(vin_scaled)}) * {ramp}"
+    )
+
+    field_id = gmsh.model.mesh.field.add("MathEval")
+    gmsh.model.mesh.field.setString(field_id, "F", expr)
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+    return restricted
+
+
 def _add_component_restricted_cylinder_field(
     gmsh: Any,
     *,
@@ -961,6 +1251,50 @@ def _box_outside_distance_expression(bounds_min: Sequence[float], bounds_max: Se
     return f"Sqrt(({dx}) * ({dx}) + ({dy}) * ({dy}) + ({dz}) * ({dz}))"
 
 
+def _max_expression(expressions: Sequence[str]) -> str:
+    result = expressions[0]
+    for expression in expressions[1:]:
+        result = f"Max({result}, {expression})"
+    return result
+
+
+def _box_airbox_boundary_ramp_expression(
+    bounds_min: Sequence[float],
+    bounds_max: Sequence[float],
+    airbox_bounds_min: Sequence[float],
+    airbox_bounds_max: Sequence[float],
+    dist_min: float,
+) -> str | None:
+    coords = ("x", "y", "z")
+    terms: list[str] = []
+    dist_min_text = _math_number(dist_min)
+    for axis, coord in enumerate(coords):
+        inner_min = float(bounds_min[axis])
+        inner_max = float(bounds_max[axis])
+        outer_min = float(airbox_bounds_min[axis])
+        outer_max = float(airbox_bounds_max[axis])
+
+        lower_gap = inner_min - outer_min
+        if lower_gap > dist_min:
+            delta = f"Max({_math_number(inner_min)} - {coord}, 0)"
+            terms.append(
+                f"Min(Max(({delta} - {dist_min_text}) / "
+                f"{_math_number(lower_gap - dist_min)}, 0), 1)"
+            )
+
+        upper_gap = outer_max - inner_max
+        if upper_gap > dist_min:
+            delta = f"Max({coord} - {_math_number(inner_max)}, 0)"
+            terms.append(
+                f"Min(Max(({delta} - {dist_min_text}) / "
+                f"{_math_number(upper_gap - dist_min)}, 0), 1)"
+            )
+
+    if not terms:
+        return None
+    return _max_expression(terms)
+
+
 def _add_axis_aligned_box_distance_threshold_field(
     gmsh: Any,
     *,
@@ -973,6 +1307,8 @@ def _add_axis_aligned_box_distance_threshold_field(
     hscale: float = 1.0,
     grading: str | None = None,
     growth_rate: object = None,
+    airbox_bounds_min: Sequence[float] | None = None,
+    airbox_bounds_max: Sequence[float] | None = None,
 ) -> int | None:
     scaled_bounds_min = [float(value) * hscale for value in bounds_min]
     scaled_bounds_max = [float(value) * hscale for value in bounds_max]
@@ -986,12 +1322,24 @@ def _add_axis_aligned_box_distance_threshold_field(
         )
         return None
 
-    distance = _box_outside_distance_expression(scaled_bounds_min, scaled_bounds_max)
-    span = dist_max_scaled - dist_min_scaled
-    ramp = (
-        f"Min(Max(({distance} - {_math_number(dist_min_scaled)}) / "
-        f"{_math_number(span)}, 0), 1)"
-    )
+    ramp = None
+    if airbox_bounds_min is not None and airbox_bounds_max is not None:
+        scaled_airbox_bounds_min = [float(value) * hscale for value in airbox_bounds_min]
+        scaled_airbox_bounds_max = [float(value) * hscale for value in airbox_bounds_max]
+        ramp = _box_airbox_boundary_ramp_expression(
+            scaled_bounds_min,
+            scaled_bounds_max,
+            scaled_airbox_bounds_min,
+            scaled_airbox_bounds_max,
+            dist_min_scaled,
+        )
+    if ramp is None:
+        distance = _box_outside_distance_expression(scaled_bounds_min, scaled_bounds_max)
+        span = dist_max_scaled - dist_min_scaled
+        ramp = (
+            f"Min(Max(({distance} - {_math_number(dist_min_scaled)}) / "
+            f"{_math_number(span)}, 0), 1)"
+        )
     grading_mode = str(grading or "").strip().lower()
     if (
         grading_mode == "geometric"
@@ -1111,6 +1459,36 @@ def _configure_mesh_size_fields(
             else:
                 _mark_field(config, status="ignored", reason="no recovered component volumes")
             continue
+        if kind == "ComponentRestrictedRectangularPerimeter":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedRectangularPerimeter is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
+                continue
+            fid = _add_component_restricted_rectangular_perimeter_field(
+                gmsh,
+                geometry_name=geometry_name,
+                vin=float(params.get("VIn")),
+                vout=float(params.get("VOut", _NO_OP_FIELD_SIZE)),
+                extent=float(params.get("Extent")),
+                mode=str(params.get("Mode")),
+                axis_a=int(params.get("AxisA")),
+                axis_b=int(params.get("AxisB")),
+                xmin=float(params.get("XMin")),
+                xmax=float(params.get("XMax")),
+                ymin=float(params.get("YMin")),
+                ymax=float(params.get("YMax")),
+                zmin=float(params.get("ZMin")),
+                zmax=float(params.get("ZMax")),
+                component_volume_tags=component_volume_tags,
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
+            continue
         if kind == "ComponentRestrictedCylinder":
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
@@ -1147,6 +1525,8 @@ def _configure_mesh_size_fields(
                 hscale=hscale,
                 grading=params.get("Grading"),
                 growth_rate=params.get("GrowthRate"),
+                airbox_bounds_min=params.get("AirboxBoundsMin"),
+                airbox_bounds_max=params.get("AirboxBoundsMax"),
             )
             if fid is not None:
                 field_ids.append(fid)

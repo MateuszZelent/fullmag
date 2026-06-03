@@ -144,6 +144,62 @@ fullmag_fem_stage_completion stage_completion_snapshot(const Context &ctx)
     return ctx.stage_completion.snapshot;
 }
 
+bool complete_stage_from_current_stats(
+    Context &ctx,
+    const fullmag_fem_step_stats &stats)
+{
+    if (ctx.stage_completion.snapshot.has_reason != 0) {
+        return true;
+    }
+    if (!has_relax_stop_criteria(ctx)) {
+        return false;
+    }
+
+    if (ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0 &&
+        ctx.stage_completion.relax_stop.has_energy_tolerance_j == 0 &&
+        stats.max_torque_Apm <= ctx.stage_completion.relax_stop.torque_tolerance_apm) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            "max_torque_Apm",
+            stats.max_torque_Apm,
+            ctx.stage_completion.relax_stop.torque_tolerance_apm);
+        return true;
+    }
+    if (ctx.stage_completion.relax_stop.has_max_physical_time_s != 0 &&
+        stats.time_seconds >= ctx.stage_completion.relax_stop.max_physical_time_s) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME,
+            "physical_time_s",
+            stats.time_seconds,
+            ctx.stage_completion.relax_stop.max_physical_time_s);
+        return true;
+    }
+    if (ctx.stage_completion.relax_stop.has_max_pseudotime_s != 0 &&
+        ctx.stage_completion.relax_pseudotime_s >= ctx.stage_completion.relax_stop.max_pseudotime_s) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME,
+            "pseudo_time_s",
+            ctx.stage_completion.relax_pseudotime_s,
+            ctx.stage_completion.relax_stop.max_pseudotime_s);
+        return true;
+    }
+    if (ctx.stage_completion.relax_stop.has_max_steps != 0 &&
+        stats.step >= ctx.stage_completion.relax_stop.max_steps) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
+            "steps",
+            static_cast<double>(stats.step),
+            static_cast<double>(ctx.stage_completion.relax_stop.max_steps));
+        return true;
+    }
+
+    return false;
+}
+
 void update_stage_completion_from_stats(
     Context &ctx,
     const fullmag_fem_step_stats &stats)

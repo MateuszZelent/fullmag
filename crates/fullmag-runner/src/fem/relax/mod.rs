@@ -9,7 +9,7 @@
 //! | Algorithm               | CPU MFEM | GPU native | Notes                               |
 //! |-------------------------|----------|------------|-------------------------------------|
 //! | `LlgOverdamped`         | ✓        | ✓          | primary production path             |
-//! | `ProjectedGradientBb`   | ✓        | ✗          | native MFEM relaxation ABI          |
+//! | `ProjectedGradientBb`   | ✓        | ✓          | native MFEM/CUDA relaxation ABI     |
 //! | `NonlinearCg`           | ✓        | ✗          | native MFEM relaxation ABI          |
 //! | `TangentPlaneImplicit`  | ✓        | ✗          | native MFEM relaxation ABI          |
 

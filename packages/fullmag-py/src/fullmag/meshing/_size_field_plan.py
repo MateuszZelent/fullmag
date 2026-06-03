@@ -115,6 +115,20 @@ def _unwrap_translated_box_geometry(geometry: Geometry) -> Box | None:
     return current if isinstance(current, Box) else None
 
 
+def _rectangular_perimeter_size(geometry: Geometry) -> tuple[float, float, float] | None:
+    box = _unwrap_translated_box_geometry(geometry)
+    if box is not None:
+        return tuple(float(component) for component in box.size)
+    flat_arch = _unwrap_translated_flat_arch_waveguide_geometry(geometry)
+    if flat_arch is not None:
+        return (
+            float(flat_arch.length),
+            float(flat_arch.width),
+            float(flat_arch.height),
+        )
+    return None
+
+
 def _unwrap_translated_flat_arch_waveguide_geometry(geometry: Geometry) -> ArchWaveguide | None:
     current = _unwrap_translated_geometry(geometry)
     if not isinstance(current, ArchWaveguide):
@@ -159,8 +173,8 @@ def _perimeter_refinement_config(
         raise ValueError(
             f"{geometry.geometry_name}: corner_maximum_element_size and corner_extent must be set together"
         )
-    box = _unwrap_translated_box_geometry(geometry)
-    if box is None:
+    rectangular_size = _rectangular_perimeter_size(geometry)
+    if rectangular_size is None:
         return {
             key: value
             for key, value in {
@@ -172,7 +186,7 @@ def _perimeter_refinement_config(
             if value is not None
         }
 
-    sx, sy, sz = (float(component) for component in box.size)
+    sx, sy, sz = rectangular_size
     in_plane_dims = sorted((sx, sy, sz), reverse=True)[:2]
     min_in_plane_dim = min(in_plane_dims)
     half_min_in_plane_dim = 0.5 * min_in_plane_dim
@@ -240,8 +254,8 @@ def _build_perimeter_refinement_fields(
         if bounds_min is None or bounds_max is None:
             continue
 
-        box = _unwrap_translated_box_geometry(geometry)
-        if box is None:
+        rectangular_size = _rectangular_perimeter_size(geometry)
+        if rectangular_size is None:
             transition_growth = (
                 _coerce_positive_float(entry.get("transition_growth"))
                 if entry is not None
@@ -348,10 +362,17 @@ def _build_perimeter_refinement_fields(
                     }
                 )
             continue
-        size_by_axis = [float(component) for component in box.size]
+        size_by_axis = [float(component) for component in rectangular_size]
         in_plane_axes = sorted(range(3), key=lambda axis: size_by_axis[axis], reverse=True)[:2]
         axis_a, axis_b = in_plane_axes
+        use_rectangular_distance_fields = _unwrap_translated_box_geometry(geometry) is None
         air_side_fields: list[dict[str, object]] = []
+        raw_bulk_hmax = (
+            entry.get("bulk_hmax") or entry.get("hmax")
+            if entry is not None
+            else None
+        )
+        bulk_hmax = _coerce_positive_float(raw_bulk_hmax) or default_hmax
         transition_growth = (
             _coerce_positive_float(entry.get("transition_growth"))
             if entry is not None
@@ -365,6 +386,8 @@ def _build_perimeter_refinement_fields(
             min_b: float,
             max_b: float,
         ) -> None:
+            if use_rectangular_distance_fields:
+                return
             if size_value is None or size_value >= default_hmax:
                 return
             local_min = [float(value) for value in bounds_min]
@@ -422,6 +445,28 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]),
             )
             if edge_hmax < default_hmax:
+                if use_rectangular_distance_fields:
+                    if edge_hmax < bulk_hmax:
+                        fields.append(
+                            {
+                                "kind": "ComponentRestrictedRectangularPerimeter",
+                                "params": {
+                                    "GeometryName": geometry.geometry_name,
+                                    "VIn": edge_hmax,
+                                    "VOut": float(_NO_OP_FIELD_SIZE),
+                                    "Extent": edge_thickness,
+                                    "Mode": "edge",
+                                    "AxisA": int(axis_a),
+                                    "AxisB": int(axis_b),
+                                    "XMin": float(bounds_min[0]),
+                                    "XMax": float(bounds_max[0]),
+                                    "YMin": float(bounds_min[1]),
+                                    "YMax": float(bounds_max[1]),
+                                    "ZMin": float(bounds_min[2]),
+                                    "ZMax": float(bounds_max[2]),
+                                },
+                            }
+                        )
                 raw_edge_transition_distance = (
                     entry.get("edge_transition_distance")
                     if entry is not None
@@ -502,6 +547,28 @@ def _build_perimeter_refinement_fields(
                 float(bounds_max[axis_b]),
             )
             if corner_hmax < default_hmax:
+                if use_rectangular_distance_fields:
+                    if corner_hmax < bulk_hmax:
+                        fields.append(
+                            {
+                                "kind": "ComponentRestrictedRectangularPerimeter",
+                                "params": {
+                                    "GeometryName": geometry.geometry_name,
+                                    "VIn": corner_hmax,
+                                    "VOut": float(_NO_OP_FIELD_SIZE),
+                                    "Extent": corner_extent,
+                                    "Mode": "corner",
+                                    "AxisA": int(axis_a),
+                                    "AxisB": int(axis_b),
+                                    "XMin": float(bounds_min[0]),
+                                    "XMax": float(bounds_max[0]),
+                                    "YMin": float(bounds_min[1]),
+                                    "YMax": float(bounds_max[1]),
+                                    "ZMin": float(bounds_min[2]),
+                                    "ZMax": float(bounds_max[2]),
+                                },
+                            }
+                        )
                 raw_corner_transition_distance = (
                     entry.get("corner_transition_distance")
                     if entry is not None
@@ -883,6 +950,10 @@ def _build_transition_fields(
                 }
                 if transition_growth is not None and transition_growth > 1.0:
                     params["GrowthRate"] = float(transition_growth)
+                if transition_source == "airbox_boundary" and airbox_bounds is not None:
+                    airbox_min, airbox_max = airbox_bounds
+                    params["AirboxBoundsMin"] = [float(value) for value in airbox_min]
+                    params["AirboxBoundsMax"] = [float(value) for value in airbox_max]
                 fields.append(
                     {
                         "kind": "AxisAlignedBoxDistanceThreshold",

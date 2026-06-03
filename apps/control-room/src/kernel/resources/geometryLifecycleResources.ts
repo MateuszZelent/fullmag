@@ -789,6 +789,7 @@ export function defaultObjectMeshPolicyResource(
 ): MeshObjectConfigResource {
   return {
     config: null,
+    effective_config: null,
     object_id: objectId,
     revision: 0,
   };

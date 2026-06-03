@@ -60,6 +60,7 @@ void stage_completion_is_owned_by_runtime_module() {
         "void initialize_stage_completion_state(",
         "bool has_relax_stop_criteria(",
         "void set_stage_completion(",
+        "bool complete_stage_from_current_stats(",
         "void update_stage_completion_from_stats(",
         "void context_update_stage_completion_from_stats(",
     };
@@ -318,6 +319,52 @@ void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
     check(ctx.stage_completion.snapshot.metric_value <= 0.25, "negative-energy plateau range");
 }
 
+void current_snapshot_completion_reports_non_plateau_stop_criteria() {
+    {
+        fullmag::fem::Context ctx;
+        ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+        ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+        fullmag_fem_step_stats stats{};
+        stats.total_energy_joules = 10.0;
+        stats.max_torque_Apm = 1.5;
+        stats.dt_seconds = 3.0;
+
+        check(
+            fullmag::fem::complete_stage_from_current_stats(ctx, stats),
+            "current snapshot torque stop");
+        check(
+            ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            "current snapshot torque reason");
+        check(
+            std::strcmp(ctx.stage_completion.snapshot.metric_name, "max_torque_Apm") == 0,
+            "current snapshot torque metric");
+        check(
+            ctx.stage_completion.relax_pseudotime_s == 0.0,
+            "current snapshot stop must not accumulate pseudo-time");
+        check(
+            !ctx.stage_completion.relax_previous_total_energy_valid,
+            "current snapshot stop must not seed accepted-step energy plateau state");
+    }
+
+    {
+        fullmag::fem::Context ctx;
+        ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+        ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+        ctx.stage_completion.relax_stop.has_energy_tolerance_j = 1;
+        ctx.stage_completion.relax_stop.energy_tolerance_j = 0.25;
+        fullmag_fem_step_stats stats{};
+        stats.total_energy_joules = 10.0;
+        stats.max_torque_Apm = 1.5;
+
+        check(
+            !fullmag::fem::complete_stage_from_current_stats(ctx, stats),
+            "current snapshot must not satisfy accepted-step energy plateau");
+        check(
+            ctx.stage_completion.snapshot.has_reason == 0,
+            "current snapshot does not bypass energy plateau window");
+    }
+}
+
 void torque_physical_time_pseudotime_and_step_stops_are_reported() {
     {
         fullmag::fem::Context ctx;
@@ -397,6 +444,7 @@ int main() {
     no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged();
     energy_stop_requires_50_step_plateau_and_torque_gate();
     energy_plateau_uses_unsigned_range_for_signed_total_energy();
+    current_snapshot_completion_reports_non_plateau_stop_criteria();
     torque_physical_time_pseudotime_and_step_stops_are_reported();
     stage_completion_snapshot_returns_public_state();
     return 0;

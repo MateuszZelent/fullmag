@@ -165,6 +165,9 @@ pub(crate) fn stage_completion_from_ffi(
         ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR => {
             StageStopReason::BackendError
         }
+        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT => {
+            StageStopReason::Gradient
+        }
     };
 
     let metric_name = if completion.has_metric_name != 0 {
@@ -227,6 +230,28 @@ mod tests {
         assert_eq!(completion.metric_name.as_deref(), Some("energy_delta_j"));
         assert_eq!(completion.metric_value, Some(1.0e-21));
         assert_eq!(completion.threshold, Some(1.0e-20));
+    }
+
+    #[test]
+    fn stage_completion_from_ffi_maps_gradient_completion() {
+        let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
+            has_reason: 1,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+            has_metric_name: 1,
+            metric_name: metric_name("tangent_gradient_norm_sq"),
+            metric_value: 0.0,
+            threshold: 1.0e-30,
+        })
+        .expect("gradient completion should map when reason is present");
+
+        assert_eq!(completion.status, "completed");
+        assert_eq!(completion.reason, Some(StageStopReason::Gradient));
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("tangent_gradient_norm_sq")
+        );
+        assert_eq!(completion.metric_value, Some(0.0));
+        assert_eq!(completion.threshold, Some(1.0e-30));
     }
 
     #[test]

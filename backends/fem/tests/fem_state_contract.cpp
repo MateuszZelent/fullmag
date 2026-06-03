@@ -112,6 +112,9 @@ void state_plan_initialization_is_owned_by_core_module() {
         state.find("ctx.state.current_time = 0.0;") != std::string::npos,
         "FemState initialization must reset accepted simulation time on the state owner");
     check(
+        state.find("normalize_active_magnetization_aos(") != std::string::npos,
+        "FemState initialization must normalize initial magnetization before native stepping");
+    check(
         state_header.find(
             "It does not own mesh topology, material coefficients, field buffers, runtime") !=
                 std::string::npos &&
@@ -131,7 +134,7 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
     ctx.mesh.periodic_reduced_node_count = 1u;
 
     const double initial_m[] = {
-        1.0, 0.0, 0.0,
+        2.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
     };
     fullmag_fem_plan_desc plan{};
@@ -165,6 +168,19 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
     check(
         error.find("initial magnetization length mismatch") != std::string::npos,
         "initial magnetization length error string");
+
+    const double zero_m[] = {
+        0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    plan.initial_magnetization_xyz = zero_m;
+    plan.initial_magnetization_len = 6;
+    check(
+        !fullmag::fem::initialize_state_plan_fields(ctx, plan, error),
+        "zero active initial magnetization is invalid");
+    check(
+        error.find("initial magnetization normalization failed") != std::string::npos,
+        "zero active initial magnetization error string");
 }
 
 } // namespace

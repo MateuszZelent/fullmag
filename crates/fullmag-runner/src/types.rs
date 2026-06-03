@@ -69,6 +69,8 @@ pub struct FemCpuRelaxationQualificationMetadata {
     pub solver_mesh_signature: String,
     pub demag_policy: FemCpuRelaxationDemagPolicyMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm_policy: Option<FemCpuRelaxationAlgorithmPolicyMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relaxation_algorithm: Option<String>,
@@ -85,6 +87,24 @@ pub struct FemCpuRelaxationQualificationMetadata {
     pub final_torque_t: f64,
     pub norm_defect: f64,
     pub executed_steps: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemCpuRelaxationAlgorithmPolicyMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preconditioner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear_solver_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tangent_operator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -303,13 +303,13 @@ run-stdprob1-fem-headless:
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag tests/stdprob1_hysteresis_fem.py --headless --json
 
 fem-gpu-headless script:
-    docker compose --profile fem-gpu run --rm fem-gpu bash -lc '\
+    docker compose --profile fem-gpu run --rm -e FULLMAG_RELAX_ALGORITHM="${FULLMAG_RELAX_ALGORITHM:-}" fem-gpu bash -lc '\
       set -euo pipefail; \
       cargo +nightly clean -p fullmag-fdm-demag >/dev/null 2>&1 || true; \
       FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli --features "cuda fem-gpu" >/tmp/fullmag-build.log; \
-      FEM_LIB=$$(dirname "$$(find target/debug/build -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" | head -n1)"); \
-      FDM_LIB=$$(dirname "$$(find target/debug/build -path "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0" | head -n1)"); \
-      export LD_LIBRARY_PATH="$$FEM_LIB:$$FDM_LIB:/opt/fullmag-deps/lib:$${LD_LIBRARY_PATH:-}"; \
+      FEM_LIB=$(dirname "$(find target/debug/build -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"); \
+      FDM_LIB=$(dirname "$(find target/debug/build -path "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"); \
+      export LD_LIBRARY_PATH="$FEM_LIB:$FDM_LIB:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}"; \
       FULLMAG_FEM_EXECUTION=gpu FULLMAG_FEM_GPU_INDEX=0 FULLMAG_FDM_GPU_INDEX=0 \
       ./target/debug/fullmag {{script}} --backend fem --headless --json \
     '

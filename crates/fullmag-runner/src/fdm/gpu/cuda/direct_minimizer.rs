@@ -11,11 +11,12 @@ use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
     apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
-    direct_minimizer_gradient_norm_sq, direct_minimizer_step_budget,
+    direct_minimizer_gradient_norm_sq, direct_minimizer_within_runtime_budget,
     nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
     nonlinear_cg_next_direction, projected_gradient_line_search,
     projected_gradient_step_size_update, DirectMinimizerAlgorithm, DirectMinimizerControl,
-    DirectMinimizerState, DirectMinimizerTrialEvaluation,
+    DirectMinimizerState, DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK,
+    PROJECTED_GRADIENT_MAX_BACKTRACK,
 };
 use crate::relaxation::vector_math::{max_torque_from_field, tangent_gradient_from_field};
 use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
@@ -35,6 +36,21 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
     if stats.per_object_scalars.is_empty() {
         stats.per_object_scalars = single_object_scalars(object_id, stats);
     }
+}
+
+fn restore_previous_state_after_failed_line_search(
+    backend: &mut NativeFdmBackend,
+    magnetization: &[[f64; 3]],
+    algorithm: &str,
+    max_backtracks: u32,
+) -> Result<RunError, RunError> {
+    backend.upload_magnetization(magnetization)?;
+    backend.refresh_observables()?;
+    Ok(RunError {
+        message: format!(
+            "FDM CUDA {algorithm} failed Armijo line search after {max_backtracks} backtracks; previous magnetization was restored"
+        ),
+    })
 }
 
 pub(crate) fn execute_direct_minimizer(
@@ -58,7 +74,7 @@ pub(crate) fn execute_direct_minimizer(
         current_stats.e_total,
     );
 
-    while state.accepted_steps < direct_minimizer_step_budget(control) {
+    while direct_minimizer_within_runtime_budget(&state, control) {
         if let Some(live) = live.as_mut() {
             if let Some(display_selection) = live.display_selection.map(|get| get()) {
                 let preview_due = display_refresh_due(
@@ -112,7 +128,7 @@ pub(crate) fn execute_direct_minimizer(
         let mut trial_lambda = state.step_size;
         let (trial_stats, m_trial) = match direct_minimizer.algorithm {
             DirectMinimizerAlgorithm::ProjectedGradientBb => {
-                let accepted_trial = projected_gradient_line_search(
+                let Some(accepted_trial) = projected_gradient_line_search(
                     state.energy_j,
                     g_norm_sq,
                     &state.magnetization,
@@ -128,7 +144,15 @@ pub(crate) fn execute_direct_minimizer(
                             stats,
                         })
                     },
-                )?;
+                )?
+                else {
+                    return Err(restore_previous_state_after_failed_line_search(
+                        backend,
+                        &state.magnetization,
+                        "projected-gradient BB",
+                        PROJECTED_GRADIENT_MAX_BACKTRACK,
+                    )?);
+                };
                 trial_lambda = accepted_trial.step_size;
                 let trial_stats = accepted_trial.stats;
                 let m_trial = accepted_trial.magnetization;
@@ -159,7 +183,7 @@ pub(crate) fn execute_direct_minimizer(
                 );
                 trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
 
-                let accepted_trial = nonlinear_cg_line_search(
+                let Some(accepted_trial) = nonlinear_cg_line_search(
                     state.energy_j,
                     p_dot_g,
                     &state.magnetization,
@@ -175,7 +199,15 @@ pub(crate) fn execute_direct_minimizer(
                             stats,
                         })
                     },
-                )?;
+                )?
+                else {
+                    return Err(restore_previous_state_after_failed_line_search(
+                        backend,
+                        &state.magnetization,
+                        "nonlinear-CG",
+                        NONLINEAR_CG_MAX_BACKTRACK,
+                    )?);
+                };
                 trial_lambda = accepted_trial.step_size;
                 let trial_stats = accepted_trial.stats;
                 let m_trial = accepted_trial.magnetization;
@@ -200,6 +232,7 @@ pub(crate) fn execute_direct_minimizer(
         state.magnetization = m_trial;
         state.energy_j = trial_stats.e_total;
         state.accepted_steps += 1;
+        state.pseudo_time_s += trial_lambda.max(0.0);
 
         let mut accepted_stats = trial_stats.clone();
         let torque_apm = apply_direct_minimizer_step_metrics(

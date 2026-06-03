@@ -49,6 +49,7 @@ pub(crate) struct DirectMinimizerState {
     pub(crate) use_bb1: bool,
     pub(crate) reset_consecutive: u64,
     pub(crate) accepted_steps: u64,
+    pub(crate) pseudo_time_s: f64,
 }
 
 impl DirectMinimizerState {
@@ -65,6 +66,7 @@ impl DirectMinimizerState {
             use_bb1: true,
             reset_consecutive: 0,
             accepted_steps: 0,
+            pseudo_time_s: 0.0,
         }
     }
 }
@@ -99,8 +101,21 @@ pub(crate) fn direct_minimizer_step_budget(control: &RelaxationControlIR) -> u64
     control.stop.max_steps.unwrap_or(u64::MAX)
 }
 
+pub(crate) fn direct_minimizer_pseudotime_budget(control: &RelaxationControlIR) -> f64 {
+    control.stop.max_pseudotime_s.unwrap_or(f64::INFINITY)
+}
+
+pub(crate) fn direct_minimizer_within_runtime_budget(
+    state: &DirectMinimizerState,
+    control: &RelaxationControlIR,
+) -> bool {
+    state.accepted_steps < direct_minimizer_step_budget(control)
+        && state.pseudo_time_s < direct_minimizer_pseudotime_budget(control)
+}
+
 pub(crate) fn fallback_reset_step_size(reset_consecutive: u64) -> f64 {
-    (reset_consecutive as f64 * MIN_STEP_SIZE).min(MAX_STEP_SIZE)
+    let divisor = reset_consecutive.saturating_add(1).max(1) as f64;
+    (DEFAULT_STEP_SIZE / divisor).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE)
 }
 
 pub(crate) fn projected_gradient_trial_magnetization(
@@ -180,7 +195,7 @@ pub(crate) fn projected_gradient_line_search<T, E, F>(
     gradient: &[[f64; 3]],
     initial_step_size: f64,
     mut evaluate_trial: F,
-) -> Result<DirectMinimizerAcceptedTrial<T>, E>
+) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
     F: FnMut(&[[f64; 3]]) -> Result<DirectMinimizerTrialEvaluation<T>, E>,
 {
@@ -195,15 +210,18 @@ where
             evaluation.energy_j,
             trial_step_size,
             gradient_norm_sq,
-        ) || direct_minimizer_backtrack_exhausted(
-            DirectMinimizerAlgorithm::ProjectedGradientBb,
-            backtracks,
         ) {
-            return Ok(DirectMinimizerAcceptedTrial {
+            return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
                 magnetization: trial,
                 step_size: trial_step_size,
-            });
+            }));
+        }
+        if direct_minimizer_backtrack_exhausted(
+            DirectMinimizerAlgorithm::ProjectedGradientBb,
+            backtracks,
+        ) {
+            return Ok(None);
         }
         trial_step_size = backtracked_step_size(trial_step_size);
         backtracks += 1;
@@ -217,7 +235,7 @@ pub(crate) fn nonlinear_cg_line_search<T, E, F>(
     direction: &[[f64; 3]],
     initial_step_size: f64,
     mut evaluate_trial: F,
-) -> Result<DirectMinimizerAcceptedTrial<T>, E>
+) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
     F: FnMut(&[[f64; 3]]) -> Result<DirectMinimizerTrialEvaluation<T>, E>,
 {
@@ -231,15 +249,15 @@ where
             evaluation.energy_j,
             trial_step_size,
             direction_dot_gradient,
-        ) || direct_minimizer_backtrack_exhausted(
-            DirectMinimizerAlgorithm::NonlinearCg,
-            backtracks,
         ) {
-            return Ok(DirectMinimizerAcceptedTrial {
+            return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
                 magnetization: trial,
                 step_size: trial_step_size,
-            });
+            }));
+        }
+        if direct_minimizer_backtrack_exhausted(DirectMinimizerAlgorithm::NonlinearCg, backtracks) {
+            return Ok(None);
         }
         trial_step_size = backtracked_step_size(trial_step_size);
         backtracks += 1;
@@ -464,6 +482,31 @@ mod tests {
     }
 
     #[test]
+    fn direct_minimizer_runtime_budget_uses_steps_and_pseudotime() {
+        let mut bounded = control(RelaxationAlgorithmIR::ProjectedGradientBb);
+        bounded.stop.max_steps = Some(4);
+        bounded.stop.max_pseudotime_s = Some(2.0e-6);
+        let mut state =
+            DirectMinimizerState::new(vec![[1.0, 0.0, 0.0]], vec![[0.0, 1.0, 0.0]], 0.0);
+
+        assert!(direct_minimizer_within_runtime_budget(&state, &bounded));
+
+        state.accepted_steps = 4;
+        assert!(!direct_minimizer_within_runtime_budget(&state, &bounded));
+
+        state.accepted_steps = 3;
+        state.pseudo_time_s = 2.0e-6;
+        assert!(!direct_minimizer_within_runtime_budget(&state, &bounded));
+    }
+
+    #[test]
+    fn fallback_reset_step_size_stays_near_default_scale() {
+        assert_eq!(fallback_reset_step_size(0), DEFAULT_STEP_SIZE);
+        assert_eq!(fallback_reset_step_size(1), DEFAULT_STEP_SIZE / 2.0);
+        assert_eq!(fallback_reset_step_size(3), DEFAULT_STEP_SIZE / 4.0);
+    }
+
+    #[test]
     fn direct_minimizer_state_initializes_backend_neutral_iteration_state() {
         let state = DirectMinimizerState::new(vec![[1.0, 0.0, 0.0]], vec![[2.0, 3.0, 0.0]], 42.0);
 
@@ -476,6 +519,7 @@ mod tests {
         assert!(state.use_bb1);
         assert_eq!(state.reset_consecutive, 0);
         assert_eq!(state.accepted_steps, 0);
+        assert_eq!(state.pseudo_time_s, 0.0);
     }
 
     #[test]
@@ -505,7 +549,7 @@ mod tests {
             2,
         );
 
-        assert_eq!(update.step_size, 3.0 * MIN_STEP_SIZE);
+        assert_eq!(update.step_size, DEFAULT_STEP_SIZE / 4.0);
         assert!(!update.use_bb1);
         assert_eq!(update.reset_consecutive, 3);
     }
@@ -588,12 +632,37 @@ mod tests {
                 })
             },
         )
-        .unwrap();
+        .unwrap()
+        .expect("Armijo should accept after backtracking");
 
         assert_eq!(trial_count, 2);
         assert_eq!(accepted.stats, 2);
         assert_eq!(accepted.step_size, 0.25);
         assert_eq!(accepted.magnetization.len(), 1);
+    }
+
+    #[test]
+    fn projected_gradient_line_search_rejects_exhausted_armijo() {
+        let mut trial_count = 0usize;
+
+        let accepted = projected_gradient_line_search(
+            10.0,
+            1.0,
+            &[[1.0, 0.0, 0.0]],
+            &[[0.0, -2.0, 0.0]],
+            0.5,
+            |_| {
+                trial_count += 1;
+                Ok::<_, ()>(DirectMinimizerTrialEvaluation {
+                    stats: trial_count,
+                    energy_j: 10.0,
+                })
+            },
+        )
+        .unwrap();
+
+        assert!(accepted.is_none());
+        assert_eq!(trial_count, (PROJECTED_GRADIENT_MAX_BACKTRACK + 1) as usize);
     }
 
     #[test]
@@ -620,12 +689,37 @@ mod tests {
                 })
             },
         )
-        .unwrap();
+        .unwrap()
+        .expect("Armijo should accept after backtracking");
 
         assert_eq!(trial_count, 2);
         assert_eq!(accepted.stats, 2);
         assert_eq!(accepted.step_size, 0.25);
         assert_eq!(accepted.magnetization.len(), 1);
+    }
+
+    #[test]
+    fn nonlinear_cg_line_search_rejects_exhausted_armijo() {
+        let mut trial_count = 0usize;
+
+        let accepted = nonlinear_cg_line_search(
+            10.0,
+            -1.0,
+            &[[1.0, 0.0, 0.0]],
+            &[[0.0, 2.0, 0.0]],
+            0.5,
+            |_| {
+                trial_count += 1;
+                Ok::<_, ()>(DirectMinimizerTrialEvaluation {
+                    stats: trial_count,
+                    energy_j: 10.0,
+                })
+            },
+        )
+        .unwrap();
+
+        assert!(accepted.is_none());
+        assert_eq!(trial_count, (NONLINEAR_CG_MAX_BACKTRACK + 1) as usize);
     }
 
     #[test]

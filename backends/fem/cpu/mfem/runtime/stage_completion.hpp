@@ -88,6 +88,18 @@ void set_stage_completion(
 fullmag_fem_stage_completion stage_completion_snapshot(const Context &ctx);
 
 /*
+ * Classify completion from the current zero-dt snapshot before a direct
+ * minimizer takes another accepted step.
+ *
+ * This covers already-satisfied native stop criteria such as torque-only
+ * convergence at stage entry. Energy plateau remains accepted-step based and
+ * is intentionally not classified from a single initial snapshot.
+ */
+bool complete_stage_from_current_stats(
+    Context &ctx,
+    const fullmag_fem_step_stats &stats);
+
+/*
  * Update relaxation stop state from the latest public step statistics.
  *
  * The function accumulates pseudo-time from non-negative `dt_seconds`, tracks

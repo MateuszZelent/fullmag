@@ -20,6 +20,7 @@
 #include "gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp"
 #include "gpu/cuda/mesh/mesh_geometry_upload.hpp"
 #include "gpu/cuda/reductions/reduction_workspace_memory.hpp"
+#include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
 #include "gpu/cuda/state/magnetization_memory.hpp"
 #include "gpu/cuda/state/magnetization_transfer.hpp"
@@ -64,6 +65,8 @@ void reset_metadata(FemGpuState &state)
     state.magnetoelastic.strain_uploaded = false;
     state.mesh_geometry.element_count = 0;
     state.mesh_geometry.uploaded = false;
+    state.relaxation.node_count = 0;
+    state.relaxation.nonlinear_cg_direction_valid = false;
     state.demag_poisson.hybrid_stage_m_xyz.clear();
     state.demag_poisson.hybrid_demag_xyz.clear();
     state.demag_poisson.hybrid_demag_energy_joules = 0.0;
@@ -119,6 +122,7 @@ bool gpu_state_upload_magnetization_aos(
     state.residency.host_state = FemGpuSyncState::HostClean;
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.rk.fsal_valid = false;
+    state.relaxation.nonlinear_cg_direction_valid = false;
     return true;
 }
 
@@ -427,6 +431,7 @@ bool gpu_state_initialize(
     if (!gpu_magnetization_allocate(state.magnetization, node_count, device_bytes, error) ||
         !gpu_field_buffers_allocate(state.fields, node_count, device_bytes, error) ||
         !gpu_rk_workspace_allocate(state.rk, node_count, state.lifecycle.stage_count, device_bytes, error) ||
+        !gpu_relaxation_state_allocate(state.relaxation, node_count, device_bytes, error) ||
         !gpu_local_interaction_workspace_allocate(state.local_interactions, node_count, device_bytes, error) ||
         !gpu_magnetoelastic_allocate(state.magnetoelastic, node_count, device_bytes, error) ||
         !gpu_reduction_workspace_allocate(
@@ -481,6 +486,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_magnetization_free(state.magnetization);
     gpu_field_buffers_free(state.fields);
     gpu_rk_workspace_free(state.rk);
+    gpu_relaxation_state_free(state.relaxation);
     gpu_local_interaction_workspace_free(state.local_interactions);
     gpu_magnetoelastic_free(state.magnetoelastic);
     gpu_reduction_workspace_free(state.reductions);

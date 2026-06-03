@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,19 +11,19 @@ use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload};
 pub struct MeshSummaryResource {
     pub revision: u64,
     /// Lightweight dashboard mesh counts/shape summary. Detailed topology lives in mesh topology resources.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_summary: Option<Value>,
     /// Transitional dashboard quality summary. Detailed quality diagnostics are owned by `meshing/meshes/*/quality`.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_quality_summary: Option<Value>,
     /// Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_airbox_target: Option<Value>,
     /// Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_per_object_targets: Option<Value>,
 }
@@ -32,11 +32,11 @@ pub struct MeshSummaryResource {
 pub struct MeshCapabilitiesResource {
     pub revision: u64,
     /// Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_capabilities: Option<Value>,
     /// Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`.
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_adaptivity_state: Option<Value>,
 }
@@ -45,9 +45,9 @@ pub struct MeshCapabilitiesResource {
 pub struct MeshObjectConfigEntryResource {
     pub object_id: String,
     pub object_name: String,
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<Value>,
+    pub config: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -110,7 +110,7 @@ pub struct MeshSemanticsResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universe_config: Option<Value>,
     /// Solver-domain shared mesh policy.
-    #[schema(value_type = Object)]
+    #[schema(additional_properties)]
     pub shared_domain_config: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_configs: Vec<MeshObjectConfigEntryResource>,
@@ -125,15 +125,20 @@ pub struct MeshSemanticsResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshUniverseConfigResource {
     pub revision: u64,
-    #[schema(value_type = Object, nullable)]
+    /// User-authored universe mesh policy exactly as committed in the scene.
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<Value>,
+    pub config: Option<BTreeMap<String, Value>>,
+    /// Effective policy projection with backend defaults merged for inspectors.
+    #[schema(additional_properties, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_config: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshUniverseConfigReplaceRequest {
-    #[schema(value_type = Object)]
-    pub config: Value,
+    #[schema(additional_properties)]
+    pub config: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -155,20 +160,20 @@ pub struct MeshUniverseQualityResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainConfigResource {
     pub revision: u64,
-    #[schema(value_type = Object)]
-    pub config: Value,
+    #[schema(additional_properties)]
+    pub config: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainConfigReplaceRequest {
-    #[schema(value_type = Object)]
-    pub config: Value,
+    #[schema(value_type = Object, additional_properties)]
+    pub config: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainReportResource {
     pub revision: u64,
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<Value>,
 }
@@ -176,7 +181,7 @@ pub struct MeshSharedDomainReportResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainQualityResource {
     pub revision: u64,
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<Value>,
 }
@@ -265,7 +270,7 @@ pub struct MeshOperationStatusResource {
     pub actual_method: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub details: serde_json::Map<String, Value>,
 }
@@ -543,16 +548,21 @@ pub struct MeshSharedDomainManifestResource {
 pub struct MeshObjectConfigResource {
     pub revision: u64,
     pub object_id: String,
-    #[schema(value_type = Object, nullable)]
+    /// User-authored per-object mesh policy exactly as committed in the scene.
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<Value>,
+    pub config: Option<BTreeMap<String, Value>>,
+    /// Effective policy projection with backend defaults merged for inspectors.
+    #[schema(additional_properties, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_config: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshObjectConfigReplaceRequest {
-    #[schema(value_type = Object, nullable)]
+    #[schema(additional_properties, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<Value>,
+    pub config: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

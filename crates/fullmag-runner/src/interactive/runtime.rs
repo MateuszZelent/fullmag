@@ -6,7 +6,7 @@ use crate::artifacts;
 use crate::types::{
     LivePreviewField, LivePreviewRequest, RunError, RunResult, StepAction, StepStats, StepUpdate,
 };
-use fullmag_ir::ProblemIR;
+use fullmag_ir::{ExecutionPlanIR, ProblemIR};
 
 use super::backend::{BackendGeometry, InteractiveBackend};
 use super::cache::DisplayCache;
@@ -49,6 +49,11 @@ impl InteractiveRuntime {
     /// Check if the backend matches the given problem.
     pub fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError> {
         self.backend.matches_problem(problem)
+    }
+
+    /// Check if the backend matches an already materialized plan.
+    pub fn matches_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError> {
+        self.backend.matches_plan(plan)
     }
 
     /// Get the current display selection.
@@ -174,16 +179,40 @@ impl InteractiveRuntime {
         mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
         let plan = fullmag_plan::plan(problem)?;
+        self.execute_planned_streaming(
+            problem,
+            &plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            &mut on_step,
+        )
+    }
 
+    /// Execute a simulation segment from an already materialized plan.
+    pub fn execute_planned_streaming(
+        &mut self,
+        problem: &ProblemIR,
+        plan: &ExecutionPlanIR,
+        until_seconds: f64,
+        output_dir: &Path,
+        field_every_n: u64,
+        display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+        interrupt_requested: Option<&AtomicBool>,
+        mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    ) -> Result<RunResult, RunError> {
         let mut artifact_pipeline = ArtifactPipeline::start(
             output_dir.to_path_buf(),
-            artifacts::build_field_context(problem, &plan),
+            artifacts::build_field_context(problem, plan),
             crate::artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
         )?;
         let artifact_writer = Some(artifact_pipeline.sender());
 
         let executed_result = self.backend.execute_streaming(
             problem,
+            plan,
             until_seconds,
             field_every_n,
             display_selection,
@@ -212,7 +241,7 @@ impl InteractiveRuntime {
         if let Err(error) = artifacts::write_artifacts(
             output_dir,
             problem,
-            &plan,
+            plan,
             &executed,
             Some(&pipeline_summary),
         ) {

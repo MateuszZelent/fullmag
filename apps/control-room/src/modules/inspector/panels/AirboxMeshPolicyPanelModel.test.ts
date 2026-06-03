@@ -41,6 +41,38 @@ describe("AirboxMeshPolicyPanelModel", () => {
     expect(draftKeyForUniverseMeshPolicyResource(resource)).toContain("12");
   });
 
+  it("shows effective defaults without copying them into raw universe policy JSON", () => {
+    const resource = {
+      config: null,
+      effective_config: {
+        airbox_grading: "geometric",
+        airbox_growth_rate: 1.3,
+        mode: "auto",
+        padding: [0, 0, 0],
+      },
+      revision: 14,
+    };
+
+    expect(
+      draftFromUniverseMeshPolicyResource(resource, {
+        effectiveTarget: {
+          maximum_element_size: 2e-7,
+          minimum_element_size: 5e-8,
+        },
+      }),
+    ).toMatchObject({
+      airboxGrading: "geometric",
+      airboxGrowthRate: "1.3",
+      airboxHmax: "2e-7",
+      airboxHmin: "5e-8",
+      airboxMode: "auto",
+      configText: "{}",
+      paddingX: "0",
+      paddingY: "0",
+      paddingZ: "0",
+    });
+  });
+
   it("hydrates structured Airbox drafts from numeric strings", () => {
     const resource = {
       config: {

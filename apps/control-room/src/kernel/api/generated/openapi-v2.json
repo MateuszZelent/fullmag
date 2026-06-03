@@ -4583,18 +4583,10 @@
       "MeshCapabilitiesResource": {
         "properties": {
           "mesh_adaptivity_state": {
-            "description": "Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`."
           },
           "mesh_capabilities": {
-            "description": "Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Meshing policy/build feature matrix only. UI-wide gating remains owned by `status.capabilities`."
           },
           "revision": {
             "format": "int64",
@@ -4882,6 +4874,7 @@
       "MeshObjectConfigEntryResource": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "type": [
               "object",
               "null"
@@ -4903,6 +4896,7 @@
       "MeshObjectConfigReplaceRequest": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "type": [
               "object",
               "null"
@@ -4914,6 +4908,16 @@
       "MeshObjectConfigResource": {
         "properties": {
           "config": {
+            "additionalProperties": true,
+            "description": "User-authored per-object mesh policy exactly as committed in the scene.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "effective_config": {
+            "additionalProperties": true,
+            "description": "Effective policy projection with backend defaults merged for inspectors.",
             "type": [
               "object",
               "null"
@@ -5065,6 +5069,7 @@
             ]
           },
           "details": {
+            "additionalProperties": true,
             "type": [
               "object",
               "null"
@@ -5640,8 +5645,7 @@
             "type": "integer"
           },
           "shared_domain_config": {
-            "description": "Solver-domain shared mesh policy.",
-            "type": "object"
+            "description": "Solver-domain shared mesh policy."
           },
           "solver_mesh": {
             "oneOf": [
@@ -5758,6 +5762,7 @@
       "MeshSharedDomainConfigResource": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "type": "object"
           },
           "revision": {
@@ -5843,12 +5848,7 @@
       },
       "MeshSharedDomainQualityResource": {
         "properties": {
-          "quality": {
-            "type": [
-              "object",
-              "null"
-            ]
-          },
+          "quality": {},
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -5862,12 +5862,7 @@
       },
       "MeshSharedDomainReportResource": {
         "properties": {
-          "report": {
-            "type": [
-              "object",
-              "null"
-            ]
-          },
+          "report": {},
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -5921,32 +5916,16 @@
       "MeshSummaryResource": {
         "properties": {
           "effective_airbox_target": {
-            "description": "Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`."
           },
           "effective_per_object_targets": {
-            "description": "Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Transitional dashboard target summary. Build-specific target resolution is owned by `meshing/builds/current`."
           },
           "mesh_quality_summary": {
-            "description": "Transitional dashboard quality summary. Detailed quality diagnostics are owned by `meshing/meshes/*/quality`.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Transitional dashboard quality summary. Detailed quality diagnostics are owned by `meshing/meshes/*/quality`."
           },
           "mesh_summary": {
-            "description": "Lightweight dashboard mesh counts/shape summary. Detailed topology lives in mesh topology resources.",
-            "type": [
-              "object",
-              "null"
-            ]
+            "description": "Lightweight dashboard mesh counts/shape summary. Detailed topology lives in mesh topology resources."
           },
           "revision": {
             "format": "int64",
@@ -6044,6 +6023,7 @@
       "MeshUniverseConfigReplaceRequest": {
         "properties": {
           "config": {
+            "additionalProperties": true,
             "type": "object"
           }
         },
@@ -6055,6 +6035,16 @@
       "MeshUniverseConfigResource": {
         "properties": {
           "config": {
+            "additionalProperties": true,
+            "description": "User-authored universe mesh policy exactly as committed in the scene.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "effective_config": {
+            "additionalProperties": true,
+            "description": "Effective policy projection with backend defaults merged for inspectors.",
             "type": [
               "object",
               "null"

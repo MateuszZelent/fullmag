@@ -263,8 +263,45 @@
   line-height: 1.2;
 }
 
+.fm-inspector-form-field__label-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
 .fm-inspector-form-field--inline .fm-inspector-form-field__label {
   white-space: nowrap;
+}
+
+.fm-inspector-form-field__help {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+}
+
+.fm-inspector-form-field__help:hover,
+.fm-inspector-form-field__help:focus-visible {
+  background: var(--fm-bg-elevated);
+  color: var(--fm-text-primary);
+  outline: none;
+}
+
+.fm-inspector-field-help__list {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding-inline-start: var(--fm-space-4);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-inspector-form-field__control {

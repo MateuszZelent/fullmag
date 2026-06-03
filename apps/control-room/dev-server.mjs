@@ -49,7 +49,30 @@ const child = spawn(
   },
 );
 
-child.on("exit", (code) => process.exit(code ?? 0));
+let shuttingDown = false;
+const shutdown = (signal) => {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  child.kill(signal);
+  setTimeout(() => {
+    if (!child.killed) {
+      child.kill("SIGKILL");
+    }
+  }, 2000).unref();
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 0);
+});
 child.on("error", (err) => {
   process.stderr.write(`[control-room dev-server] failed to spawn pnpm: ${err.message}\n`);
   process.exit(1);

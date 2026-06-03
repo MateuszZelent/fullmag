@@ -67,8 +67,8 @@ fn current_live_metadata(
     plan: &ExecutionPlanIR,
     status: &str,
 ) -> serde_json::Value {
-    let runtime_engine_info = fullmag_runner::resolve_runtime_engine(problem).ok();
-    let capabilities = fullmag_runner::resolve_runtime_capabilities(problem).ok();
+    let runtime_engine_info = fullmag_runner::resolve_planned_runtime_engine(problem, plan).ok();
+    let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
     let live_preview_supported_quantities = capabilities
         .as_ref()
         .map(|caps| caps.preview_quantities.clone())
@@ -577,6 +577,7 @@ fn format_stop_reason(completion: Option<&fullmag_ir::StageCompletionIR>) -> Str
             fullmag_ir::StageStopReason::MaxPhysicalTime => "max_physical_time",
             fullmag_ir::StageStopReason::UserCancelled => "user_cancelled",
             fullmag_ir::StageStopReason::BackendError => "backend_error",
+            fullmag_ir::StageStopReason::Gradient => "gradient",
         })
         .unwrap_or("?");
     let metric_desc = completion
@@ -872,6 +873,78 @@ fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch)
             .insert("study_universe".to_string(), universe.clone());
         problem.problem_meta.runtime_metadata.remove("domain_frame");
     }
+}
+
+fn apply_remeshed_problem_snapshot_to_stages(
+    stages: &mut [ResolvedScriptStage],
+    scene_problem_patch: Option<&SceneProblemPatch>,
+    mesh: &fullmag_ir::MeshIR,
+    hmax: f64,
+    shared_domain_remesh: bool,
+    region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    adaptive_runtime_state: Option<&serde_json::Value>,
+) -> Result<()> {
+    for stage in stages {
+        if let Some(patch) = scene_problem_patch {
+            apply_scene_problem_patch(&mut stage.ir, patch);
+        }
+        apply_current_fem_overrides(
+            &mut stage.ir,
+            Some(mesh),
+            Some(hmax),
+            adaptive_runtime_state,
+        );
+        if shared_domain_remesh {
+            let resolved_region_markers = if region_markers.is_empty() {
+                default_domain_region_markers(&stage.ir.geometry.entries)
+            } else {
+                region_markers.to_vec()
+            };
+            let domain_asset = stage
+                .ir
+                .geometry_assets
+                .as_mut()
+                .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "shared-domain remesh produced no fem_domain_mesh_asset for updated stage"
+                    )
+                })?;
+            domain_asset.region_markers = resolved_region_markers;
+        }
+    }
+    Ok(())
+}
+
+fn refresh_materialized_stage_execution_plans(
+    stages: &[ResolvedScriptStage],
+    stage_execution_plans: &mut [ExecutionPlanIR],
+    first_stage_plan: Option<ExecutionPlanIR>,
+) -> Result<()> {
+    if stages.len() != stage_execution_plans.len() {
+        bail!(
+            "stage/plan snapshot mismatch after interactive remesh: {} stages, {} plans",
+            stages.len(),
+            stage_execution_plans.len()
+        );
+    }
+
+    let mut first_stage_plan = first_stage_plan;
+    for (index, (stage, plan_slot)) in stages
+        .iter()
+        .zip(stage_execution_plans.iter_mut())
+        .enumerate()
+    {
+        validate_ir(&stage.ir)?;
+        if index == 0 {
+            if let Some(plan) = first_stage_plan.take() {
+                *plan_slot = plan;
+                continue;
+            }
+        }
+        *plan_slot = fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn current_fem_mesh_workspace(
@@ -1948,8 +2021,8 @@ fn renormalize_magnetization(values: &mut [[f64; 3]]) {
 #[allow(clippy::too_many_arguments)]
 fn execute_manual_interactive_remesh(
     command: &SessionCommand,
-    problem: &ProblemIR,
-    backend_plan: &BackendPlanIR,
+    stages: &mut [ResolvedScriptStage],
+    stage_execution_plans: &mut [ExecutionPlanIR],
     workspace_status: &str,
     live_workspace: &LocalLiveWorkspace,
     current_mesh_quality: &mut Option<crate::python_bridge::RemeshQualitySummary>,
@@ -1973,7 +2046,15 @@ fn execute_manual_interactive_remesh(
         .clone()
         .unwrap_or(serde_json::json!({}));
     let scene_problem_patch = scene_problem_patch_from_mesh_options(&opts)?;
-    let mut remesh_problem_source = problem.clone();
+    let base_problem = stages
+        .first()
+        .map(|stage| stage.ir.clone())
+        .ok_or_else(|| anyhow!("interactive remesh requires at least one materialized stage"))?;
+    let base_execution_plan = stage_execution_plans
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("interactive remesh requires at least one materialized plan"))?;
+    let mut remesh_problem_source = base_problem;
     if let Some(patch) = scene_problem_patch.as_ref() {
         apply_scene_problem_patch(&mut remesh_problem_source, patch);
     }
@@ -2013,7 +2094,7 @@ fn execute_manual_interactive_remesh(
         .runtime_metadata
         .get("adaptive_mesh")
         .cloned();
-    let fem_plan = match backend_plan {
+    let fem_plan = match &base_execution_plan.backend_plan {
         BackendPlanIR::Fem(plan) => Some(plan),
         _ => None,
     };
@@ -2240,7 +2321,7 @@ fn execute_manual_interactive_remesh(
                 } else {
                     plan.mesh_source.clone()
                 };
-                let (live_mesh_payload, remeshed_magnetization) = {
+                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
                     let mut remeshed_problem = remesh_problem_source.clone();
                     apply_current_fem_overrides(
                         &mut remeshed_problem,
@@ -2274,7 +2355,7 @@ fn execute_manual_interactive_remesh(
                             .ok_or_else(|| {
                                 anyhow!("updated backend plan did not produce a FEM mesh payload")
                             })?;
-                    (mesh_payload, magnetization)
+                    (mesh_payload, magnetization, remeshed_plan)
                 };
                 live_workspace.push_log(
                     "success",
@@ -2337,6 +2418,20 @@ fn execute_manual_interactive_remesh(
                     "size_field_stats": remesh_result.size_field_stats.clone(),
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
+                apply_remeshed_problem_snapshot_to_stages(
+                    stages,
+                    scene_problem_patch.as_ref(),
+                    &new_mesh,
+                    hmax,
+                    shared_domain_remesh,
+                    &remesh_result.region_markers,
+                    current_adaptive_runtime_state.as_ref(),
+                )?;
+                refresh_materialized_stage_execution_plans(
+                    stages,
+                    stage_execution_plans,
+                    Some(remeshed_plan),
+                )?;
 
                 live_workspace.update(|state| {
                     state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
@@ -4092,7 +4187,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     for stage in &stages {
         validate_ir(&stage.ir)?;
     }
-    let stage_execution_plans = stages
+    let mut stage_execution_plans = stages
         .iter()
         .map(|stage| fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string())))
         .collect::<Result<Vec<_>>>()?;
@@ -4763,9 +4858,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                                 }));
 
-                                for stage in stages.iter_mut() {
+                                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
+                                    let mut remeshed_problem = stages[0].ir.clone();
                                     apply_current_fem_overrides(
-                                        &mut stage.ir,
+                                        &mut remeshed_problem,
                                         Some(&new_mesh),
                                         Some(current_hmax),
                                         current_adaptive_runtime_state.as_ref(),
@@ -4774,13 +4870,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         let region_markers =
                                             if remesh_result.region_markers.is_empty() {
                                                 default_domain_region_markers(
-                                                    &stage.ir.geometry.entries,
+                                                    &remeshed_problem.geometry.entries,
                                                 )
                                             } else {
                                                 remesh_result.region_markers.clone()
                                             };
-                                        let domain_asset = stage
-                                            .ir
+                                        remeshed_problem
                                             .geometry_assets
                                             .as_mut()
                                             .and_then(|assets| {
@@ -4788,54 +4883,38 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                             })
                                             .ok_or_else(|| {
                                                 anyhow!(
-                                                    "shared-domain auto-coarsen produced no fem_domain_mesh_asset"
+                                                    "shared-domain auto-coarsen produced no attached fem_domain_mesh_asset"
                                                 )
-                                            })?;
-                                        domain_asset.region_markers = region_markers;
+                                            })?
+                                            .region_markers = region_markers;
                                     }
-                                }
-
-                                if new_ram <= ram_budget {
-                                    let (live_mesh_payload, remeshed_magnetization) = {
-                                        let mut remeshed_problem = stages[0].ir.clone();
-                                        apply_current_fem_overrides(
-                                            &mut remeshed_problem,
-                                            Some(&new_mesh),
-                                            Some(current_hmax),
-                                            current_adaptive_runtime_state.as_ref(),
-                                        );
-                                        if shared_domain_remesh {
-                                            let region_markers =
-                                                if remesh_result.region_markers.is_empty() {
-                                                    default_domain_region_markers(
-                                                        &remeshed_problem.geometry.entries,
-                                                    )
-                                                } else {
-                                                    remesh_result.region_markers.clone()
-                                                };
-                                            remeshed_problem
-                                                .geometry_assets
-                                                .as_mut()
-                                                .and_then(|assets| {
-                                                    assets.fem_domain_mesh_asset.as_mut()
-                                                })
-                                                .ok_or_else(|| {
-                                                    anyhow!(
-                                                        "shared-domain auto-coarsen produced no attached fem_domain_mesh_asset"
-                                                    )
-                                                })?
-                                                .region_markers = region_markers;
-                                        }
-                                        let remeshed_plan =
-                                            fullmag_plan::plan(&remeshed_problem)
-                                                .map_err(|error| anyhow!(error.to_string()))?;
+                                    let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
+                                        .map_err(|error| anyhow!(error.to_string()))?;
+                                    let (mesh_payload, magnetization) =
                                         fem_live_mesh_payload_and_initial_magnetization(
                                             &remeshed_plan.backend_plan,
                                         )
                                         .context(
                                             "auto-coarsen updated backend plan is inconsistent",
-                                        )?
-                                    };
+                                        )?;
+                                    (mesh_payload, magnetization, remeshed_plan)
+                                };
+                                apply_remeshed_problem_snapshot_to_stages(
+                                    &mut stages,
+                                    None,
+                                    &new_mesh,
+                                    current_hmax,
+                                    shared_domain_remesh,
+                                    &remesh_result.region_markers,
+                                    current_adaptive_runtime_state.as_ref(),
+                                )?;
+                                refresh_materialized_stage_execution_plans(
+                                    &stages,
+                                    &mut stage_execution_plans,
+                                    Some(remeshed_plan),
+                                )?;
+
+                                if new_ram <= ram_budget {
                                     live_workspace.update(|state| {
                                         state.live_state.latest_step.fem_mesh =
                                             Some(live_mesh_payload);
@@ -5051,8 +5130,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 WaitForSolveCommandAction::Remesh => {
                     execute_manual_interactive_remesh(
                         &cmd,
-                        &stages[0].ir,
-                        &stage_execution_plans[0].backend_plan,
+                        &mut stages,
+                        &mut stage_execution_plans,
                         "waiting_for_compute",
                         &live_workspace,
                         &mut current_mesh_quality,
@@ -5061,6 +5140,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &mut current_fem_hmax_override,
                         &current_adaptive_runtime_state,
                     )?;
+                    if continuation_magnetization.take().is_some() {
+                        live_workspace.push_log(
+                            "info",
+                            "Remesh changed the solver mesh; previous continuation magnetization was cleared",
+                        );
+                    }
+                    continuation_source = None;
                 }
                 WaitForSolveCommandAction::Stop => {
                     eprintln!("[fullmag] aborted by user during wait_for_solve");
@@ -5094,7 +5180,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
     }
 
-    for (stage_index, mut stage) in stages.into_iter().enumerate() {
+    for (stage_index, (mut stage, materialized_execution_plan)) in stages
+        .into_iter()
+        .zip(stage_execution_plans.into_iter())
+        .enumerate()
+    {
         if stage.entrypoint_kind == "flat_workspace" {
             live_workspace.push_log(
                 "system",
@@ -5102,6 +5192,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
             continue;
         }
+        let materialized_stage_ir = stage.ir.clone();
         let synthetic_action = stage.action.clone();
         apply_current_fem_overrides(
             &mut stage.ir,
@@ -5157,8 +5248,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             .ir
             .plan_for(args.backend.map(BackendTarget::from))
             .map_err(join_errors)?;
-        let mut execution_plan =
-            fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        let mut execution_plan = if stage.ir == materialized_stage_ir {
+            materialized_execution_plan
+        } else {
+            fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?
+        };
         emit_initial_state_warnings(Some(&live_workspace), &execution_plan.backend_plan)?;
         let use_live_callback = matches!(
             &execution_plan.backend_plan,
@@ -5386,8 +5480,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_problem_with_live_preview_interruptible_with_initial_snapshot(
+                fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
                     &stage.ir,
+                    &execution_plan,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                     field_every_n,
@@ -5454,8 +5549,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 )
             } else {
                 let mut live_cadence = LiveProgressCadence::default();
-                fullmag_runner::run_problem_with_callback(
+                fullmag_runner::run_planned_problem_with_callback(
                     &stage.ir,
+                    &execution_plan,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                     field_every_n,
@@ -5506,7 +5602,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 )
             }
         } else {
-            fullmag_runner::run_problem(&stage.ir, stage.until_seconds, &current_stage_artifact_dir)
+            fullmag_runner::run_planned_problem(
+                &stage.ir,
+                &execution_plan,
+                stage.until_seconds,
+                &current_stage_artifact_dir,
+            )
         } {
             Ok(result) => result,
             Err(error) => {
@@ -6200,12 +6301,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_fem_hmax_override,
                     current_adaptive_runtime_state.as_ref(),
                 );
+                let mut remesh_stages =
+                    vec![ResolvedScriptStage::solver(remesh_problem, 0.0, "interactive_remesh")];
+                let mut remesh_stage_plans = vec![fullmag_plan::plan(&remesh_stages[0].ir)
+                    .map_err(|error| anyhow!(error.to_string()))?];
                 execute_manual_interactive_remesh(
                     &command,
-                    &remesh_problem,
-                    &fullmag_plan::plan(&remesh_problem)
-                        .map_err(|error| anyhow!(error.to_string()))?
-                        .backend_plan,
+                    &mut remesh_stages,
+                    &mut remesh_stage_plans,
                     "awaiting_command",
                     &live_workspace,
                     &mut current_mesh_quality,
@@ -6214,6 +6317,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     &mut current_fem_hmax_override,
                     &current_adaptive_runtime_state,
                 )?;
+                if continuation_magnetization.take().is_some() {
+                    live_workspace.push_log(
+                        "info",
+                        "Remesh changed the solver mesh; previous continuation magnetization was cleared",
+                    );
+                }
+                continuation_source = None;
+                if let Some(remesh_stage) = remesh_stages.into_iter().next() {
+                    interactive_template_ir = remesh_stage.ir;
+                    current_plan_summary = interactive_template_ir
+                        .plan_for(args.backend.map(BackendTarget::from))
+                        .map_err(join_errors)?;
+                    interactive_runtime_host.replace_base_problem(interactive_template_ir.clone());
+                }
                 interactive_runtime_host
                     .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
                 continue;
@@ -6527,6 +6644,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ) {
                         if let Err(error) = interactive_runtime_host.ensure_runtime_for_problem(
                             &stage.ir,
+                            &execution_plan,
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -6542,9 +6660,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
 
                     if let Some(runtime) = interactive_runtime_host.runtime_mut() {
-                        fullmag_runner::run_problem_with_interactive_runtime_live_preview_interruptible(
+                        fullmag_runner::run_planned_problem_with_interactive_runtime_live_preview_interruptible(
                             runtime,
                             &stage.ir,
+                            &execution_plan,
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
@@ -6553,20 +6672,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             &mut on_step,
                         )
                     } else {
-                        fullmag_runner::run_problem_with_live_preview_interruptible(
+                        fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
                             &stage.ir,
+                            &execution_plan,
                             stage.until_seconds,
                             &current_stage_artifact_dir,
                             field_every_n,
                             &display_selection,
                             Some(interrupt_signal.as_ref()),
+                            true,
                             &mut on_step,
                         )
                     }
                 } else {
                     let mut live_cadence = LiveProgressCadence::default();
-                    fullmag_runner::run_problem_with_callback(
+                    fullmag_runner::run_planned_problem_with_callback(
                         &stage.ir,
+                        &execution_plan,
                         stage.until_seconds,
                         &current_stage_artifact_dir,
                         field_every_n,
@@ -6613,8 +6735,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     )
                 }
             } else {
-                fullmag_runner::run_problem(
+                fullmag_runner::run_planned_problem(
                     &stage.ir,
+                    &execution_plan,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                 )
@@ -7407,27 +7530,29 @@ pub(crate) fn prepare_live_workspace_for_ui(
 mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
-        classify_wait_for_solve_command, default_domain_region_markers,
-        discard_active_paused_stage_execution, execute_synthetic_stage,
-        fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
+        apply_remeshed_problem_snapshot_to_stages, classify_wait_for_solve_command,
+        default_domain_region_markers, discard_active_paused_stage_execution,
+        execute_synthetic_stage, fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
         has_heavy_live_payload, interactive_session_should_stay_alive,
-        mesh_build_pipeline_status_json, scripted_stage_execution_state,
+        mesh_build_pipeline_status_json, scripted_stage_execution_state, SceneProblemPatch,
         user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
         wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence,
         WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
-        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStageAction,
+        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStage,
+        ResolvedScriptStageAction,
         RunManifest, SessionManifest,
     };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
         ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
         FemDomainMeshAssetIR, FemDomainMeshModeIR, FemObjectSegmentIR, FemPlanIR, GeometryAssetsIR,
-        GeometryEntryIR, GeometryIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR,
-        ProblemIR, ProblemMeta, SamplingIR, StudyIR, ValidationProfileIR,
+        GeometryEntryIR, GeometryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice,
+        MagnetIR, MaterialIR, MeshIR, ProblemIR, ProblemMeta, RegionIR, SamplingIR, StudyIR,
+        ValidationProfileIR,
     };
     use fullmag_runner::{LivePreviewField, SequenceStage, StepStats, StepUpdate};
     use std::collections::BTreeMap;
@@ -7529,6 +7654,63 @@ mod tests {
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
         }
+    }
+
+    #[test]
+    fn interactive_compute_reuses_materialized_execution_plan_snapshot() {
+        let source = include_str!("orchestrator.rs");
+
+        assert!(
+            source.contains(".zip(stage_execution_plans.into_iter())"),
+            "interactive stage execution must carry the materialized plan beside each stage"
+        );
+        assert!(
+            source.contains("let materialized_stage_ir = stage.ir.clone();")
+                && source.contains("if stage.ir == materialized_stage_ir")
+                && source.contains("materialized_execution_plan"),
+            "interactive compute must reuse the materialized plan when the stage IR did not change"
+        );
+        assert!(
+            source.contains(
+                "fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot"
+            ) && source.contains("fullmag_runner::run_planned_problem_with_callback")
+                && source.contains("fullmag_runner::run_planned_problem(")
+                && source.contains(
+                    "fullmag_runner::run_planned_problem_with_interactive_runtime_live_preview_interruptible"
+                ),
+            "interactive compute must call plan-aware runner APIs instead of re-planning on compute"
+        );
+        assert!(
+            source.contains("interactive_runtime_host.ensure_runtime_for_problem(")
+                && source.contains("&execution_plan,"),
+            "persistent interactive runtime setup must receive the current materialized execution plan"
+        );
+        assert!(
+            source.contains("refresh_materialized_stage_execution_plans(")
+                && source.contains("execute_manual_interactive_remesh(")
+                && source.contains("&mut stages,")
+                && source.contains("&mut stage_execution_plans,"),
+            "interactive remesh must mutate both stage IR snapshots and materialized execution plans"
+        );
+        assert!(
+            source.contains("interactive_template_ir = remesh_stage.ir;")
+                && source.contains(
+                    "interactive_runtime_host.replace_base_problem(interactive_template_ir.clone())"
+                ),
+            "post-script interactive remesh must update the base problem used by later run/relax commands"
+        );
+        assert!(
+            source
+                .matches("previous continuation magnetization was cleared")
+                .count()
+                >= 2,
+            "interactive remesh must not let old-mesh continuation magnetization override the refreshed solver mesh"
+        );
+        assert!(
+            source.contains("resolve_planned_runtime_engine(problem, plan)")
+                && source.contains("resolve_planned_runtime_capabilities(problem, plan)"),
+            "live metadata must resolve runtime information from the materialized plan"
+        );
     }
 
     #[test]
@@ -8388,6 +8570,151 @@ mod tests {
         assert_eq!(markers[0].marker, 1);
         assert_eq!(markers[1].geometry_name, "right");
         assert_eq!(markers[1].marker, 2);
+    }
+
+    fn test_material(name: &str) -> MaterialIR {
+        MaterialIR {
+            name: name.to_string(),
+            saturation_magnetisation: 800e3,
+            exchange_stiffness: 13e-12,
+            damping: 0.5,
+            uniaxial_anisotropy: None,
+            anisotropy_axis: None,
+            uniaxial_anisotropy_k2: None,
+            cubic_anisotropy_kc1: None,
+            cubic_anisotropy_kc2: None,
+            cubic_anisotropy_kc3: None,
+            cubic_anisotropy_axis1: None,
+            cubic_anisotropy_axis2: None,
+            ms_field: None,
+            a_field: None,
+            alpha_field: None,
+            ku_field: None,
+            ku2_field: None,
+            kc1_field: None,
+            kc2_field: None,
+            kc3_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
+        }
+    }
+
+    #[test]
+    fn remeshed_problem_snapshot_applies_scene_patch_to_solver_stage() {
+        let mut stages = vec![ResolvedScriptStage::solver(
+            tiny_problem_with_shared_domain_asset(),
+            1.0,
+            "relax",
+        )];
+        let scene_patch = SceneProblemPatch {
+            geometry_entries: vec![
+                GeometryEntryIR::Box {
+                    name: "left".to_string(),
+                    size: [1.0, 1.0, 1.0],
+                },
+                GeometryEntryIR::Box {
+                    name: "right".to_string(),
+                    size: [2.0, 1.0, 1.0],
+                },
+            ],
+            regions: vec![
+                RegionIR {
+                    name: "left_region".to_string(),
+                    geometry: "left".to_string(),
+                },
+                RegionIR {
+                    name: "right_region".to_string(),
+                    geometry: "right".to_string(),
+                },
+            ],
+            materials: vec![test_material("mat_left"), test_material("mat_right")],
+            magnets: vec![
+                MagnetIR {
+                    name: "left_magnet".to_string(),
+                    region: "left_region".to_string(),
+                    material: "mat_left".to_string(),
+                    initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                        value: [1.0, 0.0, 0.0],
+                    }),
+                },
+                MagnetIR {
+                    name: "right_magnet".to_string(),
+                    region: "right_region".to_string(),
+                    material: "mat_right".to_string(),
+                    initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                        value: [0.0, 1.0, 0.0],
+                    }),
+                },
+            ],
+            universe: Some(serde_json::json!({
+                "kind": "box",
+                "extent": [4.0, 2.0, 2.0]
+            })),
+        };
+        let new_mesh = MeshIR {
+            mesh_name: "study_domain_after_ui_patch".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [2.0, 0.0, 0.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+
+        apply_remeshed_problem_snapshot_to_stages(
+            &mut stages,
+            Some(&scene_patch),
+            &new_mesh,
+            3.5,
+            true,
+            &[],
+            None,
+        )
+        .expect("scene remesh snapshot should update solver stage");
+
+        let problem = &stages[0].ir;
+        assert_eq!(problem.geometry.entries.len(), 2);
+        assert_eq!(problem.geometry.entries[1].name(), "right");
+        assert_eq!(problem.regions.len(), 2);
+        assert_eq!(problem.materials.len(), 2);
+        assert_eq!(problem.magnets.len(), 2);
+        assert_eq!(
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get("study_universe")
+                .and_then(|value| value.get("kind"))
+                .and_then(|value| value.as_str()),
+            Some("box")
+        );
+        let domain_asset = problem
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .expect("shared-domain solver stage should retain a domain mesh asset");
+        assert_eq!(domain_asset.mesh.as_ref(), Some(&new_mesh));
+        assert_eq!(domain_asset.region_markers.len(), 2);
+        assert_eq!(domain_asset.region_markers[0].geometry_name, "left");
+        assert_eq!(domain_asset.region_markers[1].geometry_name, "right");
+        assert_eq!(
+            problem
+                .backend_policy
+                .discretization_hints
+                .as_ref()
+                .and_then(|hints| hints.fem.as_ref())
+                .map(|hints| hints.hmax),
+            Some(3.5)
+        );
     }
 
     #[test]

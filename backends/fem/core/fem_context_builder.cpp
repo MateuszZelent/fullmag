@@ -58,6 +58,11 @@ bool build_context_from_plan(
     if (!initialize_mesh_plan_fields(ctx, plan.mesh, error)) {
         return false;
     }
+    initialize_magnetic_masks(ctx);
+    if (!validate_magnetic_mesh_has_active_region(ctx, error)) {
+        return false;
+    }
+
     initialize_anisotropy_plan_fields(ctx, plan);
     initialize_dmi_plan_fields(ctx, plan);
     initialize_material_plan_fields(ctx, plan);
@@ -78,11 +83,6 @@ bool build_context_from_plan(
     }
 
     if (!initialize_state_plan_fields(ctx, plan, error)) {
-        return false;
-    }
-
-    initialize_magnetic_masks(ctx);
-    if (!validate_magnetic_mesh_has_active_region(ctx, error)) {
         return false;
     }
 

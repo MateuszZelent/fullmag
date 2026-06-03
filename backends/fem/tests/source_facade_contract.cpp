@@ -149,6 +149,14 @@ void source_facades_document_module_boundaries() {
             context_builder.find("initialize_context_gpu_state(ctx, error)") !=
                 std::string::npos,
         "Context builder source must own Context construction sequencing");
+    const auto mask_init_pos = context_builder.find("initialize_magnetic_masks(ctx)");
+    const auto state_init_pos =
+        context_builder.find("initialize_state_plan_fields(ctx, plan, error)");
+    check(
+        mask_init_pos != std::string::npos &&
+            state_init_pos != std::string::npos &&
+            mask_init_pos < state_init_pos,
+        "Context builder must initialize magnetic masks before state normalization");
     check(
         context_header.find("struct fullmag_fem_backend") == std::string::npos,
         "Context header must not define the C ABI backend handle");

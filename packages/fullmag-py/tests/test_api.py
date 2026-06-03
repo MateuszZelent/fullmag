@@ -941,8 +941,8 @@ class ProblemApiTests(unittest.TestCase):
         )
         mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
         study_universe = loaded.problem.runtime_metadata["study_universe"]
-        self.assertEqual(study_universe["airbox_hmax"], 500e-9)
-        self.assertEqual(study_universe["airbox_hmin"], 10e-9)
+        self.assertEqual(study_universe["airbox_hmax"], 1000e-9)
+        self.assertEqual(study_universe["airbox_hmin"], 50e-9)
         self.assertEqual(study_universe["airbox_growth_rate"], 1.5)
         self.assertEqual(mesh_workflow["fem"]["hmax"], 40e-9)
         mesh_options = mesh_workflow["mesh_options"]
@@ -4111,6 +4111,8 @@ class ProblemApiTests(unittest.TestCase):
         body.mesh.thin_film(
             maximum_element_size=20e-9,
             minimum_element_size=2e-9,
+            curvature_factor=0.45,
+            narrow_region_resolution=0.8,
             interface_maximum_element_size=8e-9,
             interface_thickness=4e-9,
             transition_distance=60e-9,
@@ -4146,16 +4148,22 @@ class ProblemApiTests(unittest.TestCase):
         per_geometry = workflow["per_geometry"][0]
         self.assertEqual(per_geometry["mesh_strategy"], "thin_film_tetrahedral")
         self.assertEqual(per_geometry["through_thickness_elements"], 1)
+        self.assertEqual(per_geometry["curvature_factor"], 0.45)
+        self.assertEqual(per_geometry["narrow_region_resolution"], 0.8)
         self.assertEqual(per_geometry["edge_transition_distance"], 40e-9)
         self.assertEqual(per_geometry["corner_transition_distance"], 30e-9)
 
         mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
         self.assertEqual(mesh_entry["mesh_strategy"], "thin_film_tetrahedral")
+        self.assertEqual(mesh_entry["curvature_factor"], "0.45")
+        self.assertEqual(mesh_entry["narrow_region_resolution"], "0.8")
         self.assertEqual(mesh_entry["edge_transition_distance"], "4e-08")
         self.assertEqual(mesh_entry["corner_transition_distance"], "3e-08")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn("body.mesh.thin_film(", rewritten)
+        self.assertIn("curvature_factor=0.45", rewritten)
+        self.assertIn("narrow_region_resolution=0.8", rewritten)
         self.assertIn("edge_transition_distance=4e-08", rewritten)
         self.assertIn("corner_transition_distance=3e-08", rewritten)
         self.assertIn("layers=1", rewritten)
