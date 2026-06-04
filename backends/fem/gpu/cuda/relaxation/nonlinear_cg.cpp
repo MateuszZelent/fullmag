@@ -3,7 +3,8 @@
  *
  * Owns the native GPU Polak-Ribiere+ relaxation entrypoint, persistent search
  * direction handling, Armijo line search, and rollback for FEM CUDA
- * minimization. Routing remains disabled until this lane has live CUDA proof.
+ * minimization. Runtime routing is enabled only through the native FEM backend
+ * step boundary after the GPU transfer-audit preflight succeeds.
  */
 
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
@@ -41,6 +42,7 @@ constexpr double kMaxStepSize = 1.0e-3;
 constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr double kGradientFloor = 1.0e-30;
 constexpr uint32_t kMaxBacktracks = 30;
+constexpr uint32_t kArmijoRecoveryCycles = 1;
 constexpr uint64_t kRestartInterval = 50;
 
 struct GpuRelaxNcgRollbackState {
@@ -73,6 +75,14 @@ void restore_gpu_relax_ncg_metadata(
     ctx.relaxation.accepted_steps = rollback.accepted_steps;
     ctx.state.step_count = rollback.step_count;
     ctx.state.current_time = rollback.current_time;
+}
+
+void mark_gpu_relax_ncg_device_source_of_truth(Context &ctx)
+{
+    auto &gpu = ctx.gpu_state.device;
+    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
+    gpu.residency.host_state = FemGpuSyncState::HostStale;
 }
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
@@ -207,7 +217,7 @@ bool gpu_relax_compute_effective_field_and_energy(
     }
 
     std::array<double, kGpuFinalScalarSlots> scalars{};
-    if (!gpu_rk_read_scalar_results(
+    if (!gpu_rk_read_control_scalar_results(
             ctx,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG energy scalars device->host",
@@ -291,7 +301,7 @@ bool gpu_relax_compute_tangent_gradient_norm(
             reason)) {
         return false;
     }
-    if (!gpu_rk_read_scalar_result(
+    if (!gpu_rk_read_control_scalar_result(
             ctx,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG gradient norm device->host",
@@ -339,7 +349,7 @@ bool gpu_relax_metric_dot(
             gpu.reductions.scalar_result,
             label,
             reason) ||
-        !gpu_rk_read_scalar_result(ctx, stream, label, value, reason)) {
+        !gpu_rk_read_control_scalar_result(ctx, stream, label, value, reason)) {
         return false;
     }
     if (!std::isfinite(value)) {
@@ -364,9 +374,7 @@ bool gpu_relax_restore_previous_magnetization(
             reason)) {
         return false;
     }
-    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
-    gpu.residency.host_state = FemGpuSyncState::HostStale;
+    mark_gpu_relax_ncg_device_source_of_truth(ctx);
     return true;
 }
 
@@ -450,7 +458,7 @@ bool gpu_relax_prepare_descent_direction(
             gpu.reductions.scalar_result,
             "launch GPU nonlinear-CG direction-dot-gradient reduction",
             reason) ||
-        !gpu_rk_read_scalar_result(
+        !gpu_rk_read_control_scalar_result(
             ctx,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG direction-dot-gradient device->host",
@@ -484,7 +492,7 @@ bool gpu_relax_prepare_descent_direction(
                 gpu.reductions.scalar_result,
                 "launch GPU nonlinear-CG reset direction-dot-gradient reduction",
                 reason) ||
-            !gpu_rk_read_scalar_result(
+            !gpu_rk_read_control_scalar_result(
                 ctx,
                 stream,
                 "cudaMemcpyAsync GPU nonlinear-CG reset direction-dot-gradient device->host",
@@ -518,6 +526,102 @@ bool gpu_relax_prepare_descent_direction(
         return false;
     }
     return true;
+}
+
+bool gpu_relax_retry_ncg_line_search_with_restart(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    double current_energy,
+    double gradient_norm_sq,
+    double &p_dot_g,
+    double &direction_norm_sq,
+    double &trial_step,
+    double &trial_energy,
+    uint32_t &backtracks,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    auto gpu_relax_accept_monotone_recovery_step =
+        [](double current_energy, double trial_energy) {
+            return std::isfinite(current_energy) &&
+                std::isfinite(trial_energy) &&
+                trial_energy <= current_energy;
+        };
+    for (uint32_t recovery_cycle = 0;
+         recovery_cycle < kArmijoRecoveryCycles;
+         ++recovery_cycle) {
+        gpu.relaxation.nonlinear_cg_direction_valid = false;
+        if (!gpu_relax_prepare_descent_direction(
+                ctx,
+                stream,
+                n,
+                blocks,
+                gradient_norm_sq,
+                p_dot_g,
+                direction_norm_sq,
+                reason)) {
+            return false;
+        }
+        const double restart_step = std::clamp(
+            1.0 / std::sqrt(direction_norm_sq),
+            kMinStepSize,
+            kMaxStepSize);
+        trial_step = restart_step;
+
+        while (true) {
+            fullmag_cuda_relax_retract_field(
+                gpu.rk.m_backup.x,
+                gpu.rk.m_backup.y,
+                gpu.rk.m_backup.z,
+                gpu.relaxation.nonlinear_cg_direction.x,
+                gpu.relaxation.nonlinear_cg_direction.y,
+                gpu.relaxation.nonlinear_cg_direction.z,
+                gpu.mesh_regions.magnetic_node_mask,
+                trial_step,
+                gpu.rk.m_stage.x,
+                gpu.rk.m_stage.y,
+                gpu.rk.m_stage.z,
+                n,
+                stream);
+            if (!cuda_launch_ok("launch GPU nonlinear-CG recovery retraction", reason) ||
+                !gpu_rk_copy_component_device(
+                    gpu.rk.m_stage,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    "cudaMemcpyAsync GPU nonlinear-CG recovery m",
+                    reason) ||
+                !gpu_relax_compute_effective_field_and_energy(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    trial_energy,
+                    reason)) {
+                return false;
+            }
+
+            const bool armijo =
+                trial_energy <=
+                current_energy + kArmijoCoefficient * trial_step * p_dot_g;
+            if (armijo) {
+                return true;
+            }
+            if (gpu_relax_accept_monotone_recovery_step(
+                    current_energy,
+                    trial_energy)) {
+                return true;
+            }
+            if (backtracks >= 2u * kMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+        }
+    }
+    return false;
 }
 
 bool gpu_relax_update_next_direction(
@@ -559,7 +663,7 @@ bool gpu_relax_update_next_direction(
         return false;
     }
     double numerator = 0.0;
-    if (!gpu_rk_read_scalar_result(
+    if (!gpu_rk_read_control_scalar_result(
             ctx,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG PR+ numerator device->host",
@@ -612,7 +716,7 @@ bool gpu_relax_update_next_direction(
         return false;
     }
     double next_p_dot_g = 0.0;
-    if (!gpu_rk_read_scalar_result(
+    if (!gpu_rk_read_control_scalar_result(
             ctx,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG next direction-dot-gradient device->host",
@@ -725,7 +829,8 @@ int gpu_relax_nonlinear_cg_step(
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;
-        if (!gpu_rk_finalize_step_stats(ctx, out_stats, reason)) {
+        mark_gpu_relax_ncg_device_source_of_truth(ctx);
+        if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
@@ -829,6 +934,32 @@ int gpu_relax_nonlinear_cg_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (gpu_relax_retry_ncg_line_search_with_restart(
+                ctx,
+                stream,
+                n,
+                blocks,
+                current_energy,
+                gradient_norm_sq,
+                p_dot_g,
+                direction_norm_sq,
+                trial_step,
+                trial_energy,
+                backtracks,
+                reason)) {
+            line_search_accepted = true;
+        }
+    }
+    if (!line_search_accepted && !reason.empty()) {
+        return gpu_relax_restore_previous_state_after_failure(
+            ctx,
+            stream,
+            rollback,
+            "recovery Armijo line search failure",
+            reason,
+            error);
+    }
+    if (!line_search_accepted) {
         const std::string original_error =
             "GPU nonlinear-CG failed Armijo line search after " +
             std::to_string(backtracks) +
@@ -871,9 +1002,7 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
 
-    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
-    gpu.residency.host_state = FemGpuSyncState::HostStale;
+    mark_gpu_relax_ncg_device_source_of_truth(ctx);
     gpu.rk.fsal_valid = false;
     ctx.relaxation.step_size =
         std::clamp(trial_step, kMinStepSize, kMaxStepSize);
@@ -886,7 +1015,7 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.dt_seconds = trial_step;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;
-    if (!gpu_rk_finalize_step_stats(ctx, out_stats, reason)) {
+    if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
         return gpu_relax_restore_previous_state_after_failure(
             ctx,
             stream,

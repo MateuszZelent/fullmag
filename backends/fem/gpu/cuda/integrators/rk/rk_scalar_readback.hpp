@@ -31,5 +31,20 @@ bool gpu_rk_read_scalar_results(
     size_t count,
     std::string &reason);
 
+bool gpu_rk_read_control_scalar_result(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double &value,
+    std::string &reason);
+
+bool gpu_rk_read_control_scalar_results(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double *values,
+    size_t count,
+    std::string &reason);
+
 } // namespace fullmag::fem
 #endif

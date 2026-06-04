@@ -16,7 +16,9 @@ pub(crate) use convergence::{
     EnergyPlateauRangeJ, RelaxationEnergyPlateauWindow, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
 pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projected_gradient_bb};
+pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
+#[cfg(any(feature = "fem-gpu", test))]
+pub(crate) use provenance::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION;
 pub(crate) use provenance::{
     apply_energy_minimizer_provenance, CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
-    NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION,
 };

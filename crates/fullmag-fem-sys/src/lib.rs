@@ -402,6 +402,8 @@ pub struct fullmag_fem_transfer_audit {
     pub hot_loop_compute_h2d_bytes: u64,
     pub hot_loop_compute_d2h_bytes: u64,
     pub hot_loop_compute_host_sync_count: u64,
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    pub hot_loop_control_scalar_host_sync_count: u64,
 }
 
 #[repr(C)]
@@ -657,6 +659,8 @@ mod tests {
         assert_eq!(audit.hot_loop_compute_h2d_bytes, 0);
         assert_eq!(audit.hot_loop_compute_d2h_bytes, 0);
         assert_eq!(audit.hot_loop_compute_host_sync_count, 0);
+        assert_eq!(audit.hot_loop_control_scalar_d2h_bytes, 0);
+        assert_eq!(audit.hot_loop_control_scalar_host_sync_count, 0);
     }
 
     /// Verify availability ABI separates build-time and hot-path GPU capabilities.

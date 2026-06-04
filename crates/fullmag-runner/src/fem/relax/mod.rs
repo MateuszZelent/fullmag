@@ -10,8 +10,8 @@
 //! |-------------------------|----------|------------|-------------------------------------|
 //! | `LlgOverdamped`         | ✓        | ✓          | primary production path             |
 //! | `ProjectedGradientBb`   | ✓        | ✓          | native MFEM/CUDA relaxation ABI     |
-//! | `NonlinearCg`           | ✓        | ✗          | native MFEM relaxation ABI          |
-//! | `TangentPlaneImplicit`  | ✓        | ✗          | native MFEM relaxation ABI          |
+//! | `NonlinearCg`           | ✓        | ✓          | native MFEM/CUDA relaxation ABI     |
+//! | `TangentPlaneImplicit`  | dev      | dev        | under development; not production-qualified |
 
 pub mod algorithm;
 #[cfg(feature = "fem-gpu")]

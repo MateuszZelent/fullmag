@@ -110,6 +110,7 @@ int restore_after_failed_line_search(
     const std::vector<double> &previous_m_xyz,
     const char *algorithm_name,
     uint32_t backtracks,
+    const std::string &diagnostics,
     std::string &error);
 
 int restore_after_rejected_trial(

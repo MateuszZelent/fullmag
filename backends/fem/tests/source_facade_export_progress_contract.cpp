@@ -81,8 +81,9 @@ void managed_runtime_export_keeps_mfem_headers_linkable() {
             export_script.find("OMPI_MCA_pmix=\"${OMPI_MCA_pmix:-isolated}\"") != std::string::npos &&
             export_script.find("OMPI_MCA_ras=\"${OMPI_MCA_ras:-simulator}\"") != std::string::npos &&
             export_script.find("OMPI_MCA_oob=\"${OMPI_MCA_oob:-tcp}\"") != std::string::npos &&
-            export_script.find("OMPI_MCA_oob_tcp_if_include=lo") != std::string::npos,
-        "managed FEM launcher must force singleton OpenMPI onto isolated local launch with local TCP OOB fallback");
+            export_script.find("OMPI_MCA_oob_tcp_if_include=lo") != std::string::npos &&
+            export_script.find("PMIX_MCA_ptl_tcp_if_include=lo") != std::string::npos,
+        "managed FEM launcher must force singleton OpenMPI onto isolated local launch with OpenMPI and PMIx loopback transport fallbacks");
     check(
         export_script.find("PMIX_DATADIR=\"${RUNTIME_ROOT}/lib/pmix2/share\"") !=
                 std::string::npos &&

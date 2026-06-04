@@ -10,6 +10,17 @@ This skill covers the current `backends/fem` MFEM/hypre/libCEED implementation
 tree. The previous `native/backends/fem` path was production code, not legacy;
 it has been relocated to top-level `backends/fem`, not moved into `crates`.
 
+Hard build rule: inspect the repository `justfile` before building or running
+native FEM work. Use the matching container-backed managed `just` recipe as the
+default build/runtime path; host `cargo`, `cmake`, Docker, or direct native
+binary commands are diagnostics only unless the user explicitly asks for a
+host-only check.
+If you are about to assemble a host-side native FEM build command by hand, stop
+and look up the `justfile` recipe first.
+The container is not just a final verification environment. For native
+FEM/MFEM/CUDA/hypre/libCEED build work, the container-backed `just` recipe is
+the first build command path.
+
 ## Read First
 
 1. `docs/architecture/backend-golden-masterplan.md`
@@ -66,6 +77,23 @@ it has been relocated to top-level `backends/fem`, not moved into `crates`.
    timings.
 14. Avoid hot-path heap allocation and hidden host/device transfers in accepted
    step RHS/operator application.
+15. Use container-backed `just` recipes for authoritative FEM/MFEM/CUDA/hypre/
+   libCEED builds and runtime proof. Treat the managed/container recipe as the
+   default build path for native FEM work. Host `cargo`, `cmake`, and direct
+   native binaries are smoke checks only; do not report FEM runtime closure
+   without `just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`,
+   `just fem-gpu-headless ...`, `just verify-fem-relaxation-runtime`, or an
+   equivalent managed run recipe.
+   Always inspect/use the repo `justfile` before inventing host-side build
+   commands for native FEM runtime work.
+   Do not substitute a host-side build for this final readiness check.
+   If the `justfile` has a matching managed/container build recipe, use it
+   before any hand-assembled host build command. Host commands are diagnostics,
+   not the authoritative native FEM build path.
+   Do not start from host `cargo`, `cmake`, raw `docker`, or direct binary
+   commands when a managed/container `just` recipe covers the build.
+   If no matching managed/container recipe exists, state that explicitly before
+   using a host-side diagnostic command.
 
 ## Documentation Outputs
 

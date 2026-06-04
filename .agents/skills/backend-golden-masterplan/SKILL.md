@@ -8,6 +8,16 @@ description: "Use when modifying or reviewing Fullmag backend solver architectur
 Use this skill before backend architecture, solver layout, runtime selection,
 interaction, workflow, validation, or backend documentation changes.
 
+Hard build rule: for FEM/MFEM/CUDA/hypre/libCEED work, inspect the repository
+`justfile` first and use the matching managed/container `just` recipe as the
+default build/runtime path. Host `cargo`, `cmake`, Docker, or direct native
+binary commands are diagnostics only unless the user explicitly asks for a
+host-only check.
+If you are about to assemble a host-side FEM build command by hand, stop and
+look up the `justfile` recipe first.
+Do not treat the container as a final add-on after a host build. For native FEM
+build work, the container-backed `just` recipe is the starting point.
+
 ## Read First
 
 1. `docs/architecture/backend-golden-masterplan.md`
@@ -53,7 +63,24 @@ interaction, workflow, validation, or backend documentation changes.
     must be visible in provenance.
 11. Runtime proof is separate from local contract proof. Do not claim CUDA,
     MFEM, hypre, or libCEED runtime behavior from unit tests alone.
-12. Production physics claims require automated validation: NIST/µMAG where
+12. For FEM/MFEM/CUDA/hypre/libCEED work, runtime proof must use the
+    container-backed `just` recipes (`just rebuild-fem-runtime`,
+    `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, or managed
+    run recipes such as `just verify-fem-relaxation-runtime`). Treat those
+    recipes as the default build path for native FEM
+    work, not just as a final proof step. Host `cargo`, `cmake`, and direct
+    native binaries are smoke checks only.
+    Always inspect/use the repo `justfile` before inventing host-side build
+    commands for managed FEM runtime work.
+    Do not substitute host-side builds for the final FEM runtime proof.
+    For any build task covered by a `justfile` recipe, use the managed/container
+    recipe first; host-side command sequences are diagnostics, not the default
+    build path.
+    Do not start with host `cargo`, `cmake`, raw `docker`, or direct binary
+    commands when the `justfile` already owns the build path.
+    If no matching managed/container recipe exists, record that explicitly
+    before falling back to a host-side diagnostic command.
+13. Production physics claims require automated validation: NIST/µMAG where
     applicable, analytical benchmarks, per-interaction energies, total energy,
     CPU/GPU parity inside a discretization, and meaningful FDM/FEM convergence
     comparisons.

@@ -45,6 +45,7 @@ constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr double kGradientFloor = 1.0e-30;
 constexpr double kBbCurvatureScale = 1.0e-6;
 constexpr uint32_t kMaxBacktracks = 20;
+constexpr uint32_t kArmijoRecoveryCycles = 1;
 
 struct GpuRelaxPgbbRollbackState {
     double step_size = kDefaultStepSize;
@@ -78,6 +79,14 @@ void restore_gpu_relax_pgbb_metadata(
     ctx.relaxation.accepted_steps = rollback.accepted_steps;
     ctx.state.step_count = rollback.step_count;
     ctx.state.current_time = rollback.current_time;
+}
+
+void mark_gpu_relax_pgbb_device_source_of_truth(Context &ctx)
+{
+    auto &gpu = ctx.gpu_state.device;
+    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
+    gpu.residency.host_state = FemGpuSyncState::HostStale;
 }
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
@@ -205,7 +214,7 @@ bool gpu_relax_compute_effective_field_and_energy(
     }
 
     std::array<double, kGpuFinalScalarSlots> scalars{};
-    if (!gpu_rk_read_scalar_results(
+    if (!gpu_rk_read_control_scalar_results(
             ctx,
             stream,
             "cudaMemcpyAsync GPU projected-gradient BB energy scalars device->host",
@@ -289,7 +298,7 @@ bool gpu_relax_compute_tangent_gradient_norm(
             reason)) {
         return false;
     }
-    if (!gpu_rk_read_scalar_result(
+    if (!gpu_rk_read_control_scalar_result(
             ctx,
             stream,
             "cudaMemcpyAsync GPU projected-gradient BB gradient norm device->host",
@@ -319,9 +328,7 @@ bool gpu_relax_restore_previous_magnetization(
             reason)) {
         return false;
     }
-    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
-    gpu.residency.host_state = FemGpuSyncState::HostStale;
+    mark_gpu_relax_pgbb_device_source_of_truth(ctx);
     return true;
 }
 
@@ -358,6 +365,91 @@ int gpu_relax_restore_accepted_step_after_finalize_failure(
         "accepted-step stats finalization failure",
         original_reason,
         error);
+}
+
+bool gpu_relax_retry_pgbb_line_search_with_reset(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    double current_energy,
+    double gradient_norm_sq,
+    double &trial_step,
+    double &trial_energy,
+    uint32_t &backtracks,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    auto gpu_relax_accept_monotone_recovery_step =
+        [](double current_energy, double trial_energy) {
+            return std::isfinite(current_energy) &&
+                std::isfinite(trial_energy) &&
+                trial_energy <= current_energy;
+        };
+    for (uint32_t recovery_cycle = 0;
+         recovery_cycle < kArmijoRecoveryCycles;
+         ++recovery_cycle) {
+        ctx.relaxation.reset_consecutive += 1;
+        const double restart_step = std::clamp(
+            kDefaultStepSize /
+                static_cast<double>(ctx.relaxation.reset_consecutive + 1u),
+            kMinStepSize,
+            kMaxStepSize);
+        trial_step = restart_step;
+
+        while (true) {
+            fullmag_cuda_relax_retract_field(
+                gpu.rk.m_backup.x,
+                gpu.rk.m_backup.y,
+                gpu.rk.m_backup.z,
+                gpu.rk.k[0].x,
+                gpu.rk.k[0].y,
+                gpu.rk.k[0].z,
+                gpu.mesh_regions.magnetic_node_mask,
+                -trial_step,
+                gpu.rk.m_stage.x,
+                gpu.rk.m_stage.y,
+                gpu.rk.m_stage.z,
+                n,
+                stream);
+            if (!cuda_launch_ok("launch GPU projected-gradient BB recovery retraction", reason) ||
+                !gpu_rk_copy_component_device(
+                    gpu.rk.m_stage,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    "cudaMemcpyAsync GPU projected-gradient BB recovery m",
+                    reason) ||
+                !gpu_relax_compute_effective_field_and_energy(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    trial_energy,
+                    reason)) {
+                return false;
+            }
+
+            const bool armijo =
+                trial_energy <=
+                current_energy -
+                    kArmijoCoefficient * trial_step * gradient_norm_sq;
+            if (armijo) {
+                return true;
+            }
+            if (gpu_relax_accept_monotone_recovery_step(
+                    current_energy,
+                    trial_energy)) {
+                return true;
+            }
+            if (backtracks >= 2u * kMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+        }
+    }
+    return false;
 }
 
 bool gpu_relax_update_bb_step_size(
@@ -420,7 +512,7 @@ bool gpu_relax_update_bb_step_size(
     }
 
     double curvature[3] = {0.0, 0.0, 0.0};
-    if (!gpu_rk_read_scalar_results(
+    if (!gpu_rk_read_control_scalar_results(
             ctx,
             stream,
             "cudaMemcpyAsync GPU projected-gradient BB curvature scalars device->host",
@@ -539,7 +631,8 @@ int gpu_relax_projected_gradient_bb_step(
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;
-        if (!gpu_rk_finalize_step_stats(ctx, out_stats, reason)) {
+        mark_gpu_relax_pgbb_device_source_of_truth(ctx);
+        if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
@@ -615,6 +708,29 @@ int gpu_relax_projected_gradient_bb_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (gpu_relax_retry_pgbb_line_search_with_reset(
+                ctx,
+                stream,
+                n,
+                blocks,
+                current_energy,
+                gradient_norm_sq,
+                trial_step,
+                trial_energy,
+                backtracks,
+                reason)) {
+            line_search_accepted = true;
+        }
+    }
+    if (!line_search_accepted && !reason.empty()) {
+        return gpu_relax_restore_previous_magnetization_after_failure(
+            ctx,
+            stream,
+            "recovery Armijo line search failure",
+            reason,
+            error);
+    }
+    if (!line_search_accepted) {
         const std::string original_error =
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
@@ -648,9 +764,7 @@ int gpu_relax_projected_gradient_bb_step(
     }
     (void)accepted_gradient_norm_sq;
 
-    gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
-    gpu.residency.host_state = FemGpuSyncState::HostStale;
+    mark_gpu_relax_pgbb_device_source_of_truth(ctx);
     gpu.rk.fsal_valid = false;
     ctx.relaxation.accepted_steps += 1;
     ctx.state.step_count += 1;
@@ -661,7 +775,7 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.dt_seconds = trial_step;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations = backtracks + 2u;
-    if (!gpu_rk_finalize_step_stats(ctx, out_stats, reason)) {
+    if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
         return gpu_relax_restore_accepted_step_after_finalize_failure(
             ctx,
             stream,

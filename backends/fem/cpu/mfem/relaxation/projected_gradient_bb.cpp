@@ -16,11 +16,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
 
 namespace {
+
+constexpr uint32_t kProjectedGradientArmijoRecoveryCycles = 1;
 
 void update_bb_step_size(
     const Context &ctx,
@@ -88,6 +91,81 @@ void update_bb_step_size(
     }
     state.step_size = next;
     state.use_bb1 = !state.use_bb1;
+}
+
+bool retry_projected_gradient_bb_line_search_with_reset(
+    Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &descent_direction,
+    const fullmag_fem_step_stats &current_stats,
+    double direction_dot_gradient,
+    double &trial_step,
+    fullmag_fem_step_stats &trial_stats,
+    std::vector<double> &trial_m,
+    uint32_t &backtracks,
+    int &failure_status,
+    std::string &error)
+{
+    auto accept_monotone_recovery_step =
+        [](const fullmag_fem_step_stats &current,
+           const fullmag_fem_step_stats &trial) {
+            return std::isfinite(current.total_energy_joules) &&
+                std::isfinite(trial.total_energy_joules) &&
+                trial.total_energy_joules <= current.total_energy_joules;
+        };
+    for (uint32_t recovery_cycle = 0;
+         recovery_cycle < kProjectedGradientArmijoRecoveryCycles;
+         ++recovery_cycle) {
+        ctx.relaxation.reset_consecutive += 1;
+        const double restart_step = std::clamp(
+            relaxation::kDefaultStepSize /
+                static_cast<double>(ctx.relaxation.reset_consecutive + 1u),
+            relaxation::kMinStepSize,
+            relaxation::kMaxStepSize);
+        trial_step = restart_step;
+
+        while (true) {
+            trial_m =
+                relaxation::retracted_step(ctx, previous_m, descent_direction, trial_step);
+            const int status = relaxation::upload_and_snapshot(
+                ctx,
+                trial_m,
+                trial_stats,
+                "projected-gradient BB",
+                "recovery trial",
+                error);
+            if (status != FULLMAG_FEM_OK) {
+                const std::string trial_error = error;
+                failure_status = relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "projected-gradient BB",
+                    "failed recovery trial snapshot",
+                    status,
+                    trial_error,
+                    error);
+                return false;
+            }
+            const bool armijo =
+                trial_stats.total_energy_joules <=
+                current_stats.total_energy_joules +
+                    relaxation::kArmijoCoefficient * trial_step *
+                        direction_dot_gradient;
+            if (armijo) {
+                return true;
+            }
+            if (accept_monotone_recovery_step(current_stats, trial_stats)) {
+                return true;
+            }
+            if (backtracks >=
+                2u * relaxation::kProjectedGradientMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -219,11 +297,44 @@ int run_projected_gradient_bb_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (retry_projected_gradient_bb_line_search_with_reset(
+                ctx,
+                previous_m,
+                descent_direction,
+                current_stats,
+                direction_dot_gradient,
+                trial_step,
+                trial_stats,
+                trial_m,
+                backtracks,
+                status,
+                error)) {
+            line_search_accepted = true;
+        }
+    }
+    if (status != FULLMAG_FEM_OK) {
+        return status;
+    }
+    if (!line_search_accepted) {
+        const double armijo_rhs =
+            current_stats.total_energy_joules +
+            relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+        const std::string diagnostics =
+            "current_energy_j=" +
+            std::to_string(current_stats.total_energy_joules) +
+            " last_trial_energy_j=" +
+            std::to_string(trial_stats.total_energy_joules) +
+            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
+            " last_trial_step=" + std::to_string(trial_step) +
+            " direction_dot_gradient=" +
+            std::to_string(direction_dot_gradient) +
+            " gradient_norm_sq=" + std::to_string(g_norm_sq);
         return relaxation::restore_after_failed_line_search(
             ctx,
             previous_m,
             "projected-gradient BB",
             backtracks,
+            diagnostics,
             error);
     }
 

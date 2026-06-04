@@ -86,6 +86,19 @@ void record_host_read(TransferAudit &audit, uint64_t bytes)
     }
 }
 
+void record_control_scalar_read(TransferAudit &audit, uint64_t bytes)
+{
+    audit.counters.d2h_bytes += bytes;
+    audit.counters.host_read_count += 1;
+    if (audit.hot_loop_depth > 0) {
+        audit.counters.hot_loop_d2h_bytes += bytes;
+        audit.counters.hot_loop_host_read_count += 1;
+        audit.counters.hot_loop_host_sync_count += 1;
+        audit.counters.hot_loop_control_scalar_d2h_bytes += bytes;
+        audit.counters.hot_loop_control_scalar_host_sync_count += 1;
+    }
+}
+
 void record_host_write(TransferAudit &audit, uint64_t bytes)
 {
     audit.counters.h2d_bytes += bytes;
@@ -177,6 +190,11 @@ void record_host_to_device(TransferAudit &audit, uint64_t bytes)
 void record_device_to_host(TransferAudit &audit, uint64_t bytes)
 {
     record_host_read(audit, bytes);
+}
+
+void record_device_control_scalar_to_host(TransferAudit &audit, uint64_t bytes)
+{
+    record_control_scalar_read(audit, bytes);
 }
 
 void record_mfem_host_read(uint64_t bytes)

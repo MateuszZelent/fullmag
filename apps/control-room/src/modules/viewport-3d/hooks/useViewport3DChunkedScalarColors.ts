@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
@@ -17,14 +17,54 @@ import type {
 
 interface ChunkedScalarColorState {
   colorPalette: string;
+  modesKey: string;
   token: object;
-  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>;
+  topology: object;
+}
+
+export type Viewport3DChunkedScalarColorStatus =
+  | "building"
+  | "idle"
+  | "ready"
+  | "stale-visible"
+  | "unavailable";
+
+export interface Viewport3DChunkedScalarColorResult {
+  colors: ReadonlyMap<string, ScalarColorBuffer>;
+  status: Viewport3DChunkedScalarColorStatus;
+}
+
+export interface ChunkedScalarColorCompatibilityRequest {
+  colorPalette: string;
+  enabled: boolean;
+  fieldPointCount: number | null;
+  modesKey: string;
+  needsChunking: boolean;
+  topology: object | null | undefined;
 }
 
 const chunkedScalarColorBuffers = new WeakMap<
   object,
   ReadonlyMap<string, ScalarColorBuffer>
 >();
+
+export function chunkedScalarColorStateIsCompatible(
+  current: ChunkedScalarColorState | null,
+  request: ChunkedScalarColorCompatibilityRequest,
+): boolean {
+  return Boolean(
+    current &&
+      request.enabled &&
+      request.topology &&
+      current.topology === request.topology &&
+      current.colorPalette === request.colorPalette &&
+      current.modesKey === request.modesKey &&
+      request.fieldPointCount !== null &&
+      request.fieldPointCount ===
+        (request.topology as { nodeCount?: number }).nodeCount &&
+      request.needsChunking,
+  );
+}
 
 export function mergeViewport3DFieldScalarColors(
   base: Viewport3DFieldRenderModel | null,
@@ -61,7 +101,7 @@ export function useViewport3DChunkedScalarColors({
     | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
     | null
     | undefined;
-}): ReadonlyMap<string, ScalarColorBuffer> {
+}): Viewport3DChunkedScalarColorResult {
   const modes = useMemo(
     () =>
       [...(colorModes ?? [])]
@@ -69,22 +109,72 @@ export function useViewport3DChunkedScalarColors({
         .sort(),
     [colorModes],
   );
+  const modesKey = useMemo(() => modes.join("|"), [modes]);
   const [state, setState] = useState<ChunkedScalarColorState | null>(null);
+  const [pending, setPending] = useState(false);
+  const activeTokenRef = useRef<object | null>(null);
+  const needsChunking = Boolean(
+    fieldVector && fieldTransformNeedsChunking(fieldVector.pointCount),
+  );
+  const eligibleForChunkedBuild =
+    enabled &&
+    Boolean(topology) &&
+    Boolean(fieldVector) &&
+    fieldVector?.pointCount === topology?.nodeCount &&
+    needsChunking &&
+    modes.length > 0;
+  const compatibilityRequest = useMemo<ChunkedScalarColorCompatibilityRequest>(
+    () => ({
+      colorPalette,
+      enabled,
+      fieldPointCount: fieldVector?.pointCount ?? null,
+      modesKey,
+      needsChunking,
+      topology,
+    }),
+    [
+      colorPalette,
+      enabled,
+      fieldVector?.pointCount,
+      modesKey,
+      needsChunking,
+      topology,
+    ],
+  );
 
   useEffect(() => {
-    if (
-      !enabled ||
-      !topology ||
-      !fieldVector ||
-      fieldVector.pointCount !== topology.nodeCount ||
-      !fieldTransformNeedsChunking(fieldVector.pointCount) ||
-      modes.length === 0
-    ) {
+    return () => {
+      releaseChunkedScalarColorToken(activeTokenRef.current);
+      activeTokenRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    setState((current) => {
+      if (chunkedScalarColorStateIsCompatible(current, compatibilityRequest)) {
+        return current;
+      }
+      const currentToken = current ? current.token : null;
+      releaseChunkedScalarColorToken(currentToken);
+      if (activeTokenRef.current === currentToken) {
+        activeTokenRef.current = null;
+      }
+      return null;
+    });
+  }, [compatibilityRequest, eligibleForChunkedBuild]);
+
+  useEffect(() => {
+    if (!eligibleForChunkedBuild || !topology || !fieldVector) {
       return undefined;
     }
 
     const controller = new AbortController();
     let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        setPending(true);
+      }
+    });
 
     void (async () => {
       const entries = await Promise.all(
@@ -103,40 +193,80 @@ export function useViewport3DChunkedScalarColors({
       if (!cancelled) {
         const token = {};
         chunkedScalarColorBuffers.set(token, new Map(entries));
-        setState({
-          colorPalette,
-          token,
-          topology,
+        setState((current) => {
+          releaseChunkedScalarColorToken(current?.token ?? null);
+          activeTokenRef.current = token;
+          return {
+            colorPalette,
+            modesKey,
+            token,
+            topology,
+          };
         });
+        setPending(false);
       }
     })().catch(() => {
+      if (!cancelled) {
+        setPending(false);
+      }
       return undefined;
     });
 
     return () => {
       cancelled = true;
       controller.abort();
-      setState((current) => {
-        if (current?.topology !== topology) return current;
-        chunkedScalarColorBuffers.delete(current.token);
-        return null;
-      });
     };
-  }, [colorPalette, enabled, fieldVector, modes, topology]);
+  }, [colorPalette, eligibleForChunkedBuild, fieldVector, modes, modesKey, topology]);
 
-  if (
-    !enabled ||
-    !topology ||
-    state?.topology !== topology ||
-    state.colorPalette !== colorPalette
-  ) {
-    return EMPTY_SCALAR_COLOR_MAP;
-  }
+  const compatible = chunkedScalarColorStateIsCompatible(
+    state,
+    compatibilityRequest,
+  );
+  const colors =
+    compatible && state
+      ? chunkedScalarColorBuffers.get(state.token) ?? EMPTY_SCALAR_COLOR_MAP
+      : EMPTY_SCALAR_COLOR_MAP;
 
-  return chunkedScalarColorBuffers.get(state.token) ?? EMPTY_SCALAR_COLOR_MAP;
+  return {
+    colors,
+    status: resolveChunkedScalarColorStatus({
+      colorsAvailable: colors.size > 0,
+      eligibleForChunkedBuild,
+      enabled,
+      pending,
+      topologyAvailable: Boolean(topology),
+    }),
+  };
 }
 
 const EMPTY_SCALAR_COLOR_MAP = new Map<string, ScalarColorBuffer>();
+
+function releaseChunkedScalarColorToken(token: object | null): void {
+  if (token) {
+    chunkedScalarColorBuffers.delete(token);
+  }
+}
+
+function resolveChunkedScalarColorStatus({
+  colorsAvailable,
+  eligibleForChunkedBuild,
+  enabled,
+  pending,
+  topologyAvailable,
+}: {
+  colorsAvailable: boolean;
+  eligibleForChunkedBuild: boolean;
+  enabled: boolean;
+  pending: boolean;
+  topologyAvailable: boolean;
+}): Viewport3DChunkedScalarColorStatus {
+  if (!enabled) return "idle";
+  if (!topologyAvailable) return "unavailable";
+  if (!eligibleForChunkedBuild) return "idle";
+  if (pending && colorsAvailable) return "stale-visible";
+  if (pending) return "building";
+  return colorsAvailable ? "ready" : "building";
+}
 
 function yieldToViewport3DMainThread(): Promise<void> {
   if (

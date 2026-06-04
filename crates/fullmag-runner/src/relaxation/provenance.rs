@@ -14,7 +14,9 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
 }
 
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
+#[cfg(any(feature = "fem-gpu", test))]
 pub(crate) const NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION: &str = "native_mfem_backend_relax_step";
+pub(crate) const NATIVE_LLG_TIME_INTEGRATOR_REALIZATION: &str = "native_llg_time_integrator";
 
 pub(crate) fn apply_energy_minimizer_provenance(
     provenance: &mut ExecutionProvenance,

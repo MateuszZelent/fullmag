@@ -1316,6 +1316,7 @@ int run_tangent_plane_implicit_step(
             previous_m,
             "tangent-plane implicit",
             backtracks,
+            {},
             error);
     }
 

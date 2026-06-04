@@ -366,6 +366,8 @@ typedef struct {
     uint64_t hot_loop_compute_h2d_bytes;
     uint64_t hot_loop_compute_d2h_bytes;
     uint64_t hot_loop_compute_host_sync_count;
+    uint64_t hot_loop_control_scalar_d2h_bytes;
+    uint64_t hot_loop_control_scalar_host_sync_count;
 } fullmag_fem_transfer_audit;
 
 typedef enum {

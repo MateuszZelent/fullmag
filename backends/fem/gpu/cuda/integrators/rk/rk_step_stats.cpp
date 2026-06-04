@@ -22,6 +22,14 @@ bool gpu_rk_finalize_step_stats(
     return true;
 }
 
+bool gpu_rk_finalize_step_stats_control_readback(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    return gpu_rk_finalize_step_stats(ctx, stats, reason);
+}
+
 } // namespace fullmag::fem
 
 #endif

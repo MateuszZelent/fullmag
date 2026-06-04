@@ -33,9 +33,10 @@ double *gpu_rk_final_scalar_result(FemGpuState &gpu, GpuFinalScalarSlot slot)
     return gpu.reductions.scalar_result + static_cast<int>(slot);
 }
 
-bool gpu_rk_finalize_step_stats(
+bool finalize_step_stats_impl(
     Context &ctx,
     fullmag_fem_step_stats &stats,
+    bool control_scalar_readback,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -62,18 +63,43 @@ bool gpu_rk_finalize_step_stats(
         return false;
     }
 
-    if (!gpu_rk_read_scalar_results(
-        ctx,
-        stream,
-        "cudaMemcpyAsync GPU RK final scalar stats device->host",
-        scalars.data(),
-        scalars.size(),
-        reason)) {
+    const bool read_ok = control_scalar_readback
+        ? gpu_rk_read_control_scalar_results(
+              ctx,
+              stream,
+              "cudaMemcpyAsync GPU RK final scalar stats device->host",
+              scalars.data(),
+              scalars.size(),
+              reason)
+        : gpu_rk_read_scalar_results(
+              ctx,
+              stream,
+              "cudaMemcpyAsync GPU RK final scalar stats device->host",
+              scalars.data(),
+              scalars.size(),
+              reason);
+    if (!read_ok) {
         return false;
     }
 
     gpu_rk_publish_final_step_stats(ctx, scalars, stats);
     return true;
+}
+
+bool gpu_rk_finalize_step_stats(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    return finalize_step_stats_impl(ctx, stats, false, reason);
+}
+
+bool gpu_rk_finalize_step_stats_control_readback(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    return finalize_step_stats_impl(ctx, stats, true, reason);
 }
 
 } // namespace fullmag::fem

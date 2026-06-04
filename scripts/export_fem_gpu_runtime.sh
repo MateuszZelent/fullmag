@@ -242,6 +242,9 @@ if [ -d "${RUNTIME_ROOT}/lib/pmix2/share/pmix" ]; then
   export PMIX_LIBDIR="${RUNTIME_ROOT}/lib/pmix2/lib"
   export PMIX_MCA_mca_base_component_path="${RUNTIME_ROOT}/lib/pmix2/lib/pmix"
   export PMIX_MCA_pcompress_base_silence_warning="${PMIX_MCA_pcompress_base_silence_warning:-1}"
+  if [ -z "${PMIX_MCA_ptl_tcp_if_include:-}" ] && [ -z "${PMIX_MCA_ptl_tcp_if_exclude:-}" ]; then
+    export PMIX_MCA_ptl_tcp_if_include=lo
+  fi
 fi
 unset FULLMAG_CPU_THREADS_AUTO_RESOLVED
 if [ -n "${FULLMAG_CPU_THREADS:-}" ] && [ -z "${OMP_NUM_THREADS:-}" ]; then

@@ -35,6 +35,16 @@ runtime/residency, or observable. Production FEM means MFEM/hypre/libCEED for
 CPU and GPU; do not describe new FEM physics as an implementation detail inside
 `Context` or `mfem_bridge.cpp`.
 
+For FEM/MFEM/CUDA/hypre/libCEED changes, runtime/build claims must be proven
+through the container-backed repo `just` recipes (`just rebuild-fem-runtime`,
+`just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`,
+`just verify-fem-relaxation-runtime`, or the matching managed run recipe).
+Host `cargo`, `cmake`, or direct native binary checks are auxiliary smoke tests,
+not publication-quality runtime evidence.
+Do not start FEM build/debug work from host `cargo`, `cmake`, raw Docker, or a
+direct binary when a managed/container `justfile` recipe covers the task. The
+container-backed `just` route is the first build path, not just the final proof.
+
 ## Blocker policy
 
 If the physics note is missing, incomplete, or vague about units/validity/backend interpretation, implementation is blocked. Do not hide this as "follow-up docs."

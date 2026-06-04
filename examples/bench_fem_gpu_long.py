@@ -53,6 +53,12 @@ SUPPORTED_TIMESTEP_POLICIES = {
     "fixed",
     "adaptive",
 }
+SUPPORTED_RELAXATION_ALGORITHMS = {
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+}
 SUPPORTED_SCENARIOS = {
     "exchange_only",
     "exchange_zeeman",
@@ -117,6 +123,17 @@ def env_timestep_policy() -> str:
         supported = ", ".join(sorted(SUPPORTED_TIMESTEP_POLICIES))
         raise ValueError(f"FULLMAG_BENCH_TIMESTEP_POLICY must be one of: {supported}")
     return policy
+
+
+def env_relaxation_algorithm() -> str:
+    algorithm = os.environ.get(
+        "FULLMAG_BENCH_RELAX_ALGORITHM",
+        "llg_overdamped",
+    ).strip().lower()
+    if algorithm not in SUPPORTED_RELAXATION_ALGORITHMS:
+        supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
+        raise ValueError(f"FULLMAG_BENCH_RELAX_ALGORITHM must be one of: {supported}")
+    return algorithm
 
 
 def env_demag_solver() -> str:
@@ -335,7 +352,7 @@ def build(
 
     study = (
         fm.Relaxation(
-            algorithm="llg_overdamped",
+            algorithm=env_relaxation_algorithm(),
             torque_tolerance=env_float(
                 "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
                 DEFAULT_RELAX_TORQUE_TOLERANCE,
@@ -397,6 +414,9 @@ def emit_summary(
         "scenario": scenario,
         "integrator": integrator,
         "timestep_policy": timestep_policy,
+        "relaxation_algorithm": (
+            env_relaxation_algorithm() if scenario_uses_relaxation(scenario) else None
+        ),
         "requested_steps": steps,
         "requested_dt_s": dt,
         "executed_steps": len(result.steps),

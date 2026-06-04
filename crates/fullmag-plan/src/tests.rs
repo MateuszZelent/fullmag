@@ -3008,6 +3008,8 @@ fn tangent_plane_implicit_is_rejected_for_fdm() {
         reason.contains("tangent_plane_implicit")
             && reason.contains("FEM-only")
             && reason.contains("backend='fem'")
+            && reason.contains("under development")
+            && reason.contains("not production-qualified")
     }));
 }
 

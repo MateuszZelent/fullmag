@@ -76,6 +76,73 @@ repo-check:
 verify-fem-meshing-production:
     bash scripts/verify_fem_meshing_production.sh
 
+verify-fem-relaxation-source-contract:
+    cmake --build native/build --target fem_relaxation_source_contract
+    native/build/backends/fem/fem_relaxation_source_contract
+
+verify-fem-relaxation-runtime:
+    bash scripts/verify_fem_relaxation_runtime.sh
+
+verify-fem-relaxation-convergence:
+    FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-16}" \
+    FULLMAG_FEM_RELAXATION_MIN_STEPS="${FULLMAG_FEM_RELAXATION_MIN_STEPS:-16}" \
+    FULLMAG_FEM_RELAXATION_MIN_RELATIVE_ENERGY_DECREASE="${FULLMAG_FEM_RELAXATION_MIN_RELATIVE_ENERGY_DECREASE:-1e-2}" \
+    FULLMAG_FEM_RELAXATION_MAX_FINAL_TORQUE_GROWTH_FACTOR="${FULLMAG_FEM_RELAXATION_MAX_FINAL_TORQUE_GROWTH_FACTOR:-1.25}" \
+    bash scripts/verify_fem_relaxation_runtime.sh
+
+verify-fem-relaxation-cpu-gpu-consistency-smoke:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-250e-9}" \
+      -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-500e-9}" \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --box500-airbox-exchange-only-preset \
+        --integrators "${FULLMAG_BENCH_INTEGRATORS:-heun}" \
+        --relax-algorithms "${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}" \
+        --steps "${FULLMAG_BENCH_STEPS:-16}" \
+        --case-timeout-s "${FULLMAG_BENCH_CASE_TIMEOUT_S:-300}" \
+        --cpu-gpu-energy-rtol "${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
+        --cpu-gpu-energy-atol "${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
+        --cpu-gpu-torque-rtol "${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
+        --output "${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke.csv}" \
+        --cpu-gpu-summary-output "${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke_summary.json}" \
+        --quiet-json-summary \
+        --require-cpu-gpu-consistency'
+
+verify-fem-relaxation-production-benchmark:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-250e-9}" \
+      -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-500e-9}" \
+      -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
+      -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}" \
+      -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}" \
+      -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-600}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
+      -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}" \
+      -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_production_benchmark_summary.json}" \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --box500-airbox-interaction-consistency-preset \
+        --integrators "$FULLMAG_BENCH_INTEGRATORS" \
+        --relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS" \
+        --steps "$FULLMAG_BENCH_STEPS" \
+        --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+        --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
+        --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
+        --cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL" \
+        --output "$FULLMAG_BENCH_OUTPUT" \
+        --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
+        --quiet-json-summary \
+        --require-cpu-gpu-consistency'
+
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \
     else ./scripts/ci-resource-first-gates.sh --strict; fi
@@ -303,16 +370,44 @@ run-stdprob1-fem-headless:
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag tests/stdprob1_hysteresis_fem.py --headless --json
 
 fem-gpu-headless script:
-    docker compose --profile fem-gpu run --rm -e FULLMAG_RELAX_ALGORITHM="${FULLMAG_RELAX_ALGORITHM:-}" fem-gpu bash -lc '\
+    docker compose --profile fem-gpu run --rm -e FULLMAG_RELAX_ALGORITHM="${FULLMAG_RELAX_ALGORITHM:-}" -e FULLMAG_RELAX_DEVICE="${FULLMAG_RELAX_DEVICE:-gpu}" -e FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-4}" fem-gpu bash -lc '\
       set -euo pipefail; \
       cargo +nightly clean -p fullmag-fdm-demag >/dev/null 2>&1 || true; \
       FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli --features "cuda fem-gpu" >/tmp/fullmag-build.log; \
       FEM_LIB=$(dirname "$(find target/debug/build -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"); \
       FDM_LIB=$(dirname "$(find target/debug/build -path "*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.0" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"); \
       export LD_LIBRARY_PATH="$FEM_LIB:$FDM_LIB:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}"; \
+      export FULLMAG_PYTHON=/usr/bin/python3; \
       FULLMAG_FEM_EXECUTION=gpu FULLMAG_FEM_GPU_INDEX=0 FULLMAG_FDM_GPU_INDEX=0 \
       ./target/debug/fullmag {{script}} --backend fem --headless --json \
     '
+
+fem-managed-headless fem_execution script:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_FEM_EXECUTION="$mode" \
+    FULLMAG_RELAX_DEVICE="$mode" \
+    FULLMAG_CPU_THREADS=auto \
+    '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json
+
+fem-managed-container-headless fem_execution script:
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; \
+    case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION="$mode" \
+      -e FULLMAG_RELAX_DEVICE="$mode" \
+      -e FULLMAG_RELAX_ALGORITHM="${FULLMAG_RELAX_ALGORITHM:-}" \
+      -e FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-4}" \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      fem-gpu bash -lc 'cd /workspace && .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu {{script}} --backend fem --headless --json'
 
 fem-gpu-py-layer-hole-headless:
     just fem-gpu-headless examples/py_layer_hole_relax_150nm.py

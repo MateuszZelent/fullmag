@@ -132,6 +132,8 @@ pub(crate) fn execute_reference_fdm_multilayer(
         hot_loop_compute_h2d_bytes: None,
         hot_loop_compute_d2h_bytes: None,
         hot_loop_compute_host_sync_count: None,
+        hot_loop_control_scalar_d2h_bytes: None,
+        hot_loop_control_scalar_host_sync_count: None,
         fem_gpu_state_allocated: None,
         fem_gpu_state_node_count: None,
         fem_gpu_state_dof_len: None,

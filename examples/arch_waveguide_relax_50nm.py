@@ -19,27 +19,14 @@ HBAR = 1.054_571_817e-34
 
 LENGTH = 3000e-9
 WIDTH = 1500e-9
-HEIGHT = 100e-9
+HEIGHT = 2e-9
 AIRBOX_LATERAL_MARGIN = 500e-9
-AIRBOX_VERTICAL_MARGIN = 250e-9
+AIRBOX_VERTICAL_MARGIN = 350e-9
 AIRBOX_X = LENGTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Y = WIDTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Z = HEIGHT + AIRBOX_VERTICAL_MARGIN
 AIRBOX_HMAX = 250e-9
 AIRBOX_HMIN = 10e-9
-
-WAVEGUIDE_BULK_HMAX = 40e-9
-WAVEGUIDE_LOCAL_HMAX = 16e-9
-WAVEGUIDE_HMIN = 10e-9
-AIRBOX_NEAR_INTERFACE_HMAX = WAVEGUIDE_LOCAL_HMAX
-AIRBOX_NEAR_INTERFACE_THICKNESS = 20e-9
-AIRBOX_TRANSITION_DISTANCE = "airbox_boundary"
-AIRBOX_EDGE_HMAX = WAVEGUIDE_HMIN
-AIRBOX_EDGE_THICKNESS = 20e-9
-AIRBOX_EDGE_TRANSITION_DISTANCE = "airbox_boundary"
-AIRBOX_CORNER_HMAX = WAVEGUIDE_HMIN
-AIRBOX_CORNER_EXTENT = 20e-9
-AIRBOX_CORNER_TRANSITION_DISTANCE = "airbox_boundary"
 
 B_EXT_T = 0.0
 RELAX_TORQUE_TOLERANCE_T = 1e-4
@@ -51,7 +38,7 @@ MS = 7.7e5
 AEX = 1e-11
 ALPHA = 0.1
 KU1 = 470e3
-DIND = 0
+DIND = 3e-3
 ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-3
@@ -118,33 +105,19 @@ waveguide.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
 waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
 # waveguide.m = fm.texture.random(1)
 # Exchange length lex = sqrt(2*Aex/(μ0·Ms²)) ≈ 5.2 nm.
-# Interactive preset: keep a local skyrmion-resolution patch while avoiding a
-# globally fine 2.5 um x 1.0 um interface mesh. Tighter production studies can
-# lower these values explicitly, but the default must materialize quickly enough
-# for control-room startup and inspection.
-# The interface/transition controls are COMSOL-style automatic sizing fields:
-# keep air moderately resolved near the magnetic surface, then grade smoothly
-# to the coarse far-field airbox target without hand-drawing airbox boxes.
-waveguide.mesh.thin_film(
-    maximum_element_size=WAVEGUIDE_BULK_HMAX,
-    minimum_element_size=WAVEGUIDE_HMIN,
-    interface_maximum_element_size=AIRBOX_NEAR_INTERFACE_HMAX,
-    interface_thickness=AIRBOX_NEAR_INTERFACE_THICKNESS,
-    transition_distance=AIRBOX_TRANSITION_DISTANCE,
-    edge_maximum_element_size=AIRBOX_EDGE_HMAX,
-    edge_thickness=AIRBOX_EDGE_THICKNESS,
-    edge_transition_distance=AIRBOX_EDGE_TRANSITION_DISTANCE,
-    corner_maximum_element_size=AIRBOX_CORNER_HMAX,
-    corner_extent=AIRBOX_CORNER_EXTENT,
-    corner_transition_distance=AIRBOX_CORNER_TRANSITION_DISTANCE,
-    layers=1,
+# Skyrmion-resolution preset: keep the central skyrmion disk at 1 nm while the
+# rest of the magnetic film can stay near 10 nm.
+waveguide.mesh(
+    maximum_element_size=10e-9,
+    minimum_element_size=1e-9,
+    transition_distance=120e-9,
     order=1,
 )
 waveguide.mesh.size_field(
     "ComponentRestrictedCylinder",
     GeometryName="arch_waveguide_geom",
-    VIn=WAVEGUIDE_LOCAL_HMAX,
-    VOut=WAVEGUIDE_BULK_HMAX,
+    VIn=1e-9,
+    VOut=10e-9,
     Radius=350e-9,
     XCenter=0.0,
     YCenter=0.0,

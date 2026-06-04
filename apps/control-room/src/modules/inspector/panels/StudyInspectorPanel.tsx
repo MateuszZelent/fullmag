@@ -476,7 +476,9 @@ function studyInspectorRuntimeStatusEquals(
   );
 }
 
-export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
+function useStudyInspectorPanelController(
+  selection: InspectorPanelProps["selection"],
+) {
   const kernel = useKernel();
   const [state, dispatch] = useReducer(
     studyInspectorPanelReducer,
@@ -729,6 +731,62 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
   };
+
+  return {
+    activeStageIndex,
+    checkpointCatalog,
+    checkpoints,
+    commandDetail,
+    commandDisabledReason,
+    commitGlobalDraft,
+    commitStageDrafts,
+    currentRun,
+    dispatch,
+    energyCurrent,
+    energyHistory,
+    inspectImportFile,
+    latestCheckpoint,
+    model,
+    runCommand,
+    scene,
+    sceneHasPayload,
+    sceneRevision,
+    sceneStageCount,
+    selectedRestoreCheckpoint,
+    snapshot,
+    solverStatus,
+    stageExecution,
+    state,
+  };
+}
+
+export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
+  const {
+    activeStageIndex,
+    checkpointCatalog,
+    checkpoints,
+    commandDetail,
+    commandDisabledReason,
+    commitGlobalDraft,
+    commitStageDrafts,
+    currentRun,
+    dispatch,
+    energyCurrent,
+    energyHistory,
+    inspectImportFile,
+    latestCheckpoint,
+    model,
+    runCommand,
+    scene,
+    sceneHasPayload,
+    sceneRevision,
+    sceneStageCount,
+    selectedRestoreCheckpoint,
+    snapshot,
+    solverStatus,
+    stageExecution,
+    state,
+  } = useStudyInspectorPanelController(selection);
 
   return (
     <>

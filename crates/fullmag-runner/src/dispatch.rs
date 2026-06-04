@@ -805,8 +805,8 @@ fn fem_gpu_cpu_only_relaxation_algorithm(plan: &FemPlanIR) -> Option<RelaxationA
 fn fem_gpu_relaxation_cpu_only_fallback_message(algorithm: RelaxationAlgorithmIR) -> String {
     format!(
         "FEM relaxation algorithm `{}` is implemented for the CPU/MFEM lane; \
-         falling back to MFEM/libCEED/hypre CPU FEM because full GPU/libCEED \
-         device-resident relaxation is under development \
+         falling back to MFEM/libCEED/hypre CPU FEM because the full GPU/libCEED \
+         device-resident tangent-plane solve is under development \
          (fallback_reason={})",
         crate::fem::relax::algorithm::algorithm_provenance_name(algorithm),
         FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON
@@ -817,8 +817,9 @@ fn fem_gpu_relaxation_cpu_only_error(algorithm: RelaxationAlgorithmIR) -> RunErr
     RunError {
         message: format!(
             "native FEM GPU execution was requested, but FEM relaxation algorithm `{}` \
-             is implemented for the CPU/MFEM lane; full GPU/libCEED device-resident \
-             relaxation is under development (fallback_reason={})",
+             is implemented for the CPU/MFEM lane; the full GPU/libCEED \
+             device-resident tangent-plane solve is under development \
+             (fallback_reason={})",
             crate::fem::relax::algorithm::algorithm_provenance_name(algorithm),
             FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON
         ),
@@ -2954,7 +2955,11 @@ fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
 fn native_fem_relaxation_allows_compute_sync(plan: &FemPlanIR) -> bool {
     matches!(
         plan.relaxation.as_ref().map(|control| control.algorithm),
-        Some(RelaxationAlgorithmIR::ProjectedGradientBb)
+        Some(
+            RelaxationAlgorithmIR::LlgOverdamped
+                | RelaxationAlgorithmIR::ProjectedGradientBb
+                | RelaxationAlgorithmIR::NonlinearCg
+        )
     )
 }
 
@@ -2962,7 +2967,8 @@ fn native_fem_relaxation_allows_compute_sync(plan: &FemPlanIR) -> bool {
 fn native_fem_hot_loop_sync_allowed_for_plan(plan: &FemPlanIR, stats: &StepStats) -> bool {
     let classified_sync = stats
         .hot_loop_exchange_host_sync_count
-        .saturating_add(stats.hot_loop_compute_host_sync_count);
+        .saturating_add(stats.hot_loop_compute_host_sync_count)
+        .saturating_add(stats.hot_loop_control_scalar_host_sync_count);
     if stats.hot_loop_host_sync_count > classified_sync {
         return false;
     }
@@ -3061,6 +3067,10 @@ pub(crate) fn apply_native_fem_runtime_contract(
         provenance.hot_loop_compute_h2d_bytes = Some(entry.hot_loop_compute_h2d_bytes);
         provenance.hot_loop_compute_d2h_bytes = Some(entry.hot_loop_compute_d2h_bytes);
         provenance.hot_loop_compute_host_sync_count = Some(entry.hot_loop_compute_host_sync_count);
+        provenance.hot_loop_control_scalar_d2h_bytes =
+            Some(entry.hot_loop_control_scalar_d2h_bytes);
+        provenance.hot_loop_control_scalar_host_sync_count =
+            Some(entry.hot_loop_control_scalar_host_sync_count);
     }
     if let Some(state) = gpu_state {
         provenance.fem_gpu_state_allocated = Some(state.allocated);
@@ -3214,9 +3224,13 @@ fn execute_native_fem(
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    crate::fem::relax::llg_overdamped::fill_provenance(&mut provenance, plan);
     if native_relaxation_step.is_some() {
         provenance.energy_minimizer_realization =
             Some(crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.into());
+    } else if crate::fem::relax::llg_overdamped::uses_pure_damping(plan) {
+        provenance.energy_minimizer_realization =
+            Some(crate::relaxation::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.into());
     }
     apply_native_fem_runtime_contract(
         &mut provenance,
@@ -4179,7 +4193,8 @@ mod tests {
         ));
         let stats = StepStats {
             hot_loop_host_sync_count: 2,
-            hot_loop_compute_host_sync_count: 2,
+            hot_loop_compute_host_sync_count: 0,
+            hot_loop_control_scalar_host_sync_count: 2,
             hot_loop_exchange_host_sync_count: 0,
             ..StepStats::default()
         };
@@ -4212,7 +4227,102 @@ mod tests {
             Some("production_executable")
         );
         assert_eq!(provenance.hot_loop_host_sync_count, Some(2));
-        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(2));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
+        assert_eq!(provenance.hot_loop_control_scalar_host_sync_count, Some(2));
+        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_allows_ncg_scalar_readbacks_without_losing_device_residency() {
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.enable_demag = false;
+        plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::NonlinearCg));
+        let stats = StepStats {
+            hot_loop_host_sync_count: 3,
+            hot_loop_compute_host_sync_count: 0,
+            hot_loop_control_scalar_host_sync_count: 3,
+            hot_loop_exchange_host_sync_count: 0,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            Some(&rk_plan),
+        );
+
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("device_source_of_truth")
+        );
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("production_executable")
+        );
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(3));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
+        assert_eq!(provenance.hot_loop_control_scalar_host_sync_count, Some(3));
+        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_allows_llg_scalar_readbacks_without_losing_device_residency() {
+        let mut plan = tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.enable_demag = false;
+        plan.relaxation = Some(relaxation_control(RelaxationAlgorithmIR::LlgOverdamped));
+        let stats = StepStats {
+            hot_loop_host_sync_count: 4,
+            hot_loop_compute_host_sync_count: 4,
+            hot_loop_exchange_host_sync_count: 0,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let rk_plan = gpu_rk_ready_plan_for_log_test();
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            Some(&rk_plan),
+        );
+
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("device_source_of_truth")
+        );
+        assert_eq!(
+            provenance.fem_gpu_qualification_status.as_deref(),
+            Some("production_executable")
+        );
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(4));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(4));
         assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
     }
 
@@ -4799,6 +4909,14 @@ mod tests {
         assert!(fallback.message.contains("tangent_plane_implicit"));
         assert!(fallback.message.contains("CPU/MFEM"));
         assert!(fallback.message.contains("GPU/libCEED"));
+        assert!(fallback.message.contains("tangent-plane solve"));
+        assert!(
+            !fallback
+                .message
+                .contains("device-resident relaxation is under development"),
+            "{}",
+            fallback.message
+        );
         assert!(fallback.message.contains("under development"));
     }
 
@@ -4948,7 +5066,11 @@ mod tests {
         )
         .expect_err("forced GPU must not silently fall back for CPU-only relaxation");
 
-        assert!(err.message.contains("tangent_plane_implicit"), "{}", err.message);
+        assert!(
+            err.message.contains("tangent_plane_implicit"),
+            "{}",
+            err.message
+        );
         assert!(
             err.message
                 .contains(FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON),
@@ -4956,6 +5078,17 @@ mod tests {
             err.message
         );
         assert!(err.message.contains("GPU/libCEED"), "{}", err.message);
+        assert!(
+            err.message.contains("tangent-plane solve"),
+            "{}",
+            err.message
+        );
+        assert!(
+            !err.message
+                .contains("device-resident relaxation is under development"),
+            "{}",
+            err.message
+        );
         assert!(err.message.contains("under development"), "{}", err.message);
     }
 

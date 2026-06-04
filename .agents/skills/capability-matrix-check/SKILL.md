@@ -19,11 +19,12 @@ description: "Use when changing Fullmag backend legality, execution modes, plann
 4. State failure, degradation, and diagnostic behavior for unsupported paths. Hidden fallback is not allowed.
 5. Keep Python DSL and UI authoring vocabulary aligned with `ProblemIR`; do not expose CUDA image names, MFEM internals, raw buffers, or implementation-only toggles as common semantics.
 6. For FEM/MFEM, distinguish executable availability from validated workload coverage. `production_executable` on a FEM lane does not imply `validated` unless the operator-specific gates in `docs/physics/0900-native-fem-operator-contracts-and-validation.md` and the backend golden masterplan validation gates are covered.
-7. For FEM/MFEM, record whether the affected feature belongs to exchange, a named demag strategy, local interactions, direct torques, thermal, stepper, runtime/residency, or observables so planner and UI status do not collapse the solver into one opaque FEM bucket.
-8. Update capability maps so the unified workspace can guard commands, panels, and viewport layers without branching into separate FDM/FEM app trees.
-9. Ensure OpenAPI schemas, generated frontend types, API modules, and resource hooks expose the capability vocabulary consistently.
-10. Ensure session/run/provenance surfaces preserve requested intent, resolved backend/runtime, precision, degraded mode, and stage stop reasons where relevant.
-11. Add tests covering planner capability decisions, OpenAPI/type generation impact, UI command gating, and unavailable-path diagnostics.
+7. For FEM/MFEM/CUDA/hypre/libCEED status changes, use the container-backed repo `just` recipes as the authoritative build/runtime proof (`just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, `just verify-fem-relaxation-runtime`, or the matching managed run recipe). This is container-first, not host-first: inspect the `justfile` and use the matching managed/container recipe before any host `cargo`, `cmake`, raw Docker, or direct binary command. Host checks are smoke only and cannot justify capability status by themselves.
+8. For FEM/MFEM, record whether the affected feature belongs to exchange, a named demag strategy, local interactions, direct torques, thermal, stepper, runtime/residency, or observables so planner and UI status do not collapse the solver into one opaque FEM bucket.
+9. Update capability maps so the unified workspace can guard commands, panels, and viewport layers without branching into separate FDM/FEM app trees.
+10. Ensure OpenAPI schemas, generated frontend types, API modules, and resource hooks expose the capability vocabulary consistently.
+11. Ensure session/run/provenance surfaces preserve requested intent, resolved backend/runtime, precision, degraded mode, and stage stop reasons where relevant.
+12. Add tests covering planner capability decisions, OpenAPI/type generation impact, UI command gating, and unavailable-path diagnostics.
 
 ## Outputs
 

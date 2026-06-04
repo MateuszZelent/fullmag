@@ -20,14 +20,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BENCHMARK_DIR = REPO_ROOT / "docs" / "reports"
 CSV_PATH = BENCHMARK_DIR / "fem_gpu_benchmark_results.csv"
-FULLMAG_CPU = REPO_ROOT / ".fullmag" / "local" / "bin" / "fullmag"
 FULLMAG_GPU = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host" / "bin" / "fullmag-fem-gpu"
+FULLMAG_CPU = Path(os.environ.get("FULLMAG_BENCH_CPU_BIN", str(FULLMAG_GPU)))
 MANAGED_FEM_RUNTIME_ROOT = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host"
 BENCH_SCRIPT = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
-FEM_CMAKE = REPO_ROOT / "native" / "backends" / "fem" / "CMakeLists.txt"
+FEM_CMAKE = REPO_ROOT / "backends" / "fem" / "CMakeLists.txt"
 GPU_RK_CUDA_SOURCE = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -39,7 +38,6 @@ GPU_RK_CUDA_SOURCE = (
 GPU_RK_CMAKE_SOURCE = "gpu/cuda/integrators/rk/rk_step.cu"
 GPU_RK_ERROR_NORM_RUNTIME_SOURCE = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -50,7 +48,6 @@ GPU_RK_ERROR_NORM_RUNTIME_SOURCE = (
 )
 GPU_RK_ADAPTIVE_DECISION_READBACK_SOURCE = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -182,10 +179,24 @@ CPU_GPU_TIMING_FIELDS = {
 }
 DEFAULT_INTEGRATORS = ["heun", "rk4", "rk23", "rk45"]
 DEFAULT_TIMESTEP_POLICIES = ["fixed"]
+SUPPORTED_RELAXATION_ALGORITHMS = (
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+)
+CPU_ONLY_RELAXATION_ALGORITHMS = {"tangent_plane_implicit"}
+NONCONSERVATIVE_RELAXATION_SCENARIOS = {"stt_oersted"}
+ENERGY_MINIMIZER_RELAXATION_ALGORITHMS = {
+    "projected_gradient_bb",
+    "nonlinear_cg",
+    "tangent_plane_implicit",
+}
 DEFAULT_BACKENDS = ["cpu", "gpu"]
 DEFAULT_MAX_PERFORMANCE_REGRESSION_PERCENT = 10.0
 DEFAULT_CPU_GPU_ENERGY_RTOL = 1e-6
 DEFAULT_CPU_GPU_ENERGY_ATOL_J = 1e-30
+NONCONSERVATIVE_CPU_GPU_ENERGY_ATOL_J = 1e-23
 DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
 DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
@@ -431,6 +442,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Comma-separated integrators: heun, rk4, rk23, rk45",
+    )
+    parser.add_argument(
+        "--relax-algorithms",
+        type=str,
+        default="llg_overdamped",
+        help="Comma-separated relaxation algorithms for relaxation scenarios: llg_overdamped, projected_gradient_bb, nonlinear_cg",
     )
     parser.add_argument(
         "--timestep-policies",
@@ -777,11 +794,49 @@ def scenario_observables(scenario: str) -> list[str]:
     return observables
 
 
+def relaxation_algorithms_for_scenario(
+    scenario: str,
+    relaxation_algorithms: list[str],
+) -> list[str]:
+    canonical_scenario = canonical_consistency_scenario(scenario)
+    if canonical_scenario in NONCONSERVATIVE_RELAXATION_SCENARIOS:
+        return [
+            algorithm
+            for algorithm in relaxation_algorithms
+            if algorithm not in ENERGY_MINIMIZER_RELAXATION_ALGORITHMS
+        ]
+    return relaxation_algorithms
+
+
+def is_direct_minimizer_relaxation_algorithm(algorithm: object) -> bool:
+    return str(algorithm or "") in ENERGY_MINIMIZER_RELAXATION_ALGORITHMS
+
+
+def required_backends_for_relaxation_algorithm(algorithm: str | None) -> list[str]:
+    if algorithm in CPU_ONLY_RELAXATION_ALGORITHMS:
+        return ["fem_cpu"]
+    return ["fem_cpu", "fem_gpu"]
+
+
+def relaxation_algorithm_supported_on_backend(
+    algorithm: str | None,
+    backend: str,
+) -> bool:
+    return backend in required_backends_for_relaxation_algorithm(algorithm)
+
+
+def cpu_gpu_energy_atol_for_scenario(scenario: object, energy_atol: float) -> float:
+    if canonical_consistency_scenario(str(scenario or "")) in NONCONSERVATIVE_RELAXATION_SCENARIOS:
+        return max(energy_atol, NONCONSERVATIVE_CPU_GPU_ENERGY_ATOL_J)
+    return energy_atol
+
+
 def box500_airbox_interaction_manifest(
     scenario: str,
     *,
     steps: int,
     dt: float,
+    relaxation_algorithm: str = "llg_overdamped",
     energy_rtol: float,
     energy_atol: float,
     torque_rtol: float,
@@ -796,7 +851,7 @@ def box500_airbox_interaction_manifest(
         raise ValueError(f"unsupported box500 airbox consistency scenario: {scenario}")
     interactions = [str(item) for item in contract["interactions"]]
     relaxation: dict[str, object] = {
-        "algorithm": "llg_overdamped",
+        "algorithm": relaxation_algorithm,
         "max_steps": steps,
         "dt_s": dt,
     }
@@ -806,6 +861,8 @@ def box500_airbox_interaction_manifest(
         relaxation["torque_tolerance_t"] = relax_torque_tolerance_t
     return {
         "case_id": scenario,
+        "relaxation_algorithm": relaxation_algorithm,
+        "required_backends": required_backends_for_relaxation_algorithm(relaxation_algorithm),
         "magnet_size_m": BOX500_AIRBOX_BODY_SIZE_M,
         "airbox_size_m": BOX500_AIRBOX_SIZE_M,
         "initial_magnetization": BOX500_AIRBOX_INITIAL_M,
@@ -828,6 +885,7 @@ def box500_airbox_exchange_manifest(
     *,
     steps: int,
     dt: float,
+    relaxation_algorithm: str = "llg_overdamped",
     energy_rtol: float,
     energy_atol: float,
     torque_rtol: float,
@@ -841,6 +899,7 @@ def box500_airbox_exchange_manifest(
         BOX500_AIRBOX_SCENARIO,
         steps=steps,
         dt=dt,
+        relaxation_algorithm=relaxation_algorithm,
         energy_rtol=energy_rtol,
         energy_atol=energy_atol,
         torque_rtol=torque_rtol,
@@ -855,6 +914,7 @@ def box500_airbox_exchange_manifest(
 def cpu_gpu_case_manifests(
     *,
     scenarios: list[str],
+    relaxation_algorithms: list[str],
     steps: int,
     dt: float,
     energy_rtol: float,
@@ -870,21 +930,26 @@ def cpu_gpu_case_manifests(
     for scenario in scenarios:
         if scenario not in BOX500_AIRBOX_SCENARIO_ALIASES:
             continue
-        manifests.append(
-            box500_airbox_interaction_manifest(
-                scenario,
-                steps=steps,
-                dt=dt,
-                energy_rtol=energy_rtol,
-                energy_atol=energy_atol,
-                torque_rtol=torque_rtol,
-                torque_atol_apm=torque_atol_apm,
-                torque_atol_t=torque_atol_t,
-                max_step_delta=max_step_delta,
-                relax_torque_tolerance_apm=relax_torque_tolerance_apm,
-                relax_torque_tolerance_t=relax_torque_tolerance_t,
+        for relaxation_algorithm in relaxation_algorithms_for_scenario(
+            scenario,
+            relaxation_algorithms,
+        ):
+            manifests.append(
+                box500_airbox_interaction_manifest(
+                    scenario,
+                    steps=steps,
+                    dt=dt,
+                    relaxation_algorithm=relaxation_algorithm,
+                    energy_rtol=energy_rtol,
+                    energy_atol=energy_atol,
+                    torque_rtol=torque_rtol,
+                    torque_atol_apm=torque_atol_apm,
+                    torque_atol_t=torque_atol_t,
+                    max_step_delta=max_step_delta,
+                    relax_torque_tolerance_apm=relax_torque_tolerance_apm,
+                    relax_torque_tolerance_t=relax_torque_tolerance_t,
+                )
             )
-        )
     return manifests
 
 
@@ -1176,6 +1241,25 @@ def resolve_integrators(integrators_arg: str) -> list[str]:
     return integrators
 
 
+def resolve_relaxation_algorithms(algorithms_arg: str) -> list[str]:
+    algorithms = [
+        part.strip().lower()
+        for part in algorithms_arg.split(",")
+        if part.strip()
+    ]
+    if not algorithms:
+        raise ValueError("at least one relaxation algorithm is required")
+    supported = set(SUPPORTED_RELAXATION_ALGORITHMS)
+    unsupported = sorted(set(algorithms) - supported)
+    if unsupported:
+        supported_text = ", ".join(SUPPORTED_RELAXATION_ALGORITHMS)
+        raise ValueError(
+            f"unsupported relaxation algorithm(s): {', '.join(unsupported)}; "
+            f"production-supported: {supported_text}"
+        )
+    return list(dict.fromkeys(algorithms))
+
+
 def resolve_timestep_policies(policies_arg: str) -> list[str]:
     policies = [part.strip().lower() for part in policies_arg.split(",") if part.strip()]
     if not policies:
@@ -1390,6 +1474,7 @@ def run_backend(
     mesh_path: Path,
     scenario: str,
     integrator: str,
+    relaxation_algorithm: str | None,
     steps: int,
     dt: float,
     extra_env: dict[str, str],
@@ -1401,6 +1486,7 @@ def run_backend(
         "backend": backend_label,
         "scenario": scenario,
         "integrator": integrator,
+        "relaxation_algorithm": relaxation_algorithm,
         "timestep_policy": timestep_policy,
         "binary": str(binary),
         "steps": steps,
@@ -1448,6 +1534,7 @@ def run_backend(
         env,
         "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE",
     )
+    row["requested_relaxation_algorithm"] = relaxation_algorithm
     if (
         backend_label == "fem_gpu"
         and scenario == "exchange_only"
@@ -1485,6 +1572,8 @@ def run_backend(
     env["FULLMAG_BENCH_MESH"] = str(mesh_path)
     env["FULLMAG_BENCH_SCENARIO"] = scenario
     env["FULLMAG_BENCH_INTEGRATOR"] = integrator
+    if relaxation_algorithm is not None:
+        env["FULLMAG_BENCH_RELAX_ALGORITHM"] = relaxation_algorithm
     env["FULLMAG_BENCH_TIMESTEP_POLICY"] = timestep_policy
     env["FULLMAG_BENCH_STEPS"] = str(steps)
     env["FULLMAG_BENCH_DT"] = repr(dt)
@@ -1563,6 +1652,10 @@ def run_backend(
                 "executed_steps": payload.get("executed_steps"),
                 "reported_scenario": first_present(payload.get("scenario"), scenario),
                 "reported_integrator": first_present(payload.get("integrator"), integrator),
+                "reported_relaxation_algorithm": first_present(
+                    payload.get("relaxation_algorithm"),
+                    relaxation_algorithm,
+                ),
                 "reported_timestep_policy": first_present(
                     payload.get("timestep_policy"), timestep_policy
                 ),
@@ -1687,6 +1780,12 @@ def run_backend(
                 ),
                 "hot_loop_compute_host_sync_count": provenance.get(
                     "hot_loop_compute_host_sync_count"
+                ),
+                "hot_loop_control_scalar_d2h_bytes": provenance.get(
+                    "hot_loop_control_scalar_d2h_bytes"
+                ),
+                "hot_loop_control_scalar_host_sync_count": provenance.get(
+                    "hot_loop_control_scalar_host_sync_count"
                 ),
                 "fem_gpu_state_allocated": provenance.get("fem_gpu_state_allocated"),
                 "fem_gpu_state_node_count": provenance.get("fem_gpu_state_node_count"),
@@ -1913,6 +2012,37 @@ def classify_benchmark_error(output: str) -> str | None:
     return None
 
 
+def runtime_gpu_availability_failure(binary: Path, timeout_s: float = 10.0) -> str | None:
+    if not binary.is_file():
+        return f"native FEM GPU runtime binary is missing: {binary}"
+    try:
+        completed = subprocess.run(
+            [str(binary), "runtime", "fem-availability", "--json"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return f"native FEM GPU availability probe timed out after {timeout_s} s"
+    if completed.returncode != 0:
+        error = truncate_error("\n".join([completed.stdout, completed.stderr]))
+        return f"native FEM GPU availability probe failed: {error}"
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        return f"native FEM GPU availability probe returned invalid JSON: {exc}"
+    if payload.get("native_fem_gpu_available") is True:
+        return None
+    reason = str(payload.get("reason_gpu") or "no GPU availability reason reported")
+    visible_devices = payload.get("visible_cuda_device_count")
+    return (
+        "native FEM GPU backend is unavailable before CPU/GPU consistency sweep: "
+        f"visible_cuda_device_count={visible_devices}; reason={reason}"
+    )
+
+
 def write_csv(results: list[dict[str, object]], output_path: str) -> None:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     if not results:
@@ -1943,6 +2073,7 @@ def repeated_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
         row.get("mesh_path"),
         row.get("scenario"),
         row.get("integrator"),
+        row.get("relaxation_algorithm"),
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
@@ -1986,6 +2117,7 @@ def performance_regression_case_key(row: Mapping[str, object]) -> tuple[object, 
         row.get("mesh_path"),
         row.get("scenario"),
         row.get("integrator"),
+        row.get("relaxation_algorithm"),
         row.get("timestep_policy"),
         row.get("requested_cpu_thread_spec"),
         row.get("requested_demag_solver"),
@@ -2078,6 +2210,7 @@ def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...
         signature,
         row.get("scenario"),
         row.get("integrator"),
+        row.get("reported_relaxation_algorithm"),
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
@@ -2289,10 +2422,11 @@ def cpu_gpu_consistency_pair_summary(
         "solver_mesh_signature": case[0],
         "scenario": case[1],
         "integrator": case[2],
-        "timestep_policy": case[3],
-        "dt_s": case[4],
-        "steps": case[5],
-        "precision": case[6],
+        "relaxation_algorithm": case[3],
+        "timestep_policy": case[4],
+        "dt_s": case[5],
+        "steps": case[6],
+        "precision": case[7],
         "cpu_execution_engine": cpu_row.get("execution_engine"),
         "gpu_execution_engine": gpu_row.get("execution_engine"),
         "cpu_executed_steps": cpu_steps,
@@ -2373,45 +2507,107 @@ def manifest_case_ids(case_manifests: list[dict[str, object]] | None) -> list[st
     return case_ids
 
 
+def manifest_case_requirements(
+    case_manifests: list[dict[str, object]] | None,
+) -> list[tuple[str, str | None, tuple[str, ...]]]:
+    requirements: list[tuple[str, str | None, tuple[str, ...]]] = []
+    for manifest in case_manifests or []:
+        case_id = manifest.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            continue
+        relaxation_algorithm = manifest.get("relaxation_algorithm")
+        required_backends_payload = manifest.get("required_backends")
+        if isinstance(required_backends_payload, list):
+            required_backends = tuple(
+                str(backend)
+                for backend in required_backends_payload
+                if backend in {"fem_cpu", "fem_gpu"}
+            )
+        else:
+            required_backends = tuple(
+                required_backends_for_relaxation_algorithm(
+                    relaxation_algorithm if isinstance(relaxation_algorithm, str) else None
+                )
+            )
+        if not required_backends:
+            required_backends = ("fem_cpu", "fem_gpu")
+        requirement = (
+            case_id,
+            relaxation_algorithm if isinstance(relaxation_algorithm, str) else None,
+            required_backends,
+        )
+        if requirement not in requirements:
+            requirements.append(requirement)
+    return requirements
+
+
+def row_relaxation_algorithm(row: Mapping[str, object]) -> object:
+    return first_present(
+        row.get("reported_relaxation_algorithm"),
+        row.get("relaxation_algorithm"),
+    )
+
+
 def cpu_gpu_required_case_coverage(
     results: list[dict[str, object]],
     *,
     case_manifests: list[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
-    case_ids = manifest_case_ids(case_manifests)
-    if not case_ids:
+    case_requirements = manifest_case_requirements(case_manifests)
+    if not case_requirements:
         return []
 
-    pair_counts_by_scenario: dict[str, int] = {}
+    pair_counts_by_requirement: dict[tuple[str, str | None], int] = {}
     for pair in cpu_gpu_consistency_pair_summaries(results):
         scenario = pair.get("scenario")
+        relaxation_algorithm = pair.get("relaxation_algorithm")
         if isinstance(scenario, str):
-            pair_counts_by_scenario[scenario] = pair_counts_by_scenario.get(scenario, 0) + 1
+            key = (
+                scenario,
+                relaxation_algorithm if isinstance(relaxation_algorithm, str) else None,
+            )
+            pair_counts_by_requirement[key] = pair_counts_by_requirement.get(key, 0) + 1
 
     coverage: list[dict[str, object]] = []
-    for case_id in case_ids:
-        rows = [row for row in results if row.get("scenario") == case_id]
+    for case_id, relaxation_algorithm, required_backends in case_requirements:
+        rows = [
+            row
+            for row in results
+            if row.get("scenario") == case_id
+            and (
+                relaxation_algorithm is None
+                or row_relaxation_algorithm(row) == relaxation_algorithm
+            )
+        ]
         cpu_rows = [row for row in rows if row.get("backend") == "fem_cpu"]
         gpu_rows = [row for row in rows if row.get("backend") == "fem_gpu"]
         cpu_ok_count = sum(1 for row in cpu_rows if row.get("status") == "ok")
         gpu_ok_count = sum(1 for row in gpu_rows if row.get("status") == "ok")
-        pair_count = pair_counts_by_scenario.get(case_id, 0)
+        pair_count = pair_counts_by_requirement.get((case_id, relaxation_algorithm), 0)
+        case_label = (
+            f"case_id={case_id} relaxation_algorithm={relaxation_algorithm}"
+            if relaxation_algorithm is not None
+            else f"case_id={case_id}"
+        )
         failures: list[str] = []
         if not rows:
-            failures.append(f"required case_id={case_id} produced no benchmark rows")
-        if rows and not cpu_ok_count:
-            failures.append(f"required case_id={case_id} has no completed fem_cpu row")
-        if rows and not gpu_ok_count:
-            failures.append(f"required case_id={case_id} has no completed fem_gpu row")
-        if cpu_ok_count and gpu_ok_count and pair_count == 0:
+            failures.append(f"required {case_label} produced no benchmark rows")
+        requires_cpu = "fem_cpu" in required_backends
+        requires_gpu = "fem_gpu" in required_backends
+        if requires_cpu and rows and not cpu_ok_count:
+            failures.append(f"required {case_label} has no completed fem_cpu row")
+        if requires_gpu and rows and not gpu_ok_count:
+            failures.append(f"required {case_label} has no completed fem_gpu row")
+        if requires_cpu and requires_gpu and cpu_ok_count and gpu_ok_count and pair_count == 0:
             failures.append(
-                f"required case_id={case_id} has no completed CPU/GPU pair on the same solver_mesh_signature"
+                f"required {case_label} has no completed CPU/GPU pair on the same solver_mesh_signature"
             )
         cpu_summary = backend_case_summary_fields(cpu_rows, case_id)
         gpu_summary = backend_case_summary_fields(gpu_rows, case_id)
         coverage.append(
             {
                 "case_id": case_id,
+                "relaxation_algorithm": relaxation_algorithm,
                 "status": "pass" if not failures else "fail",
                 "row_count": len(rows),
                 "cpu_row_count": len(cpu_rows),
@@ -2419,6 +2615,7 @@ def cpu_gpu_required_case_coverage(
                 "cpu_ok_count": cpu_ok_count,
                 "gpu_ok_count": gpu_ok_count,
                 "pair_count": pair_count,
+                "required_backends": list(required_backends),
                 "cpu_average_timing_ms": cpu_summary["average_timing_ms"],
                 "gpu_average_timing_ms": gpu_summary["average_timing_ms"],
                 "cpu_observable_summary": cpu_summary["observable_summary"],
@@ -2476,7 +2673,33 @@ def cpu_gpu_required_case_failures(
     return failures
 
 
-def consistency_failure_mentions_case(failure: str, case_id: str) -> bool:
+def case_coverage_pair_key(case: Mapping[str, object]) -> tuple[str, str | None]:
+    case_id = str(case.get("case_id") or "")
+    relaxation_algorithm = case.get("relaxation_algorithm")
+    return (
+        case_id,
+        relaxation_algorithm if isinstance(relaxation_algorithm, str) else None,
+    )
+
+
+def consistency_failure_mentions_case(
+    failure: str,
+    case_id: str,
+    relaxation_algorithm: str | None,
+) -> bool:
+    if relaxation_algorithm is not None:
+        return (
+            f"required case_id={case_id} relaxation_algorithm={relaxation_algorithm}"
+            in failure
+            or (
+                f"'{case_id}'" in failure
+                and f"'{relaxation_algorithm}'" in failure
+            )
+            or (
+                f'"{case_id}"' in failure
+                and f'"{relaxation_algorithm}"' in failure
+            )
+        )
     return (
         f"required case_id={case_id}" in failure
         or f"'{case_id}'" in failure
@@ -2490,12 +2713,16 @@ def case_coverage_with_consistency_failures(
 ) -> list[dict[str, object]]:
     coverage: list[dict[str, object]] = []
     for case in case_coverage:
-        case_id = str(case.get("case_id") or "")
+        case_id, relaxation_algorithm = case_coverage_pair_key(case)
         case_failures = [str(failure) for failure in case.get("failures", [])]
         for failure in failures:
             if (
                 case_id
-                and consistency_failure_mentions_case(failure, case_id)
+                and consistency_failure_mentions_case(
+                    failure,
+                    case_id,
+                    relaxation_algorithm,
+                )
                 and failure not in case_failures
             ):
                 case_failures.append(failure)
@@ -2688,13 +2915,21 @@ def steps_per_minute(steps: object, wall_time_ms: object) -> float | None:
     return step_count * 60000.0 / wall_ms
 
 
+def summary_case_key(case_id: str, relaxation_algorithm: object | None) -> str:
+    if relaxation_algorithm is None or relaxation_algorithm == "":
+        return case_id
+    return f"{case_id}:{relaxation_algorithm}"
+
+
 def _case_pairs_by_scenario(cpu_gpu_summary: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
     pairs_by_scenario: dict[str, Mapping[str, object]] = {}
     for pair in cpu_gpu_summary.get("pairs", []):
         if isinstance(pair, Mapping):
             scenario = pair.get("scenario")
             if scenario is not None:
-                pairs_by_scenario[str(scenario)] = pair
+                pairs_by_scenario[
+                    summary_case_key(str(scenario), pair.get("relaxation_algorithm"))
+                ] = pair
     return pairs_by_scenario
 
 
@@ -2758,7 +2993,8 @@ def render_cpu_gpu_benchmark_report(
         if not isinstance(case, Mapping):
             continue
         case_id = str(case.get("case_id", "-"))
-        pair = pairs_by_scenario.get(case_id, {})
+        case_label = summary_case_key(case_id, case.get("relaxation_algorithm"))
+        pair = pairs_by_scenario.get(case_label, {})
         cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
         gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
         cpu_observables = _mapping_value(case.get("cpu_observable_summary"))
@@ -2772,7 +3008,7 @@ def render_cpu_gpu_benchmark_report(
             + " | ".join(
                 markdown_cell(value)
                 for value in [
-                    case_id,
+                    case_label,
                     case.get("status", "-"),
                     report_ms(cpu_wall_ms),
                     report_ms(gpu_wall_ms),
@@ -2920,7 +3156,8 @@ def print_cpu_gpu_benchmark_rich_report(
         if not isinstance(case, Mapping):
             continue
         case_id = str(case.get("case_id", "-"))
-        pair = pairs_by_scenario.get(case_id, {})
+        case_label = summary_case_key(case_id, case.get("relaxation_algorithm"))
+        pair = pairs_by_scenario.get(case_label, {})
         cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
         gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
         cpu_observables = _mapping_value(case.get("cpu_observable_summary"))
@@ -2931,7 +3168,7 @@ def print_cpu_gpu_benchmark_rich_report(
         gpu_wall_ms = gpu_timing.get("wall_time_ms")
         case_status = str(case.get("status", "-"))
         table.add_row(
-            case_id,
+            case_label,
             f"[green]{case_status}[/green]" if case_status == "pass" else f"[red]{case_status}[/red]",
             report_ms(cpu_wall_ms),
             report_ms(gpu_wall_ms),
@@ -2943,7 +3180,7 @@ def print_cpu_gpu_benchmark_rich_report(
             report_rate(steps_per_minute(gpu_steps, gpu_wall_ms)),
         )
         detail_table.add_row(
-            case_id,
+            case_label,
             report_ms(cpu_timing.get("demag_solver_apply_wall_time_ms")),
             report_ms(gpu_timing.get("demag_solver_apply_wall_time_ms")),
             report_value(pair.get("demag_solver_apply_wall_time_speedup_cpu_over_gpu"), suffix="x"),
@@ -3115,13 +3352,19 @@ def cpu_gpu_consistency_failures(
             continue
         for cpu_row in cpu_rows:
             for gpu_row in gpu_rows:
+                if is_direct_minimizer_relaxation_algorithm(key[3]):
+                    continue
+                scenario_energy_atol = cpu_gpu_energy_atol_for_scenario(
+                    key[1],
+                    energy_atol,
+                )
                 for field in scenario_energy_fields(str(key[1] or "")):
                     compare_cpu_gpu_numeric_field(
                         cpu_row,
                         gpu_row,
                         field,
                         rtol=energy_rtol,
-                        atol=energy_atol,
+                        atol=scenario_energy_atol,
                         failures=failures,
                         case=key,
                     )
@@ -3739,8 +3982,14 @@ def main() -> None:
     meshes = resolve_meshes(args.meshes, args.sizes)
     scenarios = resolve_scenarios(args.scenarios)
     integrators = resolve_integrators(args.integrators or ",".join(DEFAULT_INTEGRATORS))
+    relaxation_algorithms = resolve_relaxation_algorithms(args.relax_algorithms)
     timestep_policies = resolve_timestep_policies(args.timestep_policies)
     backends = resolve_backends(args.backends)
+    if args.require_cpu_gpu_consistency and "fem_gpu" in backends:
+        gpu_failure = runtime_gpu_availability_failure(FULLMAG_GPU)
+        if gpu_failure is not None:
+            print(f"FEM_PREFLIGHT_ERROR={gpu_failure}", file=sys.stderr)
+            raise SystemExit(2)
     thread_specs = resolve_thread_count_specs(args.thread_counts)
     demag_solvers = resolve_demag_solvers(args.demag_solvers, args.demag_solver)
     demag_preconditioners = resolve_demag_preconditioners(
@@ -3758,6 +4007,7 @@ def main() -> None:
         )
     cpu_gpu_manifests = cpu_gpu_case_manifests(
         scenarios=scenarios,
+        relaxation_algorithms=relaxation_algorithms,
         steps=args.steps,
         dt=args.dt,
         energy_rtol=args.cpu_gpu_energy_rtol,
@@ -3777,7 +4027,7 @@ def main() -> None:
     results: list[dict[str, object]] = []
 
     print(
-        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
+        f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
     )
     for mesh_path in meshes:
         mesh_stats = load_mesh_stats(mesh_path)
@@ -3785,77 +4035,94 @@ def main() -> None:
             f"  mesh={mesh_stats['mesh_name']} nodes={mesh_stats['node_count']} elements={mesh_stats['element_count']}"
         )
         for scenario in scenarios:
-            for integrator in integrators:
-                for timestep_policy in timestep_policies:
-                    for thread_spec in thread_specs:
-                        demag_policy_pairs = demag_policy_pairs_for_scenario(
-                            scenario,
-                            demag_solvers,
-                            demag_preconditioners,
-                        )
-                        for demag_solver, demag_preconditioner in demag_policy_pairs:
-                            print(
-                                f"    scenario={scenario} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner}"
+            scenario_relaxation_algorithms: list[str | None] = (
+                relaxation_algorithms_for_scenario(scenario, relaxation_algorithms)
+                if scenario in BOX500_AIRBOX_SCENARIO_ALIASES
+                else [None]
+            )
+            for relaxation_algorithm in scenario_relaxation_algorithms:
+                for integrator in integrators:
+                    for timestep_policy in timestep_policies:
+                        for thread_spec in thread_specs:
+                            demag_policy_pairs = demag_policy_pairs_for_scenario(
+                                scenario,
+                                demag_solvers,
+                                demag_preconditioners,
                             )
-                            demag_env = {
-                                "FULLMAG_BENCH_DEMAG_SOLVER": demag_solver,
-                                "FULLMAG_BENCH_DEMAG_PRECONDITIONER": demag_preconditioner,
-                                "FULLMAG_BENCH_DEMAG_RTOL": repr(args.demag_rtol),
-                                "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(
-                                    args.demag_max_iterations
-                                ),
-                                "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(
-                                    args.demag_print_level
-                                ),
-                            }
-                            if args.demag_atol is not None:
-                                demag_env["FULLMAG_BENCH_DEMAG_ATOL"] = repr(
-                                    args.demag_atol
+                            for demag_solver, demag_preconditioner in demag_policy_pairs:
+                                relaxation_label = relaxation_algorithm or "none"
+                                print(
+                                    f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner}"
                                 )
-                            for repeat_index in range(repeat_count):
-                                for backend in backends:
-                                    if backend == "fem_cpu":
-                                        row = run_backend(
-                                            backend_label="fem_cpu",
-                                            binary=FULLMAG_CPU,
-                                            mesh_path=mesh_path,
-                                            scenario=scenario,
-                                            integrator=integrator,
-                                            steps=args.steps,
-                                            dt=args.dt,
-                                            timestep_policy=timestep_policy,
-                                            thread_spec=thread_spec,
-                                            timeout_s=args.case_timeout_s,
-                                            extra_env={
-                                                "FULLMAG_FEM_EXECUTION": "cpu",
-                                                **demag_env,
-                                                **mesh_env,
-                                                **relax_env,
-                                            },
-                                        )
-                                    elif backend == "fem_gpu":
-                                        row = run_backend(
-                                            backend_label="fem_gpu",
-                                            binary=FULLMAG_GPU,
-                                            mesh_path=mesh_path,
-                                            scenario=scenario,
-                                            integrator=integrator,
-                                            steps=args.steps,
-                                            dt=args.dt,
-                                            timestep_policy=timestep_policy,
-                                            thread_spec=thread_spec,
-                                            timeout_s=args.case_timeout_s,
-                                            extra_env={
-                                                "FULLMAG_FEM_GPU_INDEX": "0",
-                                                **demag_env,
-                                                **mesh_env,
-                                                **relax_env,
-                                            },
-                                        )
-                                    else:
-                                        continue
-                                    row["repeat_index"] = repeat_index
-                                    results.append(row)
+                                demag_env = {
+                                    "FULLMAG_BENCH_DEMAG_SOLVER": demag_solver,
+                                    "FULLMAG_BENCH_DEMAG_PRECONDITIONER": demag_preconditioner,
+                                    "FULLMAG_BENCH_DEMAG_RTOL": repr(args.demag_rtol),
+                                    "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(
+                                        args.demag_max_iterations
+                                    ),
+                                    "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(
+                                        args.demag_print_level
+                                    ),
+                                }
+                                if args.demag_atol is not None:
+                                    demag_env["FULLMAG_BENCH_DEMAG_ATOL"] = repr(
+                                        args.demag_atol
+                                    )
+                                for repeat_index in range(repeat_count):
+                                    for backend in backends:
+                                        if not relaxation_algorithm_supported_on_backend(
+                                            relaxation_algorithm,
+                                            backend,
+                                        ):
+                                            print(
+                                                f"      skip backend={backend} relaxation_algorithm={relaxation_label}: unsupported lane"
+                                            )
+                                            continue
+                                        if backend == "fem_cpu":
+                                            row = run_backend(
+                                                backend_label="fem_cpu",
+                                                binary=FULLMAG_CPU,
+                                                mesh_path=mesh_path,
+                                                scenario=scenario,
+                                                integrator=integrator,
+                                                relaxation_algorithm=relaxation_algorithm,
+                                                steps=args.steps,
+                                                dt=args.dt,
+                                                timestep_policy=timestep_policy,
+                                                thread_spec=thread_spec,
+                                                timeout_s=args.case_timeout_s,
+                                                extra_env={
+                                                    "FULLMAG_FEM_EXECUTION": "cpu",
+                                                    **demag_env,
+                                                    **mesh_env,
+                                                    **relax_env,
+                                                },
+                                            )
+                                        elif backend == "fem_gpu":
+                                            row = run_backend(
+                                                backend_label="fem_gpu",
+                                                binary=FULLMAG_GPU,
+                                                mesh_path=mesh_path,
+                                                scenario=scenario,
+                                                integrator=integrator,
+                                                relaxation_algorithm=relaxation_algorithm,
+                                                steps=args.steps,
+                                                dt=args.dt,
+                                                timestep_policy=timestep_policy,
+                                                thread_spec=thread_spec,
+                                                timeout_s=args.case_timeout_s,
+                                                extra_env={
+                                                    "FULLMAG_FEM_GPU_INDEX": "0",
+                                                    **demag_env,
+                                                    **mesh_env,
+                                                    **relax_env,
+                                                },
+                                            )
+                                        else:
+                                            continue
+                                        row["repeat_index"] = repeat_index
+                                        results.append(row)
 
     write_csv(results, args.output)
     cpu_gpu_summary_for_report: dict[str, object] | None = None

@@ -313,6 +313,15 @@ fn configure_openmpi_loopback_oob_if_missing() {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn configure_pmix_loopback_ptl_if_missing() {
+    if std::env::var_os("PMIX_MCA_ptl_tcp_if_include").is_none()
+        && std::env::var_os("PMIX_MCA_ptl_tcp_if_exclude").is_none()
+    {
+        std::env::set_var("PMIX_MCA_ptl_tcp_if_include", "lo");
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn configure_managed_openmpi_environment() {
     let Some(runtime_root) = managed_fem_runtime_root() else {
         return;
@@ -351,6 +360,7 @@ fn configure_managed_openmpi_environment() {
             pmix_root.join("lib/pmix"),
         );
         set_env_if_missing("PMIX_MCA_pcompress_base_silence_warning", "1");
+        configure_pmix_loopback_ptl_if_missing();
     }
 }
 
@@ -1025,6 +1035,8 @@ impl NativeFemBackend {
             hot_loop_compute_h2d_bytes: 0,
             hot_loop_compute_d2h_bytes: 0,
             hot_loop_compute_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
         };
         let rc = unsafe { ffi::fullmag_fem_backend_get_transfer_audit(self.handle, &mut audit) };
         if rc != ffi::FULLMAG_FEM_OK {
@@ -1085,6 +1097,9 @@ impl NativeFemBackend {
         stats.hot_loop_compute_h2d_bytes = audit.hot_loop_compute_h2d_bytes;
         stats.hot_loop_compute_d2h_bytes = audit.hot_loop_compute_d2h_bytes;
         stats.hot_loop_compute_host_sync_count = audit.hot_loop_compute_host_sync_count;
+        stats.hot_loop_control_scalar_d2h_bytes = audit.hot_loop_control_scalar_d2h_bytes;
+        stats.hot_loop_control_scalar_host_sync_count =
+            audit.hot_loop_control_scalar_host_sync_count;
         Ok(())
     }
 
@@ -1738,6 +1753,13 @@ mod tests {
         }
     }
 
+    fn source_block<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+        let start = source.find(start_marker).expect(start_marker);
+        let rest = &source[start..];
+        let end = rest.find(end_marker).expect(end_marker);
+        &rest[..end]
+    }
+
     fn make_test_plan() -> FemPlanIR {
         FemPlanIR {
             mesh_name: "unit_tet".to_string(),
@@ -2014,6 +2036,91 @@ mod tests {
                 let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
                 assert_scalar_close(
                     &format!("{algorithm:?}.m_norm[{node}]"),
+                    norm,
+                    1.0,
+                    5e-12,
+                    1e-12,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_fem_direct_minimizers_advance_with_local_energy_terms_when_mfem_stack_is_available() {
+        if !is_cpu_available() {
+            eprintln!(
+                "skipping native FEM direct-minimizer local-energy test: CPU MFEM stack unavailable"
+            );
+            return;
+        }
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+        ] {
+            let mut plan = make_test_plan();
+            plan.mfem_device_string = Some("cpu".to_string());
+            plan.initial_magnetization = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+            plan.external_field = Some([0.0, 0.0, 2.0e5]);
+            plan.material.uniaxial_anisotropy = Some(5.0e4);
+            plan.material.uniaxial_anisotropy_k2 = Some(1.0e4);
+            plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+            plan.relaxation = Some(RelaxationControlIR {
+                algorithm,
+                stop: RelaxStopIR {
+                    torque_tolerance_apm: None,
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+
+            let mut backend = NativeFemBackend::create_with_initial_effective_field(&plan, true)
+                .expect("native FEM direct-minimizer local-energy create");
+            let initial_stats = backend
+                .snapshot_step_stats(plan.mesh.nodes.len())
+                .expect("initial native FEM direct-minimizer local-energy stats");
+            let stats = backend
+                .relax_step(algorithm, plan.mesh.nodes.len())
+                .expect("native FEM direct-minimizer local-energy step")
+                .expect("native FEM direct-minimizer local-energy step should not be interrupted");
+            let magnetization = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+
+            assert_eq!(
+                stats.step, 1,
+                "{algorithm:?} local-energy test must publish one accepted step"
+            );
+            assert!(stats.dt.is_finite(), "{algorithm:?} dt must be finite");
+            assert!(stats.dt > 0.0, "{algorithm:?} dt must be positive");
+            assert!(
+                stats.e_ext.is_finite(),
+                "{algorithm:?} Zeeman energy must be finite"
+            );
+            assert!(
+                stats.e_ani.is_finite(),
+                "{algorithm:?} anisotropy energy must be finite"
+            );
+            assert!(
+                stats.e_ani.abs() > 0.0,
+                "{algorithm:?} active anisotropy must contribute non-zero energy"
+            );
+            assert!(
+                stats.e_ext < initial_stats.e_ext,
+                "{algorithm:?} must reduce external-field energy: initial={} final={}",
+                initial_stats.e_ext,
+                stats.e_ext
+            );
+            assert!(
+                stats.e_total <= initial_stats.e_total + initial_stats.e_total.abs() * 1e-8 + 1e-24,
+                "{algorithm:?} local-energy step must not increase total energy beyond tolerance: initial={} final={}",
+                initial_stats.e_total,
+                stats.e_total
+            );
+            for (node, m) in magnetization.iter().enumerate() {
+                let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+                assert_scalar_close(
+                    &format!("{algorithm:?}.local_energy.m_norm[{node}]"),
                     norm,
                     1.0,
                     5e-12,
@@ -3328,7 +3435,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_scaffold_step_is_honestly_unavailable() {
+    fn native_fem_scaffold_step_uses_available_native_backend_or_reports_unavailable() {
         let plan = make_test_plan();
         let mut backend = match NativeFemBackend::create(&plan) {
             Ok(backend) => backend,
@@ -3351,7 +3458,9 @@ mod tests {
                 panic!("native fem scaffold create: {}", err.message);
             }
         };
-        if !is_gpu_available() {
+        if is_cpu_available() || is_gpu_available() {
+            backend.step(1e-13).expect("native FEM step");
+        } else {
             let err = backend.step(1e-13).expect_err("step should be unavailable");
             assert!(
                 err.message.contains("MFEM")
@@ -3360,8 +3469,6 @@ mod tests {
                 "unexpected unavailable message: {}",
                 err.message
             );
-        } else {
-            backend.step(1e-13).expect("native fem step");
         }
     }
 
@@ -3734,9 +3841,127 @@ mod tests {
             gpu.stats.hot_loop_exchange_host_sync_count, 0,
             "GPU PG-BB must not perform exchange host sync inside the native relaxation hot loop"
         );
+        assert_eq!(
+            gpu.stats.hot_loop_compute_host_sync_count, 0,
+            "GPU PG-BB control-scalar sync must not be classified as compute-side readback"
+        );
         assert!(
-            gpu.stats.hot_loop_compute_host_sync_count > 0,
-            "GPU PG-BB host sync must be classified as compute-side readback"
+            gpu.stats.hot_loop_control_scalar_host_sync_count > 0,
+            "GPU PG-BB must expose host-driven Armijo/BB decisions as control-scalar readback"
+        );
+    }
+
+    #[test]
+    fn native_fem_gpu_nonlinear_cg_relax_step_when_available() {
+        if !native_cpu_gpu_parity_available(false) {
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::NonlinearCg,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(1),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+        let cpu_plan = native_plan_for_device(&plan, "cpu");
+        let gpu_plan = native_plan_for_device(&plan, "cuda");
+        assert_same_parity_mesh(&cpu_plan, &gpu_plan);
+
+        let cpu = run_native_parity_relax_step(&cpu_plan, RelaxationAlgorithmIR::NonlinearCg);
+        let gpu = run_native_parity_relax_step(&gpu_plan, RelaxationAlgorithmIR::NonlinearCg);
+
+        assert!(
+            cpu.device_name.contains("cpu") || cpu.device_name.contains("mfem"),
+            "CPU relaxation provenance device was {}",
+            cpu.device_name
+        );
+        assert!(
+            gpu.device_name.contains("cuda")
+                || gpu.device_name.contains("NVIDIA")
+                || gpu.device_name.contains("GeForce")
+                || gpu.device_name.contains("RTX"),
+            "GPU relaxation provenance device was {}",
+            gpu.device_name
+        );
+
+        for (label, run) in [("cpu", &cpu), ("gpu", &gpu)] {
+            assert_eq!(
+                run.stats.step, 1,
+                "{label} NCG must publish one accepted step"
+            );
+            assert!(run.stats.dt.is_finite(), "{label} NCG dt must be finite");
+            assert!(run.stats.dt > 0.0, "{label} NCG dt must be positive");
+            assert!(
+                run.stats.e_total.is_finite(),
+                "{label} NCG total energy must be finite"
+            );
+            assert!(
+                run.stats.e_total
+                    <= run.initial_stats.e_total + run.initial_stats.e_total.abs() * 1e-8 + 1e-24,
+                "{label} NCG must not increase energy beyond tolerance: initial={} final={}",
+                run.initial_stats.e_total,
+                run.stats.e_total
+            );
+            assert_eq!(
+                run.completion.reason,
+                Some(fullmag_ir::StageStopReason::MaxSteps),
+                "{label} NCG completion reason"
+            );
+            assert_eq!(
+                run.completion.metric_name.as_deref(),
+                Some("steps"),
+                "{label} NCG completion metric"
+            );
+            assert_eq!(
+                run.completion.metric_value,
+                Some(1.0),
+                "{label} NCG completion metric value"
+            );
+            assert_eq!(
+                run.completion.threshold,
+                Some(1.0),
+                "{label} NCG completion threshold"
+            );
+            for (node, m) in run.m.iter().enumerate() {
+                let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+                assert_scalar_close(
+                    &format!("{label}.NCG.m_norm[{node}]"),
+                    norm,
+                    1.0,
+                    5e-12,
+                    1e-12,
+                );
+            }
+            for (node, h_eff) in run.h_eff.iter().enumerate() {
+                for (component, value) in h_eff.iter().enumerate() {
+                    assert!(
+                        value.is_finite(),
+                        "{label}.NCG.H_eff[{node}][{component}] must be finite"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            gpu.stats.hot_loop_host_sync_count > 0,
+            "GPU NCG must expose audited host sync while Armijo/PR+ decisions remain host-driven"
+        );
+        assert_eq!(
+            gpu.stats.hot_loop_exchange_host_sync_count, 0,
+            "GPU NCG must not perform exchange host sync inside the native relaxation hot loop"
+        );
+        assert_eq!(
+            gpu.stats.hot_loop_compute_host_sync_count, 0,
+            "GPU NCG control-scalar sync must not be classified as compute-side readback"
+        );
+        assert!(
+            gpu.stats.hot_loop_control_scalar_host_sync_count > 0,
+            "GPU NCG must expose host-driven Armijo/PR+ decisions as control-scalar readback"
         );
     }
 
@@ -3804,31 +4029,22 @@ mod tests {
 
     #[test]
     fn native_fem_poisson_rhs_hot_path_reuses_workspace() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let coeff_start = source
-            .find("class MagnetizationCoefficient")
-            .expect("MagnetizationCoefficient definition");
-        let coeff_rest = &source[coeff_start..];
-        let coeff_end = coeff_rest
-            .find("\nstruct PoissonRhsWorkspace")
-            .expect("MagnetizationCoefficient end marker");
-        let coeff_body = &coeff_rest[..coeff_end];
-        let start = source
-            .find("bool assemble_poisson_rhs(")
-            .expect("assemble_poisson_rhs definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\nvoid zero_poisson_essential_values")
-            .expect("assemble_poisson_rhs end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp");
+        let coeff_body = source_block(
+            source,
+            "class MagnetizationCoefficient",
+            "\nstruct PoissonRhsWorkspace",
+        );
+        let body = source_block(source, "bool assemble_demag_poisson_rhs(", "\n#endif");
 
         assert!(
             !body.contains("mfem::LinearForm b(fes)"),
-            "assemble_poisson_rhs must reuse the context-owned LinearForm workspace"
+            "assemble_demag_poisson_rhs must reuse the context-owned LinearForm workspace"
         );
         assert!(
             !body.contains("AddDomainIntegrator("),
-            "assemble_poisson_rhs must not allocate/add RHS integrators in the hot path"
+            "assemble_demag_poisson_rhs must not allocate/add RHS integrators in the hot path"
         );
         let eval_start = coeff_body
             .find("void Eval(")
@@ -3855,18 +4071,16 @@ mod tests {
 
     #[test]
     fn native_fem_poisson_essential_zeroing_uses_context_tdof_list_directly() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("void zero_poisson_essential_values(")
-            .expect("zero_poisson_essential_values definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n#ifdef MFEM_USE_MPI")
-            .expect("zero_poisson_essential_values end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let body = source_block(
+            source,
+            "void zero_poisson_essential_values(",
+            "\n\n\n} // namespace",
+        );
 
         assert!(
-            body.contains("for (const int tdof : ctx.poisson_ess_tdof_list)"),
+            body.contains("for (const int tdof : ctx.poisson_demag.ess_tdof_list)"),
             "essential value zeroing must iterate the context-owned tdof list directly"
         );
         assert!(
@@ -3877,130 +4091,113 @@ mod tests {
 
     #[test]
     fn native_fem_demag_recovery_reuses_context_workspace() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool recover_demag_field(")
-            .expect("recover_demag_field definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n} // namespace")
-            .expect("recover_demag_field end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp");
+        let body = source_block(
+            source,
+            "bool recover_demag_poisson_field(",
+            "\n} // namespace fullmag::fem",
+        );
 
         assert!(
             body.contains("demag_recovery_workspace"),
-            "recover_demag_field must use context-owned demag recovery workspace"
+            "recover_demag_poisson_field must use context-owned demag recovery workspace"
         );
         assert!(
             !body.contains("std::vector<std::vector<double>> field_partials("),
-            "recover_demag_field must not allocate per-call full-size field partials"
+            "recover_demag_poisson_field must not allocate per-call full-size field partials"
         );
         assert!(
             !body.contains("std::vector<std::vector<double>> weight_partials("),
-            "recover_demag_field must not allocate per-call full-size weight partials"
+            "recover_demag_poisson_field must not allocate per-call full-size weight partials"
         );
         assert!(
             body.contains("serial_scratch"),
-            "recover_demag_field must reuse context-owned serial element scratch"
+            "recover_demag_poisson_field must reuse context-owned serial element scratch"
         );
         assert!(
             body.contains("thread_scratch"),
-            "recover_demag_field must reuse context-owned per-thread element scratch"
+            "recover_demag_poisson_field must reuse context-owned per-thread element scratch"
         );
         assert!(
             !body.contains("mfem::DenseMatrix dshape;"),
-            "recover_demag_field must not allocate element DenseMatrix scratch per call/thread"
+            "recover_demag_poisson_field must not allocate element DenseMatrix scratch per call/thread"
         );
         assert!(
             body.contains("robin_boundary_tmp"),
-            "recover_demag_field must reuse context-owned Robin boundary scratch"
+            "recover_demag_poisson_field must reuse context-owned Robin boundary scratch"
         );
         assert!(
             !body.contains("mfem::Vector Bu("),
-            "recover_demag_field must not allocate Robin boundary scratch per recovery"
+            "recover_demag_poisson_field must not allocate Robin boundary scratch per recovery"
         );
     }
 
     #[test]
     fn native_fem_hypre_solve_reuses_transfer_vectors() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool solve_poisson_hypre(")
-            .expect("solve_poisson_hypre definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n#endif // MFEM_USE_MPI")
-            .expect("solve_poisson_hypre end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let body = source_block(source, "bool solve_demag_poisson_hypre(", "\n#else");
 
         assert!(
             body.contains("poisson_hypre_workspace"),
-            "solve_poisson_hypre must use context-owned Hypre transfer workspace"
+            "solve_demag_poisson_hypre must use context-owned Hypre transfer workspace"
         );
         assert!(
             !body.contains("mfem::HypreParVector b_par("),
-            "solve_poisson_hypre must not allocate a fresh RHS HypreParVector per solve"
+            "solve_demag_poisson_hypre must not allocate a fresh RHS HypreParVector per solve"
         );
         assert!(
             !body.contains("mfem::HypreParVector x_par("),
-            "solve_poisson_hypre must not allocate a fresh solution HypreParVector per solve"
+            "solve_demag_poisson_hypre must not allocate a fresh solution HypreParVector per solve"
         );
     }
 
     #[test]
     fn native_fem_hypre_solve_reuses_persistent_warm_start_vector() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool solve_poisson_hypre(")
-            .expect("solve_poisson_hypre definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n#endif // MFEM_USE_MPI")
-            .expect("solve_poisson_hypre end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let body = source_block(source, "bool solve_demag_poisson_hypre(", "\n#else");
 
         let guard = body
             .find("if (!poisson_hypre_workspace->x_par_contains_solution)")
             .expect("Hypre warm-start copy must be guarded by workspace validity");
         let solution_read = body
-            .find("const double *sol_host = audited_host_read(solution)")
+            .find("const double *sol_host = audited_host_read(warm_start_solution)")
             .expect("first Hypre solve still needs to seed x_par from solution");
-        let solved_copy = body
-            .find("const double *x_solved = audited_host_read(x_par)")
-            .expect("solved Hypre vector must still be copied back to MFEM solution");
+        let solved_publish = body
+            .find("solved_solution = &x_par")
+            .expect("solved Hypre vector must be published without a full-vector copy");
 
         assert!(
-            guard < solution_read && solution_read < solved_copy,
+            guard < solution_read && solution_read < solved_publish,
             "solution-to-Hypre warm-start copy must happen only inside the guarded seed block"
         );
         assert!(
             body.contains("poisson_hypre_workspace->x_par_contains_solution = true"),
-            "solve_poisson_hypre must mark the persistent Hypre solution vector valid after solve"
+            "solve_demag_poisson_hypre must mark the persistent Hypre solution vector valid after solve"
         );
     }
 
     #[test]
     fn native_fem_non_pbc_demag_reuses_solution_workspace() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool context_compute_demag_poisson(")
-            .expect("context_compute_demag_poisson definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\nbool context_refresh_exchange_field_mfem")
-            .expect("context_compute_demag_poisson end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp");
+        let lifecycle_source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_lifecycle.cpp");
+        let body = source_block(source, "bool context_compute_demag_poisson(", "\n#endif");
 
         assert!(
-            source.contains("ctx.mfem_poisson_solution_vec ="),
+            lifecycle_source.contains("ctx.poisson_demag.solution_vec ="),
             "Poisson initialization must allocate a context-owned solution workspace"
         );
         assert!(
-            source.contains("delete static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec)"),
+            lifecycle_source
+                .contains("delete static_cast<mfem::Vector *>(ctx.poisson_demag.solution_vec)"),
             "Poisson destruction must release the context-owned solution workspace"
         );
         assert!(
-            body.contains("ctx.mfem_poisson_solution_vec"),
+            body.contains("ctx.poisson_demag.solution_vec"),
             "non-PBC demag solve must use the context-owned solution workspace"
         );
         assert!(
@@ -4008,22 +4205,16 @@ mod tests {
             "non-PBC demag solve must not allocate a fresh true-DOF solution vector per solve"
         );
         assert!(
-            body.contains("if (!poisson_hypre_has_warm_start(ctx))"),
+            body.contains("if (!demag_poisson_hypre_has_warm_start(ctx))"),
             "non-PBC demag solve should skip GridFunction warm-start extraction when Hypre already has a persistent solution"
         );
     }
 
     #[test]
     fn native_fem_hypre_solve_enables_iterative_mode_for_warm_start() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool solve_poisson_hypre(")
-            .expect("solve_poisson_hypre definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n#endif // MFEM_USE_MPI")
-            .expect("solve_poisson_hypre end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let body = source_block(source, "bool solve_demag_poisson_hypre(", "\n#else");
 
         assert!(
             body.contains("pcg->iterative_mode = true"),
@@ -4037,22 +4228,16 @@ mod tests {
 
     #[test]
     fn native_fem_hypre_solve_honors_configured_print_level() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool solve_poisson_hypre(")
-            .expect("solve_poisson_hypre definition");
-        let rest = &source[start..];
-        let end = rest
-            .find("\n#endif // MFEM_USE_MPI")
-            .expect("solve_poisson_hypre end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp");
+        let body = source_block(source, "bool solve_demag_poisson_hypre(", "\n#else");
 
         assert!(
-            body.contains("ctx.demag_solver.print_level"),
+            body.contains("ctx.demag.solver.print_level"),
             "native Hypre solver setup must use the configured demag print level"
         );
         assert!(
-            body.contains("SetAbsTol(ctx.demag_solver.absolute_tolerance)"),
+            body.contains("SetAbsTol(ctx.demag.solver.absolute_tolerance)"),
             "native Hypre solver setup must apply configured absolute tolerance"
         );
         assert!(
@@ -4063,18 +4248,16 @@ mod tests {
 
     #[test]
     fn native_fem_periodic_demag_reduced_solve_reuses_workspace_and_warm_start() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("Periodic demag: solve in reduced class space")
-            .expect("periodic demag solve block");
-        let rest = &source[start..];
-        let end = rest
-            .find("End periodic demag path")
-            .expect("periodic demag solve end marker");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp");
+        let body = source_block(
+            source,
+            "bool solve_demag_periodic_poisson_reduced(",
+            "\n#endif",
+        );
 
         assert!(
-            body.contains("mfem_periodic_poisson_workspace"),
+            body.contains("periodic_workspace"),
             "periodic reduced demag solve must use a context-owned solver workspace"
         );
         assert!(
@@ -4181,7 +4364,7 @@ mod tests {
             .expect("final field publish block");
         let rest = &source[start..];
         let end = rest
-            .find("\n    ctx.current_time += dt;")
+            .find("\n    ctx.state.current_time += dt;")
             .expect("final field publish block end");
         let body = &rest[..end];
 
@@ -4203,7 +4386,7 @@ mod tests {
             .expect("post-step RHS block");
         let rhs_rest = &source[rhs_start..];
         let rhs_end = rhs_rest
-            .find("\n    stats.step = ctx.step_count;")
+            .find("\n    stats.step = ctx.state.step_count;")
             .expect("post-step RHS block end");
         let rhs_body = &rhs_rest[..rhs_end];
         assert!(
@@ -4218,26 +4401,25 @@ mod tests {
 
     #[test]
     fn native_fem_disabled_local_terms_are_not_zeroed_each_effective_field_eval() {
-        let bridge_source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = bridge_source
-            .find("bool compute_effective_fields_for_magnetization_impl(")
-            .expect("effective field implementation");
-        let rest = &bridge_source[start..];
-        let end = rest
-            .find("\nvoid fill_demag_solver_stats")
-            .expect("effective field implementation end");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/effective_field.cpp");
+        let body = source_block(
+            source,
+            "bool compute_effective_fields_for_magnetization(",
+            "\n#endif",
+        );
 
         assert!(
-            !body.contains("ctx.h_dmi_xyz.assign(m_xyz.size(), 0.0)")
-                && !body.contains("ctx.h_cubic_ani_xyz.assign(m_xyz.size(), 0.0)")
-                && !body.contains("ctx.h_bulk_dmi_xyz.assign(m_xyz.size(), 0.0)"),
+            !body.contains("ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0)")
+                && !body.contains("ctx.anisotropy.h_cubic_xyz.assign(m_xyz.size(), 0.0)")
+                && !body.contains("ctx.dmi.h_bulk_xyz.assign(m_xyz.size(), 0.0)"),
             "disabled DMI/cubic/bulk-DMI buffers should not be cleared on every effective-field evaluation"
         );
         assert!(
-            body.contains("if (ctx.enable_exchange) {\n        h_ex_xyz.resize(m_xyz.size());")
-                && body
-                    .contains("if (ctx.enable_demag) {\n        h_demag_xyz.resize(m_xyz.size());")
+            body.contains("if (ctx.exchange.enabled) {\n        h_ex_xyz.resize(m_xyz.size());")
+                && body.contains(
+                    "if (ctx.demag.enabled) {\n        h_demag_xyz.resize(m_xyz.size());"
+                )
                 && body.contains("h_eff_xyz.resize(m_xyz.size());"),
             "active exchange/demag/H_eff buffers should avoid pre-zeroing before being overwritten"
         );
@@ -4246,33 +4428,33 @@ mod tests {
             "H_eff is fully overwritten later and must not be pre-zeroed every evaluation"
         );
 
-        let context_source = include_str!("../../../backends/fem/src/context.cpp");
+        let context_source = include_str!("../../../backends/fem/core/fem_field_buffers.cpp");
         assert!(
-            context_source.contains("fill_zero_vector_field(ctx.h_dmi_xyz, ctx.n_nodes)")
+            context_source
+                .contains("fill_zero_vector_field(ctx.dmi.h_interfacial_xyz, ctx.mesh.n_nodes)")
+                && context_source.contains(
+                    "fill_zero_vector_field(ctx.anisotropy.h_cubic_xyz, ctx.mesh.n_nodes)"
+                )
                 && context_source
-                    .contains("fill_zero_vector_field(ctx.h_cubic_ani_xyz, ctx.n_nodes)")
-                && context_source
-                    .contains("fill_zero_vector_field(ctx.h_bulk_dmi_xyz, ctx.n_nodes)"),
+                    .contains("fill_zero_vector_field(ctx.dmi.h_bulk_xyz, ctx.mesh.n_nodes)"),
             "disabled local-term observable buffers must be initialized once in context_from_plan"
         );
     }
 
     #[test]
     fn native_fem_demag_cache_copy_is_guarded_by_field_refresh_policy() {
-        let source = include_str!("../../../backends/fem/src/mfem_bridge.cpp");
-        let start = source
-            .find("bool compute_effective_fields_for_magnetization_impl(")
-            .expect("effective field implementation");
-        let rest = &source[start..];
-        let end = rest
-            .find("\nvoid fill_demag_solver_stats")
-            .expect("effective field implementation end");
-        let body = &rest[..end];
+        let source =
+            include_str!("../../../backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp");
+        let body = source_block(
+            source,
+            "void demag_poisson_store_refreshed_field_cache(",
+            "\nbool demag_poisson_try_load_cached_field(",
+        );
         let cache_copy = body
-            .find("ctx.h_demag_cached_xyz = h_demag_xyz")
+            .find("ctx.demag.cached_xyz = h_demag_xyz")
             .expect("demag cache copy");
         let policy_guard = body
-            .find("if (ctx.field_refresh.has_demag_interval_s != 0) {")
+            .find("if (ctx.demag.field_refresh.has_demag_interval_s == 0) {")
             .expect("field-refresh cache guard");
 
         assert!(
@@ -4527,8 +4709,15 @@ mod tests {
             "managed native FEM OpenMPI setup must avoid distributed host discovery for single-rank runs"
         );
         assert!(
-            source.contains("configure_openmpi_loopback_oob_if_missing()"),
-            "managed native FEM OpenMPI setup must retain loopback OOB fallback"
+            source.contains("configure_openmpi_loopback_oob_if_missing()")
+                && source.contains("set_env_if_missing(\"OMPI_MCA_oob\", \"tcp\")")
+                && source.contains(&format!("{}{}", "OMPI_MCA_oob", "_tcp_if_include")),
+            "managed native FEM OpenMPI setup must retain OpenMPI loopback OOB fallback"
+        );
+        assert!(
+            source.contains("configure_pmix_loopback_ptl_if_missing()")
+                && source.contains(&format!("{}{}", "PMIX_MCA_ptl", "_tcp_if_include")),
+            "managed native FEM OpenMPI setup must retain PMIx loopback PTL fallback"
         );
     }
 

@@ -49,7 +49,7 @@ export interface StudyStageDraftValidation {
   severity: "error" | "warning";
 }
 
-export const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
+const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
   bc: "free",
@@ -84,7 +84,7 @@ export const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   untilSeconds: "",
 };
 
-export const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
+const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   algorithm: "llg_overdamped",
   artifactName: "state_snapshot",
   bc: "free",
@@ -119,7 +119,7 @@ export const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   untilSeconds: "1e-9",
 };
 
-export const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
+const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RELAX_STAGE_DRAFT,
   algorithm: "",
   dt: "",
@@ -130,13 +130,13 @@ export const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
   torqueTolerance: "",
 };
 
-export const DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT: StudyStageDraft = {
+const DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_EIGENMODES_STAGE_DRAFT,
   equilibriumSource: "provided",
   kind: "frequency_response",
 };
 
-export const DEFAULT_SAVE_STATE_STAGE_DRAFT: StudyStageDraft = {
+const DEFAULT_SAVE_STATE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RUN_STAGE_DRAFT,
   kind: "save_state",
   untilSeconds: "",
@@ -605,16 +605,26 @@ function optionalVector3(value: string): number[] | null {
 }
 
 function finiteNumberList(value: string): number[] {
-  return value
-    .split(/[,\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map(Number)
-    .filter(Number.isFinite);
+  const values: number[] = [];
+  for (const token of value.split(/[,\s]+/)) {
+    const entry = token.trim();
+    if (!entry) continue;
+    const parsed = Number(entry);
+    if (Number.isFinite(parsed)) {
+      values.push(parsed);
+    }
+  }
+  return values;
 }
 
 function positiveNumberList(value: string): number[] {
-  return finiteNumberList(value).filter((entry) => entry > 0);
+  const values: number[] = [];
+  for (const entry of finiteNumberList(value)) {
+    if (entry > 0) {
+      values.push(entry);
+    }
+  }
+  return values;
 }
 
 function parseJsonOrString(value: string, fallback: string): JsonObject | string {

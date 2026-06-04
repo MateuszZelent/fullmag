@@ -169,6 +169,11 @@ pub(crate) struct UiCli {
 pub(crate) enum RuntimeCommand {
     /// Diagnose installed runtime packs and host capabilities
     Doctor,
+    /// Print native FEM CPU/GPU availability from the linked runtime
+    FemAvailability {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ValueEnum)]

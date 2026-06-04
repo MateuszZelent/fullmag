@@ -5,15 +5,13 @@ export interface StatusBarRunReadback {
   resolved_device?: string | null;
   resolved_engine_id?: string | null;
   resolved_runtime_family?: string | null;
-  resolved_fallback?: StatusBarResolvedFallbackReadback | null;
-}
-
-export interface StatusBarResolvedFallbackReadback {
-  occurred?: boolean | null;
-  original_engine?: string | null;
-  fallback_engine?: string | null;
-  reason?: string | null;
-  message?: string | null;
+  resolved_fallback?: {
+    occurred?: boolean | null;
+    original_engine?: string | null;
+    fallback_engine?: string | null;
+    reason?: string | null;
+    message?: string | null;
+  } | null;
 }
 
 export interface StatusBarEngineModel {
@@ -143,7 +141,10 @@ function pendingRuntimeDetail(
 }
 
 function normalizeFallback(
-  fallback: StatusBarResolvedFallbackReadback | null | undefined,
+  fallback:
+    | StatusBarRunReadback["resolved_fallback"]
+    | null
+    | undefined,
 ): { detail: string; title: string } | null {
   if (!fallback?.occurred) return null;
   const original = normalizeToken(fallback.original_engine);

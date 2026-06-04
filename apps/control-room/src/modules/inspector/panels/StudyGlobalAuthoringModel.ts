@@ -24,7 +24,7 @@ export interface StudyGlobalDraftValidation {
   severity: "error" | "warning";
 }
 
-export const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
+const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
   demagEnabled: true,
   demagRealization: "auto",
   externalField: "",
@@ -164,11 +164,12 @@ function requiredText(value: string, fallback: string): string {
 }
 
 function optionalVector3(value: string): number[] | null {
-  const values = value
-    .split(/[,\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map(Number);
+  const values: number[] = [];
+  for (const token of value.split(/[,\s]+/)) {
+    const entry = token.trim();
+    if (!entry) continue;
+    values.push(Number(entry));
+  }
   return values.length === 3 && values.every(Number.isFinite) ? values : null;
 }
 

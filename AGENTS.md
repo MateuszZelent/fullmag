@@ -26,6 +26,9 @@ These rules override everything else in this file when in conflict:
 3. **Never fabricate.** Not file paths, not commit hashes, not API names, not test results, not library functions. If you don't know, read the file, run the command, or say "I don't know, let me check."
 4. **Stop when confused.** If the task has two plausible interpretations, ask. Do not pick silently and proceed.
 5. **Touch only what you must.** Every changed line must trace directly to the user's request. No drive-by refactors, reformatting, or "while I was in there" cleanups.
+6. **Native FEM builds use container-backed `just`.** For FEM/MFEM/CUDA/hypre/libCEED work, inspect the repo `justfile` first and use the matching managed/container recipe as the default build/runtime path. If you are about to run host `cargo`, `cmake`, `docker compose`, or direct native binaries for a FEM build, stop and find the `just` recipe first. The `justfile` owns the container invocation; host commands and hand-written Docker commands are diagnostics only, not final proof.
+7. **Do not bypass the build container.** Native FEM/MFEM/CUDA/hypre/libCEED build work starts from the repository container-backed `just` recipes, not from hand-assembled host commands. The build container is the normal build route for this stack.
+8. **No host-first FEM builds.** When native FEM code changes, the first build decision must be the container-backed `justfile` route. Use host `cargo`, `cmake`, or direct binaries only after identifying the relevant `just` recipe, and label those runs as diagnostics.
 
 ---
 
@@ -163,7 +166,11 @@ Boris Cherny (creator of Claude Code) keeps his team's file around 100 lines. Un
 
 ### Commands
 - Install: `TODO`
-- Build: `TODO`
+- Build: native FEM/MFEM/CUDA/hypre/libCEED builds use the container-backed
+  repo `justfile` recipes first, for example `just rebuild-fem-runtime`,
+  `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, or the
+  matching managed run/verification recipe. Host `cargo`, `cmake`, raw Docker,
+  and direct binaries are diagnostics only.
 - Test (all): `TODO`
 - Test (single file): `TODO`
 - Lint: `TODO`
@@ -211,7 +218,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - FEM/MFEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
 - FEM CPU and FEM GPU implementations must share backend-neutral physics contracts while using separate MFEM/hypre/libCEED runtime realizations; do not duplicate equations, signs, units, or observable semantics per device.
 - Any FEM/MFEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
-- FEM/MFEM/CUDA/hypre/libCEED builds and runtime verification must use the container-backed `just` recipes (`just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, or managed run recipes). Host-side `cargo`/`cmake` checks are only auxiliary smoke tests and must not be reported as final FEM GPU verification.
+- FEM/MFEM/CUDA/hypre/libCEED builds and runtime verification must use the container-backed `just` recipes (`just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, `just verify-fem-relaxation-runtime`, or managed run recipes). The container path is the default build path for native FEM work, not only a final smoke test. Always inspect/use the repo `justfile` before inventing host-side build commands or direct `docker compose` invocations. Host-side `cargo`/`cmake` checks are only auxiliary smoke tests and must not be reported as final FEM GPU verification.
 
 ---
 
@@ -1010,6 +1017,30 @@ When a file grows past that threshold, split it.
 ## 24. Canonical build and run entrypoints
 
 Prefer `just` recipes when they exist.
+For build tasks, the repository `justfile` is the first place to look. If a
+managed/container recipe exists, use that recipe as the default build path
+instead of assembling an equivalent-looking host-side `cargo`, `cmake`, Docker,
+or shell command. Host-only commands are diagnostics unless the user explicitly
+asks for them.
+
+For FEM/MFEM/CUDA/hypre/libCEED work, the canonical build and runtime proof is
+container-backed `just`, not host-only build commands. Treat the container
+recipe as the default build path for native FEM work, not as an optional final
+check. Before choosing build commands, inspect the repo `justfile` and use the
+matching managed/container recipe when one exists. Use recipes such as `just
+rebuild-fem-runtime`, `just ensure-managed-fem-runtime`, `just fem-gpu-headless
+...`, or the managed run recipes before calling native FEM runtime work
+complete. Raw host `cargo`, `cmake`, or native binaries are useful as fast smoke
+checks only.
+For native FEM build tasks, do not start by typing a lower-level `cargo`,
+`cmake`, `docker`, or binary command and then validate later in the container.
+Start in the container-backed `just` route. Use host commands only after that
+route is identified, and label them as diagnostics.
+Do not replace these recipes with an equivalent-looking host build when judging
+FEM runtime readiness.
+If a matching `just` recipe is missing, state that explicitly before using a
+host-side diagnostic command. Do not silently promote the diagnostic path into
+the build path.
 
 ### Canonical build entrypoints
 - `just build fullmag`

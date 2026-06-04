@@ -23,6 +23,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../backends/fem/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../backends/fem/core");
     println!("cargo:rerun-if-changed=../../backends/fem/cpu");
+    println!("cargo:rerun-if-changed=../../backends/fem/gpu");
     println!("cargo:rerun-if-changed=../../backends/fem/src");
     println!("cargo:rerun-if-changed=../../backends/fem/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FEM_LIB_DIR");

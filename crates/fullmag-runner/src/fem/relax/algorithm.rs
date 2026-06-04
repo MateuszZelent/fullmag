@@ -16,8 +16,9 @@ use super::super::engine::FemEngineKind;
 ///
 /// This table describes runner-level availability. Keep it aligned with the
 /// native backend lanes: projected-gradient BB and nonlinear-CG are implemented
-/// on the CPU/MFEM and native CUDA lanes. TPI is production on the CPU/MFEM lane;
-/// the GPU/libCEED tangent-plane solver is under development.
+/// on the CPU/MFEM and native CUDA lanes. TPI is production-executable on the
+/// CPU/MFEM tangent-plane lane; its full GPU/libCEED implementation remains
+/// under development.
 pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKind) -> bool {
     match (algorithm, engine) {
         // LlgOverdamped is the primary production path on both engines.
@@ -32,7 +33,6 @@ pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKi
         (RelaxationAlgorithmIR::NonlinearCg, FemEngineKind::NativeGpu) => true,
 
         // TPI solves a global MFEM tangent-plane system on the CPU/MFEM lane.
-        // The GPU/libCEED tangent-plane solver is intentionally under development.
         (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::CpuNative) => true,
 
         (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::NativeGpu) => false,
@@ -41,10 +41,7 @@ pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKi
 
 /// Whether the algorithm currently requires the CPU/MFEM native relaxation lane.
 pub fn requires_cpu_mfem_relaxation_lane(algorithm: RelaxationAlgorithmIR) -> bool {
-    matches!(
-        algorithm,
-        RelaxationAlgorithmIR::TangentPlaneImplicit
-    )
+    matches!(algorithm, RelaxationAlgorithmIR::TangentPlaneImplicit)
 }
 
 /// Whether the algorithm uses the direct energy-minimization code path
@@ -130,7 +127,7 @@ pub fn check_algorithm_support(
             message: format!(
                 "FEM relaxation algorithm `{}` is not yet supported on engine `{}`. \
                  Supported algorithms on this engine: {}. \
-                 CPU/MFEM owns the production tangent_plane_implicit implementation; \
+                 tangent_plane_implicit is production-executable on the CPU/MFEM lane; \
                  its full GPU/libCEED device-resident algorithm is under development.",
                 algorithm_provenance_name(control.algorithm),
                 engine.id(),
@@ -241,9 +238,9 @@ mod tests {
         assert!(err.message.contains("fem_native_gpu"), "{}", err.message);
         assert!(
             err.message.contains("tangent_plane_implicit")
-                && err.message.contains("CPU/MFEM")
                 && err.message.contains("GPU/libCEED")
-                && err.message.contains("under development"),
+                && err.message.contains("under development")
+                && err.message.contains("CPU/MFEM"),
             "{}",
             err.message
         );

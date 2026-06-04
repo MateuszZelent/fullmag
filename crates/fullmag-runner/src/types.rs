@@ -94,6 +94,12 @@ pub struct FemCpuRelaxationAlgorithmPolicyMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_integrator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precession_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhs_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_search: Option<String>,
@@ -104,7 +110,68 @@ pub struct FemCpuRelaxationAlgorithmPolicyMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tangent_operator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_update: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_update: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemGpuRelaxationQualificationMetadata {
+    pub schema_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation_algorithm: Option<String>,
+    pub algorithm_policy: FemGpuRelaxationAlgorithmPolicyMetadata,
+    pub device_policy: FemGpuRelaxationDevicePolicyMetadata,
+    pub norm_defect: f64,
+    pub executed_steps: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemGpuRelaxationAlgorithmPolicyMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_integrator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precession_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhs_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_update: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_update: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemGpuRelaxationDevicePolicyMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualification_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_residency: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_operator_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_operator_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uses_cuda_kernels: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uses_gpu_poisson: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hot_loop_exchange_host_sync_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hot_loop_compute_host_sync_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hot_loop_control_scalar_host_sync_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -302,6 +369,12 @@ pub struct StepStats {
     /// Cumulative non-exchange/RK host sync calls observed inside the native FEM hot loop.
     #[serde(default)]
     pub hot_loop_compute_host_sync_count: u64,
+    /// Cumulative control-scalar D2H bytes observed inside direct-minimizer hot loops.
+    #[serde(default)]
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    /// Cumulative control-scalar host sync calls observed inside direct-minimizer hot loops.
+    #[serde(default)]
+    pub hot_loop_control_scalar_host_sync_count: u64,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
@@ -363,6 +436,8 @@ impl Default for StepStats {
             hot_loop_compute_h2d_bytes: 0,
             hot_loop_compute_d2h_bytes: 0,
             hot_loop_compute_host_sync_count: 0,
+            hot_loop_control_scalar_d2h_bytes: 0,
+            hot_loop_control_scalar_host_sync_count: 0,
             per_object_scalars: HashMap::new(),
         }
     }
@@ -382,6 +457,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
             hot_loop_host_sync_count: 8,
             hot_loop_exchange_host_sync_count: 2,
             hot_loop_compute_host_sync_count: 6,
+            hot_loop_control_scalar_host_sync_count: 4,
             ..StepStats::default()
         };
 
@@ -392,6 +468,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(stats.hot_loop_host_sync_count, 8);
         assert_eq!(stats.hot_loop_exchange_host_sync_count, 2);
         assert_eq!(stats.hot_loop_compute_host_sync_count, 6);
+        assert_eq!(stats.hot_loop_control_scalar_host_sync_count, 4);
     }
 
     #[test]
@@ -525,6 +602,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
             hot_loop_host_sync_count: Some(0),
             hot_loop_exchange_host_sync_count: Some(0),
             hot_loop_compute_host_sync_count: Some(0),
+            hot_loop_control_scalar_host_sync_count: Some(0),
             ..ExecutionProvenance::default()
         };
 
@@ -548,6 +626,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(provenance.hot_loop_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
+        assert_eq!(provenance.hot_loop_control_scalar_host_sync_count, Some(0));
     }
 }
 
@@ -1385,6 +1464,12 @@ pub struct ExecutionProvenance {
     /// Cumulative native FEM non-exchange/RK host synchronization count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hot_loop_compute_host_sync_count: Option<u64>,
+    /// Cumulative native FEM direct-minimizer control-scalar D2H bytes in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_control_scalar_d2h_bytes: Option<u64>,
+    /// Cumulative native FEM direct-minimizer control-scalar host synchronization count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_control_scalar_host_sync_count: Option<u64>,
     /// Whether the native FEM runtime allocated the Phase-1 GPU state object.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_gpu_state_allocated: Option<bool>,

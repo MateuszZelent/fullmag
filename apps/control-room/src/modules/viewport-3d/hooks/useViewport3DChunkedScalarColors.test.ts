@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
-import { mergeViewport3DFieldScalarColors } from "./useViewport3DChunkedScalarColors";
+import {
+  chunkedScalarColorStateIsCompatible,
+  mergeViewport3DFieldScalarColors,
+} from "./useViewport3DChunkedScalarColors";
 
 const sourceUrl = new URL("./useViewport3DChunkedScalarColors.ts", import.meta.url);
 
@@ -41,7 +44,69 @@ describe("useViewport3DChunkedScalarColors", () => {
     const source = readFileSync(sourceUrl, "utf8");
 
     expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
-    expect(source).toContain("chunkedScalarColorBuffers.delete(current.token)");
+    expect(source).toContain("releaseChunkedScalarColorToken");
     expect(source).not.toContain("buffers: Map<string, ScalarColorBuffer>");
+  });
+
+  it("keeps the previous chunked buffers visible during compatible field replacement", () => {
+    const topology = { nodeCount: 75_000 };
+    const current = {
+      colorPalette: "viridis",
+      modesKey: "orientation",
+      token: {},
+      topology,
+    };
+
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 75_000,
+        modesKey: "orientation",
+        needsChunking: true,
+        topology,
+      }),
+    ).toBe(true);
+  });
+
+  it("drops previous chunked buffers when topology or mode compatibility changes", () => {
+    const topology = { nodeCount: 75_000 };
+    const current = {
+      colorPalette: "viridis",
+      modesKey: "orientation",
+      token: {},
+      topology,
+    };
+
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 75_000,
+        modesKey: "orientation",
+        needsChunking: true,
+        topology: { nodeCount: 75_000 },
+      }),
+    ).toBe(false);
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 75_000,
+        modesKey: "magnitude",
+        needsChunking: true,
+        topology,
+      }),
+    ).toBe(false);
+    expect(
+      chunkedScalarColorStateIsCompatible(current, {
+        colorPalette: "viridis",
+        enabled: true,
+        fieldPointCount: 10_000,
+        modesKey: "orientation",
+        needsChunking: false,
+        topology,
+      }),
+    ).toBe(false);
   });
 });

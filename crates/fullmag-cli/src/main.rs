@@ -94,6 +94,40 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Runtime(RuntimeCommand::FemAvailability { json }) => {
+            let gpu = fullmag_runner::native_fem_gpu_status();
+            let payload = serde_json::json!({
+                "native_fem_cpu_available": fullmag_runner::is_native_fem_cpu_available(),
+                "native_fem_gpu_available": gpu.available,
+                "visible_cuda_device_count": gpu.visible_cuda_device_count,
+                "requested_gpu_index": gpu.requested_gpu_index,
+                "resolved_gpu_index": gpu.resolved_gpu_index,
+                "memory_free_bytes": gpu.memory_free_bytes,
+                "memory_total_bytes": gpu.memory_total_bytes,
+                "reason_gpu": gpu.reason_gpu,
+            });
+            if json {
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!("Native FEM availability");
+                println!(
+                    "- CPU: {}",
+                    if payload["native_fem_cpu_available"].as_bool().unwrap_or(false) {
+                        "available"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                println!(
+                    "- GPU: {}",
+                    if gpu.available { "available" } else { "unavailable" }
+                );
+                println!("- visible CUDA devices: {}", gpu.visible_cuda_device_count);
+                if !gpu.reason_gpu.is_empty() {
+                    println!("- GPU reason: {}", gpu.reason_gpu);
+                }
+            }
+        }
         Command::ExampleIr => {
             let example = ProblemIR::bootstrap_example();
             println!("{}", serde_json::to_string_pretty(&example)?);
@@ -1144,6 +1178,21 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Runtime(RuntimeCommand::Doctor)
+        ));
+    }
+
+    #[test]
+    fn cli_parses_runtime_fem_availability_json_subcommand() {
+        let cli = Cli::try_parse_from([
+            "fullmag",
+            "runtime",
+            "fem-availability",
+            "--json",
+        ])
+        .expect("cli parse");
+        assert!(matches!(
+            cli.command,
+            Command::Runtime(RuntimeCommand::FemAvailability { json: true })
         ));
     }
 

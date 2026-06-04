@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use crate::types::{
     ExecutedRun, FemCpuRelaxationAlgorithmPolicyMetadata, FemCpuRelaxationDemagPolicyMetadata,
     FemCpuRelaxationDemagTimingsNs, FemCpuRelaxationEnergyTerms,
-    FemCpuRelaxationQualificationMetadata, StepStats,
+    FemCpuRelaxationQualificationMetadata, FemGpuRelaxationAlgorithmPolicyMetadata,
+    FemGpuRelaxationDevicePolicyMetadata, FemGpuRelaxationQualificationMetadata, StepStats,
 };
 
 use std::collections::{BTreeSet, HashMap};
@@ -173,7 +174,10 @@ fn fem_cpu_relaxation_qualification_metadata(
         },
         final_torque_apm: last.max_torque_Apm,
         final_torque_t: last.max_torque_T,
-        norm_defect: magnetization_norm_defect(&executed.result.final_magnetization),
+        norm_defect: magnetization_norm_defect_for_fem_plan(
+            fem,
+            &executed.result.final_magnetization,
+        ),
         executed_steps: last.step,
     };
     serde_json::to_value(metadata).unwrap_or(serde_json::Value::Null)
@@ -187,37 +191,52 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
     let gpu_status = provenance
         .fem_gpu_qualification_status
         .clone()
-        .or_else(|| Some("direct_minimizers_cpu_mfem_only".to_string()));
+        .or_else(|| Some(default_fem_relaxation_gpu_status(control.algorithm).to_string()));
     match control.algorithm {
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
             Some(FemCpuRelaxationAlgorithmPolicyMetadata {
                 realization: provenance.energy_minimizer_realization.clone(),
+                time_integrator: None,
+                precession_policy: None,
+                rhs_policy: None,
                 metric: Some("fem_lumped_mass_inner_product".to_string()),
                 line_search: Some("native_armijo_backtracking_bb1_bb2".to_string()),
                 preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
                 linear_solver_policy: Some(
-                    "HyprePCG/BoomerAMG when available; serial MFEM CG fallback".to_string(),
+                    "serial MFEM CG production default; HyprePCG/BoomerAMG explicit opt-in"
+                        .to_string(),
                 ),
                 tangent_operator: None,
+                direction_update: None,
+                step_update: Some("alternating_bb1_bb2".to_string()),
                 gpu_status,
             })
         }
         fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
             Some(FemCpuRelaxationAlgorithmPolicyMetadata {
                 realization: provenance.energy_minimizer_realization.clone(),
+                time_integrator: None,
+                precession_policy: None,
+                rhs_policy: None,
                 metric: Some("fem_lumped_mass_inner_product".to_string()),
                 line_search: Some("native_armijo_backtracking_pr_plus_restart".to_string()),
                 preconditioner: Some("exchange_plus_mass_tangent_gradient".to_string()),
                 linear_solver_policy: Some(
-                    "HyprePCG/BoomerAMG when available; serial MFEM CG fallback".to_string(),
+                    "serial MFEM CG production default; HyprePCG/BoomerAMG explicit opt-in"
+                        .to_string(),
                 ),
                 tangent_operator: None,
+                direction_update: Some("polak_ribiere_plus_projected_restart".to_string()),
+                step_update: None,
                 gpu_status,
             })
         }
         fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => {
             Some(FemCpuRelaxationAlgorithmPolicyMetadata {
                 realization: provenance.energy_minimizer_realization.clone(),
+                time_integrator: None,
+                precession_policy: None,
+                rhs_policy: None,
                 metric: Some("fem_lumped_mass_inner_product".to_string()),
                 line_search: Some("native_armijo_backtracking".to_string()),
                 preconditioner: Some(
@@ -230,11 +249,141 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
                 tangent_operator: Some(
                     "mass_exchange_local_anisotropy_zeeman_dmi_demag_linear_response".to_string(),
                 ),
+                direction_update: None,
+                step_update: None,
                 gpu_status,
             })
         }
-        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => None,
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => {
+            Some(FemCpuRelaxationAlgorithmPolicyMetadata {
+                realization: provenance.energy_minimizer_realization.clone().or_else(|| {
+                    Some(crate::relaxation::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.to_string())
+                }),
+                time_integrator: provenance.resolved_integrator.clone(),
+                precession_policy: Some("disabled_pure_damping".to_string()),
+                rhs_policy: Some("llg_overdamped_rhs".to_string()),
+                metric: None,
+                line_search: None,
+                preconditioner: None,
+                linear_solver_policy: None,
+                tangent_operator: None,
+                direction_update: None,
+                step_update: None,
+                gpu_status,
+            })
+        }
     }
+}
+
+fn default_fem_relaxation_gpu_status(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> &'static str {
+    match algorithm {
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+        | fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => "production_executable",
+        fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => "unsupported",
+    }
+}
+
+fn fem_gpu_relaxation_qualification_metadata(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+    executed: &ExecutedRun,
+) -> serde_json::Value {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return serde_json::Value::Null;
+    };
+    if provenance.execution_engine != "fem_native_gpu" {
+        return serde_json::Value::Null;
+    }
+    let Some(control) = fem.relaxation.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    let (
+        realization,
+        time_integrator,
+        precession_policy,
+        rhs_policy,
+        metric,
+        gradient_policy,
+        line_search,
+        direction_update,
+        step_update,
+    ) = match control.algorithm {
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => (
+            provenance.energy_minimizer_realization.clone().or_else(|| {
+                Some(crate::relaxation::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.to_string())
+            }),
+            provenance.resolved_integrator.clone(),
+            Some("disabled_pure_damping".to_string()),
+            Some("llg_overdamped_rhs".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => (
+            provenance.energy_minimizer_realization.clone(),
+            None,
+            None,
+            None,
+            Some("fem_lumped_mass_inner_product".to_string()),
+            Some("device_tangent_gradient".to_string()),
+            Some("native_armijo_backtracking_bb1_bb2".to_string()),
+            None,
+            Some("alternating_bb1_bb2".to_string()),
+        ),
+        fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => (
+            provenance.energy_minimizer_realization.clone(),
+            None,
+            None,
+            None,
+            Some("fem_lumped_mass_inner_product".to_string()),
+            Some("device_tangent_gradient".to_string()),
+            Some("native_armijo_backtracking_pr_plus_restart".to_string()),
+            Some("polak_ribiere_plus_projected_restart".to_string()),
+            None,
+        ),
+        _ => return serde_json::Value::Null,
+    };
+    let Some(last) = executed.result.steps.last() else {
+        return serde_json::Value::Null;
+    };
+
+    let metadata = FemGpuRelaxationQualificationMetadata {
+        schema_version: "fem_gpu_relaxation_qualification.v1".to_string(),
+        relaxation_algorithm: Some(control.algorithm.as_str().to_string()),
+        algorithm_policy: FemGpuRelaxationAlgorithmPolicyMetadata {
+            realization,
+            time_integrator,
+            precession_policy,
+            rhs_policy,
+            metric,
+            gradient_policy,
+            line_search,
+            direction_update,
+            step_update,
+        },
+        device_policy: FemGpuRelaxationDevicePolicyMetadata {
+            execution_mode: provenance.fem_execution_mode.clone(),
+            qualification_status: provenance.fem_gpu_qualification_status.clone(),
+            data_residency: provenance.fem_data_residency.clone(),
+            exchange_operator_mode: provenance.fem_exchange_operator_mode.clone(),
+            demag_operator_mode: provenance.fem_demag_operator_mode.clone(),
+            uses_cuda_kernels: provenance.uses_cuda_kernels,
+            uses_gpu_poisson: provenance.uses_gpu_poisson,
+            hot_loop_exchange_host_sync_count: provenance.hot_loop_exchange_host_sync_count,
+            hot_loop_compute_host_sync_count: provenance.hot_loop_compute_host_sync_count,
+            hot_loop_control_scalar_host_sync_count: provenance
+                .hot_loop_control_scalar_host_sync_count,
+        },
+        norm_defect: magnetization_norm_defect_for_fem_plan(
+            fem,
+            &executed.result.final_magnetization,
+        ),
+        executed_steps: last.step,
+    };
+    serde_json::to_value(metadata).unwrap_or(serde_json::Value::Null)
 }
 
 fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -327,9 +476,48 @@ fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
     digest.iter().map(|byte| format!("{:02x}", byte)).collect()
 }
 
-fn magnetization_norm_defect(values: &[[f64; 3]]) -> f64 {
-    values
+fn magnetization_norm_defect_for_fem_plan(fem: &fullmag_ir::FemPlanIR, values: &[[f64; 3]]) -> f64 {
+    let magnetic_nodes = fem
+        .mesh_parts
         .iter()
+        .filter(|part| part.role == fullmag_ir::FemMeshPartRole::MagneticObject)
+        .flat_map(|part| fem_part_magnetic_node_indices_for_norm_defect(fem, part))
+        .collect::<BTreeSet<_>>();
+    if magnetic_nodes.is_empty() {
+        return magnetization_norm_defect(values.iter());
+    }
+    magnetization_norm_defect(
+        magnetic_nodes
+            .into_iter()
+            .filter_map(|index| values.get(index)),
+    )
+}
+
+fn fem_part_magnetic_node_indices_for_norm_defect(
+    fem: &fullmag_ir::FemPlanIR,
+    part: &fullmag_ir::FemMeshPartIR,
+) -> Vec<usize> {
+    let mut nodes = BTreeSet::new();
+    nodes.extend(part.node_indices.iter().map(|index| *index as usize));
+
+    if nodes.is_empty() {
+        if let fullmag_ir::FemMeshPartSelector::NodeRange { start, count } = &part.node_selector {
+            let start = *start as usize;
+            let end = start
+                .saturating_add(*count as usize)
+                .min(fem.mesh.nodes.len());
+            nodes.extend(start..end);
+        }
+    }
+
+    nodes
+        .into_iter()
+        .filter(|index| *index < fem.mesh.nodes.len())
+        .collect()
+}
+
+fn magnetization_norm_defect<'a>(values: impl Iterator<Item = &'a [f64; 3]>) -> f64 {
+    values
         .map(|m| {
             let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
             (norm - 1.0).abs()
@@ -378,6 +566,8 @@ pub(crate) fn write_artifacts(
         &demag_runtime,
         executed,
     );
+    let fem_gpu_relaxation_qualification =
+        fem_gpu_relaxation_qualification_metadata(plan, &execution_provenance, executed);
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -390,6 +580,7 @@ pub(crate) fn write_artifacts(
         "runtime_threading": runtime_threading,
         "demag_runtime": demag_runtime,
         "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
+        "fem_gpu_relaxation_qualification": fem_gpu_relaxation_qualification,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
@@ -1801,7 +1992,7 @@ mod tests {
                 crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
             ),
             fem_assembly_mode: Some("legacy_sparse".to_string()),
-            fem_gpu_qualification_status: Some("direct_minimizers_cpu_mfem_only".to_string()),
+            fem_gpu_qualification_status: None,
             ..ExecutionProvenance::default()
         };
         let executed = ExecutedRun {
@@ -1846,8 +2037,12 @@ mod tests {
             "exchange_plus_mass_tangent_gradient"
         );
         assert_eq!(
+            metadata["algorithm_policy"]["step_update"],
+            "alternating_bb1_bb2"
+        );
+        assert_eq!(
             metadata["algorithm_policy"]["gpu_status"],
-            "direct_minimizers_cpu_mfem_only"
+            "production_executable"
         );
 
         let typed: crate::types::FemCpuRelaxationQualificationMetadata =
@@ -1857,8 +2052,413 @@ mod tests {
             .expect("direct minimizer metadata must carry an algorithm policy");
         assert_eq!(
             policy.linear_solver_policy.as_deref(),
-            Some("HyprePCG/BoomerAMG when available; serial MFEM CG fallback")
+            Some("serial MFEM CG production default; HyprePCG/BoomerAMG explicit opt-in")
         );
+    }
+
+    #[test]
+    fn fem_cpu_relaxation_qualification_metadata_reports_nonlinear_cg_update_policy() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            energy_minimizer_realization: Some(
+                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
+            ),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            fem_gpu_qualification_status: None,
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 3,
+                    e_ex: 1.0,
+                    e_total: 1.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+
+        assert_eq!(metadata["relaxation_algorithm"], "nonlinear_cg");
+        assert_eq!(
+            metadata["algorithm_policy"]["direction_update"],
+            "polak_ribiere_plus_projected_restart"
+        );
+        assert_eq!(
+            metadata["algorithm_policy"]["line_search"],
+            "native_armijo_backtracking_pr_plus_restart"
+        );
+    }
+
+    #[test]
+    fn fem_relaxation_norm_defect_ignores_shared_domain_airbox_nodes() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(10),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+            fem.domain_mesh_mode = FemDomainMeshModeIR::SharedDomainMeshWithAir;
+            fem.mesh_parts = vec![
+                FemMeshPartIR {
+                    id: "part:body".to_string(),
+                    label: "body".to_string(),
+                    role: FemMeshPartRole::MagneticObject,
+                    object_id: Some("body".to_string()),
+                    geometry_id: Some("body_geom".to_string()),
+                    material_id: None,
+                    element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
+                    boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                        start: 0,
+                        count: 0,
+                    },
+                    node_selector: FemMeshPartSelector::NodeRange { start: 0, count: 1 },
+                    boundary_face_indices: Vec::new(),
+                    node_indices: vec![0],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                    parent_id: None,
+                },
+                FemMeshPartIR {
+                    id: "part:__air__".to_string(),
+                    label: "Airbox".to_string(),
+                    role: FemMeshPartRole::Air,
+                    object_id: None,
+                    geometry_id: None,
+                    material_id: None,
+                    element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
+                    boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange {
+                        start: 0,
+                        count: 0,
+                    },
+                    node_selector: FemMeshPartSelector::NodeRange { start: 1, count: 3 },
+                    boundary_face_indices: Vec::new(),
+                    node_indices: vec![1, 2, 3],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                    parent_id: None,
+                },
+            ];
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            energy_minimizer_realization: Some(
+                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
+            ),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 3,
+                    e_ex: 1.0,
+                    e_total: 1.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                ],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+
+        assert_eq!(metadata["norm_defect"], 0.0);
+    }
+
+    #[test]
+    fn metadata_reports_fem_gpu_direct_minimizer_qualification_policy() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "gpu_ncg_relax_metadata".to_string();
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(4),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_native_gpu".to_string(),
+            precision: "double".to_string(),
+            requested_energy_minimizer: Some("nonlinear_cg".to_string()),
+            resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
+            energy_minimizer_realization: Some(
+                crate::relaxation::NATIVE_MFEM_DIRECT_MINIMIZER_REALIZATION.to_string(),
+            ),
+            fem_execution_mode: Some("all_in_gpu_legacy_sparse".to_string()),
+            fem_gpu_qualification_status: Some("production_executable".to_string()),
+            fem_exchange_operator_mode: Some("legacy_sparse_gpu".to_string()),
+            fem_data_residency: Some("device_source_of_truth".to_string()),
+            uses_cuda_kernels: Some(true),
+            uses_gpu_poisson: Some(true),
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            hot_loop_exchange_host_sync_count: Some(0),
+            hot_loop_compute_host_sync_count: Some(3),
+            hot_loop_control_scalar_d2h_bytes: Some(0),
+            hot_loop_control_scalar_host_sync_count: Some(0),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 4,
+                    e_ex: 1.0,
+                    e_demag: 2.0,
+                    e_total: 3.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance,
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-gpu-relax-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("GPU relaxation metadata artifacts should be written");
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        let qualification = &metadata["fem_gpu_relaxation_qualification"];
+        assert_eq!(
+            qualification["schema_version"],
+            "fem_gpu_relaxation_qualification.v1"
+        );
+        assert_eq!(qualification["relaxation_algorithm"], "nonlinear_cg");
+        assert_eq!(
+            qualification["algorithm_policy"]["line_search"],
+            "native_armijo_backtracking_pr_plus_restart"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["metric"],
+            "fem_lumped_mass_inner_product"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["gradient_policy"],
+            "device_tangent_gradient"
+        );
+        assert_eq!(
+            qualification["device_policy"]["exchange_operator_mode"],
+            "legacy_sparse_gpu"
+        );
+        assert_eq!(
+            qualification["device_policy"]["hot_loop_exchange_host_sync_count"],
+            0
+        );
+        assert_eq!(qualification["norm_defect"], 0.0);
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn metadata_reports_fem_llg_overdamped_relaxation_policy() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.name = "gpu_llg_relax_metadata".to_string();
+        let mut gpu_plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut gpu_plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(4),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+        }
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 4,
+                    e_ex: 1.0,
+                    e_demag: 2.0,
+                    e_total: 3.0,
+                    max_torque_Apm: 2.0e-4,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_native_gpu".to_string(),
+                precision: "double".to_string(),
+                requested_integrator: Some("heun".to_string()),
+                resolved_integrator: Some("heun".to_string()),
+                requested_energy_minimizer: Some("llg_overdamped".to_string()),
+                resolved_energy_minimizer: Some("llg_overdamped".to_string()),
+                energy_minimizer_realization: Some("native_llg_time_integrator".to_string()),
+                llg_mode: Some("pure_damping".to_string()),
+                fem_execution_mode: Some("all_in_gpu_legacy_sparse".to_string()),
+                fem_gpu_qualification_status: Some("production_executable".to_string()),
+                fem_exchange_operator_mode: Some("legacy_sparse_gpu".to_string()),
+                fem_data_residency: Some("device_source_of_truth".to_string()),
+                uses_cuda_kernels: Some(true),
+                uses_gpu_poisson: Some(true),
+                fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+                hot_loop_exchange_host_sync_count: Some(0),
+                hot_loop_compute_host_sync_count: Some(3),
+                hot_loop_control_scalar_d2h_bytes: Some(0),
+                hot_loop_control_scalar_host_sync_count: Some(0),
+                ..ExecutionProvenance::default()
+            },
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-gpu-llg-relax-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_artifacts(&output_dir, &problem, &gpu_plan, &executed, None)
+            .expect("GPU LLG relaxation metadata artifacts should be written");
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+        let qualification = &metadata["fem_gpu_relaxation_qualification"];
+        assert_eq!(
+            qualification["schema_version"],
+            "fem_gpu_relaxation_qualification.v1"
+        );
+        assert_eq!(qualification["relaxation_algorithm"], "llg_overdamped");
+        assert_eq!(
+            qualification["algorithm_policy"]["realization"],
+            "native_llg_time_integrator"
+        );
+        assert_eq!(qualification["algorithm_policy"]["time_integrator"], "heun");
+        assert_eq!(
+            qualification["algorithm_policy"]["precession_policy"],
+            "disabled_pure_damping"
+        );
+        assert_eq!(
+            qualification["algorithm_policy"]["rhs_policy"],
+            "llg_overdamped_rhs"
+        );
+
+        let cpu_plan = gpu_plan.clone();
+        let cpu_provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            requested_integrator: Some("heun".to_string()),
+            resolved_integrator: Some("heun".to_string()),
+            requested_energy_minimizer: Some("llg_overdamped".to_string()),
+            resolved_energy_minimizer: Some("llg_overdamped".to_string()),
+            energy_minimizer_realization: Some("native_llg_time_integrator".to_string()),
+            llg_mode: Some("pure_damping".to_string()),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            fem_gpu_qualification_status: Some("production_executable".to_string()),
+            ..ExecutionProvenance::default()
+        };
+        let demag_runtime =
+            demag_runtime_metadata(&cpu_plan, &cpu_provenance, &executed.result.steps);
+        let cpu_executed = ExecutedRun {
+            provenance: cpu_provenance.clone(),
+            ..executed.clone()
+        };
+        let cpu_qualification = fem_cpu_relaxation_qualification_metadata(
+            &cpu_plan,
+            &cpu_provenance,
+            &demag_runtime,
+            &cpu_executed,
+        );
+        assert_eq!(cpu_qualification["relaxation_algorithm"], "llg_overdamped");
+        assert_eq!(
+            cpu_qualification["algorithm_policy"]["realization"],
+            "native_llg_time_integrator"
+        );
+        assert_eq!(
+            cpu_qualification["algorithm_policy"]["precession_policy"],
+            "disabled_pure_damping"
+        );
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }
 
     #[test]
@@ -2001,6 +2601,8 @@ mod tests {
             hot_loop_compute_h2d_bytes: None,
             hot_loop_compute_d2h_bytes: None,
             hot_loop_compute_host_sync_count: None,
+            hot_loop_control_scalar_d2h_bytes: None,
+            hot_loop_control_scalar_host_sync_count: None,
             fem_gpu_state_allocated: None,
             fem_gpu_state_node_count: None,
             fem_gpu_state_dof_len: None,
@@ -2266,6 +2868,8 @@ mod tests {
             hot_loop_compute_h2d_bytes: None,
             hot_loop_compute_d2h_bytes: None,
             hot_loop_compute_host_sync_count: None,
+            hot_loop_control_scalar_d2h_bytes: None,
+            hot_loop_control_scalar_host_sync_count: None,
             fem_gpu_state_allocated: None,
             fem_gpu_state_node_count: None,
             fem_gpu_state_dof_len: None,

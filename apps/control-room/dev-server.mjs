@@ -49,7 +49,13 @@ const child = spawn(
   },
 );
 
+const signalExitCodes = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
 let shuttingDown = false;
+let childExited = false;
 const shutdown = (signal) => {
   if (shuttingDown) {
     return;
@@ -57,7 +63,7 @@ const shutdown = (signal) => {
   shuttingDown = true;
   child.kill(signal);
   setTimeout(() => {
-    if (!child.killed) {
+    if (!childExited) {
       child.kill("SIGKILL");
     }
   }, 2000).unref();
@@ -67,8 +73,9 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 child.on("exit", (code, signal) => {
+  childExited = true;
   if (signal) {
-    process.kill(process.pid, signal);
+    process.exit(signalExitCodes[signal] ?? 1);
     return;
   }
   process.exit(code ?? 0);

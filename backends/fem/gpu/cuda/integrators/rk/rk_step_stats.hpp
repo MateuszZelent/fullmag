@@ -50,4 +50,9 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason);
 
+bool gpu_rk_finalize_step_stats_control_readback(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason);
+
 } // namespace fullmag::fem

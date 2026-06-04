@@ -4372,8 +4372,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let mut overrides: Vec<serde_json::Value> = Vec::new();
 
         if let Some(airbox_hint) = viz_hint.get("airbox") {
-            let show = airbox_hint.get("show").and_then(|v| v.as_bool()).unwrap_or(false);
-            let mode = airbox_hint.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+            let show = airbox_hint
+                .get("show")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mode = airbox_hint
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let active_quantity_id = airbox_hint
                 .get("active_quantity_id")
                 .and_then(|v| v.as_str())
@@ -4424,14 +4430,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     display["vectors"]["density"] = serde_json::json!(density);
                     display["vectors"]["domain"] = serde_json::json!("airbox_only");
                 } else {
-                    display["vectors"] =
-                        serde_json::json!({ "visible": true, "density": density, "domain": "airbox_only" });
+                    display["vectors"] = serde_json::json!({ "visible": true, "density": density, "domain": "airbox_only" });
                 }
             }
 
             // style overrides
             let mut style = serde_json::Map::new();
-            if let Some(v) = airbox_hint.get("vector_length_scale").and_then(|v| v.as_f64()) {
+            if let Some(v) = airbox_hint
+                .get("vector_length_scale")
+                .and_then(|v| v.as_f64())
+            {
                 style.insert("vector_length_scale".to_string(), serde_json::json!(v));
             }
             if let Some(v) = airbox_hint.get("vector_thickness").and_then(|v| v.as_f64()) {
@@ -4440,7 +4448,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             if let Some(v) = airbox_hint.get("vector_alpha").and_then(|v| v.as_f64()) {
                 style.insert("vector_alpha".to_string(), serde_json::json!(v));
             }
-            if let Some(v) = airbox_hint.get("vector_color_mode").and_then(|v| v.as_str()) {
+            if let Some(v) = airbox_hint
+                .get("vector_color_mode")
+                .and_then(|v| v.as_str())
+            {
                 style.insert("vector_color_mode".to_string(), serde_json::json!(v));
             }
 
@@ -4461,7 +4472,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
         if let Some(geom_hints) = viz_hint.get("geometry_hints").and_then(|v| v.as_object()) {
             for (geom_name, geom_hint) in geom_hints {
-                let show = geom_hint.get("show").and_then(|v| v.as_bool()).unwrap_or(true);
+                let show = geom_hint
+                    .get("show")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
                 let mode = geom_hint.get("mode").and_then(|v| v.as_str()).unwrap_or("");
                 let active_quantity_id = geom_hint
                     .get("active_quantity_id")
@@ -4521,11 +4535,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         display["vectors"]["density"] = serde_json::json!(density);
                         display["vectors"]["domain"] = serde_json::json!(domain);
                     } else {
-                        display["vectors"] =
-                            serde_json::json!({ "visible": true, "density": density, "domain": domain });
+                        display["vectors"] = serde_json::json!({ "visible": true, "density": density, "domain": domain });
                     }
-                } else if let Some(domain) =
-                    geom_hint.get("vector_domain").and_then(|v| v.as_str())
+                } else if let Some(domain) = geom_hint.get("vector_domain").and_then(|v| v.as_str())
                 {
                     if display["vectors"].is_object() {
                         display["vectors"]["domain"] = serde_json::json!(domain);
@@ -4534,10 +4546,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
                 // style overrides
                 let mut style = serde_json::Map::new();
-                if let Some(v) = geom_hint.get("surface_color_source").and_then(|v| v.as_str()) {
+                if let Some(v) = geom_hint
+                    .get("surface_color_source")
+                    .and_then(|v| v.as_str())
+                {
                     style.insert("surface_color_source".to_string(), serde_json::json!(v));
                 }
-                if let Some(v) = geom_hint.get("vector_length_scale").and_then(|v| v.as_f64()) {
+                if let Some(v) = geom_hint
+                    .get("vector_length_scale")
+                    .and_then(|v| v.as_f64())
+                {
                     style.insert("vector_length_scale".to_string(), serde_json::json!(v));
                 }
                 if let Some(v) = geom_hint.get("vector_thickness").and_then(|v| v.as_f64()) {
@@ -4563,8 +4581,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     target_override["style"] = serde_json::Value::Object(style);
                 }
                 if let Some(qty) = active_quantity_id {
-                    target_override["quantity"] =
-                        serde_json::json!({ "active_quantity_id": qty });
+                    target_override["quantity"] = serde_json::json!({ "active_quantity_id": qty });
                 }
                 overrides.push(target_override);
             }
@@ -4657,10 +4674,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     "wireframe".to_string(),
                     serde_json::json!({ "visible": wire }),
                 );
-                layers.insert(
-                    "points".to_string(),
-                    serde_json::json!({ "visible": pts }),
-                );
+                layers.insert("points".to_string(), serde_json::json!({ "visible": pts }));
             }
             if let Some(density) = viz_hint.get("vector_density").and_then(|v| v.as_u64()) {
                 layers.insert(
@@ -4673,7 +4687,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
         }
 
-        let has_patch = state_patch.as_object().map(|o| !o.is_empty()).unwrap_or(false);
+        let has_patch = state_patch
+            .as_object()
+            .map(|o| !o.is_empty())
+            .unwrap_or(false);
         if !args.headless && has_patch {
             if let Err(e) = sync_initial_visualization_state(state_patch) {
                 eprintln!(
@@ -6301,8 +6318,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_fem_hmax_override,
                     current_adaptive_runtime_state.as_ref(),
                 );
-                let mut remesh_stages =
-                    vec![ResolvedScriptStage::solver(remesh_problem, 0.0, "interactive_remesh")];
+                let mut remesh_stages = vec![ResolvedScriptStage::solver(
+                    remesh_problem,
+                    0.0,
+                    "interactive_remesh",
+                )];
                 let mut remesh_stage_plans = vec![fullmag_plan::plan(&remesh_stages[0].ir)
                     .map_err(|error| anyhow!(error.to_string()))?];
                 execute_manual_interactive_remesh(
@@ -7532,19 +7552,19 @@ mod tests {
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, classify_wait_for_solve_command,
         default_domain_region_markers, discard_active_paused_stage_execution,
-        execute_synthetic_stage, fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
-        fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        has_heavy_live_payload, interactive_session_should_stay_alive,
-        mesh_build_pipeline_status_json, scripted_stage_execution_state, SceneProblemPatch,
-        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_should_block,
-        wait_for_solve_supported, ActiveSequenceState, LiveProgressCadence,
-        WaitForSolveCommandAction, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        execute_synthetic_stage, fem_gpu_memory_preflight_message,
+        fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
+        fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
+        interactive_session_should_stay_alive, mesh_build_pipeline_status_json,
+        scripted_stage_execution_state, user_cancelled_stage_completion, wait_for_solve_prompt,
+        wait_for_solve_should_block, wait_for_solve_supported, ActiveSequenceState,
+        LiveProgressCadence, SceneProblemPatch, WaitForSolveCommandAction,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStage,
-        ResolvedScriptStageAction,
-        RunManifest, SessionManifest,
+        ResolvedScriptStageAction, RunManifest, SessionManifest,
     };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,

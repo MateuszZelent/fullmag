@@ -845,6 +845,7 @@ int restore_after_failed_line_search(
     const std::vector<double> &previous_m_xyz,
     const char *algorithm_name,
     uint32_t backtracks,
+    const std::string &diagnostics,
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK
@@ -864,11 +865,15 @@ int restore_after_failed_line_search(
         " relaxation failed Armijo line search after " +
         std::to_string(backtracks) +
         " backtracks; previous state restored";
+    if (!diagnostics.empty()) {
+        error += "; " + diagnostics;
+    }
     return FULLMAG_FEM_ERR_INTERNAL;
 #else
     (void)ctx;
     (void)previous_m_xyz;
     (void)backtracks;
+    (void)diagnostics;
     error = std::string(algorithm_name) +
         " relaxation line-search restore requires FULLMAG_USE_MFEM_STACK=ON";
     return FULLMAG_FEM_ERR_UNAVAILABLE;

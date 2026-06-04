@@ -67,6 +67,7 @@ describe("viewport3dDiagnostics", () => {
         fieldRevision: 8,
         objectCount: 3,
         quantityId: "m",
+        surfaceColorStatus: "stale-visible",
         topologyRevision: 7,
         tracker: {
           contextLosses: 0,
@@ -79,6 +80,6 @@ describe("viewport3dDiagnostics", () => {
           workers: 0,
         },
       }),
-    ).toBe("q:m top:7 field:8 obj:3 air:1 geo:1 cache:2KB frames:2");
+    ).toBe("q:m top:7 field:8 surface:stale-visible obj:3 air:1 geo:1 cache:2KB frames:2");
   });
 });

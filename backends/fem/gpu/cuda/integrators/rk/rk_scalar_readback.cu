@@ -21,13 +21,12 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
     return false;
 }
 
-} // namespace
-
-bool gpu_rk_read_scalar_result(
+bool read_scalar_result_impl(
     Context &ctx,
     cudaStream_t stream,
     const char *label,
     double &value,
+    bool control_scalar_readback,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -45,16 +44,21 @@ bool gpu_rk_read_scalar_result(
     if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
         return false;
     }
-    record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
+    if (control_scalar_readback) {
+        record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(double));
+    } else {
+        record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
+    }
     return true;
 }
 
-bool gpu_rk_read_scalar_results(
+bool read_scalar_results_impl(
     Context &ctx,
     cudaStream_t stream,
     const char *label,
     double *values,
     size_t count,
+    bool control_scalar_readback,
     std::string &reason)
 {
     if (count == 0) {
@@ -75,8 +79,84 @@ bool gpu_rk_read_scalar_results(
     if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
         return false;
     }
-    record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double));
+    if (control_scalar_readback) {
+        record_device_control_scalar_to_host(
+            ctx.transfer_audit.audit,
+            count * sizeof(double));
+    } else {
+        record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double));
+    }
     return true;
+}
+
+} // namespace
+
+bool gpu_rk_read_scalar_result(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double &value,
+    std::string &reason)
+{
+    return read_scalar_result_impl(
+        ctx,
+        stream,
+        label,
+        value,
+        false,
+        reason);
+}
+
+bool gpu_rk_read_scalar_results(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double *values,
+    size_t count,
+    std::string &reason)
+{
+    return read_scalar_results_impl(
+        ctx,
+        stream,
+        label,
+        values,
+        count,
+        false,
+        reason);
+}
+
+bool gpu_rk_read_control_scalar_result(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double &value,
+    std::string &reason)
+{
+    return read_scalar_result_impl(
+        ctx,
+        stream,
+        label,
+        value,
+        true,
+        reason);
+}
+
+bool gpu_rk_read_control_scalar_results(
+    Context &ctx,
+    cudaStream_t stream,
+    const char *label,
+    double *values,
+    size_t count,
+    std::string &reason)
+{
+    return read_scalar_results_impl(
+        ctx,
+        stream,
+        label,
+        values,
+        count,
+        true,
+        reason);
 }
 
 } // namespace fullmag::fem

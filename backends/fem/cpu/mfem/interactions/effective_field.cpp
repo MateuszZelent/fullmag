@@ -125,8 +125,6 @@ bool compute_effective_fields_for_magnetization(
             if (!ctx.mesh.periodic_reduced_node.empty()) {
                 project_static_periodic_aos(ctx, ctx.anisotropy.h_uniaxial_xyz);
             }
-        } else {
-            ctx.anisotropy.h_uniaxial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double dmi = 0.0;
@@ -138,8 +136,6 @@ bool compute_effective_fields_for_magnetization(
             if (!ctx.mesh.periodic_reduced_node.empty()) {
                 project_static_periodic_aos(ctx, ctx.dmi.h_interfacial_xyz);
             }
-        } else {
-            ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         if (ctx.anisotropy.cubic_enabled) {
@@ -150,8 +146,6 @@ bool compute_effective_fields_for_magnetization(
             if (!ctx.mesh.periodic_reduced_node.empty()) {
                 project_static_periodic_aos(ctx, ctx.anisotropy.h_cubic_xyz);
             }
-        } else {
-            ctx.anisotropy.h_cubic_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double bulk_dmi = 0.0;
@@ -163,8 +157,6 @@ bool compute_effective_fields_for_magnetization(
             if (!ctx.mesh.periodic_reduced_node.empty()) {
                 project_static_periodic_aos(ctx, ctx.dmi.h_bulk_xyz);
             }
-        } else {
-            ctx.dmi.h_bulk_xyz.assign(m_xyz.size(), 0.0);
         }
 
         for (size_t i = 0; i < h_eff_xyz.size(); ++i) {

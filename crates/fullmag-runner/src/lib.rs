@@ -1714,11 +1714,19 @@ mod tests {
         assert!(tpi.contains("native CPU/MFEM ABI"), "{tpi}");
         assert!(tpi.contains("demag fresh-solve linear response"), "{tpi}");
         assert!(
+            tpi.contains("**under-development** (native FEM CPU/MFEM and FEM GPU/libCEED)"),
+            "{tpi}"
+        );
+        assert!(
             tpi.contains("fem_gpu_relaxation_algorithm_cpu_only"),
             "{tpi}"
         );
         assert!(
             !tpi.contains("execution deferred") && !tpi.contains("planned | planned"),
+            "{tpi}"
+        );
+        assert!(
+            !tpi.contains("**public-executable** (native FEM CPU/MFEM)"),
             "{tpi}"
         );
     }
@@ -2174,6 +2182,26 @@ mod tests {
     }
 
     #[test]
+    fn fem_relaxation_module_support_table_matches_native_algorithm_lanes() {
+        let module =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/fem/relax/mod.rs"))
+                .expect("read fem/relax/mod.rs");
+
+        assert!(
+            module.contains("| `ProjectedGradientBb`   | ✓        | ✓          | native MFEM/CUDA relaxation ABI"),
+            "fem/relax/mod.rs must document PG-BB as executable on CPU/MFEM and native CUDA"
+        );
+        assert!(
+            module.contains("| `NonlinearCg`           | ✓        | ✓          | native MFEM/CUDA relaxation ABI"),
+            "fem/relax/mod.rs must document NCG as executable on CPU/MFEM and native CUDA"
+        );
+        assert!(
+            module.contains("| `TangentPlaneImplicit`  | dev      | dev        | under development; not production-qualified |"),
+            "fem/relax/mod.rs must document TPI as under development, not production-qualified"
+        );
+    }
+
+    #[test]
     fn fem_relaxation_finalization_is_owned_by_fem_relax_module() {
         let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
             .expect("read dispatch.rs");
@@ -2306,9 +2334,13 @@ mod tests {
             "native_fem.rs tests must not use the previous native/backends/fem path after relocation"
         );
         assert!(
-            native_fem.contains("../../../backends/fem/src/mfem_bridge.cpp"),
+            native_fem.contains("../../../backends/fem/"),
             "native_fem.rs tests must inspect the current backends/fem source tree"
         );
+        let native_fem_production = native_fem
+            .split("#[cfg(all(test, feature = \"fem-gpu\"))]")
+            .next()
+            .expect("native_fem production section");
         for symbol in [
             "fn has_slonczewski_stt(",
             "fn has_zhang_li_stt(",
@@ -2326,7 +2358,7 @@ mod tests {
             "StageCompletionIR {",
         ] {
             assert!(
-                !native_fem.contains(symbol),
+                !native_fem_production.contains(symbol),
                 "native_fem.rs must not re-own native FEM plan-policy helper {symbol}"
             );
         }

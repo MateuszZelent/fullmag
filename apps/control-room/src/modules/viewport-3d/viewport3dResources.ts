@@ -352,12 +352,16 @@ export function useViewport3DFieldVector(
     [requestKey],
   );
 
-  return useResource({
+  const resource = useResource({
     enabled,
     load,
     resolveRevision,
     resourceKey: requestKey,
   });
+  return {
+    ...resource,
+    payloadRevision: resolveRevision(),
+  };
 }
 
 export function useViewport3DAirboxFieldVectors(
@@ -427,12 +431,16 @@ export function useViewport3DAirboxFieldVectors(
     return revisions.length > 0 ? revisions.join("|") : null;
   }, [requestKeys]);
 
-  return useResource({
+  const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,
   });
+  return {
+    ...resource,
+    payloadRevision: resolveRevision(),
+  };
 }
 
 export function useViewport3DQuantityFieldVectors(
@@ -506,12 +514,16 @@ export function useViewport3DQuantityFieldVectors(
     return revisions.length > 0 ? revisions.join("|") : null;
   }, [requestKeys]);
 
-  return useResource({
+  const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,
   });
+  return {
+    ...resource,
+    payloadRevision: resolveRevision(),
+  };
 }
 
 export function useViewport3DPartFieldVectors(
@@ -573,12 +585,16 @@ export function useViewport3DPartFieldVectors(
     return revisions.length > 0 ? revisions.join("|") : null;
   }, [requestKeys]);
 
-  return useResource({
+  const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
     resolveRevision,
     resourceKey,
   });
+  return {
+    ...resource,
+    payloadRevision: resolveRevision(),
+  };
 }
 
 export function useViewport3DMeshQualityData(enabled = true) {

@@ -12,6 +12,7 @@ import type {
   FieldVectorQuery,
   LiveStatusResource,
   MeshHistogramBinElementsResource,
+  ResourceRevision,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
@@ -19,7 +20,10 @@ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { isMagneticOnlyQuantityId } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import type {
+  ResourceResult,
+  ResourceStatus,
+} from "@/kernel/resources/resourceTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   activeCrossSectionFramePreview,
@@ -76,6 +80,7 @@ import {
 } from "../viewport3dDiagnostics";
 import { buildSampledScalarColors } from "../viewport3dFieldMapping";
 import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
+import type { Viewport3DResourceFrameState } from "../viewport3dInvalidation";
 import {
   buildViewport3DMagnetizationTexturePreviewMap,
   buildViewport3DPrimitiveRenderModel,
@@ -141,6 +146,15 @@ const VIEWPORT_3D_SCALAR_FIELD_COMPONENTS = new Set([
   "z",
 ]);
 
+export interface Viewport3DResourceFrameInput {
+  dataAvailable: boolean;
+  error?: string | null;
+  id: string;
+  payloadRevision: ResourceRevision | null;
+  revision: ResourceRevision | null;
+  status: ResourceStatus;
+}
+
 export interface Viewport3DFieldDataIssue {
   key: string;
   message: string;
@@ -191,6 +205,24 @@ export function resolveViewport3DPrimaryFieldQuery({
         scope_kind: "full",
       }
     : FULL_FIELD_QUERY;
+}
+
+export function resolveViewport3DResourceFrameState({
+  dataAvailable,
+  error,
+  id,
+  payloadRevision,
+  revision,
+  status,
+}: Viewport3DResourceFrameInput): Viewport3DResourceFrameState {
+  const visiblePayloadAvailable = dataAvailable && !error;
+  return {
+    error,
+    id,
+    revision: visiblePayloadAvailable ? payloadRevision ?? revision : revision,
+    status:
+      visiblePayloadAvailable && status === "stale" ? "ready" : status,
+  };
 }
 
 export function resolveViewport3DTargetFieldQuery({
@@ -1258,11 +1290,11 @@ export function useViewport3DSceneModel({
     );
     return mergeViewport3DFieldScalarColors(
       model,
-      chunkedScalarColors,
+      chunkedScalarColors.colors,
       vectorColorMode,
     );
   }, [
-    chunkedScalarColors,
+    chunkedScalarColors.colors,
     committedFieldVector,
     currentTopologyRenderModel,
     resolvedFieldRenderOptions,
@@ -1291,9 +1323,10 @@ export function useViewport3DSceneModel({
   const diagnostics = buildViewport3DDiagnostics({
     airboxPartCount: femDomain.airboxParts.length,
     cache: getCacheStats(),
-    fieldRevision: fieldVector.revision,
+    fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision,
     objectCount: femDomain.objectPartIds.size,
     quantityId,
+    surfaceColorStatus: chunkedScalarColors.status,
     topologyRevision: topology.revision,
     tracker: resourceCounts,
   });
@@ -1308,30 +1341,38 @@ export function useViewport3DSceneModel({
       revision: topology.revision,
       status: topology.status,
     },
-    {
+    resolveViewport3DResourceFrameState({
+      dataAvailable: Boolean(fieldVector.data),
       error: fieldVector.error?.message,
       id: "field-vector",
+      payloadRevision: fieldVector.payloadRevision ?? null,
       revision: fieldVector.revision,
       status: fieldVector.status,
-    },
-    {
+    }),
+    resolveViewport3DResourceFrameState({
+      dataAvailable: Boolean(magneticPartFieldVectors.data?.size),
       error: magneticPartFieldVectors.error?.message,
       id: "magnetic-part-field-vectors",
+      payloadRevision: magneticPartFieldVectors.payloadRevision ?? null,
       revision: magneticPartFieldVectors.revision,
       status: magneticPartFieldVectors.status,
-    },
-    {
+    }),
+    resolveViewport3DResourceFrameState({
+      dataAvailable: Boolean(targetQuantityFieldVectors.data?.size),
       error: targetQuantityFieldVectors.error?.message,
       id: "target-quantity-field-vectors",
+      payloadRevision: targetQuantityFieldVectors.payloadRevision ?? null,
       revision: targetQuantityFieldVectors.revision,
       status: targetQuantityFieldVectors.status,
-    },
-    {
+    }),
+    resolveViewport3DResourceFrameState({
+      dataAvailable: Boolean(airboxFieldVectors.data?.size),
       error: airboxFieldVectors.error?.message,
       id: "airbox-field-vectors",
+      payloadRevision: airboxFieldVectors.payloadRevision ?? null,
       revision: airboxFieldVectors.revision,
       status: airboxFieldVectors.status,
-    },
+    }),
     {
       error: meshQualityOverlayVisible
         ? meshQualityData.error?.message

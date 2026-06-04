@@ -70,6 +70,18 @@ int main()
             std::string::npos,
         "transfer audit header must declare env gate import");
     check(
+        transfer_header.find("void record_device_control_scalar_to_host(") !=
+                std::string::npos &&
+            transfer_impl.find("record_device_control_scalar_to_host(") !=
+                std::string::npos,
+        "transfer audit must expose a separate control-scalar D2H accounting path");
+    check(
+        transfer_impl.find("hot_loop_control_scalar_d2h_bytes") !=
+                std::string::npos &&
+            transfer_impl.find("hot_loop_control_scalar_host_sync_count") !=
+                std::string::npos,
+        "transfer audit must publish hot-loop control-scalar readback counters");
+    check(
         transfer_impl.find("void configure_transfer_audit_from_env(TransferAudit &audit)") !=
             std::string::npos,
         "transfer audit implementation must own env gate import");
@@ -164,6 +176,39 @@ int main()
     check(audit.counters.hot_loop_compute_h2d_bytes == 8, "compute H2D byte count mismatch");
     check(audit.counters.hot_loop_exchange_d2h_bytes == 32, "exchange D2H byte count mismatch");
     check(audit.counters.hot_loop_exchange_h2d_bytes == 56, "exchange H2D byte count mismatch");
+
+    fullmag::fem::TransferAudit control_scalar_audit;
+    control_scalar_audit.assert_no_hot_loop_compute_sync = true;
+    {
+        fullmag::fem::TransferAuditScope hot_loop(
+            control_scalar_audit,
+            fullmag::fem::TransferAuditScopeKind::HotLoop);
+        fullmag::fem::record_device_control_scalar_to_host(control_scalar_audit, 40);
+    }
+    check(
+        control_scalar_audit.counters.d2h_bytes == 40,
+        "control-scalar readback must count total D2H bytes");
+    check(
+        control_scalar_audit.counters.hot_loop_d2h_bytes == 40,
+        "control-scalar readback must count total hot-loop D2H bytes");
+    check(
+        control_scalar_audit.counters.hot_loop_host_sync_count == 1,
+        "control-scalar readback must count total hot-loop sync");
+    check(
+        control_scalar_audit.counters.hot_loop_control_scalar_d2h_bytes == 40,
+        "control-scalar D2H byte counter mismatch");
+    check(
+        control_scalar_audit.counters.hot_loop_control_scalar_host_sync_count == 1,
+        "control-scalar sync counter mismatch");
+    check(
+        control_scalar_audit.counters.hot_loop_compute_d2h_bytes == 0,
+        "control-scalar readback must not count as compute D2H");
+    check(
+        control_scalar_audit.counters.hot_loop_compute_host_sync_count == 0,
+        "control-scalar readback must not count as compute sync");
+    check(
+        !control_scalar_audit.hot_loop_violation,
+        "control-scalar readback must not violate compute hot-loop gate");
 
     fullmag::fem::record_mfem_host_read(64);
     check(audit.counters.hot_loop_host_sync_count == 4, "host access outside scope counted as hot-loop");

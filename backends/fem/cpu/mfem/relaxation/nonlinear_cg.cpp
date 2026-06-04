@@ -16,11 +16,39 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
 
 namespace {
+
+constexpr uint32_t kNonlinearCgArmijoRecoveryCycles = 1;
+constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23;
+constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12;
+
+double line_search_energy_tolerance(
+    const fullmag_fem_step_stats &current,
+    const fullmag_fem_step_stats &trial)
+{
+    return std::max(
+        kLineSearchEnergyNoiseFloorJ,
+        kLineSearchEnergyNoiseRelative *
+            std::max(
+                std::abs(current.total_energy_joules),
+                std::abs(trial.total_energy_joules)));
+}
+
+bool accept_monotone_recovery_step(
+    const fullmag_fem_step_stats &current,
+    const fullmag_fem_step_stats &trial)
+{
+    return std::isfinite(current.total_energy_joules) &&
+        std::isfinite(trial.total_energy_joules) &&
+        trial.total_energy_joules <=
+            current.total_energy_joules +
+                line_search_energy_tolerance(current, trial);
+}
 
 double initial_step_size(
     const Context &ctx,
@@ -61,6 +89,157 @@ bool ensure_descent_direction(
         }
     }
     return std::isfinite(direction_dot_gradient) && direction_dot_gradient < 0.0;
+}
+
+bool retry_nonlinear_cg_line_search_with_restart(
+    Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &previous_gradient,
+    const std::vector<double> &previous_preconditioned_gradient,
+    const fullmag_fem_step_stats &current_stats,
+    std::vector<double> &direction,
+    double &p_dot_g,
+    double &trial_step,
+    fullmag_fem_step_stats &trial_stats,
+    std::vector<double> &trial_m,
+    uint32_t &backtracks,
+    int &failure_status,
+    std::string &error)
+{
+    for (uint32_t recovery_cycle = 0;
+         recovery_cycle < kNonlinearCgArmijoRecoveryCycles;
+         ++recovery_cycle) {
+        ctx.relaxation.nonlinear_cg_direction.clear();
+        direction.clear();
+        if (!ensure_descent_direction(
+                ctx,
+                previous_m,
+                previous_gradient,
+                previous_preconditioned_gradient,
+                direction,
+                p_dot_g)) {
+            error =
+                "nonlinear-CG relaxation recovery produced a non-finite or non-descent direction";
+            failure_status = FULLMAG_FEM_ERR_INTERNAL;
+            return false;
+        }
+        const double restart_step = std::clamp(
+            initial_step_size(ctx, direction),
+            relaxation::kMinStepSize,
+            relaxation::kMaxStepSize);
+        trial_step = restart_step;
+
+        while (true) {
+            trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+            const int status = relaxation::upload_and_snapshot(
+                ctx,
+                trial_m,
+                trial_stats,
+                "nonlinear-CG",
+                "recovery trial",
+                error);
+            if (status != FULLMAG_FEM_OK) {
+                const std::string trial_error = error;
+                failure_status = relaxation::restore_previous_relaxation_state(
+                    ctx,
+                    previous_m,
+                    "nonlinear-CG",
+                    "failed recovery trial snapshot",
+                    status,
+                    trial_error,
+                    error);
+                return false;
+            }
+            const bool armijo =
+                trial_stats.total_energy_joules <=
+                current_stats.total_energy_joules +
+                    relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+            if (armijo) {
+                return true;
+            }
+            if (accept_monotone_recovery_step(current_stats, trial_stats)) {
+                return true;
+            }
+            if (backtracks >= 2u * relaxation::kNonlinearCgMaxBacktracks) {
+                break;
+            }
+            trial_step *= 0.5;
+            backtracks += 1;
+        }
+    }
+    return false;
+}
+
+bool retry_nonlinear_cg_line_search_with_raw_gradient_restart(
+    Context &ctx,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &previous_gradient,
+    const fullmag_fem_step_stats &current_stats,
+    std::vector<double> &direction,
+    double &p_dot_g,
+    double &trial_step,
+    fullmag_fem_step_stats &trial_stats,
+    std::vector<double> &trial_m,
+    uint32_t &backtracks,
+    int &failure_status,
+    std::string &error)
+{
+    ctx.relaxation.nonlinear_cg_direction.clear();
+    direction = relaxation::project_tangent(
+        ctx,
+        previous_m,
+        relaxation::negative_field(previous_gradient));
+    p_dot_g = relaxation::metric_dot_fields(ctx, direction, previous_gradient);
+    if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
+        error =
+            "nonlinear-CG relaxation raw-gradient recovery produced a non-finite or non-descent direction";
+        failure_status = FULLMAG_FEM_ERR_INTERNAL;
+        return false;
+    }
+    const double restart_step = std::clamp(
+        initial_step_size(ctx, direction),
+        relaxation::kMinStepSize,
+        relaxation::kMaxStepSize);
+    trial_step = restart_step;
+
+    while (true) {
+        trial_m = relaxation::retracted_step(ctx, previous_m, direction, trial_step);
+        const int status = relaxation::upload_and_snapshot(
+            ctx,
+            trial_m,
+            trial_stats,
+            "nonlinear-CG",
+            "raw-gradient recovery trial",
+            error);
+        if (status != FULLMAG_FEM_OK) {
+            const std::string trial_error = error;
+            failure_status = relaxation::restore_previous_relaxation_state(
+                ctx,
+                previous_m,
+                "nonlinear-CG",
+                "failed raw-gradient recovery trial snapshot",
+                status,
+                trial_error,
+                error);
+            return false;
+        }
+        const bool armijo =
+            trial_stats.total_energy_joules <=
+            current_stats.total_energy_joules +
+                relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        if (armijo) {
+            return true;
+        }
+        if (accept_monotone_recovery_step(current_stats, trial_stats)) {
+            return true;
+        }
+        if (backtracks >= 3u * relaxation::kNonlinearCgMaxBacktracks) {
+            break;
+        }
+        trial_step *= 0.5;
+        backtracks += 1;
+    }
+    return false;
 }
 
 std::vector<double> next_direction_pr_plus(
@@ -249,11 +428,62 @@ int run_nonlinear_cg_step(
         backtracks += 1;
     }
     if (!line_search_accepted) {
+        if (retry_nonlinear_cg_line_search_with_restart(
+                ctx,
+                previous_m,
+                previous_gradient,
+                previous_preconditioned_gradient,
+                current_stats,
+                direction,
+                p_dot_g,
+                trial_step,
+                trial_stats,
+                trial_m,
+                backtracks,
+                status,
+                error)) {
+            line_search_accepted = true;
+        }
+    }
+    if (!line_search_accepted && status == FULLMAG_FEM_OK) {
+        if (retry_nonlinear_cg_line_search_with_raw_gradient_restart(
+                ctx,
+                previous_m,
+                previous_gradient,
+                current_stats,
+                direction,
+                p_dot_g,
+                trial_step,
+                trial_stats,
+                trial_m,
+                backtracks,
+                status,
+                error)) {
+            line_search_accepted = true;
+        }
+    }
+    if (status != FULLMAG_FEM_OK) {
+        return status;
+    }
+    if (!line_search_accepted) {
+        const double armijo_rhs =
+            current_stats.total_energy_joules +
+            relaxation::kArmijoCoefficient * trial_step * p_dot_g;
+        const std::string diagnostics =
+            "current_energy_j=" +
+            std::to_string(current_stats.total_energy_joules) +
+            " last_trial_energy_j=" +
+            std::to_string(trial_stats.total_energy_joules) +
+            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
+            " last_trial_step=" + std::to_string(trial_step) +
+            " p_dot_g=" + std::to_string(p_dot_g) +
+            " gradient_norm_sq=" + std::to_string(g_norm_sq);
         return relaxation::restore_after_failed_line_search(
             ctx,
             previous_m,
             "nonlinear-CG",
             backtracks,
+            diagnostics,
             error);
     }
 

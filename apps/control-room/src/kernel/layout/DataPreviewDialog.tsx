@@ -156,10 +156,7 @@ export function DataPreviewDialog({
         </Button>
       </div>
 
-      <form
-        className="fm-data-preview__controls"
-        onSubmit={(event) => event.preventDefault()}
-      >
+      <div className="fm-data-preview__controls">
         <label>
           <span>Quantity</span>
           <input
@@ -188,7 +185,7 @@ export function DataPreviewDialog({
             onChange={(event) => setSampleCountInput(event.target.value)}
           />
         </label>
-      </form>
+      </div>
 
       <dl className="fm-data-preview__meta">
         <div>

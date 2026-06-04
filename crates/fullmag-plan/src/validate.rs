@@ -94,7 +94,7 @@ pub(crate) fn planned_study_controls(
             BackendTarget::Fdm => {
                 if control.algorithm == RelaxationAlgorithmIR::TangentPlaneImplicit {
                     errors.push(
-                        "relaxation algorithm 'tangent_plane_implicit' is FEM-only in the current public runner; request backend='fem' to use the native MFEM tangent-plane implicit implementation"
+                        "relaxation algorithm 'tangent_plane_implicit' is FEM-only and under development in the current public runner; it is not production-qualified. Request backend='fem' only for development-scale native MFEM tangent-plane implicit checks"
                             .to_string(),
                     );
                 } else if control.algorithm != RelaxationAlgorithmIR::LlgOverdamped

@@ -23,6 +23,7 @@ export interface Viewport3DDiagnosticsInput {
   fieldRevision: string | number | null;
   objectCount: number;
   quantityId: string;
+  surfaceColorStatus?: string | null;
   topologyRevision: string | number | null;
   tracker: Viewport3DResourceCounts;
 }
@@ -148,6 +149,9 @@ export function buildViewport3DDiagnostics(
     `q:${input.quantityId}`,
     `top:${input.topologyRevision ?? "none"}`,
     `field:${input.fieldRevision ?? "none"}`,
+    ...(input.surfaceColorStatus
+      ? [`surface:${input.surfaceColorStatus}`]
+      : []),
     `obj:${input.objectCount}`,
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,

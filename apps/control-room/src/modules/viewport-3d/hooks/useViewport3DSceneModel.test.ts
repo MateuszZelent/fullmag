@@ -7,6 +7,7 @@ import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegi
 import {
   resolveViewport3DPrimaryFieldRenderOptions,
   resolveViewport3DPrimaryFieldQuery,
+  resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DScopedPartVectorFieldRequests,
   resolveViewport3DScopedVectorFieldQuery,
@@ -42,6 +43,24 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual({
       component: "magnitude",
       scope_kind: "full",
+    });
+  });
+
+  it("keeps stale field resources out of the render frame key when payload data is still visible", () => {
+    expect(
+      resolveViewport3DResourceFrameState({
+        dataAvailable: true,
+        error: null,
+        id: "field-vector",
+        payloadRevision: "etag-1",
+        revision: "scalar-tick-2",
+        status: "stale",
+      }),
+    ).toEqual({
+      error: null,
+      id: "field-vector",
+      revision: "etag-1",
+      status: "ready",
     });
   });
 
