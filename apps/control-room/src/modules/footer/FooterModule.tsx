@@ -53,7 +53,7 @@ export default function FooterModule(props: ModuleProps) {
 }
 
 function FooterModuleContent({ kernel }: ModuleProps) {
-  const [activeTab, setActiveTab] = useState<FooterTabId>("logs");
+  const [activeTab, setActiveTab] = useState<FooterTabId>("telemetry");
 
   useEffect(() => {
     return kernel.bus.on("footer:tab-requested", ({ tab }) => {

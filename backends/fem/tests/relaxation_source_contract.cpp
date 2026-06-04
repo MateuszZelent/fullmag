@@ -889,6 +889,10 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             pgbb_source.find("constexpr double kBbCurvatureScale = 1.0e-6") !=
                 std::string::npos &&
+            pgbb_source.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
+                std::string::npos &&
+            pgbb_source.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
+                std::string::npos &&
             pgbb_source.find("constexpr uint32_t kMaxBacktracks = 20") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must keep CPU-compatible BB/Armijo constants until parity proof intentionally changes them");
@@ -947,11 +951,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             pgbb_source.find("kArmijoRecoveryCycles") != std::string::npos &&
             pgbb_source.find("gpu_relax_accept_monotone_recovery_step(") !=
                 std::string::npos &&
+            pgbb_source.find("line_search_energy_tolerance(current_energy, trial_energy)") !=
+                std::string::npos &&
             pgbb_source.find("trial_step = restart_step;") !=
                 std::string::npos &&
             pgbb_source.find("reset_consecutive") <
                 pgbb_source.find("GPU projected-gradient BB failed Armijo line search"),
-        "native FEM GPU projected-gradient BB must attempt bounded Armijo recovery with reset step-size policy, fresh restart step, and monotone fallback before failing the device step");
+        "native FEM GPU projected-gradient BB must attempt bounded Armijo recovery with reset step-size policy, fresh restart step, and noise-tolerant monotone fallback before failing the device step");
+    check(
+        pgbb_source.find("current_energy_j=") != std::string::npos &&
+            pgbb_source.find("last_trial_energy_j=") != std::string::npos &&
+            pgbb_source.find("armijo_rhs_j=") != std::string::npos &&
+            pgbb_source.find("last_trial_step=") != std::string::npos &&
+            pgbb_source.find("gradient_norm_sq=") != std::string::npos,
+        "native FEM GPU projected-gradient BB exhausted Armijo failures must include actionable line-search diagnostics");
     check(
         pgbb_source.find("gpu_relax_restore_previous_magnetization_after_failure(") !=
                 std::string::npos &&
@@ -1224,6 +1237,10 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("constexpr double kGradientFloor = 1.0e-30") !=
                 std::string::npos &&
+            ncg_source.find("constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23") !=
+                std::string::npos &&
+            ncg_source.find("constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12") !=
+                std::string::npos &&
             ncg_source.find("constexpr uint32_t kMaxBacktracks = 30") !=
                 std::string::npos &&
             ncg_source.find("constexpr uint64_t kRestartInterval = 50") !=
@@ -1255,11 +1272,21 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("kArmijoRecoveryCycles") != std::string::npos &&
             ncg_source.find("gpu_relax_accept_monotone_recovery_step(") !=
                 std::string::npos &&
+            ncg_source.find("line_search_energy_tolerance(current_energy, trial_energy)") !=
+                std::string::npos &&
             ncg_source.find("trial_step = restart_step;") !=
                 std::string::npos &&
             ncg_source.find("gpu.relaxation.nonlinear_cg_direction_valid = false") <
                 ncg_source.find("GPU nonlinear-CG failed Armijo line search"),
-        "native FEM GPU nonlinear-CG must attempt bounded Armijo recovery with restarted descent direction, fresh restart step, and monotone fallback before failing the device step");
+        "native FEM GPU nonlinear-CG must attempt bounded Armijo recovery with restarted descent direction, fresh restart step, and noise-tolerant monotone fallback before failing the device step");
+    check(
+        ncg_source.find("current_energy_j=") != std::string::npos &&
+            ncg_source.find("last_trial_energy_j=") != std::string::npos &&
+            ncg_source.find("armijo_rhs_j=") != std::string::npos &&
+            ncg_source.find("last_trial_step=") != std::string::npos &&
+            ncg_source.find("direction_dot_gradient=") != std::string::npos &&
+            ncg_source.find("gradient_norm_sq=") != std::string::npos,
+        "native FEM GPU nonlinear-CG exhausted Armijo failures must include actionable line-search diagnostics");
     check(
         ncg_source.find("GPU nonlinear-CG produced non-finite total energy") !=
                 std::string::npos &&

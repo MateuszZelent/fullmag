@@ -35,6 +35,7 @@ const child = spawn(
   ["--dir", "apps/control-room", "dev", "--hostname", hostname, "--port", port],
   {
     cwd: repoRoot,
+    detached: process.platform !== "win32",
     env: {
       ...process.env,
       FULLMAG_API_PROXY_TARGET: apiTarget,
@@ -45,7 +46,53 @@ const child = spawn(
   },
 );
 
-child.on("exit", (code) => process.exit(code ?? 0));
+const signalExitCodes = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+let shuttingDown = false;
+let childExited = false;
+const shutdown = (signal) => {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  if (process.platform === "win32") {
+    child.kill(signal);
+  } else {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  }
+  setTimeout(() => {
+    if (!childExited) {
+      if (process.platform === "win32") {
+        child.kill("SIGKILL");
+      } else {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
+    }
+  }, 2000).unref();
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+child.on("exit", (code, signal) => {
+  childExited = true;
+  if (signal) {
+    process.exit(signalExitCodes[signal] ?? 1);
+    return;
+  }
+  process.exit(code ?? 0);
+});
 child.on("error", (err) => {
   process.stderr.write(`[dev-server shim] failed to spawn pnpm: ${err.message}\n`);
   process.exit(1);

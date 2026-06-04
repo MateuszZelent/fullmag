@@ -95,6 +95,8 @@ const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
   "stages_revision",
 ] as const satisfies ReadonlyArray<keyof LiveStatusResource["resources"]>;
 
+const SCALAR_WINDOW_MIN_REFETCH_INTERVAL_MS = 1_000;
+
 type StudyRuntimeCommandSessionStatus = {
   capabilities: Pick<
     LiveStatusResource["capabilities"],
@@ -522,6 +524,7 @@ export function useScalarWindowResource({
   return useResource<ScalarWindowResource | null>({
     enabled,
     load,
+    minRefetchIntervalMs: SCALAR_WINDOW_MIN_REFETCH_INTERVAL_MS,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });

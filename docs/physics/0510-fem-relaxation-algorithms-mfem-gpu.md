@@ -332,10 +332,11 @@ Current production-executable subset (FEM backend):
 - `algorithm = "llg_overdamped"`
 - `algorithm = "projected_gradient_bb"`
 - `algorithm = "nonlinear_cg"`
-- `algorithm = "tangent_plane_implicit"` (CPU/MFEM lane; GPU/libCEED
-  device-resident tangent-plane solve remains under development)
 
-These four algorithms are public-executable on their maintained lanes.
+`algorithm = "tangent_plane_implicit"` remains under development. It has a
+native CPU/MFEM implementation path for development and compatibility checks,
+but it is not part of the production-qualified relaxation set and its
+GPU/libCEED device-resident tangent-plane solve remains under development.
 
 Status 2026-06-04: native CPU/MFEM direct-relaxation runs publish
 `requested_energy_minimizer`, `resolved_energy_minimizer`, and
@@ -356,7 +357,7 @@ energy decrease across the smoke trajectory. It also rejects runs where final
 `max_torque_T` grows beyond `1.25x` the initial value, allowing short-line-search
 torque fluctuations while catching non-relaxing or unstable trajectories.
 Use `just verify-fem-relaxation-convergence` for the longer managed
-container-backed LLG/PG-BB/NCG/TPI convergence gate; it raises the default run to 16
+container-backed LLG/PG-BB/NCG convergence gate; it raises the default run to 16
 steps and requires at least `1.0e-2` relative energy decrease. Set
 `FULLMAG_FEM_RELAXATION_KEEP_LOGS=1` when the runtime logs need to be preserved
 as audit evidence for a local verification run.
@@ -364,18 +365,16 @@ Use `just verify-fem-relaxation-cpu-gpu-consistency-smoke` for the focused
 Box500 exchange-only CPU/GPU consistency slice. It exercises the existing FEM
 benchmark runner with a deterministic heun relaxation case across the active
 production algorithms `llg_overdamped`, `projected_gradient_bb`,
-`nonlinear_cg`, and `tangent_plane_implicit`. The smoke requires a separate
-CPU/GPU pair for algorithms with both lanes and a CPU-only row for
-`tangent_plane_implicit`, because its GPU/libCEED device-resident tangent-plane
-solve is still under development. It is a parity smoke, not a replacement for
-the broader benchmark matrix.
+and `nonlinear_cg`. The smoke requires a separate CPU/GPU pair for each active
+production algorithm and intentionally excludes `tangent_plane_implicit`
+because that method remains under development. It is a parity smoke, not a
+replacement for the broader benchmark matrix.
 Use `just verify-fem-relaxation-production-benchmark` for the broader managed
 container-backed interaction-matrix gate. It runs the deterministic Box500
 airbox CPU/GPU consistency preset across exchange, Zeeman, demag, anisotropy,
 DMI, and STT/Oersted scenario families for the current production algorithms.
-It still requires per-algorithm CPU/GPU pairs for algorithms with both lanes,
-requires CPU-only coverage for `tangent_plane_implicit`, and requires strict
-managed FEM runtime availability.
+It requires per-algorithm CPU/GPU pairs for the active production algorithms
+and strict managed FEM runtime availability.
 
 Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use FEM
 lumped-mass inner products and native Armijo line search on both maintained
@@ -479,9 +478,9 @@ with a clear under-development diagnostic.
 - [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED device-resident tangent-plane solve; under development)
 - [ ] Hybrid backend
 - [ ] Outputs / observables
-- [x] Targeted source-contract and managed runtime smoke coverage for current LLG/PG-BB/NCG/TPI executable lanes
-- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG/TPI executable lanes
-- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG/TPI executable lanes
+- [x] Targeted source-contract and managed runtime smoke coverage for current LLG/PG-BB/NCG production lanes
+- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG production lanes
+- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes
 - [ ] Extended benchmark campaign across mesh refinements, adaptive timesteps, and publication-scale physics cases
 - [x] Documentation (this note + `0500-fdm-relaxation-algorithms.md`)
 

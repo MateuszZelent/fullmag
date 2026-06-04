@@ -479,10 +479,13 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(fieldKey)).toBe(8);
   });
 
-  it("refreshes simulation step resources for scalar result batches without session status fanout", () => {
+  it("refreshes scalar resources for scalar result batches without runtime or field fanout", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
+    const scalarWindowKey = `${DATA_SCALARS_PATH}?limit=100`;
+
+    resources.subscribe(scalarWindowKey, () => {});
 
     const handled = bridge.handleEvent({
       payload: {
@@ -500,9 +503,10 @@ describe("RealtimeInvalidationBridge", () => {
     expect(handled).toBe(true);
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
-    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(10);
-    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(10);
-    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(10);
+    expect(resources.getRevision(scalarWindowKey)).toBe(10);
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBeNull();
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
   });
 
@@ -533,6 +537,48 @@ describe("RealtimeInvalidationBridge", () => {
     expect(handled).toBe(true);
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
     expect(resources.getRevision(fieldKey)).toBe(11);
+  });
+
+  it("maps quantity-scoped field sample invalidations only to matching field resources", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const mFieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full&scope_kind=full`;
+    const hEffFieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "H_eff",
+    )}?component=full&scope_kind=airbox&max_samples=1200`;
+    const mCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${mFieldKey}`;
+    const hEffCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:airbox-field-vectors:${hEffFieldKey}`;
+
+    resources.subscribe(mFieldKey, () => {});
+    resources.subscribe(hEffFieldKey, () => {});
+    resources.subscribe(mCollectionKey, () => {});
+    resources.subscribe(hEffCollectionKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            quantity_ids: ["m"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 12,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+    expect(resources.getRevision(mFieldKey)).toBe(12);
+    expect(resources.getRevision(mCollectionKey)).toBe(12);
+    expect(resources.getRevision(hEffFieldKey)).toBeNull();
+    expect(resources.getRevision(hEffCollectionKey)).toBeNull();
   });
 
   it("refreshes mesh build dependents after latest successful build changes", () => {

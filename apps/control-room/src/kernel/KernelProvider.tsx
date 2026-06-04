@@ -8,6 +8,7 @@ import {
   resolveControlRoomApiBase,
   resolveControlRoomWebSocketUrl,
 } from "./api/apiRuntimeTarget";
+import { normalizeQuantityIdOrDefault } from "./api/quantityIds";
 import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "./authoring/magnetization-texture/commands";
@@ -231,9 +232,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
 
     const auditApi = {
       setGlobalQuantity: async (quantityId: string) => {
+        const activeQuantityId = normalizeQuantityIdOrDefault(quantityId);
         kernel.visualizationSync.queuePatch({
-          active_quantity_id: quantityId,
-          quantity: { active_quantity_id: quantityId },
+          active_quantity_id: activeQuantityId,
+          quantity: { active_quantity_id: activeQuantityId },
         });
         await kernel.visualizationSync.flushNow();
       },

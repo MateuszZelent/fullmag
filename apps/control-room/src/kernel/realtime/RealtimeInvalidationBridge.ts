@@ -3,7 +3,6 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
-  DATA_SCALARS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -14,12 +13,11 @@ import {
   MODEL_SCENE_PATH,
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
-  SIMULATION_OBJECT_METRICS_PATH,
-  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
+import { resolveCanonicalQuantityId } from "../api/quantityIds";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -33,6 +31,8 @@ interface RealtimeResourceEvent {
 }
 
 interface RealtimeBatchChange {
+  broad?: boolean;
+  quantity_ids?: string[];
   resource?: string;
   resource_id?: string;
   recommended_fetch?: string;
@@ -108,6 +108,10 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
   }
 
   return {
+    broad: record.broad === true,
+    quantity_ids: Array.isArray(record.quantity_ids)
+      ? record.quantity_ids.filter((value): value is string => typeof value === "string")
+      : undefined,
     resource: typeof record.resource === "string" ? record.resource : undefined,
     resource_id:
       typeof record.resource_id === "string" ? record.resource_id : undefined,
@@ -172,6 +176,10 @@ export class RealtimeInvalidationBridge {
   private currentSessionId: string | null = null;
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
+  private pendingMatchers: Array<{
+    predicate: (resourceKey: string) => boolean;
+    revision: ResourceRevision;
+  }> = [];
   private pendingPrefixes = new Map<string, ResourceRevision>();
   private pendingStatusRevision: ResourceRevision | null = null;
 
@@ -221,7 +229,16 @@ export class RealtimeInvalidationBridge {
           change.resource === "fields" &&
           change.resource_id === "samples"
         ) {
-          this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
+          if (change.broad || !change.quantity_ids?.length) {
+            this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
+          } else {
+            for (const quantityId of change.quantity_ids) {
+              this.queueFieldSampleQuantityInvalidation(
+                quantityId,
+                change.revision,
+              );
+            }
+          }
         }
         handled = true;
       }
@@ -328,6 +345,27 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private queueFieldSampleQuantityInvalidation(
+    quantityId: string,
+    revision: ResourceRevision,
+  ): void {
+    const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+    const quantityPrefix = `${DATA_FIELDS_PATH}/${encodeURIComponent(canonicalQuantityId)}/`;
+    this.queueMatchingInvalidation(
+      (resourceKey) =>
+        resourceKey.startsWith(quantityPrefix) ||
+        resourceKey.includes(quantityPrefix),
+      revision,
+    );
+  }
+
+  private queueMatchingInvalidation(
+    predicate: (resourceKey: string) => boolean,
+    revision: ResourceRevision,
+  ): void {
+    this.pendingMatchers.push({ predicate, revision });
+  }
+
   private scheduleFlush(): void {
     if (this.flushCancel) return;
     const scheduleFlush = this.options.scheduleFlush ?? defaultScheduleFlush;
@@ -343,9 +381,11 @@ export class RealtimeInvalidationBridge {
   private flushPendingInvalidations(): void {
     const pendingFetches = this.pendingFetches;
     const pendingPrefixes = this.pendingPrefixes;
+    const pendingMatchers = this.pendingMatchers;
     let statusRevision = this.pendingStatusRevision;
     this.pendingFetches = new Map<string, ResourceRevision>();
     this.pendingPrefixes = new Map<string, ResourceRevision>();
+    this.pendingMatchers = [];
     this.pendingStatusRevision = null;
 
     for (const [resourceKey, revision] of pendingFetches) {
@@ -357,12 +397,12 @@ export class RealtimeInvalidationBridge {
       if (dependentStatusRevision !== null && statusRevision === null) {
         statusRevision = latestRevision(statusRevision, dependentStatusRevision);
       }
-      if (resourceKey === DATA_SCALARS_PATH) {
-        this.invalidateSimulationStepResources(revision);
-      }
     }
     for (const [resourceKey, revision] of pendingPrefixes) {
       this.resources.invalidatePrefix(resourceKey, revision);
+    }
+    for (const matcher of pendingMatchers) {
+      this.resources.invalidateMatching(matcher.predicate, matcher.revision);
     }
 
     if (statusRevision !== null) {
@@ -436,17 +476,5 @@ export class RealtimeInvalidationBridge {
     }
 
     return null;
-  }
-
-  private invalidateSimulationStepResources(revision: ResourceRevision): void {
-    this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
-    this.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
-    this.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
-    this.resources.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
-    this.resources.invalidatePrefix(
-      resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
-      revision,
-    );
-    this.resources.invalidatePrefix(DATA_FIELDS_PATH, revision);
   }
 }

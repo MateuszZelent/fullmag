@@ -76,6 +76,17 @@ export class ResourceInvalidationController {
     }
   }
 
+  invalidateMatching(
+    predicate: (resourceKey: ResourceKey) => boolean,
+    revision: ResourceRevision,
+  ): void {
+    for (const resourceKey of this.listeners.keys()) {
+      if (predicate(resourceKey)) {
+        this.invalidate(resourceKey, revision);
+      }
+    }
+  }
+
   subscribe(resourceKey: ResourceKey, listener: ResourceListener): () => void {
     const listeners =
       this.listeners.get(resourceKey) ?? new Set<ResourceListener>();

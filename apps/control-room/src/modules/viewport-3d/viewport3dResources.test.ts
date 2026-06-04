@@ -130,7 +130,7 @@ describe("viewport3dResources", () => {
           "part-b",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&max_samples=128&scope_id=part-b&scope_kind=part`,
-            quantityId: "h_eff",
+            quantityId: "H_eff",
             query: {
               component: "full",
               max_samples: 128,
@@ -145,16 +145,40 @@ describe("viewport3dResources", () => {
 
   it("builds stable full-field keys for target-specific quantities", () => {
     expect(
-      resolveViewport3DQuantityFieldVectorResourceKeys(["h_eff", "m", "h_eff"]),
+      resolveViewport3DQuantityFieldVectorResourceKeys(["h_eff", "H_eff", "m"]),
     ).toEqual(
       new Map([
         [
-          "h_eff",
+          "H_eff",
           `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=full`,
         ],
         [
           "m",
           `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full&scope_kind=full`,
+        ],
+      ]),
+    );
+  });
+
+  it("deduplicates target-specific field vector requests after canonicalization", () => {
+    expect(
+      resolveViewport3DQuantityFieldVectorResourceRequests(
+        new Map([
+          ["h_eff", { component: "full", scope_kind: "full" }],
+          ["H_eff", { component: "magnitude", scope_kind: "full" }],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        [
+          "H_eff",
+          {
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=magnitude&scope_kind=full`,
+            query: {
+              component: "magnitude",
+              scope_kind: "full",
+            },
+          },
         ],
       ]),
     );
@@ -183,7 +207,7 @@ describe("viewport3dResources", () => {
     ).toEqual(
       new Map([
         [
-          "h_eff",
+          "H_eff",
           {
             key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=magnitude&scope_kind=full`,
             query: {

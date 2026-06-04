@@ -17,7 +17,11 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
-import { isMagneticOnlyQuantityId } from "@/kernel/api/quantityIds";
+import {
+  isMagneticOnlyQuantityId,
+  resolveCanonicalQuantityId,
+  sameQuantityId,
+} from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import type {
@@ -176,6 +180,18 @@ export interface Viewport3DScopedPartVectorFieldRequest {
   query: FieldVectorQuery;
 }
 
+export function resolveViewport3DVisualizationQuantityId(
+  state: VisualizationStateResource | null | undefined,
+): string {
+  return resolveCanonicalQuantityId(
+    state?.quantity?.active_quantity_id ?? state?.active_quantity_id ?? "m",
+  );
+}
+
+export function sameViewport3DQuantityId(left: string, right: string): boolean {
+  return sameQuantityId(left, right);
+}
+
 export function resolveViewport3DPrimaryFieldQuery({
   fdmInstanceModelNeedsFieldVector,
   fdmSurfaceColorMode,
@@ -303,7 +319,10 @@ export function resolveViewport3DPrimaryFieldRenderOptions({
 
   for (const partModel of magneticParts) {
     const settings = getPartSettings(partModel.part);
-    if (settings.activeQuantityId !== quantityId || !settings.visible) {
+    if (
+      !sameViewport3DQuantityId(settings.activeQuantityId, quantityId) ||
+      !settings.visible
+    ) {
       continue;
     }
     if (settings.shaderVisible) {
@@ -370,7 +389,7 @@ export function resolveViewport3DScopedPartVectorFieldRequests({
       continue;
     }
     requests.set(partModel.part.id, {
-      quantityId: settings.activeQuantityId,
+      quantityId: resolveCanonicalQuantityId(settings.activeQuantityId),
       query: resolveViewport3DScopedVectorFieldQuery({
         maxSamples: settings.vectorBudget,
         surfaceColorMode: null,
@@ -600,7 +619,7 @@ export function useViewport3DSceneModel({
   const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
     layers: renderingState?.layers,
   });
-  const quantityId = renderingState?.active_quantity_id ?? "m";
+  const quantityId = resolveViewport3DVisualizationQuantityId(renderingState);
   const scalarColorPalette =
     renderingState?.quantity?.colormap ?? renderingState?.colormap ?? "viridis";
   const vectorColorMode =
@@ -992,12 +1011,12 @@ export function useViewport3DSceneModel({
       }
       const settings = getPartSettings(partModel.part);
       if (
-        settings.activeQuantityId !== quantityId &&
+        !sameViewport3DQuantityId(settings.activeQuantityId, quantityId) &&
         settings.visible &&
         (settings.shaderVisible || settings.vectorsVisible)
       ) {
         setQuery(
-          settings.activeQuantityId,
+          resolveCanonicalQuantityId(settings.activeQuantityId),
           resolveViewport3DTargetFieldQuery({
             surfaceColorMode: settings.shaderVisible
               ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
@@ -1008,12 +1027,12 @@ export function useViewport3DSceneModel({
       }
     }
     if (
-      fdmSettings.activeQuantityId !== quantityId &&
+      !sameViewport3DQuantityId(fdmSettings.activeQuantityId, quantityId) &&
       fdmSettings.visible &&
       (fdmSettings.shaderVisible || fdmSettings.vectorsVisible)
     ) {
       setQuery(
-        fdmSettings.activeQuantityId,
+        resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
         resolveViewport3DTargetFieldQuery({
           surfaceColorMode: fdmSurfaceColorMode,
           vectorsVisible: fdmSettings.vectorsVisible,
@@ -1082,7 +1101,9 @@ export function useViewport3DSceneModel({
       const partFieldVectors = new Map<string, DecodedFieldVector>();
       if (targetQuantityFieldVectors.data && currentTopologyRenderModel) {
         for (const partModel of currentTopologyRenderModel.magneticParts) {
-          const targetQuantityId = getPartSettings(partModel.part).activeQuantityId;
+          const targetQuantityId = resolveCanonicalQuantityId(
+            getPartSettings(partModel.part).activeQuantityId,
+          );
           const fieldVector = targetQuantityFieldVectors.data.get(targetQuantityId);
           if (fieldVector) {
             partFieldVectors.set(partModel.part.id, fieldVector);
@@ -1091,7 +1112,7 @@ export function useViewport3DSceneModel({
         if (airboxQuantityCompatible) {
           for (const partModel of currentTopologyRenderModel.airboxParts) {
             const fieldVector = targetQuantityFieldVectors.data.get(
-              airboxSettings.activeQuantityId,
+              resolveCanonicalQuantityId(airboxSettings.activeQuantityId),
             );
             if (fieldVector) {
               partFieldVectors.set(partModel.part.id, fieldVector);
@@ -1228,9 +1249,11 @@ export function useViewport3DSceneModel({
   );
   const committedFieldVector = fieldVector.data ?? null;
   const fdmFieldVector =
-    fdmSettings.activeQuantityId === quantityId
+    sameViewport3DQuantityId(fdmSettings.activeQuantityId, quantityId)
       ? committedFieldVector
-      : targetQuantityFieldVectors.data?.get(fdmSettings.activeQuantityId) ?? null;
+      : targetQuantityFieldVectors.data?.get(
+          resolveCanonicalQuantityId(fdmSettings.activeQuantityId),
+        ) ?? null;
   const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
     ? fdmFieldVector
     : null;

@@ -171,6 +171,55 @@ describe("ResourceRuntimeStore", () => {
     });
   });
 
+  it("delays heavy refetches until the minimum interval elapses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const loadInitial = vi.fn(async () => "initial");
+      const loadLatest = vi.fn(async () => "latest");
+
+      await store.ensureLoad({
+        externalRevision: 1,
+        load: loadInitial,
+        minRefetchIntervalMs: 250,
+        resourceKey: "data/fields/m",
+        resolveRevision: () => 1,
+      });
+
+      vi.setSystemTime(1_020);
+      await store.ensureLoad({
+        externalRevision: 2,
+        load: loadLatest,
+        minRefetchIntervalMs: 250,
+        resourceKey: "data/fields/m",
+        resolveRevision: () => 2,
+      });
+
+      expect(loadInitial).toHaveBeenCalledTimes(1);
+      expect(loadLatest).not.toHaveBeenCalled();
+      expect(store.getSnapshot("data/fields/m")).toMatchObject({
+        data: "initial",
+        revision: 2,
+        status: "stale",
+      });
+
+      await vi.advanceTimersByTimeAsync(229);
+      expect(loadLatest).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+
+      expect(loadLatest).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot("data/fields/m")).toMatchObject({
+        data: "latest",
+        revision: 2,
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps newer locally seeded data when an older in-flight load resolves", async () => {
     const store = new ResourceRuntimeStore<string>();
     const stale = deferred<string>();

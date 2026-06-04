@@ -1711,7 +1711,7 @@ mod tests {
 
         let tpi = row("Relaxation(tangent_plane_implicit)");
         assert!(tpi.contains("fem_cpu_native"), "{tpi}");
-        assert!(tpi.contains("native CPU/MFEM ABI"), "{tpi}");
+        assert!(tpi.contains("native CPU/MFEM implementation path"), "{tpi}");
         assert!(tpi.contains("demag fresh-solve linear response"), "{tpi}");
         assert!(
             tpi.contains("**under-development** (native FEM CPU/MFEM and FEM GPU/libCEED)"),

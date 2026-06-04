@@ -36,6 +36,7 @@ const child = spawn(
   ["--dir", appDir, "dev", "--hostname", hostname, "--port", port],
   {
     cwd: repoRoot,
+    detached: process.platform !== "win32",
     env: {
       ...process.env,
       FULLMAG_API_PROXY_TARGET: apiTarget,
@@ -61,10 +62,26 @@ const shutdown = (signal) => {
     return;
   }
   shuttingDown = true;
-  child.kill(signal);
+  if (process.platform === "win32") {
+    child.kill(signal);
+  } else {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  }
   setTimeout(() => {
     if (!childExited) {
-      child.kill("SIGKILL");
+      if (process.platform === "win32") {
+        child.kill("SIGKILL");
+      } else {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
+      }
     }
   }, 2000).unref();
 };

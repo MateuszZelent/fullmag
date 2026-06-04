@@ -77,6 +77,26 @@ describe("ResourceInvalidationController", () => {
     expect(controller.getRevision("data:fields:m:full")).toBe(7);
   });
 
+  it("invalidates subscribed resources by predicate", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const mListener = vi.fn();
+    const hEffListener = vi.fn();
+
+    controller.subscribe("data:fields:m:samples/vector", mListener);
+    controller.subscribe("data:fields:H_eff:samples/vector", hEffListener);
+
+    controller.invalidateMatching(
+      (resourceKey) => resourceKey.includes(":m:"),
+      12,
+    );
+
+    expect(mListener).toHaveBeenCalledWith(12);
+    expect(hEffListener).not.toHaveBeenCalled();
+    expect(controller.getRevision("data:fields:m:samples/vector")).toBe(12);
+    expect(controller.getRevision("data:fields:H_eff:samples/vector")).toBeNull();
+  });
+
   it("applies prefix revisions to child resources subscribed after invalidation", () => {
     const bus = new EventBus<KernelEventMap>();
     const controller = new ResourceInvalidationController(bus);

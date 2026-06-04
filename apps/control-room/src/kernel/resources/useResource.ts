@@ -26,6 +26,7 @@ interface LoadContext {
 interface UseResourceOptions<TData> {
   enabled?: boolean;
   load: (context: LoadContext) => Promise<TData>;
+  minRefetchIntervalMs?: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
 }
@@ -43,6 +44,7 @@ const NOOP_SUBSCRIBE = () => undefined;
 export function useResource<TData>({
   enabled = true,
   load,
+  minRefetchIntervalMs,
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
@@ -95,6 +97,7 @@ export function useResource<TData>({
     errorCountRef,
     externalRevision,
     load,
+    minRefetchIntervalMs,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -131,6 +134,7 @@ export function useResourceSelector<TData, TSelected>({
   enabled = true,
   isEqual = Object.is,
   load,
+  minRefetchIntervalMs,
   resolveRevision,
   resourceKey,
   selector,
@@ -209,6 +213,7 @@ export function useResourceSelector<TData, TSelected>({
     errorCountRef,
     externalRevision,
     load,
+    minRefetchIntervalMs,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -223,6 +228,7 @@ function useResourceLoader<TData>({
   errorCountRef,
   externalRevision,
   load,
+  minRefetchIntervalMs = 0,
   refreshToken,
   resolveRevision,
   resourceKey,
@@ -232,6 +238,7 @@ function useResourceLoader<TData>({
   errorCountRef: { current: number };
   externalRevision: ResourceRevision | null;
   load: (context: LoadContext) => Promise<TData>;
+  minRefetchIntervalMs?: number;
   refreshToken: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
@@ -250,6 +257,7 @@ function useResourceLoader<TData>({
           externalRevision,
           force: refreshToken > 0,
           load,
+          minRefetchIntervalMs,
           resolveRevision,
           resourceKey,
         })
@@ -269,6 +277,7 @@ function useResourceLoader<TData>({
     errorCountRef,
     externalRevision,
     load,
+    minRefetchIntervalMs,
     refreshToken,
     resolveRevision,
     resourceKey,

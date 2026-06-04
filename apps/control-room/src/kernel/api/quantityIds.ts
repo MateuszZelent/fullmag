@@ -60,6 +60,21 @@ export function resolveCanonicalQuantityId(quantityId: string): string {
   return CANONICAL_QUANTITY_IDS[trimmed] ?? trimmed;
 }
 
+export function normalizeQuantityIdOrDefault(
+  quantityId: string | null | undefined,
+  fallback = "m",
+): string {
+  const trimmed = quantityId?.trim() ?? "";
+  return resolveCanonicalQuantityId(trimmed || fallback);
+}
+
+export function sameQuantityId(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  return normalizeQuantityIdOrDefault(left) === normalizeQuantityIdOrDefault(right);
+}
+
 export function isMagneticOnlyQuantityId(quantityId: string): boolean {
   return MAGNETIC_ONLY_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
 }

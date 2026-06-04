@@ -74,6 +74,25 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f64, RunError> {
+    if let Some(dt) =
+        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
+    {
+        return Ok(dt);
+    }
+    if plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| crate::fem::relax::algorithm::is_direct_minimizer(control.algorithm))
+    {
+        return Ok(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    }
+    Err(RunError {
+        message: "native FEM: no fixed_timestep or adaptive_timestep specified".to_string(),
+    })
+}
+
+#[cfg(feature = "fem-gpu")]
 fn assign_runtime_marker_range(
     markers: &mut [Option<u32>],
     start: usize,
@@ -611,13 +630,7 @@ impl NativeFemBackend {
                 .unwrap_or(FALLBACK_ROBIN_BETA_FACTOR),
             initial_magnetization_xyz: m_flat.as_ptr(),
             initial_magnetization_len: m_flat.len() as u64,
-            dt_seconds: crate::resolve_initial_timestep(
-                plan.fixed_timestep,
-                plan.adaptive_timestep.as_ref(),
-            )
-            .ok_or_else(|| RunError {
-                message: "native FEM: no fixed_timestep or adaptive_timestep specified".to_string(),
-            })?,
+            dt_seconds: resolve_native_fem_plan_dt_seconds(plan)?,
             adaptive_config: std::ptr::null(),
             field_refresh: ffi::fullmag_fem_field_refresh_policy {
                 has_demag_interval_s: if plan
@@ -1863,6 +1876,45 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn native_fem_direct_minimizer_without_solver_timestep_uses_internal_seed() {
+        let mut plan = make_test_plan();
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = None;
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-6),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        });
+
+        assert_eq!(
+            resolve_native_fem_plan_dt_seconds(&plan).expect("direct minimizer seed dt"),
+            crate::DEFAULT_ADAPTIVE_DT_INITIAL
+        );
+    }
+
+    #[test]
+    fn native_fem_non_relaxation_without_solver_timestep_still_errors() {
+        let mut plan = make_test_plan();
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = None;
+        plan.relaxation = None;
+
+        let err = resolve_native_fem_plan_dt_seconds(&plan)
+            .expect_err("non-relaxation plan must still require timestep policy");
+        assert!(
+            err.message
+                .contains("no fixed_timestep or adaptive_timestep"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

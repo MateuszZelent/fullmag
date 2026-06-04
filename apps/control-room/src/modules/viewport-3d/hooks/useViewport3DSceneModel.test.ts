@@ -12,6 +12,8 @@ import {
   resolveViewport3DScopedPartVectorFieldRequests,
   resolveViewport3DScopedVectorFieldQuery,
   resolveViewport3DTargetFieldQuery,
+  resolveViewport3DVisualizationQuantityId,
+  sameViewport3DQuantityId,
 } from "./useViewport3DSceneModel";
 import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
 import {
@@ -62,6 +64,50 @@ describe("useViewport3DSceneModel", () => {
       revision: "etag-1",
       status: "ready",
     });
+  });
+
+  it("prefers canonical visualization quantity over stale compatibility state", () => {
+    expect(
+      resolveViewport3DVisualizationQuantityId({
+        active_quantity_id: "H_demag",
+        quantity: {
+          active_quantity_id: "m",
+        },
+      } as never),
+    ).toBe("m");
+  });
+
+  it("compares target quantities by canonical identity", () => {
+    expect(sameViewport3DQuantityId("h_eff", "H_eff")).toBe(true);
+    expect(sameViewport3DQuantityId("h_demag", "H_eff")).toBe(false);
+  });
+
+  it("keeps canonical-equivalent target quantities on the primary render path", () => {
+    const primaryOptions = resolveViewport3DPrimaryFieldRenderOptions({
+      fieldRenderOptions: {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
+        scalarColorsVisible: false,
+      },
+      getPartSettings: () =>
+        ({
+          activeQuantityId: "h_eff",
+          shaderVisible: true,
+          surfaceColorSource: "magnitude",
+          vectorBudget: 256,
+          vectorsVisible: true,
+          visible: true,
+        }) as never,
+      magneticParts: [{ part: { id: "part:free-layer" } }] as never,
+      quantityId: "H_eff",
+      vectorDomain: "auto",
+    });
+
+    expect(primaryOptions.scalarColorModes).toEqual(new Set(["magnitude"]));
+    expect(primaryOptions.partVectorBudgets).toEqual(
+      new Map([["part:free-layer", 256]]),
+    );
   });
 
   it("keeps full field vectors when glyphs or orientation colors need vector components", () => {

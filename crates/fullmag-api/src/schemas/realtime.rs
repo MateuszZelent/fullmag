@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const FULLMAG_LIVE_SUBPROTOCOL: &str = "fullmag.live.v1";
 
@@ -7,6 +8,8 @@ pub struct RealtimeResourceRevisionMap {
     pub topology_revision: u64,
     pub field_catalog_revision: u64,
     pub field_revision: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_quantity_revisions: BTreeMap<String, u64>,
     pub slice_revision: u64,
     pub artifact_revision: u64,
     pub command_completion_revision: u64,
@@ -53,10 +56,18 @@ pub struct RealtimeResourceChange {
     pub revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quantity_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub broad: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_generation_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_fetch: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

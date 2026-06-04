@@ -44,6 +44,8 @@ constexpr double kMaxStepSize = 1.0e-3;
 constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr double kGradientFloor = 1.0e-30;
 constexpr double kBbCurvatureScale = 1.0e-6;
+constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23;
+constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12;
 constexpr uint32_t kMaxBacktracks = 20;
 constexpr uint32_t kArmijoRecoveryCycles = 1;
 
@@ -87,6 +89,27 @@ void mark_gpu_relax_pgbb_device_source_of_truth(Context &ctx)
     gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
     gpu.residency.host_state = FemGpuSyncState::HostStale;
+}
+
+double line_search_energy_tolerance(
+    double current_energy,
+    double trial_energy)
+{
+    return std::max(
+        kLineSearchEnergyNoiseFloorJ,
+        kLineSearchEnergyNoiseRelative *
+            std::max(std::abs(current_energy), std::abs(trial_energy)));
+}
+
+bool gpu_relax_accept_monotone_recovery_step(
+    double current_energy,
+    double trial_energy)
+{
+    return std::isfinite(current_energy) &&
+        std::isfinite(trial_energy) &&
+        trial_energy <=
+            current_energy +
+                line_search_energy_tolerance(current_energy, trial_energy);
 }
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
@@ -380,12 +403,6 @@ bool gpu_relax_retry_pgbb_line_search_with_reset(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    auto gpu_relax_accept_monotone_recovery_step =
-        [](double current_energy, double trial_energy) {
-            return std::isfinite(current_energy) &&
-                std::isfinite(trial_energy) &&
-                trial_energy <= current_energy;
-        };
     for (uint32_t recovery_cycle = 0;
          recovery_cycle < kArmijoRecoveryCycles;
          ++recovery_cycle) {
@@ -731,10 +748,19 @@ int gpu_relax_projected_gradient_bb_step(
             error);
     }
     if (!line_search_accepted) {
+        const double armijo_rhs =
+            current_energy -
+                kArmijoCoefficient * trial_step * gradient_norm_sq;
         const std::string original_error =
             "GPU projected-gradient BB failed Armijo line search after " +
             std::to_string(backtracks) +
-            " backtracks";
+            " backtracks; current_energy_j=" +
+            std::to_string(current_energy) +
+            " last_trial_energy_j=" +
+            std::to_string(trial_energy) +
+            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
+            " last_trial_step=" + std::to_string(trial_step) +
+            " gradient_norm_sq=" + std::to_string(gradient_norm_sq);
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,
@@ -743,6 +769,11 @@ int gpu_relax_projected_gradient_bb_step(
             error);
     }
 
+    // Rollback captured *after* the accepted line search (unlike NCG which
+    // captures before).  PGBB only needs metadata rollback (step_size, use_bb1,
+    // reset_consecutive) if the post-acceptance BB curvature or stats finalization
+    // fails — the magnetization is already correct on device from the line search
+    // and m_backup still holds the pre-step state for device-level restore.
     const GpuRelaxPgbbRollbackState rollback =
         capture_gpu_relax_pgbb_rollback_state(ctx);
     double accepted_gradient_norm_sq = 0.0;

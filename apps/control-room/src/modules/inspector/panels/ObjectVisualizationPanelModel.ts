@@ -42,10 +42,10 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   value: string;
 }> = [
   { value: "m", label: "Magnetization / m" },
-  { value: "h_eff", label: "Effective field / h_eff" },
-  { value: "h_demag", label: "Demag field / h_demag" },
-  { value: "h_ex", label: "Exchange field / h_ex" },
-  { value: "h_ani", label: "Anisotropy field / h_ani" },
+  { value: "H_eff", label: "Effective field / H_eff" },
+  { value: "H_demag", label: "Demag field / H_demag" },
+  { value: "H_ex", label: "Exchange field / H_ex" },
+  { value: "H_ani", label: "Anisotropy field / H_ani" },
   { value: "eden_total", label: "Total energy density / eden_total" },
   { value: "eden_ex", label: "Exchange energy density / eden_ex" },
   { value: "eden_demag", label: "Demag energy density / eden_demag" },

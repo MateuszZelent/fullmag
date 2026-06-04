@@ -52,6 +52,7 @@ const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
 };
+const VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS = 250;
 
 export interface Viewport3DQuantityFieldVectorRequest {
   key: string;
@@ -155,9 +156,10 @@ export function resolveViewport3DFieldVectorResourceKey(
   quantityId: string,
   query: FieldVectorQuery = {},
 ): string {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
   const path = DATA_FIELD_VECTOR_PATH.replace(
     "{quantity_id}",
-    encodeURIComponent(resolveCanonicalQuantityId(quantityId)),
+    encodeURIComponent(canonicalQuantityId),
   );
   const params = new URLSearchParams();
   if (query.component) params.set("component", query.component);
@@ -202,9 +204,12 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
 export function resolveViewport3DQuantityFieldVectorResourceKeys(
   quantityIds: readonly string[],
 ): Map<string, string> {
+  const canonicalQuantityIds = quantityIds
+    .map((quantityId) => quantityId.trim())
+    .filter((quantityId) => quantityId.length > 0)
+    .map(resolveCanonicalQuantityId);
   return new Map(
-    [...new Set(quantityIds)]
-      .filter((quantityId) => quantityId.trim().length > 0)
+    [...new Set(canonicalQuantityIds)]
       .sort()
       .map((quantityId) => [
         quantityId,
@@ -219,9 +224,14 @@ export function resolveViewport3DQuantityFieldVectorResourceKeys(
 export function resolveViewport3DQuantityFieldVectorResourceRequests(
   quantityQueries: ReadonlyMap<string, FieldVectorQuery>,
 ): Map<string, Viewport3DQuantityFieldVectorRequest> {
+  const canonicalQueries = new Map<string, FieldVectorQuery>();
+  for (const [quantityId, query] of quantityQueries) {
+    const trimmed = quantityId.trim();
+    if (!trimmed) continue;
+    canonicalQueries.set(resolveCanonicalQuantityId(trimmed), query);
+  }
   return new Map(
-    Array.from(quantityQueries)
-      .filter(([quantityId]) => quantityId.trim().length > 0)
+    Array.from(canonicalQueries)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([quantityId, query]) => [
         quantityId,
@@ -244,6 +254,9 @@ export function resolveViewport3DPartFieldVectorResourceRequests(
       .filter(([, request]) => request.quantityId.trim().length > 0)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([partId, request]) => {
+        const quantityId = resolveCanonicalQuantityId(
+          request.quantityId.trim(),
+        );
         const query: FieldVectorQuery = {
           ...request.query,
           component: request.query.component ?? "full",
@@ -254,10 +267,10 @@ export function resolveViewport3DPartFieldVectorResourceRequests(
           partId,
           {
             key: resolveViewport3DFieldVectorResourceKey(
-              request.quantityId,
+              quantityId,
               query,
             ),
-            quantityId: request.quantityId,
+            quantityId,
             query,
           },
         ];
@@ -355,6 +368,7 @@ export function useViewport3DFieldVector(
   const resource = useResource({
     enabled,
     load,
+    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
     resolveRevision,
     resourceKey: requestKey,
   });
@@ -434,6 +448,7 @@ export function useViewport3DAirboxFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
+    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
     resolveRevision,
     resourceKey,
   });
@@ -517,6 +532,7 @@ export function useViewport3DQuantityFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
+    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
     resolveRevision,
     resourceKey,
   });
@@ -588,6 +604,7 @@ export function useViewport3DPartFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
+    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
     resolveRevision,
     resourceKey,
   });

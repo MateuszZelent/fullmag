@@ -2,6 +2,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { normalizeQuantityIdOrDefault } from "@/kernel/api/quantityIds";
 import type {
   CommandContext,
   CommandContribution,
@@ -79,7 +80,7 @@ export function globalQuantityCommandInput(
   targetQuantityOverrideCount = 0,
 ): ApplyGlobalQuantityInput {
   return {
-    activeQuantityId,
+    activeQuantityId: normalizeQuantityIdOrDefault(activeQuantityId),
     clearTargetQuantities,
     requiresConfirmation,
     targetQuantityOverrideCount,
@@ -543,11 +544,12 @@ function asApplyGlobalQuantityInput(
   value: unknown,
 ): ApplyGlobalQuantityInput | null {
   const record = asRecord(value);
-  const activeQuantityId =
+  const rawActiveQuantityId =
     typeof record?.activeQuantityId === "string"
       ? record.activeQuantityId.trim()
       : "";
-  if (!record || !activeQuantityId) return null;
+  if (!record || !rawActiveQuantityId) return null;
+  const activeQuantityId = normalizeQuantityIdOrDefault(rawActiveQuantityId);
   return {
     activeQuantityId,
     clearTargetQuantities: Boolean(record.clearTargetQuantities),

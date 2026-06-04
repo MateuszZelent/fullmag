@@ -64,6 +64,10 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import {
+  normalizeQuantityIdOrDefault,
+  sameQuantityId,
+} from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -2756,12 +2760,13 @@ function buildQuantityAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
   const state = context.visualizationState;
-  const activeQuantityId =
-    state?.quantity?.active_quantity_id ?? state?.active_quantity_id ?? "m";
+  const activeQuantityId = normalizeQuantityIdOrDefault(
+    state?.quantity?.active_quantity_id ?? state?.active_quantity_id,
+  );
   const targetQuantityOverrideCount =
     state?.overrides?.filter((entry) => {
       const quantityId = entry.quantity?.active_quantity_id;
-      return Boolean(quantityId && quantityId !== activeQuantityId);
+      return Boolean(quantityId && !sameQuantityId(quantityId, activeQuantityId));
     }).length ?? 0;
   const hasMixedTargetQuantities = targetQuantityOverrideCount > 0;
   const overlayVisible = state?.layers?.quantity_overlay?.visible ?? true;
@@ -3806,11 +3811,11 @@ function buildSelectedVisualizationGroup(
     settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource,
     context.sessionStatus,
   );
-  const selectedQuantityId =
+  const selectedQuantityId = normalizeQuantityIdOrDefault(
     settings?.activeQuantityId ??
-    context.visualizationState?.quantity?.active_quantity_id ??
-    context.visualizationState?.active_quantity_id ??
-    "m";
+      context.visualizationState?.quantity?.active_quantity_id ??
+      context.visualizationState?.active_quantity_id,
+  );
   const selectedVectorScope =
     targetVisualization?.override?.geometryScope ??
     (target

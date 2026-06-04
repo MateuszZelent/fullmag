@@ -576,7 +576,7 @@ describe("ribbon structure", () => {
       {
         overrides: [
           {
-            quantity: { active_quantity_id: "h_eff" },
+            quantity: { active_quantity_id: "H_eff" },
             scope: "object",
             scope_id: "free-layer",
           },
@@ -633,7 +633,7 @@ describe("ribbon structure", () => {
       {
         overrides: [
           {
-            quantity: { active_quantity_id: "h_eff" },
+            quantity: { active_quantity_id: "H_eff" },
             scope: "airbox",
             scope_id: "airbox",
           },
@@ -1550,6 +1550,79 @@ describe("ribbon structure", () => {
     expect(patches).toEqual([]);
   });
 
+  it("does not mark canonical-equivalent target quantities as mixed", () => {
+    const { context } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "H_eff",
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            quantity: { active_quantity_id: "h_eff" },
+          },
+        ],
+        quantity: {
+          active_quantity_id: "H_eff",
+          auto_contrast: true,
+          colormap: "viridis",
+          field_component: "magnitude",
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", context);
+    const quantityAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-quantity");
+    const mixedNode = quantityAction?.menu?.find(
+      (node) => node.type === "status" && node.id === "quantity:mixed-targets",
+    );
+
+    expect(quantityAction?.iconColor).toBe("text-sky-300");
+    expect(mixedNode).toBeUndefined();
+  });
+
+  it("canonicalizes selected target quantity radio values", () => {
+    const { context } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "H_eff",
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            quantity: { active_quantity_id: "h_eff" },
+          },
+        ],
+        quantity: { active_quantity_id: "H_eff" },
+        revision: 7,
+      });
+    const selection = {
+      kind: "object.visualization" as const,
+      label: "Free layer",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:visualization",
+      objectId: "free-layer",
+      ref: null,
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const quantityNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "selected-texture:quantity",
+    );
+
+    expect(quantityNode).toMatchObject({
+      value: "H_eff",
+    });
+  });
+
   it("marks global Quantity controls as mixed and can clear per-target quantities", async () => {
     const { context, invalidations, patches } =
       createVisualizationRibbonContext({
@@ -1605,7 +1678,7 @@ describe("ribbon structure", () => {
 
     expect(patches).toEqual([
       {
-        active_quantity_id: "h_ex",
+        active_quantity_id: "H_ex",
         overrides: [
           {
             scope: "object",
@@ -1613,7 +1686,7 @@ describe("ribbon structure", () => {
             display: { visible: true },
           },
         ],
-        quantity: { active_quantity_id: "h_ex" },
+        quantity: { active_quantity_id: "H_ex" },
       },
     ]);
     await vi.waitFor(() =>

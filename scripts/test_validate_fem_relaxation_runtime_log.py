@@ -664,7 +664,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "--require-cpu-gpu-consistency" in justfile
     assert "--relax-algorithms" in justfile
     assert (
-        'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit'
+        'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'
         in justfile
     )
     assert ".fullmag/reports/fullmag_relaxation_production_benchmark.csv" in justfile
@@ -682,20 +682,22 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "`just verify-fem-relaxation-production-benchmark`" in physics_note
     assert "FULLMAG_FEM_RELAXATION_KEEP_LOGS=1" in physics_note
 
-    assert "four algorithms are public-executable" in normalized_physics_note
+    assert "Current production-executable subset" in physics_note
+    assert 'algorithm = "llg_overdamped"' in normalized_physics_note
+    assert 'algorithm = "projected_gradient_bb"' in normalized_physics_note
+    assert 'algorithm = "nonlinear_cg"' in normalized_physics_note
     assert (
-        "`StudyIR::Relaxation` exists and four FEM relaxation algorithms are "
-        "production-executable"
-    ) in normalized_physics_note
-    assert "TPI remains under development" not in normalized_physics_note
+        '`algorithm = "tangent_plane_implicit"` remains under development'
+    ) in physics_note
+    assert "four algorithms are public-executable" not in normalized_physics_note
     assert "- [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM" in physics_note
     assert "- [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED" in physics_note
     assert (
-        "- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG/TPI executable lanes"
+        "- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG production lanes"
         in physics_note
     )
     assert (
-        "- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG/TPI executable lanes"
+        "- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes"
         in physics_note
     )
 
@@ -723,7 +725,7 @@ def test_cpu_gpu_consistency_smoke_covers_active_relaxation_algorithms() -> None
 
     assert "--relax-algorithms" in justfile
     assert (
-        'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit'
+        'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'
         in justfile
     )
 

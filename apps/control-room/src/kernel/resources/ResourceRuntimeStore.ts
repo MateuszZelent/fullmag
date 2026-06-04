@@ -16,6 +16,7 @@ export interface ResourceRuntimeLoadRequest<TData> {
   externalRevision: ResourceRevision | null;
   force?: boolean;
   load: (context: LoadContext) => Promise<TData>;
+  minRefetchIntervalMs?: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
 }
@@ -31,8 +32,10 @@ interface ResourceRuntimeEntry<TData> {
   controller: AbortController | null;
   inflight: Promise<ResourceRuntimeSnapshot<TData>> | null;
   inflightExternalRevision: ResourceRevision | null;
+  lastSettledAtMs: number;
   listeners: Set<ResourceRuntimeListener>;
   pendingRequest: ResourceRuntimeLoadRequest<TData> | null;
+  pendingTimer: ReturnType<typeof setTimeout> | null;
   sequence: number;
   snapshot: ResourceRuntimeSnapshot<TData>;
 }
@@ -65,8 +68,10 @@ function createEntry<TData>(): ResourceRuntimeEntry<TData> {
     controller: null,
     inflight: null,
     inflightExternalRevision: null,
+    lastSettledAtMs: 0,
     listeners: new Set<ResourceRuntimeListener>(),
     pendingRequest: null,
+    pendingTimer: null,
     sequence: 0,
     snapshot: createInitialSnapshot<TData>(),
   };
@@ -136,10 +141,15 @@ export class ResourceRuntimeStore<TData = unknown> {
     const entry = this.getOrCreateEntry<TUpdateData>(resourceKey);
     entry.sequence += 1;
     entry.controller?.abort();
+    if (entry.pendingTimer) {
+      clearTimeout(entry.pendingTimer);
+    }
     entry.controller = null;
     entry.inflight = null;
     entry.inflightExternalRevision = null;
+    entry.lastSettledAtMs = Date.now();
     entry.pendingRequest = null;
+    entry.pendingTimer = null;
     entry.snapshot = {
       ...markResourceReady(entry.snapshot, data, revision),
       settledExternalRevision: revision,
@@ -167,6 +177,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     externalRevision,
     force = false,
     load,
+    minRefetchIntervalMs = 0,
     resolveRevision,
     resourceKey,
   }: ResourceRuntimeLoadRequest<TLoadData>): Promise<
@@ -195,11 +206,32 @@ export class ResourceRuntimeStore<TData = unknown> {
       return entry.inflight;
     }
 
+    const delayMs = refetchDelayMs(entry, minRefetchIntervalMs);
+    if (!force && delayMs > 0) {
+      entry.pendingRequest = {
+        externalRevision,
+        force: false,
+        load,
+        minRefetchIntervalMs,
+        resolveRevision,
+        resourceKey,
+      };
+      entry.snapshot = {
+        ...markResourceLoading(entry.snapshot, externalRevision),
+        settledExternalRevision: entry.snapshot.settledExternalRevision,
+        settledResourceKey: entry.snapshot.settledResourceKey,
+      };
+      this.schedulePendingLoad(entry, delayMs);
+      this.notify(entry);
+      return Promise.resolve(entry.snapshot);
+    }
+
     if (!force && entry.inflight) {
       entry.pendingRequest = {
         externalRevision,
         force: false,
         load,
+        minRefetchIntervalMs,
         resolveRevision,
         resourceKey,
       };
@@ -213,6 +245,10 @@ export class ResourceRuntimeStore<TData = unknown> {
     }
 
     entry.controller?.abort();
+    if (entry.pendingTimer) {
+      clearTimeout(entry.pendingTimer);
+      entry.pendingTimer = null;
+    }
     const controller = new AbortController();
     const sequence = entry.sequence + 1;
     entry.controller = controller;
@@ -241,6 +277,7 @@ export class ResourceRuntimeStore<TData = unknown> {
           settledExternalRevision: externalRevision,
           settledResourceKey: resourceKey,
         };
+        entry.lastSettledAtMs = Date.now();
         return entry.snapshot;
       })
       .catch((error: unknown) => {
@@ -311,13 +348,47 @@ export class ResourceRuntimeStore<TData = unknown> {
   ): void {
     if (entry.listeners.size > 0) return;
     entry.controller?.abort();
+    if (entry.pendingTimer) {
+      clearTimeout(entry.pendingTimer);
+    }
     entry.controller = null;
     entry.inflight = null;
     entry.inflightExternalRevision = null;
     entry.pendingRequest = null;
+    entry.pendingTimer = null;
     entry.sequence += 1;
     this.entries.delete(resourceKey);
+  }
+
+  private schedulePendingLoad<TEntryData>(
+    entry: ResourceRuntimeEntry<TEntryData>,
+    delayMs: number,
+  ): void {
+    if (entry.pendingTimer) return;
+    entry.pendingTimer = setTimeout(() => {
+      entry.pendingTimer = null;
+      const pendingRequest = entry.pendingRequest;
+      entry.pendingRequest = null;
+      if (pendingRequest) {
+        void this.ensureLoad(pendingRequest);
+      }
+    }, delayMs);
   }
 }
 
 export const sharedResourceRuntimeStore = new ResourceRuntimeStore();
+
+function refetchDelayMs<TData>(
+  entry: ResourceRuntimeEntry<TData>,
+  minRefetchIntervalMs: number,
+): number {
+  if (
+    minRefetchIntervalMs <= 0 ||
+    entry.snapshot.status !== "ready" ||
+    entry.lastSettledAtMs <= 0
+  ) {
+    return 0;
+  }
+  const elapsedMs = Date.now() - entry.lastSettledAtMs;
+  return Math.max(0, minRefetchIntervalMs - elapsedMs);
+}

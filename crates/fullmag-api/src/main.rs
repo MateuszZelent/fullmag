@@ -72,6 +72,7 @@ use types::*;
 const CURRENT_LIVE_REALTIME_REPLAY_CAPACITY: usize = 512;
 const CURRENT_LIVE_REALTIME_HEARTBEAT_SECS: u64 = 15;
 const CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS: u32 = 250;
+const CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS: u32 = 1_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLiveRealtimeState {
@@ -136,6 +137,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             ),
             field_catalog_revision,
             field_revision,
+            field_quantity_revisions: snapshot.field_quantity_revisions.clone(),
             slice_revision,
             artifact_revision,
             command_completion_revision,
@@ -203,6 +205,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Display,
             revision: realtime_state.revisions.display_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/visualization/display".to_string()),
         },
@@ -210,6 +214,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::VisualizationState,
             revision: realtime_state.revisions.visualization_state_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/visualization/state".to_string()),
         },
@@ -217,6 +223,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Workspace,
             revision: realtime_state.revisions.workspace_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/workspace/selection".to_string()),
         },
@@ -224,6 +232,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Fields,
             revision: realtime_state.revisions.field_catalog_revision,
             resource_id: Some("catalog".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/data/fields".to_string()),
         },
@@ -231,6 +241,13 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Fields,
             revision: realtime_state.revisions.field_revision,
             resource_id: Some("samples".to_string()),
+            quantity_ids: realtime_state
+                .revisions
+                .field_quantity_revisions
+                .keys()
+                .cloned()
+                .collect(),
+            broad: true,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: None,
         },
@@ -238,6 +255,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Scalars,
             revision: realtime_state.revisions.scalars_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
         },
@@ -245,6 +264,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Domain,
             revision: realtime_state.revisions.domain_generation_id,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/data/domain/meta".to_string()),
         },
@@ -252,6 +273,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Domain,
             revision: realtime_state.revisions.topology_revision,
             resource_id: Some("topology".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/data/domain/topology".to_string()),
         },
@@ -259,6 +282,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Artifacts,
             revision: realtime_state.revisions.artifacts_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/data/artifacts".to_string()),
         },
@@ -266,6 +291,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Logs,
             revision: realtime_state.revisions.engine_log_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/diagnostics/engine-log".to_string()),
         },
@@ -275,6 +302,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Diagnostics,
             revision: realtime_state.revisions.solver_profile_revision,
             resource_id: Some("solver-profile".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/diagnostics/solver-profile".to_string()),
         });
@@ -284,6 +313,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Mesh,
             revision: realtime_state.revisions.mesh_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/meshing/summary".to_string()),
         });
@@ -292,6 +323,8 @@ fn current_live_realtime_changes(
                 resource: RealtimeResourceName::Mesh,
                 revision: realtime_state.revisions.mesh_revision,
                 resource_id: None,
+                quantity_ids: Vec::new(),
+                broad: false,
                 domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
                 recommended_fetch: Some(recommended_fetch.clone()),
             });
@@ -302,6 +335,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::MeshBuilds,
             revision: realtime_state.revisions.mesh_build_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/meshing/builds/current".to_string()),
         });
@@ -312,6 +347,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Commands,
             revision: commands_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/simulation/commands".to_string()),
         });
@@ -321,6 +358,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::Stages,
             revision: realtime_state.revisions.stages_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/simulation/stages/execution".to_string()),
         });
@@ -330,6 +369,8 @@ fn current_live_realtime_changes(
             resource: RealtimeResourceName::SceneDocument,
             revision: scene_revision,
             resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
             domain_generation_id: None,
             recommended_fetch: Some("/v2/sessions/current/model/scene".to_string()),
         });
@@ -341,14 +382,46 @@ fn current_live_realtime_changes_since(
     realtime_state: &CurrentLiveRealtimeState,
     previous_revisions: Option<&RealtimeResourceRevisionMap>,
 ) -> Vec<RealtimeResourceChange> {
-    let changes = current_live_realtime_changes(realtime_state);
+    let mut changes = current_live_realtime_changes(realtime_state);
     let Some(previous_revisions) = previous_revisions else {
         return changes;
     };
 
     changes
-        .into_iter()
-        .filter(|change| current_live_realtime_change_revision_changed(previous_revisions, change))
+        .iter_mut()
+        .filter_map(|change| {
+            if !current_live_realtime_change_revision_changed(previous_revisions, change) {
+                return None;
+            }
+            if matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples")
+            {
+                let quantity_ids = changed_field_sample_quantity_ids(
+                    &realtime_state.revisions.field_quantity_revisions,
+                    &previous_revisions.field_quantity_revisions,
+                );
+                if quantity_ids.is_empty() {
+                    change.quantity_ids.clear();
+                    change.broad = true;
+                } else {
+                    change.quantity_ids = quantity_ids;
+                    change.broad = false;
+                }
+            }
+            Some(change.clone())
+        })
+        .collect()
+}
+
+fn changed_field_sample_quantity_ids(
+    current: &BTreeMap<String, u64>,
+    previous: &BTreeMap<String, u64>,
+) -> Vec<String> {
+    current
+        .iter()
+        .filter_map(|(quantity_id, revision)| {
+            (previous.get(quantity_id) != Some(revision)).then(|| quantity_id.clone())
+        })
         .collect()
 }
 
@@ -409,6 +482,10 @@ mod realtime_change_tests {
             topology_revision: 11,
             field_catalog_revision: 12,
             field_revision: 13,
+            field_quantity_revisions: BTreeMap::from([
+                ("H_eff".to_string(), 5),
+                ("m".to_string(), 13),
+            ]),
             slice_revision: 14,
             artifact_revision: 15,
             command_completion_revision: 16,
@@ -470,6 +547,8 @@ mod realtime_change_tests {
             matches!(change.resource, RealtimeResourceName::Fields)
                 && change.resource_id.as_deref() == Some("samples")
                 && change.recommended_fetch.is_none()
+                && change.broad
+                && change.quantity_ids == vec!["H_eff".to_string(), "m".to_string()]
         }));
         assert!(changes.iter().all(|change| {
             change
@@ -556,9 +635,13 @@ mod realtime_change_tests {
 
     #[test]
     fn realtime_changes_since_refreshes_field_samples_when_live_field_data_changes() {
-        let mut current_revisions = revisions();
+        let previous = revisions();
+        let mut current_revisions = previous.clone();
         current_revisions.field_revision += 1;
         current_revisions.fields_revision = current_revisions.field_revision;
+        current_revisions
+            .field_quantity_revisions
+            .insert("m".to_string(), current_revisions.field_revision);
         let state = CurrentLiveRealtimeState {
             session_id: "session-1".to_string(),
             run_id: Some("run-1".to_string()),
@@ -566,12 +649,14 @@ mod realtime_change_tests {
             mesh_resource_fetches: Vec::new(),
         };
 
-        let changes = current_live_realtime_changes_since(&state, Some(&revisions()));
+        let changes = current_live_realtime_changes_since(&state, Some(&previous));
 
         assert!(changes.iter().any(|change| {
             matches!(change.resource, RealtimeResourceName::Fields)
                 && change.resource_id.as_deref() == Some("samples")
                 && change.recommended_fetch.is_none()
+                && !change.broad
+                && change.quantity_ids == vec!["m".to_string()]
         }));
     }
 
@@ -639,6 +724,8 @@ mod realtime_change_tests {
                         resource: RealtimeResourceName::Stages,
                         revision: 2,
                         resource_id: None,
+                        quantity_ids: Vec::new(),
+                        broad: false,
                         domain_generation_id: None,
                         recommended_fetch: Some(
                             "/v2/sessions/current/simulation/stages/execution".to_string(),
@@ -648,6 +735,8 @@ mod realtime_change_tests {
                         resource: RealtimeResourceName::Commands,
                         revision: 4,
                         resource_id: None,
+                        quantity_ids: Vec::new(),
+                        broad: false,
                         domain_generation_id: None,
                         recommended_fetch: Some(
                             "/v2/sessions/current/simulation/commands".to_string(),
@@ -660,6 +749,107 @@ mod realtime_change_tests {
         };
 
         assert_eq!(current_live_realtime_event_coalesce_window_ms(&event), None);
+    }
+
+    #[test]
+    fn realtime_qos_split_keeps_field_samples_coalesced_when_stages_are_immediate() {
+        let batches = split_realtime_changes_for_qos(
+            vec![
+                RealtimeResourceChange {
+                    resource: RealtimeResourceName::Stages,
+                    revision: 2,
+                    resource_id: None,
+                    quantity_ids: Vec::new(),
+                    broad: false,
+                    domain_generation_id: None,
+                    recommended_fetch: Some(
+                        "/v2/sessions/current/simulation/stages/execution".to_string(),
+                    ),
+                },
+                RealtimeResourceChange {
+                    resource: RealtimeResourceName::Fields,
+                    revision: 3,
+                    resource_id: Some("samples".to_string()),
+                    quantity_ids: vec!["m".to_string()],
+                    broad: false,
+                    domain_generation_id: Some(1),
+                    recommended_fetch: None,
+                },
+            ],
+            true,
+            250,
+        );
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].1, false);
+        assert_eq!(batches[0].2, 0);
+        assert!(batches[0]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Stages)));
+        assert_eq!(batches[1].1, true);
+        assert_eq!(batches[1].2, 250);
+        assert!(batches[1]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
+    }
+
+    #[test]
+    fn realtime_qos_slows_scalar_only_batches() {
+        let batches = split_realtime_changes_for_qos(
+            vec![RealtimeResourceChange {
+                resource: RealtimeResourceName::Scalars,
+                revision: 7,
+                resource_id: None,
+                quantity_ids: Vec::new(),
+                broad: false,
+                domain_generation_id: None,
+                recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
+            }],
+            true,
+            250,
+        );
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1, true);
+        assert_eq!(
+            batches[0].2,
+            CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS
+        );
+    }
+
+    #[test]
+    fn realtime_qos_suppresses_scalar_only_batches_inside_emit_window() {
+        let last_scalar_emit_unix_ms = AtomicU64::new(0);
+        let changes = vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::Scalars,
+            revision: 7,
+            resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
+        }];
+
+        assert!(should_publish_scalar_only_realtime_batch(
+            &last_scalar_emit_unix_ms,
+            &changes,
+            true,
+            10_000,
+        ));
+        assert!(!should_publish_scalar_only_realtime_batch(
+            &last_scalar_emit_unix_ms,
+            &changes,
+            true,
+            10_999,
+        ));
+        assert!(should_publish_scalar_only_realtime_batch(
+            &last_scalar_emit_unix_ms,
+            &changes,
+            true,
+            11_000,
+        ));
     }
 }
 
@@ -749,6 +939,42 @@ pub(crate) async fn publish_current_live_realtime_resource_changes(
     if changes.is_empty() {
         return Ok(());
     }
+    if !should_publish_scalar_only_realtime_batch(
+        &state.current_live_realtime_last_scalar_emit_unix_ms,
+        &changes,
+        coalesced,
+        realtime_unix_ms_now(),
+    ) {
+        return Ok(());
+    }
+    for (batch_changes, batch_coalesced, batch_window_ms) in
+        split_realtime_changes_for_qos(changes, coalesced, window_ms)
+    {
+        publish_current_live_realtime_resource_changes_unsplit(
+            state,
+            session_id.clone(),
+            run_id.clone(),
+            batch_changes,
+            batch_coalesced,
+            batch_window_ms,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn publish_current_live_realtime_resource_changes_unsplit(
+    state: &AppState,
+    session_id: String,
+    run_id: Option<String>,
+    changes: Vec<RealtimeResourceChange>,
+    coalesced: bool,
+    window_ms: u32,
+) -> Result<(), ApiError> {
+    if changes.is_empty() {
+        return Ok(());
+    }
 
     let seq = state
         .current_live_realtime_next_seq
@@ -770,6 +996,97 @@ pub(crate) async fn publish_current_live_realtime_resource_changes(
         },
     )
     .await
+}
+
+fn is_immediate_realtime_change(change: &RealtimeResourceChange) -> bool {
+    matches!(
+        change.resource,
+        RealtimeResourceName::Commands | RealtimeResourceName::Stages
+    )
+}
+
+fn split_realtime_changes_for_qos(
+    changes: Vec<RealtimeResourceChange>,
+    coalesced: bool,
+    window_ms: u32,
+) -> Vec<(Vec<RealtimeResourceChange>, bool, u32)> {
+    if changes.is_empty() {
+        return Vec::new();
+    }
+    if !coalesced || window_ms == 0 || !changes.iter().any(is_immediate_realtime_change) {
+        let window_ms = realtime_effective_coalesce_window_ms(&changes, coalesced, window_ms);
+        return vec![(changes, coalesced, window_ms)];
+    }
+
+    let (immediate_changes, coalesced_changes): (Vec<_>, Vec<_>) =
+        changes.into_iter().partition(is_immediate_realtime_change);
+    let mut batches = Vec::with_capacity(2);
+    if !immediate_changes.is_empty() {
+        batches.push((immediate_changes, false, 0));
+    }
+    if !coalesced_changes.is_empty() {
+        let window_ms = realtime_effective_coalesce_window_ms(&coalesced_changes, true, window_ms);
+        batches.push((coalesced_changes, true, window_ms));
+    }
+    batches
+}
+
+fn realtime_effective_coalesce_window_ms(
+    changes: &[RealtimeResourceChange],
+    coalesced: bool,
+    window_ms: u32,
+) -> u32 {
+    if !coalesced || window_ms == 0 {
+        return window_ms;
+    }
+    if changes
+        .iter()
+        .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
+    {
+        return window_ms.max(CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS);
+    }
+    window_ms
+}
+
+fn should_publish_scalar_only_realtime_batch(
+    last_scalar_emit_unix_ms: &AtomicU64,
+    changes: &[RealtimeResourceChange],
+    coalesced: bool,
+    now_ms: u64,
+) -> bool {
+    if !coalesced || !is_scalar_only_realtime_batch(changes) {
+        return true;
+    }
+
+    loop {
+        let last_ms = last_scalar_emit_unix_ms.load(Ordering::Relaxed);
+        if last_ms != 0
+            && now_ms.saturating_sub(last_ms)
+                < u64::from(CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS)
+        {
+            return false;
+        }
+        if last_scalar_emit_unix_ms
+            .compare_exchange(last_ms, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn is_scalar_only_realtime_batch(changes: &[RealtimeResourceChange]) -> bool {
+    !changes.is_empty()
+        && changes
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
+}
+
+fn realtime_unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
@@ -823,6 +1140,7 @@ async fn main() {
         current_live_realtime_events: broadcast::channel(256).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
+        current_live_realtime_last_scalar_emit_unix_ms: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(BTreeMap::new())),

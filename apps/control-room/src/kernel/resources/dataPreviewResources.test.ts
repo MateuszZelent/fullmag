@@ -28,4 +28,20 @@ describe("dataPreviewResources", () => {
     expect(key).toContain("/m/samples/vector");
     expect(key).toContain("component=full");
   });
+
+  it("canonicalizes quantity aliases in field-vector resource keys", () => {
+    const aliasKey = resolveDataPreviewFieldVectorResourceKey({
+      component: "full",
+      maxSamples: 17,
+      quantityId: "h_eff",
+    });
+    const canonicalKey = resolveDataPreviewFieldVectorResourceKey({
+      component: "full",
+      maxSamples: 17,
+      quantityId: "H_eff",
+    });
+
+    expect(aliasKey).toBe(canonicalKey);
+    expect(aliasKey).toContain("/H_eff/samples/vector");
+  });
 });

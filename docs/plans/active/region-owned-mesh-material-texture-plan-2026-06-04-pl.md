@@ -13,6 +13,22 @@ Główna korekta po audycie: **region nie może być jedynym mechanizmem zmiany 
 
 Jeżeli te pojęcia zostaną zmieszane, UI będzie wyglądać dobrze, ale fizyka materiałów i granic będzie niejawna.
 
+Najważniejszy model mentalny:
+
+- **Dwa różne materiały z ostrą granicą** powinny być dwoma obiektami
+  materiałowymi albo dwoma jawnymi domenami materiałowymi. Mogą być styczne,
+  rozdzielone spacerem albo sprzężone przez osobną regułę interfejsową.
+- **Jeden ciągły materiał** pozostaje jednym obiektem i jednym właścicielem
+  pola magnetyzacji `m`, nawet jeżeli wewnątrz ma regiony, lokalne mesh policy,
+  lokalne warunki początkowe albo zmienne parametry materiałowe.
+- **Gradient materiałowy**, np. `Ms(x)` albo `Aex(x)`, jest polem
+  współczynnika materiałowego, nie zbiorem ukrytych mini-regionów.
+- **Skok parametrów wewnątrz jednego obiektu** jest fizycznie ostrą granicą
+  materiałową. W FEM wymaga konforemnej granicy/domain markerów albo jawnie
+  wybranego trybu projekcji z diagnostyką.
+- **RKKY/contact/interlayer exchange** jest osobną interakcją powierzchniową
+  albo interfejsową, nie zwykłym nadpisaniem `Aex` po obu stronach.
+
 ---
 
 ## Audyt Mumax+
@@ -147,6 +163,68 @@ Wniosek: **nie wolno modelować każdego interfejsu jako region material overrid
 
 ## Główne wnioski dla Fullmag
 
+### 0. Obiekt materiałowy, region i coupling to trzy różne pojęcia
+
+Fullmag powinien rozróżniać trzy poziomy:
+
+1. **Obiekt materiałowy** - reprezentuje fizyczną domenę materiału i jest
+   właścicielem pola magnetyzacji `m`.
+2. **Region wewnątrz obiektu** - jest selektorem części tego samego obiektu.
+   Może sterować mesh policy, parametrami, teksturą początkową i diagnostyką,
+   ale sam nie tworzy nowego pola `m`.
+3. **Coupling/interfejs** - opisuje fizyczne sprzężenie między dwoma stronami
+   granicy: ordinary exchange, scaled exchange, brak exchange, RKKY,
+   interlayer exchange albo przyszłe modele kontaktowe.
+
+Praktyczna reguła:
+
+- dwa fizycznie różne materiały z ostrą granicą -> dwa obiekty/domeny
+  materiałowe i jawny `study.couplings.*`,
+- jeden materiał z płynną zmiennością -> jeden obiekt i pola
+  `MaterialParameterField`,
+- jeden obiekt z ostrym skokiem parametru -> dozwolone tylko z jawną polityką
+  realizacji granicy: conformal/domain marker albo projection warning.
+
+Przykład dwóch materiałów:
+
+```python
+layer_a = study.geometry(
+    fm.shapes.box(size=(2.0e-6, 1.0e-6, 2.0e-9)),
+    name="layer_a",
+)
+layer_b = study.geometry(
+    fm.shapes.box(size=(2.0e-6, 1.0e-6, 2.0e-9)).translate((0.0, 0.0, 3.0e-9)),
+    name="layer_b",
+)
+
+layer_a.material.Ms = 8.0e5
+layer_a.material.Aex = 1.2e-11
+
+layer_b.material.Ms = 6.0e5
+layer_b.material.Aex = 8.0e-12
+
+study.couplings.exchange(layer_a, layer_b, mode="harmonic_mean")
+study.couplings.rkky(
+    source=layer_a.surface("top"),
+    target=layer_b.surface("bottom"),
+    J1=-0.3e-3,
+)
+```
+
+Przykład jednego materiału z gradientem:
+
+```python
+film = study.geometry(
+    fm.shapes.box(size=(2.0e-6, 1.0e-6, 2.0e-9)),
+    name="film",
+)
+film.material.Ms = fm.fields.linear(
+    base=7.7e5,
+    gradient=(0.0, 2.0e11, 0.0),
+    frame="object",
+)
+```
+
 ### 1. Region to selektor, nie pełny materiał
 
 Region powinien być:
@@ -185,7 +263,7 @@ To musi niżej zejść jako coefficient field:
 
 Nie wolno automatycznie zamieniać gładkiego gradientu na setki ukrytych regionów.
 
-### 3. Ostre granice materiałowe w FEM wymagają decyzji meshingowej
+### 3. Ostre granice materiałowe w FEM mają jawny kontrakt meshingowy
 
 Dla FEM są dwa przypadki:
 
@@ -194,9 +272,11 @@ Dla FEM są dwa przypadki:
 
 Jeżeli skokowy region przecina tetrahedry bez granicy konforemnej, coefficient zostanie projekcyjnie rozmyty. To może być fizycznie błędne.
 
-Dlatego plan powinien przyjąć:
+Przyjęta decyzja:
 
 - region material override z ostrym interfejsem ma domyślnie wymagać konforemnej granicy/domain markerów,
+- projection mode jest jawny i dozwolony tylko w trybie `extended`; w `strict`
+  brak konforemnej granicy jest błędem,
 - jeżeli użytkownik wybierze tryb projekcyjny, UI musi pokazać ostrzeżenie,
 - mesh build report musi pokazywać, czy granica regionu została zrealizowana konforemnie, czy jako projekcja pola.
 
@@ -275,18 +355,20 @@ Obiekt pozostaje właścicielem pola magnetyzacji `m`.
 
 ### Zasady projektowe
 
-1. Region to semantyczny selektor, nie surowe pole Gmsh.
-2. Obiekt pozostaje właścicielem `m`.
-3. Domyślny układ współrzędnych regionu to local frame obiektu.
-4. Mesh/material/texture/coupling to niezależne attachmenty.
-5. Overlap musi być deterministyczny.
-6. FDM i FEM niżej realizują ten sam intent inaczej.
-7. Surowe `mesh.size_field(...)` zostaje jako advanced/debug escape hatch.
-8. `fm.shapes` jest wspólnym namespace dla geometrii i regionów.
-9. Rejestr regionów jest owner-scoped; study ma read-only flattened registry.
-10. Smooth gradienty są polami parametrów, nie ukrytymi regionami.
-11. Ostre granice materiałowe w FEM wymagają konforemnej granicy/domain markerów albo jawnej projekcji z ostrzeżeniem.
-12. Interface exchange/contact/RKKY to osobne coupling semantics.
+1. Dwa różne materiały z ostrą granicą modelujemy jako dwa obiekty/domeny
+   materiałowe, nie jako dwa przypadkowe regiony jednego obiektu.
+2. Region to semantyczny selektor, nie surowe pole Gmsh.
+3. Obiekt pozostaje właścicielem `m`.
+4. Domyślny układ współrzędnych regionu to local frame obiektu.
+5. Mesh/material/texture/coupling to niezależne attachmenty.
+6. Overlap musi być deterministyczny.
+7. FDM i FEM niżej realizują ten sam intent inaczej.
+8. Surowe `mesh.size_field(...)` zostaje jako advanced/debug escape hatch.
+9. `fm.shapes` jest wspólnym namespace dla geometrii i regionów.
+10. Rejestr regionów jest owner-scoped; study ma read-only flattened registry.
+11. Smooth gradienty są polami parametrów, nie ukrytymi regionami.
+12. Ostre granice materiałowe w FEM wymagają konforemnej granicy/domain markerów albo jawnej projekcji z ostrzeżeniem.
+13. Interface exchange/contact/RKKY to osobne coupling semantics.
 
 ### Docelowy Python API
 
@@ -463,7 +545,7 @@ Region mesh policy obniża się do size fields, ale raport musi zachować semant
   "source": "object_region",
   "owner": "arch_waveguide",
   "region": "skyrmion",
-  "region_id": "..."
+  "region_id": "reg_arch_waveguide_skyrmion_01"
 }
 ```
 
@@ -512,6 +594,15 @@ Wymagane przypadki:
 8. overlap `Ms` i `Aex` z equal priority -> dozwolone z diagnostyką,
 9. próba przypisania `m/Ms/Aex` do airboxa -> błąd,
 10. DMI interface -> zablokowane do czasu osobnej noty fizycznej.
+11. dwa obiekty bez explicit coupling -> brak exchange między nimi (free surface),
+12. jeden obiekt, dwa regiony, brak jawnego `interfaces` -> default exchange = harmonic mean (weryfikacja, że intra-object default jest ciągły),
+13. gradient `Ms(x)` + exchange -> `H_ex` poprawnie dzieli przez lokalne `Ms(x)` (brak division-by-zero, poprawny denominator),
+14. dwa obiekty, explicit coupling `scale=0.5` -> reduced exchange (połówka harmonicznej średniej),
+15. FEM conformal split + gradient `Aex` wewnątrz -> ciągłość `m` na granicy (flux continuity),
+16. round-trip: Python->IR->scene->export->Python zachowuje coupling `J1`, `scale`, `mode`,
+17. relaxation convergence z dwoma regionami o różnym `Aex` -> solver dochodzi do równowagi,
+18. exchange field/energy consistency: `δE_ex/δm ∝ -μ₀ Ms H_ex` (Taylor test z finite difference) -> spójność `A_ij` w field i energy reduction,
+19. `Ms=0` wewnątrz aktywnego obiektu magnetycznego -> błąd walidacji (nie division by zero).
 
 ### Kryteria akceptacji
 
@@ -529,12 +620,53 @@ Wymagane przypadki:
 
 ---
 
-## Decyzje, których nie wolno pominąć przed implementacją
+## Przyjęte odpowiedzi przed implementacją
 
-1. Czy pierwsza wersja region material override w FEM wymaga conformal boundary, czy dopuszcza projection mode?
-2. Jak wygląda publiczny API dla `fm.fields.*`?
-3. Czy `interface exchange` jest własnością owner object (`waveguide.interfaces`) czy globalnym `study.couplings`?
-4. Jak UI pokazuje różnicę między authored region i realized mesh field?
-5. Czy region texture override ma dotyczyć tylko initial condition, czy też runtime texture authoring?
-6. Jak eksportować regiony po rename, skoro runtime używa stabilnego `region_id`, a skrypt używa nazw?
-7. Jak wersjonować zmianę OpenAPI, żeby stary frontend nie interpretował realized mesh regions jako authored regions?
+1. Pierwsza wersja region material override w FEM wymaga conformal boundary dla
+   ostrych skoków w trybie `strict`. Projection mode jest dozwolony tylko jako
+   jawne `policy="project"` w trybie `extended`, z diagnostyką w mesh report i
+   UI.
+2. Publiczny API `fm.fields.*` w v1 obejmuje `constant`, `linear`, `radial`,
+   `piecewise` i `sampled`. Każde pole musi mieć jawne jednostki/typ parametru,
+   finite values, frame (`object` albo `world`) i docelową lokalizację
+   realizacji (`cell`, `node`, `element`, `quadrature`) tam, gdzie ma to
+   znaczenie.
+3. Kanonicznym właścicielem interface exchange jest `study.couplings`.
+   `waveguide.interfaces` może istnieć tylko jako convenience alias tworzący
+   wpis w `study.couplings` z owner context.
+4. UI pokazuje authored regions pod owner object w Explorerze. Realized mesh
+   fields/markers są osobnym widokiem realizacji i diagnostyki, z innym badge,
+   kolorem overlay i inspektorem provenance. Nie wolno mieszać authored region
+   z realized mesh part.
+5. Region texture override w v1 dotyczy wyłącznie initial condition `m0`.
+   Runtime texture authoring jest poza zakresem i wymaga osobnego kontraktu
+   stage/runtime.
+6. Eksport po rename używa aktualnych nazw dla czytelności, ale zachowuje
+   stabilne `region_id` w canonical Python export (`region_id=` dla regionów
+   pochodzących z UI albo migracji). Ręcznie pisane skrypty mogą pominąć
+   `region_id`, wtedy DSL generuje stabilny identyfikator.
+7. OpenAPI musi rozdzielić resources authored i realized: nowe endpoints dla
+   authored regions/material fields/couplings, osobne endpoints dla realized
+   mesh/material regions. Schema dostaje jawny `kind` i revision, a generated
+   frontend types/client muszą zostać odświeżone razem z `ControlRoomApi`.
+8. Default exchange między regionami **wewnątrz** jednego obiektu to
+   `harmonic_mean(A_i, A_j)`. To jest ciągłość jednego materiału/pola `m`, a
+   nie opcjonalny coupling.
+9. Default exchange między dwoma **obiektami** bez explicit coupling to
+   `none` / free surface. Dwa obiekty są niezależne, dopóki użytkownik nie doda
+   `study.couplings.exchange(...)`.
+10. RKKY unsupported w runtime blokuje run. Planner nie może zamienić RKKY na
+    warning ani na zwykły exchange.
+11. `Ms=0` wewnątrz aktywnego obiektu magnetycznego jest niedozwolone.
+    Niemagnetyczny void modelujemy przez geometrię/active mask, nie przez
+    zerowanie `Ms`.
+12. Coupling surface selector `layer_a.surface("top")` w v1 oznacza
+    bounding-box face z tolerancją. FDM rozwiązuje go do exposed/contact cell
+    faces i par sąsiedztwa masek; FEM rozwiązuje go do boundary face markers.
+    Pełne named-face support jest v2.
+13. Multilayer FDM + region-owned material/coupling jest poza zakresem v1 i
+    wymaga explicit capability gate.
+14. FDM ABI migruje z implicit zero cross-region default do jawnego kontraktu:
+    `exchange_pairs` + `exchange_pair_default`. Stary `exchange_lut` zostaje
+    low-level realized override, a legacy zero-default może działać tylko dla
+    jawnie oznaczonej starej wersji planu.

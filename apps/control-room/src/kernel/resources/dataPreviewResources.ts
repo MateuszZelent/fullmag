@@ -8,6 +8,7 @@ import type {
   FieldVectorQuery,
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { normalizeQuantityIdOrDefault } from "@/kernel/api/quantityIds";
 import { useKernel } from "@/kernel/KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
@@ -28,9 +29,10 @@ export function resolveDataPreviewFieldVectorResourceKey({
   maxSamples,
   quantityId,
 }: DataPreviewFieldVectorRequest): string {
+  const resolvedQuantityId = normalizeQuantityIdOrDefault(quantityId);
   const path = DATA_FIELD_VECTOR_PATH.replace(
     "{quantity_id}",
-    encodeURIComponent(quantityId.trim() || "m"),
+    encodeURIComponent(resolvedQuantityId),
   );
   const params = new URLSearchParams();
   params.set("component", component || "full");
@@ -46,7 +48,7 @@ export function useDataPreviewFieldVector({
 }: DataPreviewFieldVectorRequest & { enabled: boolean }) {
   const { api, resources } = useKernel();
   const resolvedQuantityId = useMemo(
-    () => quantityId.trim() || "m",
+    () => normalizeQuantityIdOrDefault(quantityId),
     [quantityId],
   );
   const query = useMemo<FieldVectorQuery>(

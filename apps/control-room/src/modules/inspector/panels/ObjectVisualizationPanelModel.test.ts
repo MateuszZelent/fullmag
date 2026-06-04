@@ -54,10 +54,10 @@ describe("ObjectVisualizationPanelModel", () => {
   it("exposes target quantity options for the inspector visualization panel", () => {
     expect(VISUALIZATION_QUANTITY_ITEMS.map((item) => item.value)).toEqual([
       "m",
-      "h_eff",
-      "h_demag",
-      "h_ex",
-      "h_ani",
+      "H_eff",
+      "H_demag",
+      "H_ex",
+      "H_ani",
       "eden_total",
       "eden_ex",
       "eden_demag",

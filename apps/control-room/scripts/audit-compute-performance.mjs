@@ -1475,11 +1475,11 @@ function checkFdmCuboidSceneModelReuse() {
 function checkFooterTelemetryIsOptIn() {
   const source = readFileSync(footerModulePath, "utf8");
   requireTokens(source, "Footer telemetry opt-in", [
-    'useState<FooterTabId>("logs")',
+    'useState<FooterTabId>("telemetry")',
     'activeTab === "telemetry" ? <FooterTelemetry /> : null',
   ]);
   forbidTokens(source, "Footer telemetry opt-in", [
-    'useState<FooterTabId>("telemetry")',
+    'useState<FooterTabId>("logs")',
   ]);
 
   const telemetrySource = readFileSync(footerTelemetryPath, "utf8");

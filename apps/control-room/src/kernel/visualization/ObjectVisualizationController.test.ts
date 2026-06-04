@@ -94,6 +94,15 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("canonicalizes per-target quantity aliases when patching local settings", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "arch", kind: "object" as const };
+
+    controller.patchTarget(target, { activeQuantityId: "h_eff" });
+
+    expect(controller.getSettings(target).activeQuantityId).toBe("H_eff");
+  });
+
   it("normalizes surface color source while preserving legacy color mode compatibility", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "arch", kind: "object" as const };
@@ -504,7 +513,7 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toMatchObject({
       settings: {
-        activeQuantityId: "h_demag",
+        activeQuantityId: "H_demag",
         geometryScope: "surface",
         opacityPercent: 35,
         shaderMonoColor: "#00ffaa",
@@ -561,7 +570,7 @@ describe("ObjectVisualizationController", () => {
       scope: "object",
       scope_id: "free-layer",
       quantity: {
-        active_quantity_id: "h_eff",
+        active_quantity_id: "H_eff",
       },
       style: {
         surface_color_source: "solid",
@@ -806,14 +815,14 @@ describe("ObjectVisualizationController", () => {
           scope: "object",
           scope_id: "free-layer",
           quantity: {
-            active_quantity_id: "h_demag",
+            active_quantity_id: "H_demag",
           },
         },
         {
           scope: "airbox",
           scope_id: "airbox",
           quantity: {
-            active_quantity_id: "h_eff",
+            active_quantity_id: "H_eff",
           },
         },
       ],
@@ -871,6 +880,17 @@ describe("ObjectVisualizationController", () => {
     ).toBe("H_demag");
   });
 
+  it("canonicalizes serialized target quantity patches", () => {
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        { id: "free-layer", kind: "object" },
+        { activeQuantityId: "h_eff" },
+      ),
+    ).toMatchObject({
+      quantity: { active_quantity_id: "H_eff" },
+    });
+  });
+
   it("updates stale backend airbox visibility overrides when patching layer visibility", () => {
     const patch = airboxVisualizationStatePatchFromTargetPatch(
       {
@@ -882,7 +902,7 @@ describe("ObjectVisualizationController", () => {
             visible: false,
           },
           quantity: {
-            active_quantity_id: "h_demag",
+            active_quantity_id: "H_demag",
           },
           scope: "airbox",
           scope_id: "airbox",
@@ -905,7 +925,7 @@ describe("ObjectVisualizationController", () => {
             visible: true,
           },
           quantity: {
-            active_quantity_id: "h_demag",
+            active_quantity_id: "H_demag",
           },
           scope: "airbox",
           scope_id: "airbox",

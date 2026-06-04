@@ -115,6 +115,11 @@
           "topology_revision": { "type": "integer", "minimum": 0 },
           "field_catalog_revision": { "type": "integer", "minimum": 0 },
           "field_revision": { "type": "integer", "minimum": 0 },
+          "field_quantity_revisions": {
+            "type": "object",
+            "additionalProperties": { "type": "integer", "minimum": 0 },
+            "description": "Optional per-quantity field sample revision map used to narrow realtime invalidation for field samples."
+          },
           "slice_revision": { "type": "integer", "minimum": 0 },
           "artifact_revision": { "type": "integer", "minimum": 0 },
           "command_completion_revision": { "type": "integer", "minimum": 0 },
@@ -160,6 +165,15 @@
           },
           "revision": { "type": "integer", "minimum": 0 },
           "resource_id": { "type": ["string", "null"] },
+          "quantity_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional canonical quantity IDs affected by a field-sample change."
+          },
+          "broad": {
+            "type": "boolean",
+            "description": "True when clients must treat the change as a broad family invalidation even if quantity IDs are absent or partial."
+          },
           "domain_generation_id": { "type": ["integer", "null"], "minimum": 0 },
           "recommended_fetch": { "type": ["string", "null"] }
         }

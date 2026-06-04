@@ -82,6 +82,8 @@ describe("RealtimeClient", () => {
         byteLength: new TextEncoder().encode(message).byteLength,
         channel: "websocket",
         direction: "rx",
+        detail:
+          "immediate changes=fields@8->/v2/sessions/current/data/fields",
         messageType: "resource.batch_changed",
         outcome: "ok",
         path: SESSION_EVENTS_WS_PATH,

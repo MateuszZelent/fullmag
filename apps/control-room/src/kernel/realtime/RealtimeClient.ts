@@ -48,7 +48,7 @@ export class RealtimeClient {
       this.options.diagnostics?.record({
         byteLength,
         channel: "websocket",
-        detail: "message",
+        detail: realtimeDiagnosticDetail(parsed),
         direction: "rx",
         durationMs: null,
         messageType:
@@ -169,6 +169,52 @@ export class RealtimeClient {
 
     this.lastSeenSeq = Math.max(this.lastSeenSeq ?? 0, seq);
   }
+}
+
+function realtimeDiagnosticDetail(event: Record<string, unknown>): string {
+  if (event.type !== "resource.batch_changed") {
+    return "message";
+  }
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : null;
+  const changes = Array.isArray(payload?.changes) ? payload.changes : [];
+  const changeSummary = changes
+    .slice(0, 6)
+    .map((change) => {
+      if (!change || typeof change !== "object") return "unknown";
+      const record = change as Record<string, unknown>;
+      const resource = typeof record.resource === "string" ? record.resource : "?";
+      const resourceId =
+        typeof record.resource_id === "string" ? `:${record.resource_id}` : "";
+      const revision =
+        typeof record.revision === "number" || typeof record.revision === "string"
+          ? `@${record.revision}`
+          : "";
+      const quantityIds = Array.isArray(record.quantity_ids)
+        ? record.quantity_ids
+            .filter((value): value is string => typeof value === "string")
+            .join(",")
+        : "";
+      const quantitySuffix = quantityIds ? `[${quantityIds}]` : "";
+      const fetch =
+        typeof record.recommended_fetch === "string"
+          ? `->${record.recommended_fetch}`
+          : "";
+      const broad = record.broad === true ? ":broad" : "";
+      return `${resource}${resourceId}${quantitySuffix}${broad}${revision}${fetch}`;
+    })
+    .join(" ");
+  const truncated = changes.length > 6 ? ` +${changes.length - 6}` : "";
+  const coalesced = payload?.coalesced === true ? "coalesced" : "immediate";
+  const windowMs =
+    typeof payload?.window_ms === "number" ? ` window=${payload.window_ms}ms` : "";
+  const seq =
+    typeof event.seq === "number" || typeof event.seq === "string"
+      ? ` seq=${event.seq}`
+      : "";
+  return `${coalesced}${windowMs}${seq} changes=${changeSummary}${truncated}`.trim();
 }
 
 function byteLengthFromText(value: string): number {

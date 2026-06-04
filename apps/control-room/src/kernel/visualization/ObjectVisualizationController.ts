@@ -2,6 +2,10 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
+import {
+  normalizeQuantityIdOrDefault,
+  resolveCanonicalQuantityId,
+} from "../api/quantityIds";
 import type { Selection } from "../selection/selectionTypes";
 
 export type VisualizationTargetKind = "airbox" | "object" | "part";
@@ -491,7 +495,11 @@ function resolveVisualizationStateTargetOverride(
     ...(override.quantity?.active_quantity_id === undefined ||
     override.quantity.active_quantity_id === null
       ? {}
-      : { activeQuantityId: override.quantity.active_quantity_id }),
+      : {
+          activeQuantityId: normalizeQuantityIdOrDefault(
+            override.quantity.active_quantity_id,
+          ),
+        }),
   };
 
   return Object.keys(patch).length > 0 ? patch : null;
@@ -605,7 +613,22 @@ export function mergeVisualizationStateTargetOverride(
   const rest = overrides.filter(
     (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
   );
-  return [...rest, merged];
+  return [...rest.map(normalizeVisualizationStateOverride), merged];
+}
+
+function normalizeVisualizationStateOverride(
+  override: VisualizationStateResource["overrides"][number],
+): VisualizationStateResource["overrides"][number] {
+  return override.quantity?.active_quantity_id
+    ? {
+        ...override,
+        quantity: {
+          active_quantity_id: normalizeQuantityIdOrDefault(
+            override.quantity.active_quantity_id,
+          ),
+        },
+      }
+    : override;
 }
 
 export function visualizationStatePatchFromDefaultTargetPatch(
@@ -696,7 +719,14 @@ function mergeVisualizationOverride(
   current: VisualizationStateResource["overrides"][number],
   next: VisualizationStateResource["overrides"][number],
 ): VisualizationStateResource["overrides"][number] {
-  const quantity = next.quantity ?? current.quantity;
+  const quantitySource = next.quantity ?? current.quantity;
+  const quantity = quantitySource?.active_quantity_id
+    ? {
+        active_quantity_id: normalizeQuantityIdOrDefault(
+          quantitySource.active_quantity_id,
+        ),
+      }
+    : undefined;
   const merged = {
     ...current,
     ...next,
@@ -761,10 +791,10 @@ export function resolveGlobalObjectVisualizationSettings(
   const vectorMonoColor =
     state?.vector_style?.mono_color ??
     DEFAULT_OBJECT_VISUALIZATION.vectorMonoColor;
-  const activeQuantityId =
-    state.quantity?.active_quantity_id ??
-    state.active_quantity_id ??
-    DEFAULT_OBJECT_VISUALIZATION.activeQuantityId;
+  const activeQuantityId = normalizeQuantityIdOrDefault(
+    state.quantity?.active_quantity_id ?? state.active_quantity_id,
+    DEFAULT_OBJECT_VISUALIZATION.activeQuantityId,
+  );
 
   return {
     ...DEFAULT_OBJECT_VISUALIZATION,
@@ -808,11 +838,12 @@ export function resolveAirboxVisualizationSettingsFromState(
     state?.targets?.airbox?.settings,
   );
   const baseSettings = targetSettings ?? DEFAULT_AIRBOX_VISUALIZATION;
-  const activeQuantityId =
+  const activeQuantityId = normalizeQuantityIdOrDefault(
     state?.targets?.airbox?.settings?.active_quantity_id ??
-    state?.quantity?.active_quantity_id ??
-    state?.active_quantity_id ??
-    baseSettings.activeQuantityId;
+      state?.quantity?.active_quantity_id ??
+      state?.active_quantity_id,
+    baseSettings.activeQuantityId,
+  );
   const airbox = state?.layers?.airbox;
   const shaderVisible =
     airbox?.surface?.visible ?? baseSettings.shaderVisible;
@@ -856,7 +887,10 @@ function visualizationSettingsFromResolvedTarget(
   return normalizeVisualizationSettings({
     ...DEFAULT_AIRBOX_VISUALIZATION,
     activeQuantityId:
-      settings.active_quantity_id ?? DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+      normalizeQuantityIdOrDefault(
+        settings.active_quantity_id,
+        DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+      ),
     boundsVisible: settings.bounds_visible,
     geometryScope: settings.geometry_scope,
     opacityPercent: layerOpacityToPercent(settings.opacity),
@@ -1157,7 +1191,7 @@ function normalizePatch(
         ? normalized.activeQuantityId.trim()
         : "";
     if (activeQuantityId) {
-      normalized.activeQuantityId = activeQuantityId;
+      normalized.activeQuantityId = resolveCanonicalQuantityId(activeQuantityId);
     } else {
       delete normalized.activeQuantityId;
     }
@@ -1177,6 +1211,7 @@ function normalizeVisualizationSettings(
   const wireframeVisible = Boolean(settings.wireframeVisible);
   return {
     ...settings,
+    activeQuantityId: normalizeQuantityIdOrDefault(settings.activeQuantityId),
     primitiveVisible: settings.primitiveVisible ?? false,
     pointsVisible,
     renderMode: resolveRenderMode({

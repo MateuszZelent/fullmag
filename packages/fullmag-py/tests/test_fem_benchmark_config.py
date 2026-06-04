@@ -14,13 +14,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BENCHMARK_PATH = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
 ANALYSIS_BENCHMARK_PATH = REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
-FEM_CMAKE_PATH = REPO_ROOT / "native" / "backends" / "fem" / "CMakeLists.txt"
+FEM_CMAKE_PATH = REPO_ROOT / "backends" / "fem" / "CMakeLists.txt"
 FEM_SOURCE_FACADE_CONTRACT_PATH = (
-    REPO_ROOT / "native" / "backends" / "fem" / "tests" / "source_facade_contract.cpp"
+    REPO_ROOT / "backends" / "fem" / "tests" / "source_facade_contract.cpp"
 )
 GPU_RK_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -31,7 +30,6 @@ GPU_RK_CU_PATH = (
 )
 GPU_RK_STEP_PREFLIGHT_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -42,7 +40,6 @@ GPU_RK_STEP_PREFLIGHT_CU_PATH = (
 )
 GPU_RK_STEP_PREFLIGHT_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -53,7 +50,6 @@ GPU_RK_STEP_PREFLIGHT_HPP_PATH = (
 )
 GPU_RK_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -64,7 +60,6 @@ GPU_RK_CPP_PATH = (
 )
 GPU_RK_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -75,7 +70,6 @@ GPU_RK_HPP_PATH = (
 )
 GPU_RK_ADAPTIVE_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -86,7 +80,6 @@ GPU_RK_ADAPTIVE_KERNELS_CU_PATH = (
 )
 GPU_RK_ADAPTIVE_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -97,7 +90,6 @@ GPU_RK_ADAPTIVE_KERNELS_HPP_PATH = (
 )
 GPU_RK_STAGE_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -108,7 +100,6 @@ GPU_RK_STAGE_KERNELS_CU_PATH = (
 )
 GPU_RK_STAGE_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -119,7 +110,6 @@ GPU_RK_STAGE_KERNELS_HPP_PATH = (
 )
 GPU_RK_STAGE_PREDICTOR_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -130,7 +120,6 @@ GPU_RK_STAGE_PREDICTOR_KERNELS_CU_PATH = (
 )
 GPU_RK_STAGE_PREDICTOR_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -141,7 +130,6 @@ GPU_RK_STAGE_PREDICTOR_KERNELS_HPP_PATH = (
 )
 GPU_RK_STAGE_ACCEPT_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -152,7 +140,6 @@ GPU_RK_STAGE_ACCEPT_KERNELS_CU_PATH = (
 )
 GPU_RK_STAGE_ACCEPT_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -163,7 +150,6 @@ GPU_RK_STAGE_ACCEPT_KERNELS_HPP_PATH = (
 )
 GPU_RK_HEUN_ACCEPT_KERNEL_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -174,7 +160,6 @@ GPU_RK_HEUN_ACCEPT_KERNEL_CU_PATH = (
 )
 GPU_RK_HEUN_ACCEPT_KERNEL_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -185,7 +170,6 @@ GPU_RK_HEUN_ACCEPT_KERNEL_HPP_PATH = (
 )
 GPU_RK_RK4_ACCEPT_KERNEL_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -196,7 +180,6 @@ GPU_RK_RK4_ACCEPT_KERNEL_CU_PATH = (
 )
 GPU_RK_RK4_ACCEPT_KERNEL_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -207,7 +190,6 @@ GPU_RK_RK4_ACCEPT_KERNEL_HPP_PATH = (
 )
 GPU_RK_BS23_ACCEPT_KERNEL_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -218,7 +200,6 @@ GPU_RK_BS23_ACCEPT_KERNEL_CU_PATH = (
 )
 GPU_RK_BS23_ACCEPT_KERNEL_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -229,7 +210,6 @@ GPU_RK_BS23_ACCEPT_KERNEL_HPP_PATH = (
 )
 GPU_RK_DP54_ACCEPT_KERNEL_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -240,7 +220,6 @@ GPU_RK_DP54_ACCEPT_KERNEL_CU_PATH = (
 )
 GPU_RK_DP54_ACCEPT_KERNEL_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -251,7 +230,6 @@ GPU_RK_DP54_ACCEPT_KERNEL_HPP_PATH = (
 )
 GPU_RK_STAGE_SCHEDULE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -262,7 +240,6 @@ GPU_RK_STAGE_SCHEDULE_CU_PATH = (
 )
 GPU_RK_STAGE_SCHEDULE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -273,7 +250,6 @@ GPU_RK_STAGE_SCHEDULE_HPP_PATH = (
 )
 GPU_RK45_STAGE_SEQUENCE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -284,7 +260,6 @@ GPU_RK45_STAGE_SEQUENCE_CU_PATH = (
 )
 GPU_RK45_STAGE_SEQUENCE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -295,7 +270,6 @@ GPU_RK45_STAGE_SEQUENCE_HPP_PATH = (
 )
 GPU_RK4_RK23_STAGE_SEQUENCE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -306,7 +280,6 @@ GPU_RK4_RK23_STAGE_SEQUENCE_CU_PATH = (
 )
 GPU_RK4_RK23_STAGE_SEQUENCE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -317,7 +290,6 @@ GPU_RK4_RK23_STAGE_SEQUENCE_HPP_PATH = (
 )
 GPU_RK4_STAGE_SEQUENCE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -328,7 +300,6 @@ GPU_RK4_STAGE_SEQUENCE_CU_PATH = (
 )
 GPU_RK4_STAGE_SEQUENCE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -339,7 +310,6 @@ GPU_RK4_STAGE_SEQUENCE_HPP_PATH = (
 )
 GPU_RK23_STAGE_SEQUENCE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -350,7 +320,6 @@ GPU_RK23_STAGE_SEQUENCE_CU_PATH = (
 )
 GPU_RK23_STAGE_SEQUENCE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -361,7 +330,6 @@ GPU_RK23_STAGE_SEQUENCE_HPP_PATH = (
 )
 GPU_HEUN_STAGE_SEQUENCE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -372,7 +340,6 @@ GPU_HEUN_STAGE_SEQUENCE_CU_PATH = (
 )
 GPU_HEUN_STAGE_SEQUENCE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -383,7 +350,6 @@ GPU_HEUN_STAGE_SEQUENCE_HPP_PATH = (
 )
 GPU_RK23_ADAPTIVE_K3_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -394,7 +360,6 @@ GPU_RK23_ADAPTIVE_K3_CU_PATH = (
 )
 GPU_RK23_ADAPTIVE_K3_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -405,7 +370,6 @@ GPU_RK23_ADAPTIVE_K3_HPP_PATH = (
 )
 GPU_RK_ATTEMPT_SETUP_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -416,7 +380,6 @@ GPU_RK_ATTEMPT_SETUP_CU_PATH = (
 )
 GPU_RK_ATTEMPT_SETUP_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -427,7 +390,6 @@ GPU_RK_ATTEMPT_SETUP_HPP_PATH = (
 )
 GPU_RK_DEVICE_IO_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -438,7 +400,6 @@ GPU_RK_DEVICE_IO_CU_PATH = (
 )
 GPU_RK_DEVICE_IO_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -449,7 +410,6 @@ GPU_RK_DEVICE_IO_HPP_PATH = (
 )
 GPU_RK_SCALAR_READBACK_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -460,7 +420,6 @@ GPU_RK_SCALAR_READBACK_CU_PATH = (
 )
 GPU_RK_SCALAR_READBACK_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -471,7 +430,6 @@ GPU_RK_SCALAR_READBACK_HPP_PATH = (
 )
 GPU_RK_COMPONENT_COPY_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -482,7 +440,6 @@ GPU_RK_COMPONENT_COPY_CU_PATH = (
 )
 GPU_RK_COMPONENT_COPY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -493,7 +450,6 @@ GPU_RK_COMPONENT_COPY_HPP_PATH = (
 )
 GPU_RK_ADAPTIVE_RUNTIME_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -504,7 +460,6 @@ GPU_RK_ADAPTIVE_RUNTIME_CU_PATH = (
 )
 GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -515,7 +470,6 @@ GPU_RK_ADAPTIVE_RUNTIME_HPP_PATH = (
 )
 GPU_RK_ERROR_NORM_RUNTIME_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -526,7 +480,6 @@ GPU_RK_ERROR_NORM_RUNTIME_CU_PATH = (
 )
 GPU_RK_ERROR_NORM_RUNTIME_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -537,7 +490,6 @@ GPU_RK_ERROR_NORM_RUNTIME_HPP_PATH = (
 )
 GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -548,7 +500,6 @@ GPU_RK_ADAPTIVE_DECISION_READBACK_CU_PATH = (
 )
 GPU_RK_ADAPTIVE_DECISION_READBACK_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -559,7 +510,6 @@ GPU_RK_ADAPTIVE_DECISION_READBACK_HPP_PATH = (
 )
 GPU_RK_ATTEMPT_LOOP_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -570,7 +520,6 @@ GPU_RK_ATTEMPT_LOOP_CU_PATH = (
 )
 GPU_RK_ATTEMPT_LOOP_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -581,7 +530,6 @@ GPU_RK_ATTEMPT_LOOP_HPP_PATH = (
 )
 GPU_RK_RHS_RUNTIME_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -592,7 +540,6 @@ GPU_RK_RHS_RUNTIME_CU_PATH = (
 )
 GPU_RK_RHS_RUNTIME_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -603,7 +550,6 @@ GPU_RK_RHS_RUNTIME_HPP_PATH = (
 )
 GPU_RK_FSAL_POLICY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -614,7 +560,6 @@ GPU_RK_FSAL_POLICY_CPP_PATH = (
 )
 GPU_RK_FSAL_POLICY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -625,7 +570,6 @@ GPU_RK_FSAL_POLICY_HPP_PATH = (
 )
 GPU_RK_EXCHANGE_DISPATCH_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -636,7 +580,6 @@ GPU_RK_EXCHANGE_DISPATCH_CU_PATH = (
 )
 GPU_RK_EXCHANGE_DISPATCH_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -647,7 +590,6 @@ GPU_RK_EXCHANGE_DISPATCH_HPP_PATH = (
 )
 GPU_RK_DEMAG_DISPATCH_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -658,7 +600,6 @@ GPU_RK_DEMAG_DISPATCH_CU_PATH = (
 )
 GPU_RK_DEMAG_DISPATCH_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -669,7 +610,6 @@ GPU_RK_DEMAG_DISPATCH_HPP_PATH = (
 )
 GPU_RK_LLG_RHS_DISPATCH_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -680,7 +620,6 @@ GPU_RK_LLG_RHS_DISPATCH_CU_PATH = (
 )
 GPU_RK_LLG_RHS_DISPATCH_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -691,7 +630,6 @@ GPU_RK_LLG_RHS_DISPATCH_HPP_PATH = (
 )
 GPU_RK_LOCAL_FIELDS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -702,7 +640,6 @@ GPU_RK_LOCAL_FIELDS_CU_PATH = (
 )
 GPU_RK_LOCAL_FIELDS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -713,7 +650,6 @@ GPU_RK_LOCAL_FIELDS_HPP_PATH = (
 )
 GPU_RK_ANISOTROPY_FIELD_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -724,7 +660,6 @@ GPU_RK_ANISOTROPY_FIELD_CU_PATH = (
 )
 GPU_RK_ANISOTROPY_FIELD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -735,7 +670,6 @@ GPU_RK_ANISOTROPY_FIELD_HPP_PATH = (
 )
 GPU_RK_MAGNETOELASTIC_FIELD_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -746,7 +680,6 @@ GPU_RK_MAGNETOELASTIC_FIELD_CU_PATH = (
 )
 GPU_RK_MAGNETOELASTIC_FIELD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -757,7 +690,6 @@ GPU_RK_MAGNETOELASTIC_FIELD_HPP_PATH = (
 )
 GPU_RK_THERMAL_FIELD_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -768,7 +700,6 @@ GPU_RK_THERMAL_FIELD_CU_PATH = (
 )
 GPU_RK_THERMAL_FIELD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -779,7 +710,6 @@ GPU_RK_THERMAL_FIELD_HPP_PATH = (
 )
 GPU_RK_EFFECTIVE_FIELD_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -790,7 +720,6 @@ GPU_RK_EFFECTIVE_FIELD_CU_PATH = (
 )
 GPU_RK_EFFECTIVE_FIELD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -801,7 +730,6 @@ GPU_RK_EFFECTIVE_FIELD_HPP_PATH = (
 )
 GPU_RK_OERSTED_FIELD_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -812,7 +740,6 @@ GPU_RK_OERSTED_FIELD_CU_PATH = (
 )
 GPU_RK_OERSTED_FIELD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -823,7 +750,6 @@ GPU_RK_OERSTED_FIELD_HPP_PATH = (
 )
 GPU_RK_DIRECT_TORQUES_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -834,7 +760,6 @@ GPU_RK_DIRECT_TORQUES_CU_PATH = (
 )
 GPU_RK_DIRECT_TORQUES_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -845,7 +770,6 @@ GPU_RK_DIRECT_TORQUES_HPP_PATH = (
 )
 GPU_RK_SLONCZEWSKI_TORQUE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -856,7 +780,6 @@ GPU_RK_SLONCZEWSKI_TORQUE_CU_PATH = (
 )
 GPU_RK_SLONCZEWSKI_TORQUE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -867,7 +790,6 @@ GPU_RK_SLONCZEWSKI_TORQUE_HPP_PATH = (
 )
 GPU_RK_ZHANG_LI_TORQUE_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -878,7 +800,6 @@ GPU_RK_ZHANG_LI_TORQUE_CU_PATH = (
 )
 GPU_RK_ZHANG_LI_TORQUE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -889,7 +810,6 @@ GPU_RK_ZHANG_LI_TORQUE_HPP_PATH = (
 )
 GPU_RK_DMI_FIELDS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -900,7 +820,6 @@ GPU_RK_DMI_FIELDS_CU_PATH = (
 )
 GPU_RK_DMI_FIELDS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -912,7 +831,6 @@ GPU_RK_DMI_FIELDS_HPP_PATH = (
 FEM_DMI_DOC_PATH = REPO_ROOT / "docs" / "physics" / "fem_dmi.md"
 FEM_DMI_INTERFACIAL_SOURCE = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -921,13 +839,12 @@ FEM_DMI_INTERFACIAL_SOURCE = (
     / "dmi_interfacial.cpp"
 )
 FEM_DMI_WEAK_RESIDUAL_TEST = (
-    REPO_ROOT / "native" / "backends" / "fem" / "tests" / "dmi_weak_residual.cpp"
+    REPO_ROOT / "backends" / "fem" / "tests" / "dmi_weak_residual.cpp"
 )
 VERIFY_FEM_GPU_ENABLEMENT_SCRIPT = REPO_ROOT / "scripts" / "verify_fem_gpu_enablement.sh"
 FEM_GPU_DOCKERFILE_PATH = REPO_ROOT / "docker" / "fem-gpu" / "Dockerfile"
 GPU_RK_STEP_STATS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -938,7 +855,6 @@ GPU_RK_STEP_STATS_CU_PATH = (
 )
 GPU_RK_STEP_STATS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -949,7 +865,6 @@ GPU_RK_STEP_STATS_HPP_PATH = (
 )
 GPU_RK_STEP_STATS_PUBLICATION_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -960,7 +875,6 @@ GPU_RK_STEP_STATS_PUBLICATION_CPP_PATH = (
 )
 GPU_RK_STEP_STATS_PUBLICATION_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -971,7 +885,6 @@ GPU_RK_STEP_STATS_PUBLICATION_HPP_PATH = (
 )
 GPU_RK_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -982,7 +895,6 @@ GPU_RK_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_EXCHANGE_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -993,7 +905,6 @@ GPU_RK_EXCHANGE_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_EXCHANGE_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1004,7 +915,6 @@ GPU_RK_EXCHANGE_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_EXTERNAL_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1015,7 +925,6 @@ GPU_RK_EXTERNAL_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_EXTERNAL_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1026,7 +935,6 @@ GPU_RK_EXTERNAL_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_DEMAG_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1037,7 +945,6 @@ GPU_RK_DEMAG_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_DEMAG_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1048,7 +955,6 @@ GPU_RK_DEMAG_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_DMI_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1059,7 +965,6 @@ GPU_RK_DMI_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_DMI_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1070,7 +975,6 @@ GPU_RK_DMI_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_ANISOTROPY_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1081,7 +985,6 @@ GPU_RK_ANISOTROPY_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_ANISOTROPY_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1092,7 +995,6 @@ GPU_RK_ANISOTROPY_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_MAGNETOELASTIC_ENERGY_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1103,7 +1005,6 @@ GPU_RK_MAGNETOELASTIC_ENERGY_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_MAGNETOELASTIC_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1114,7 +1015,6 @@ GPU_RK_MAGNETOELASTIC_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_ENERGY_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1125,7 +1025,6 @@ GPU_RK_ENERGY_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_OBSERVABLE_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1136,7 +1035,6 @@ GPU_RK_OBSERVABLE_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_OBSERVABLE_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1147,7 +1045,6 @@ GPU_RK_OBSERVABLE_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_FIELD_METRIC_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1158,7 +1055,6 @@ GPU_RK_FIELD_METRIC_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_FIELD_METRIC_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1169,7 +1065,6 @@ GPU_RK_FIELD_METRIC_REDUCTIONS_HPP_PATH = (
 )
 GPU_RK_MAGNETIZATION_REDUCTIONS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1180,7 +1075,6 @@ GPU_RK_MAGNETIZATION_REDUCTIONS_CU_PATH = (
 )
 GPU_RK_MAGNETIZATION_REDUCTIONS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1191,7 +1085,6 @@ GPU_RK_MAGNETIZATION_REDUCTIONS_HPP_PATH = (
 )
 GPU_MAGNETIZATION_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1201,7 +1094,6 @@ GPU_MAGNETIZATION_STATE_HPP_PATH = (
 )
 GPU_MAGNETIZATION_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1211,7 +1103,6 @@ GPU_MAGNETIZATION_MEMORY_HPP_PATH = (
 )
 GPU_MAGNETIZATION_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1221,7 +1112,6 @@ GPU_MAGNETIZATION_MEMORY_CPP_PATH = (
 )
 GPU_MAGNETIZATION_TRANSFER_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1231,7 +1121,6 @@ GPU_MAGNETIZATION_TRANSFER_HPP_PATH = (
 )
 GPU_MAGNETIZATION_TRANSFER_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1241,7 +1130,6 @@ GPU_MAGNETIZATION_TRANSFER_CPP_PATH = (
 )
 GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1251,7 +1139,6 @@ GPU_RUNTIME_COEFFICIENTS_STATE_HPP_PATH = (
 )
 GPU_RUNTIME_COEFFICIENTS_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1261,7 +1148,6 @@ GPU_RUNTIME_COEFFICIENTS_MEMORY_HPP_PATH = (
 )
 GPU_RUNTIME_COEFFICIENTS_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1271,7 +1157,6 @@ GPU_RUNTIME_COEFFICIENTS_MEMORY_CPP_PATH = (
 )
 GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1281,7 +1166,6 @@ GPU_RUNTIME_COEFFICIENTS_UPLOAD_HPP_PATH = (
 )
 GPU_RUNTIME_COEFFICIENTS_UPLOAD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1291,7 +1175,6 @@ GPU_RUNTIME_COEFFICIENTS_UPLOAD_CPP_PATH = (
 )
 GPU_RESIDENCY_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1301,7 +1184,6 @@ GPU_RESIDENCY_STATE_HPP_PATH = (
 )
 GPU_LIFECYCLE_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1311,7 +1193,6 @@ GPU_LIFECYCLE_STATE_HPP_PATH = (
 )
 GPU_DEVICE_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1321,7 +1202,6 @@ GPU_DEVICE_MEMORY_HPP_PATH = (
 )
 GPU_DEVICE_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1331,7 +1211,6 @@ GPU_DEVICE_MEMORY_CPP_PATH = (
 )
 GPU_FIELD_BUFFER_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1341,7 +1220,6 @@ GPU_FIELD_BUFFER_STATE_HPP_PATH = (
 )
 GPU_FIELD_BUFFER_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1351,7 +1229,6 @@ GPU_FIELD_BUFFER_MEMORY_HPP_PATH = (
 )
 GPU_FIELD_BUFFER_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1361,7 +1238,6 @@ GPU_FIELD_BUFFER_MEMORY_CPP_PATH = (
 )
 GPU_FIELD_BUFFER_UPLOAD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1371,7 +1247,6 @@ GPU_FIELD_BUFFER_UPLOAD_HPP_PATH = (
 )
 GPU_FIELD_BUFFER_UPLOAD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1381,7 +1256,6 @@ GPU_FIELD_BUFFER_UPLOAD_CPP_PATH = (
 )
 GPU_RK_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1392,7 +1266,6 @@ GPU_RK_WORKSPACE_STATE_HPP_PATH = (
 )
 GPU_RK_WORKSPACE_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1403,7 +1276,6 @@ GPU_RK_WORKSPACE_MEMORY_HPP_PATH = (
 )
 GPU_RK_WORKSPACE_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1414,7 +1286,6 @@ GPU_RK_WORKSPACE_MEMORY_CPP_PATH = (
 )
 GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1424,7 +1295,6 @@ GPU_REDUCTION_WORKSPACE_STATE_HPP_PATH = (
 )
 GPU_REDUCTION_WORKSPACE_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1434,7 +1304,6 @@ GPU_REDUCTION_WORKSPACE_MEMORY_HPP_PATH = (
 )
 GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1444,7 +1313,6 @@ GPU_REDUCTION_WORKSPACE_MEMORY_CPP_PATH = (
 )
 GPU_RK_FINAL_REFRESH_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1455,7 +1323,6 @@ GPU_RK_FINAL_REFRESH_CU_PATH = (
 )
 GPU_RK_FINAL_REFRESH_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1466,7 +1333,6 @@ GPU_RK_FINAL_REFRESH_HPP_PATH = (
 )
 GPU_RK_SNAPSHOT_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1477,7 +1343,6 @@ GPU_RK_SNAPSHOT_CU_PATH = (
 )
 GPU_RK_SNAPSHOT_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1487,11 +1352,10 @@ GPU_RK_SNAPSHOT_HPP_PATH = (
     / "rk_snapshot.hpp"
 )
 KERNELS_CU_PATH = (
-    REPO_ROOT / "native" / "backends" / "fem" / "gpu" / "cuda" / "kernels" / "kernels.cu"
+    REPO_ROOT / "backends" / "fem" / "gpu" / "cuda" / "kernels" / "kernels.cu"
 )
 KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1507,7 +1371,6 @@ def read_optional_text(path: Path) -> str:
 
 GPU_VECTOR_FIELD_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1517,7 +1380,6 @@ GPU_VECTOR_FIELD_KERNELS_CU_PATH = (
 )
 GPU_VECTOR_FIELD_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1527,7 +1389,6 @@ GPU_VECTOR_FIELD_KERNELS_HPP_PATH = (
 )
 GPU_DEMAG_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1537,7 +1398,6 @@ GPU_DEMAG_KERNELS_CU_PATH = (
 )
 GPU_DEMAG_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1547,7 +1407,6 @@ GPU_DEMAG_KERNELS_HPP_PATH = (
 )
 GPU_DEMAG_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1557,7 +1416,6 @@ GPU_DEMAG_STATE_HPP_PATH = (
 )
 GPU_DEMAG_STAGE_COMPUTE_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1567,7 +1425,6 @@ GPU_DEMAG_STAGE_COMPUTE_CPP_PATH = (
 )
 GPU_LLG_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1578,7 +1435,6 @@ GPU_LLG_KERNELS_CU_PATH = (
 )
 GPU_LLG_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1589,7 +1445,6 @@ GPU_LLG_KERNELS_HPP_PATH = (
 )
 GPU_EXCHANGE_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1599,7 +1454,6 @@ GPU_EXCHANGE_CPP_PATH = (
 )
 GPU_EXCHANGE_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1609,7 +1463,6 @@ GPU_EXCHANGE_KERNELS_CU_PATH = (
 )
 GPU_EXCHANGE_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1619,7 +1472,6 @@ GPU_EXCHANGE_KERNELS_HPP_PATH = (
 )
 GPU_EXCHANGE_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1629,7 +1481,6 @@ GPU_EXCHANGE_STATE_HPP_PATH = (
 )
 GPU_EXCHANGE_UPLOAD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1639,7 +1490,6 @@ GPU_EXCHANGE_UPLOAD_HPP_PATH = (
 )
 GPU_EXCHANGE_UPLOAD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1649,7 +1499,6 @@ GPU_EXCHANGE_UPLOAD_CPP_PATH = (
 )
 GPU_MESH_METRICS_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1659,7 +1508,6 @@ GPU_MESH_METRICS_STATE_HPP_PATH = (
 )
 GPU_MESH_REGIONS_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1669,7 +1517,6 @@ GPU_MESH_REGIONS_STATE_HPP_PATH = (
 )
 GPU_MESH_GEOMETRY_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1679,7 +1526,6 @@ GPU_MESH_GEOMETRY_STATE_HPP_PATH = (
 )
 GPU_MESH_GEOMETRY_UPLOAD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1689,7 +1535,6 @@ GPU_MESH_GEOMETRY_UPLOAD_HPP_PATH = (
 )
 GPU_MESH_GEOMETRY_UPLOAD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1699,7 +1544,6 @@ GPU_MESH_GEOMETRY_UPLOAD_CPP_PATH = (
 )
 GPU_MATERIAL_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1709,7 +1553,6 @@ GPU_MATERIAL_STATE_HPP_PATH = (
 )
 GPU_ANISOTROPY_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1720,7 +1563,6 @@ GPU_ANISOTROPY_KERNELS_CU_PATH = (
 )
 GPU_ANISOTROPY_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1731,7 +1573,6 @@ GPU_ANISOTROPY_KERNELS_HPP_PATH = (
 )
 GPU_DMI_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1742,7 +1583,6 @@ GPU_DMI_KERNELS_CU_PATH = (
 )
 GPU_DMI_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1753,7 +1593,6 @@ GPU_DMI_KERNELS_HPP_PATH = (
 )
 GPU_MAGNETOELASTIC_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1764,7 +1603,6 @@ GPU_MAGNETOELASTIC_KERNELS_CU_PATH = (
 )
 GPU_MAGNETOELASTIC_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1775,7 +1613,6 @@ GPU_MAGNETOELASTIC_KERNELS_HPP_PATH = (
 )
 GPU_MAGNETOELASTIC_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1786,7 +1623,6 @@ GPU_MAGNETOELASTIC_STATE_HPP_PATH = (
 )
 GPU_MAGNETOELASTIC_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1797,7 +1633,6 @@ GPU_MAGNETOELASTIC_MEMORY_HPP_PATH = (
 )
 GPU_MAGNETOELASTIC_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1808,7 +1643,6 @@ GPU_MAGNETOELASTIC_MEMORY_CPP_PATH = (
 )
 GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1819,7 +1653,6 @@ GPU_MAGNETOELASTIC_UPLOAD_HPP_PATH = (
 )
 GPU_MAGNETOELASTIC_UPLOAD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1830,7 +1663,6 @@ GPU_MAGNETOELASTIC_UPLOAD_CPP_PATH = (
 )
 GPU_LOCAL_INTERACTION_WORKSPACE_STATE_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1840,7 +1672,6 @@ GPU_LOCAL_INTERACTION_WORKSPACE_STATE_HPP_PATH = (
 )
 GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1850,7 +1681,6 @@ GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_HPP_PATH = (
 )
 GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1860,7 +1690,6 @@ GPU_LOCAL_INTERACTION_WORKSPACE_MEMORY_CPP_PATH = (
 )
 GPU_STT_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1871,7 +1700,6 @@ GPU_STT_KERNELS_CU_PATH = (
 )
 GPU_STT_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1882,7 +1710,6 @@ GPU_STT_KERNELS_HPP_PATH = (
 )
 GPU_THERMAL_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1893,7 +1720,6 @@ GPU_THERMAL_KERNELS_CU_PATH = (
 )
 GPU_THERMAL_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1904,7 +1730,6 @@ GPU_THERMAL_KERNELS_HPP_PATH = (
 )
 GPU_ZEEMAN_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1915,7 +1740,6 @@ GPU_ZEEMAN_KERNELS_CU_PATH = (
 )
 GPU_ZEEMAN_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1926,7 +1750,6 @@ GPU_ZEEMAN_KERNELS_HPP_PATH = (
 )
 GPU_OERSTED_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1937,7 +1760,6 @@ GPU_OERSTED_KERNELS_CU_PATH = (
 )
 GPU_OERSTED_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1948,7 +1770,6 @@ GPU_OERSTED_KERNELS_HPP_PATH = (
 )
 GPU_OBSERVABLE_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1958,7 +1779,6 @@ GPU_OBSERVABLE_KERNELS_CU_PATH = (
 )
 GPU_OBSERVABLE_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1968,7 +1788,6 @@ GPU_OBSERVABLE_KERNELS_HPP_PATH = (
 )
 GPU_REDUCTION_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1978,7 +1797,6 @@ GPU_REDUCTION_KERNELS_CU_PATH = (
 )
 GPU_REDUCTION_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1988,7 +1806,6 @@ GPU_REDUCTION_KERNELS_HPP_PATH = (
 )
 GPU_TRANSFER_KERNELS_CU_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -1998,7 +1815,6 @@ GPU_TRANSFER_KERNELS_CU_PATH = (
 )
 GPU_TRANSFER_KERNELS_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -2008,7 +1824,6 @@ GPU_TRANSFER_KERNELS_HPP_PATH = (
 )
 GPU_COMPONENT_TRANSFER_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -2018,7 +1833,6 @@ GPU_COMPONENT_TRANSFER_CPP_PATH = (
 )
 GPU_COMPONENT_TRANSFER_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -2027,14 +1841,13 @@ GPU_COMPONENT_TRANSFER_HPP_PATH = (
     / "component_transfer.hpp"
 )
 GPU_STATE_CPP_PATH = (
-    REPO_ROOT / "native" / "backends" / "fem" / "gpu" / "cuda" / "state" / "gpu_state.cpp"
+    REPO_ROOT / "backends" / "fem" / "gpu" / "cuda" / "state" / "gpu_state.cpp"
 )
 GPU_STATE_HPP_PATH = (
-    REPO_ROOT / "native" / "backends" / "fem" / "gpu" / "cuda" / "state" / "gpu_state.hpp"
+    REPO_ROOT / "backends" / "fem" / "gpu" / "cuda" / "state" / "gpu_state.hpp"
 )
 GPU_STATE_RUNTIME_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "gpu"
@@ -2042,10 +1855,9 @@ GPU_STATE_RUNTIME_CPP_PATH = (
     / "runtime"
     / "gpu_state_runtime.cpp"
 )
-MFEM_BRIDGE_CPP_PATH = REPO_ROOT / "native" / "backends" / "fem" / "src" / "mfem_bridge.cpp"
+MFEM_BRIDGE_CPP_PATH = REPO_ROOT / "backends" / "fem" / "src" / "mfem_bridge.cpp"
 EXCHANGE_FIELD_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2055,7 +1867,6 @@ EXCHANGE_FIELD_CPP_PATH = (
 )
 EXCHANGE_RUNTIME_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2065,7 +1876,6 @@ EXCHANGE_RUNTIME_CPP_PATH = (
 )
 RK_EXPLICIT_STEP_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2075,7 +1885,6 @@ RK_EXPLICIT_STEP_CPP_PATH = (
 )
 SNAPSHOT_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2085,7 +1894,6 @@ SNAPSHOT_CPP_PATH = (
 )
 STAGE_COMPLETION_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2095,7 +1903,6 @@ STAGE_COMPLETION_CPP_PATH = (
 )
 STAGE_COMPLETION_HPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -2105,7 +1912,6 @@ STAGE_COMPLETION_HPP_PATH = (
 )
 STEP_METRICS_CPP_PATH = (
     REPO_ROOT
-    / "native"
     / "backends"
     / "fem"
     / "cpu"
@@ -7365,9 +7171,8 @@ def test_legacy_sparse_exchange_csr_upload_is_wired_before_gpu_exchange_plan_can
     cmake = FEM_CMAKE_PATH.read_text(encoding="utf-8")
     mfem_source = (
         REPO_ROOT
-        / "native"
-        / "backends"
-        / "fem"
+    / "backends"
+    / "fem"
         / "cpu"
         / "mfem"
         / "runtime"
@@ -7375,9 +7180,8 @@ def test_legacy_sparse_exchange_csr_upload_is_wired_before_gpu_exchange_plan_can
     ).read_text(encoding="utf-8")
     exchange_upload_source = (
         REPO_ROOT
-        / "native"
-        / "backends"
-        / "fem"
+    / "backends"
+    / "fem"
         / "cpu"
         / "mfem"
         / "interactions"
@@ -7474,9 +7278,8 @@ def test_legacy_sparse_exchange_upload_runs_after_gpu_state_allocation():
     context_source = GPU_STATE_RUNTIME_CPP_PATH.read_text(encoding="utf-8")
     mfem_source = (
         REPO_ROOT
-        / "native"
-        / "backends"
-        / "fem"
+    / "backends"
+    / "fem"
         / "cpu"
         / "mfem"
         / "runtime"
@@ -7714,7 +7517,7 @@ def test_gpu_demag_poisson_device_state_is_owned_by_demag_poisson_module():
 
 
 def test_gpu_cuda_owner_modules_do_not_include_kernel_compatibility_umbrella():
-    cuda_root = REPO_ROOT / "native" / "backends" / "fem" / "gpu" / "cuda"
+    cuda_root = REPO_ROOT / "backends" / "fem" / "gpu" / "cuda"
     offenders = []
     for source_path in cuda_root.rglob("*"):
         if source_path == KERNELS_HPP_PATH or source_path.suffix not in {
@@ -9386,9 +9189,8 @@ def test_gpu_rk_step_contains_adaptive_retry_loop_scaffold():
 def test_gpu_rk_scalar_stats_are_read_outside_hot_loop_scope():
     backend_step_source = (
         REPO_ROOT
-        / "native"
-        / "backends"
-        / "fem"
+    / "backends"
+    / "fem"
         / "cpu"
         / "mfem"
         / "runtime"
@@ -9967,7 +9769,7 @@ def test_gpu_rk_finalize_batches_scalar_device_to_host_readback():
     magnetization_source = GPU_RK_MAGNETIZATION_REDUCTIONS_CU_PATH.read_text(
         encoding="utf-8"
     )
-    function_start = stats_source.index("bool gpu_rk_finalize_step_stats(")
+    function_start = stats_source.index("bool finalize_step_stats_impl(")
     function_end = stats_source.index("\n} // namespace fullmag::fem", function_start)
     function_source = stats_source[function_start:function_end]
 
@@ -9979,7 +9781,8 @@ def test_gpu_rk_finalize_batches_scalar_device_to_host_readback():
         "gpu_rk_reduce_final_observable_terms(ctx, stream, n, blocks, reason)"
         in function_source
     )
-    assert "read_scalar_results(\n        ctx," in function_source
+    assert "gpu_rk_read_scalar_results(" in function_source
+    assert "gpu_rk_read_control_scalar_results(" in function_source
     assert "read_scalar_result(" not in function_source
     assert (
         "gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::ExchangeEnergy)"
@@ -10479,6 +10282,37 @@ def test_benchmark_cli_applies_box500_airbox_interaction_consistency_preset(monk
     assert args.require_gpu_strict_residency is True
 
 
+def test_cpu_gpu_consistency_gate_defaults_to_single_threaded_gmsh(monkeypatch):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setattr(
+        bench.sys,
+        "argv",
+        ["fem_gpu_benchmark.py", "--require-cpu-gpu-consistency"],
+    )
+
+    args = bench.parse_args()
+
+    assert bench.benchmark_mesh_env(args) == {"FULLMAG_GMSH_THREADS": "1"}
+
+
+def test_explicit_gmsh_threads_override_cpu_gpu_consistency_default(monkeypatch):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setattr(
+        bench.sys,
+        "argv",
+        [
+            "fem_gpu_benchmark.py",
+            "--require-cpu-gpu-consistency",
+            "--gmsh-threads",
+            "4",
+        ],
+    )
+
+    args = bench.parse_args()
+
+    assert bench.benchmark_mesh_env(args) == {"FULLMAG_GMSH_THREADS": "4"}
+
+
 def test_box500_airbox_interaction_preset_preserves_requested_integrators(monkeypatch):
     bench = load_analysis_benchmark_module()
     monkeypatch.setattr(
@@ -10662,7 +10496,7 @@ def test_cpu_gpu_rich_report_prints_bordered_color_table():
         "failure_count": 0,
         "case_coverage": [
             {
-                "case_id": "box500_airbox_exchange_demag",
+                "case_id": "box500",
                 "status": "pass",
                 "cpu_average_timing_ms": {
                     "wall_time_ms": 10.0,
@@ -10678,7 +10512,7 @@ def test_cpu_gpu_rich_report_prints_bordered_color_table():
         ],
         "pairs": [
             {
-                "scenario": "box500_airbox_exchange_demag",
+                "scenario": "box500",
                 "executed_step_delta": 1,
                 "wall_time_speedup_cpu_over_gpu": 2.0,
                 "demag_solver_apply_wall_time_speedup_cpu_over_gpu": 2.0,
@@ -10698,7 +10532,7 @@ def test_cpu_gpu_rich_report_prints_bordered_color_table():
         file=output,
         force_terminal=True,
         color_system="standard",
-        width=180,
+        width=260,
     )
 
     rendered = bench.print_cpu_gpu_benchmark_rich_report(
@@ -10713,15 +10547,33 @@ def test_cpu_gpu_rich_report_prints_bordered_color_table():
     assert rendered is True
     assert "\x1b[" in text
     assert "┏" in text
-    assert "CPU steps/min" in text
-    assert "GPU steps/min" in text
-    assert "box500_airbox_exchange_demag" in text
+    assert "Case Runtime And Step Rate" in text
+    assert "Demag And Numerical Parity" in text
+    assert "12000.000" in text
+    assert "2.000x" in text
 
 
 def test_ensure_python_installs_rich_for_benchmark_reports():
     justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
 
     assert "'rich>=13.7'" in justfile_text
+
+
+def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile_text
+    assert "verify-fem-relaxation-production-benchmark:" in justfile_text
+    assert (
+        '-e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg}"'
+        in justfile_text
+    )
+    assert '-e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-16}"' in justfile_text
+    assert '-e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}"' in justfile_text
+    assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke.csv}"' in justfile_text
+    assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}"' in justfile_text
+    assert '--relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS"' in justfile_text
+    assert "--relax-algorithms \"${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}\"" not in justfile_text
 
 
 def test_box500_consistency_just_target_defaults_to_multistep_relaxation():

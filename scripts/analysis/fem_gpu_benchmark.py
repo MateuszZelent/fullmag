@@ -914,7 +914,6 @@ def box500_airbox_exchange_manifest(
 def cpu_gpu_case_manifests(
     *,
     scenarios: list[str],
-    relaxation_algorithms: list[str],
     steps: int,
     dt: float,
     energy_rtol: float,
@@ -923,34 +922,47 @@ def cpu_gpu_case_manifests(
     torque_atol_apm: float,
     torque_atol_t: float,
     max_step_delta: int,
+    relaxation_algorithms: list[str] | None = None,
     relax_torque_tolerance_apm: float | None = None,
     relax_torque_tolerance_t: float | None = None,
 ) -> list[dict[str, object]]:
     manifests: list[dict[str, object]] = []
+    explicit_relaxation_algorithms = relaxation_algorithms is not None
+    effective_algorithms = relaxation_algorithms or ["llg_overdamped"]
     for scenario in scenarios:
         if scenario not in BOX500_AIRBOX_SCENARIO_ALIASES:
             continue
         for relaxation_algorithm in relaxation_algorithms_for_scenario(
             scenario,
-            relaxation_algorithms,
+            effective_algorithms,
         ):
-            manifests.append(
-                box500_airbox_interaction_manifest(
-                    scenario,
-                    steps=steps,
-                    dt=dt,
-                    relaxation_algorithm=relaxation_algorithm,
-                    energy_rtol=energy_rtol,
-                    energy_atol=energy_atol,
-                    torque_rtol=torque_rtol,
-                    torque_atol_apm=torque_atol_apm,
-                    torque_atol_t=torque_atol_t,
-                    max_step_delta=max_step_delta,
-                    relax_torque_tolerance_apm=relax_torque_tolerance_apm,
-                    relax_torque_tolerance_t=relax_torque_tolerance_t,
-                )
+            manifest = box500_airbox_interaction_manifest(
+                scenario,
+                steps=steps,
+                dt=dt,
+                relaxation_algorithm=relaxation_algorithm,
+                energy_rtol=energy_rtol,
+                energy_atol=energy_atol,
+                torque_rtol=torque_rtol,
+                torque_atol_apm=torque_atol_apm,
+                torque_atol_t=torque_atol_t,
+                max_step_delta=max_step_delta,
+                relax_torque_tolerance_apm=relax_torque_tolerance_apm,
+                relax_torque_tolerance_t=relax_torque_tolerance_t,
             )
+            if not explicit_relaxation_algorithms:
+                manifest["relaxation_algorithm"] = None
+                manifest["required_backends"] = ["fem_cpu", "fem_gpu"]
+            manifests.append(manifest)
     return manifests
+
+
+def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
+    if args.gmsh_threads is not None:
+        return {"FULLMAG_GMSH_THREADS": str(args.gmsh_threads)}
+    if args.require_stable_solver_mesh or args.require_cpu_gpu_consistency:
+        return {"FULLMAG_GMSH_THREADS": "1"}
+    return {}
 
 
 def env_text(env: Mapping[str, str], key: str) -> str | None:
@@ -1474,10 +1486,10 @@ def run_backend(
     mesh_path: Path,
     scenario: str,
     integrator: str,
-    relaxation_algorithm: str | None,
     steps: int,
     dt: float,
     extra_env: dict[str, str],
+    relaxation_algorithm: str | None = None,
     timestep_policy: str = "fixed",
     thread_spec: ThreadCountSpec = ThreadCountSpec(label="auto", env_value="auto"),
     timeout_s: float | None = None,
@@ -2210,7 +2222,7 @@ def cpu_gpu_consistency_case_key(row: Mapping[str, object]) -> tuple[object, ...
         signature,
         row.get("scenario"),
         row.get("integrator"),
-        row.get("reported_relaxation_algorithm"),
+        row_relaxation_algorithm(row),
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
@@ -2542,10 +2554,16 @@ def manifest_case_requirements(
 
 
 def row_relaxation_algorithm(row: Mapping[str, object]) -> object:
-    return first_present(
+    value = first_present(
         row.get("reported_relaxation_algorithm"),
         row.get("relaxation_algorithm"),
     )
+    if value is not None:
+        return value
+    scenario = row.get("scenario")
+    if isinstance(scenario, str) and scenario in BOX500_AIRBOX_SCENARIO_ALIASES:
+        return "llg_overdamped"
+    return None
 
 
 def cpu_gpu_required_case_coverage(
@@ -2567,6 +2585,10 @@ def cpu_gpu_required_case_coverage(
                 relaxation_algorithm if isinstance(relaxation_algorithm, str) else None,
             )
             pair_counts_by_requirement[key] = pair_counts_by_requirement.get(key, 0) + 1
+            generic_key = (scenario, None)
+            pair_counts_by_requirement[generic_key] = (
+                pair_counts_by_requirement.get(generic_key, 0) + 1
+            )
 
     coverage: list[dict[str, object]] = []
     for case_id, relaxation_algorithm, required_backends in case_requirements:
@@ -4019,11 +4041,7 @@ def main() -> None:
         relax_torque_tolerance_apm=relax_torque_tolerance_apm,
         relax_torque_tolerance_t=args.relax_torque_tolerance_t,
     )
-    mesh_env = {}
-    if args.gmsh_threads is not None:
-        mesh_env["FULLMAG_GMSH_THREADS"] = str(args.gmsh_threads)
-    elif args.require_stable_solver_mesh:
-        mesh_env["FULLMAG_GMSH_THREADS"] = "1"
+    mesh_env = benchmark_mesh_env(args)
     results: list[dict[str, object]] = []
 
     print(

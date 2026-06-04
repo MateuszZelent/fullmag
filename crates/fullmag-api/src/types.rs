@@ -101,6 +101,8 @@ pub(crate) struct AppState {
     pub current_live_realtime_replay: Arc<Mutex<VecDeque<CurrentLiveRealtimeEvent>>>,
     /// Monotonic sequence number for resource-first realtime events.
     pub current_live_realtime_next_seq: Arc<AtomicU64>,
+    /// Last wall-clock publish time for scalar-only realtime telemetry batches.
+    pub current_live_realtime_last_scalar_emit_unix_ms: Arc<AtomicU64>,
     /// Typed display selection for the sessionless root workspace.
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.

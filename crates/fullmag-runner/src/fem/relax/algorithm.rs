@@ -16,9 +16,9 @@ use super::super::engine::FemEngineKind;
 ///
 /// This table describes runner-level availability. Keep it aligned with the
 /// native backend lanes: projected-gradient BB and nonlinear-CG are implemented
-/// on the CPU/MFEM and native CUDA lanes. TPI is production-executable on the
-/// CPU/MFEM tangent-plane lane; its full GPU/libCEED implementation remains
-/// under development.
+/// on the CPU/MFEM and native CUDA lanes. TPI currently remains a CPU/MFEM-only
+/// development lane; its full GPU/libCEED implementation is not production-
+/// qualified yet.
 pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKind) -> bool {
     match (algorithm, engine) {
         // LlgOverdamped is the primary production path on both engines.
@@ -32,7 +32,8 @@ pub fn algorithm_supported(algorithm: RelaxationAlgorithmIR, engine: FemEngineKi
         (RelaxationAlgorithmIR::NonlinearCg, FemEngineKind::CpuNative) => true,
         (RelaxationAlgorithmIR::NonlinearCg, FemEngineKind::NativeGpu) => true,
 
-        // TPI solves a global MFEM tangent-plane system on the CPU/MFEM lane.
+        // TPI solves a global MFEM tangent-plane system on the CPU/MFEM lane,
+        // but remains under development and is not part of GPU production gates.
         (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::CpuNative) => true,
 
         (RelaxationAlgorithmIR::TangentPlaneImplicit, FemEngineKind::NativeGpu) => false,
@@ -127,7 +128,7 @@ pub fn check_algorithm_support(
             message: format!(
                 "FEM relaxation algorithm `{}` is not yet supported on engine `{}`. \
                  Supported algorithms on this engine: {}. \
-                 tangent_plane_implicit is production-executable on the CPU/MFEM lane; \
+                 tangent_plane_implicit is available only on the CPU/MFEM development lane; \
                  its full GPU/libCEED device-resident algorithm is under development.",
                 algorithm_provenance_name(control.algorithm),
                 engine.id(),
@@ -240,6 +241,7 @@ mod tests {
             err.message.contains("tangent_plane_implicit")
                 && err.message.contains("GPU/libCEED")
                 && err.message.contains("under development")
+                && !err.message.contains("production-executable")
                 && err.message.contains("CPU/MFEM"),
             "{}",
             err.message

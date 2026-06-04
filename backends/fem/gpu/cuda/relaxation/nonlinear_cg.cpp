@@ -5,6 +5,19 @@
  * direction handling, Armijo line search, and rollback for FEM CUDA
  * minimization. Runtime routing is enabled only through the native FEM backend
  * step boundary after the GPU transfer-audit preflight succeeds.
+ *
+ * NOTE: unlike the CPU/MFEM nonlinear-CG in cpu/mfem/relaxation/nonlinear_cg,
+ * this GPU implementation is unpreconditioned — it does not apply the
+ * exchange-mass preconditioner (M + w·K)^{-1}·M to the tangent gradient
+ * before computing the PR+ beta or the descent direction.  This is a valid
+ * but slower-converging variant; adding a GPU sparse CG preconditioner
+ * solve is deferred.
+ *
+ * The GPU path also omits the CPU's third-tier raw-gradient recovery fallback
+ * (retry with d = −g after both preconditioned and restart recoveries fail).
+ * Monotone recovery uses the same noise-tolerant energy criterion as CPU NCG
+ * (trial ≤ current + ε), which avoids rejecting numerically flat accepted
+ * relaxation steps near convergence.
  */
 
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
@@ -41,6 +54,8 @@ constexpr double kMinStepSize = 1.0e-15;
 constexpr double kMaxStepSize = 1.0e-3;
 constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr double kGradientFloor = 1.0e-30;
+constexpr double kLineSearchEnergyNoiseFloorJ = 1.0e-23;
+constexpr double kLineSearchEnergyNoiseRelative = 1.0e-12;
 constexpr uint32_t kMaxBacktracks = 30;
 constexpr uint32_t kArmijoRecoveryCycles = 1;
 constexpr uint64_t kRestartInterval = 50;
@@ -83,6 +98,27 @@ void mark_gpu_relax_ncg_device_source_of_truth(Context &ctx)
     gpu.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     gpu.residency.device_state = FemGpuSyncState::DeviceDirty;
     gpu.residency.host_state = FemGpuSyncState::HostStale;
+}
+
+double line_search_energy_tolerance(
+    double current_energy,
+    double trial_energy)
+{
+    return std::max(
+        kLineSearchEnergyNoiseFloorJ,
+        kLineSearchEnergyNoiseRelative *
+            std::max(std::abs(current_energy), std::abs(trial_energy)));
+}
+
+bool gpu_relax_accept_monotone_recovery_step(
+    double current_energy,
+    double trial_energy)
+{
+    return std::isfinite(current_energy) &&
+        std::isfinite(trial_energy) &&
+        trial_energy <=
+            current_energy +
+                line_search_energy_tolerance(current_energy, trial_energy);
 }
 
 bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
@@ -543,12 +579,6 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    auto gpu_relax_accept_monotone_recovery_step =
-        [](double current_energy, double trial_energy) {
-            return std::isfinite(current_energy) &&
-                std::isfinite(trial_energy) &&
-                trial_energy <= current_energy;
-        };
     for (uint32_t recovery_cycle = 0;
          recovery_cycle < kArmijoRecoveryCycles;
          ++recovery_cycle) {
@@ -960,10 +990,19 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
     if (!line_search_accepted) {
+        const double armijo_rhs =
+            current_energy + kArmijoCoefficient * trial_step * p_dot_g;
         const std::string original_error =
             "GPU nonlinear-CG failed Armijo line search after " +
             std::to_string(backtracks) +
-            " backtracks";
+            " backtracks; current_energy_j=" +
+            std::to_string(current_energy) +
+            " last_trial_energy_j=" +
+            std::to_string(trial_energy) +
+            " armijo_rhs_j=" + std::to_string(armijo_rhs) +
+            " last_trial_step=" + std::to_string(trial_step) +
+            " direction_dot_gradient=" + std::to_string(p_dot_g) +
+            " gradient_norm_sq=" + std::to_string(gradient_norm_sq);
         return gpu_relax_restore_previous_state_after_failure(
             ctx,
             stream,
