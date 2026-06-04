@@ -9755,6 +9755,262 @@
         ],
         "type": "string"
       },
+      "TableColumnMeta": {
+        "properties": {
+          "column_id": {
+            "type": "string"
+          },
+          "component": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dimension": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "reduction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "value_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "column_id",
+          "quantity_id",
+          "label",
+          "unit",
+          "dimension",
+          "value_type"
+        ],
+        "type": "object"
+      },
+      "TableDecimationMeta": {
+        "properties": {
+          "endpoints_preserved": {
+            "type": "boolean"
+          },
+          "extrema_preserved": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "returned_points": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target_points": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mode",
+          "source_rows",
+          "target_points",
+          "returned_points",
+          "endpoints_preserved",
+          "extrema_preserved"
+        ],
+        "type": "object"
+      },
+      "TableListResource": {
+        "properties": {
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "tables"
+        ],
+        "type": "object"
+      },
+      "TableResource": {
+        "properties": {
+          "binary_rows_href": {
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumnMeta"
+            },
+            "type": "array"
+          },
+          "columns_href": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows_href": {
+            "type": "string"
+          },
+          "schema_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "table_id": {
+            "type": "string"
+          },
+          "total_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table_id",
+          "revision",
+          "schema_revision",
+          "total_rows",
+          "columns",
+          "rows_href",
+          "columns_href",
+          "binary_rows_href"
+        ],
+        "type": "object"
+      },
+      "TableRowsBinaryDescriptor": {
+        "properties": {
+          "endianness": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "layout": {
+            "type": "string"
+          },
+          "value_type": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "format",
+          "version",
+          "layout",
+          "value_type",
+          "endianness"
+        ],
+        "type": "object"
+      },
+      "TableRowsResource": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumnMeta"
+            },
+            "type": "array"
+          },
+          "cursor_end": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cursor_start": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decimation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TableDecimationMeta"
+              }
+            ]
+          },
+          "resync_required": {
+            "type": "boolean"
+          },
+          "returned_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "schema_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "table_id": {
+            "type": "string"
+          },
+          "total_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table_id",
+          "revision",
+          "schema_revision",
+          "cursor_start",
+          "cursor_end",
+          "total_rows",
+          "returned_rows",
+          "columns",
+          "rows",
+          "resync_required"
+        ],
+        "type": "object"
+      },
       "TrimAxisVisualizationAxes": {
         "properties": {
           "x": {
@@ -14278,6 +14534,369 @@
               }
             },
             "description": "Scalar history window"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/tables": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_tables",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableListResource"
+                }
+              }
+            },
+            "description": "Available table resources"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/tables/{table_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_tables_table_id",
+        "parameters": [
+          {
+            "description": "Table resource id",
+            "in": "path",
+            "name": "table_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResource"
+                }
+              }
+            },
+            "description": "Table resource metadata"
+          },
+          "404": {
+            "description": "Unknown table id"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/tables/{table_id}/columns": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_tables_table_id_columns",
+        "parameters": [
+          {
+            "description": "Table resource id",
+            "in": "path",
+            "name": "table_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TableColumnMeta"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Table column metadata"
+          },
+          "404": {
+            "description": "Unknown table id"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/tables/{table_id}/rows": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_tables_table_id_rows",
+        "parameters": [
+          {
+            "description": "Table resource id",
+            "in": "path",
+            "name": "table_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only rows after this cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive one-based row cursor lower bound",
+            "in": "query",
+            "name": "from_row",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive one-based row cursor upper bound",
+            "in": "query",
+            "name": "to_row",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive simulation-time lower bound in seconds",
+            "in": "query",
+            "name": "from_t",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Inclusive simulation-time upper bound in seconds",
+            "in": "query",
+            "name": "to_t",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Max rows to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Display point budget for server-side decimation",
+            "in": "query",
+            "name": "target_points",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Server-side decimation mode",
+            "in": "query",
+            "name": "decimation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Preserve the latest row in decimated windows",
+            "in": "query",
+            "name": "include_tail",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Comma-separated table columns to return",
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableRowsResource"
+                }
+              }
+            },
+            "description": "Table row window"
+          },
+          "404": {
+            "description": "Unknown table id"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/tables/{table_id}/rows.bin": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_tables_table_id_rows_bin",
+        "parameters": [
+          {
+            "description": "Table resource id",
+            "in": "path",
+            "name": "table_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only rows after this cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive one-based row cursor lower bound",
+            "in": "query",
+            "name": "from_row",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive one-based row cursor upper bound",
+            "in": "query",
+            "name": "to_row",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Inclusive simulation-time lower bound in seconds",
+            "in": "query",
+            "name": "from_t",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Inclusive simulation-time upper bound in seconds",
+            "in": "query",
+            "name": "to_t",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Max rows to return",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Display point budget for server-side decimation",
+            "in": "query",
+            "name": "target_points",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Server-side decimation mode",
+            "in": "query",
+            "name": "decimation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Preserve the latest row in decimated windows",
+            "in": "query",
+            "name": "include_tail",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Comma-separated table columns to return",
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.fullmag.table-rows.v1+octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableRowsBinaryDescriptor"
+                }
+              }
+            },
+            "description": "Binary table row window"
+          },
+          "404": {
+            "description": "Unknown table id"
           }
         },
         "tags": [

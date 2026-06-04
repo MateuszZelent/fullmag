@@ -177,7 +177,8 @@ describe("SimulationStartupOverlay", () => {
 
   it("keeps refreshing status while startup overlay is visible", () => {
     expect(source).not.toContain("setInterval(");
-    expect(source).toContain("setTimeout(tick, SIMULATION_STARTUP_STATUS_REFRESH_MS)");
+    expect(source).toContain("statusRefreshIntervalMs()");
+    expect(source).not.toContain("SIMULATION_STARTUP_STATUS_REFRESH_MS");
 
     expect(
       shouldRefreshSimulationStartupStatus({

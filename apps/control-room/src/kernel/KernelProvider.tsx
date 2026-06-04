@@ -73,6 +73,7 @@ function createKernel(): KernelApi {
     resources,
   });
   const realtime = new RealtimeInvalidationBridge(resources, {
+    bus,
     shouldSuppressInvalidation: (resourceKey, revision) =>
       visualizationSync.shouldSuppressInvalidation(resourceKey, revision) ||
       cameraRegistry.shouldSuppressInvalidation(resourceKey, revision),
@@ -122,14 +123,8 @@ function createKernel(): KernelApi {
 }
 
 function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
-  const startupVisible = useSimulationStartupOverlayVisibility();
-
   useEffect(() => {
     if (controlRoomRealtimeDisabledFromBrowser()) {
-      return;
-    }
-
-    if (startupVisible) {
       return;
     }
 
@@ -153,7 +148,7 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     });
     client.connect();
     return () => client.close();
-  }, [kernel, startupVisible]);
+  }, [kernel]);
 
   return null;
 }

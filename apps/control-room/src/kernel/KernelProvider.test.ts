@@ -26,13 +26,17 @@ describe("KernelProvider performance contracts", () => {
     );
   });
 
-  it("uses a startup visibility selector instead of full session status snapshots in kernel connectors", () => {
+  it("uses startup visibility selectors only for interactions that must wait for the workspace", () => {
     expect(kernelProviderSource).toContain(
       "useSimulationStartupOverlayVisibility",
     );
     expect(kernelProviderSource).toContain(
       "const startupVisible = useSimulationStartupOverlayVisibility();",
     );
+    expect(kernelProviderSource).not.toContain(
+      "function RealtimeConnector({ kernel }: { kernel: KernelApi }) {\n  const startupVisible",
+    );
+    expect(kernelProviderSource).not.toContain("if (startupVisible) {\n      return;\n    }\n\n    if (typeof WebSocket");
     expect(kernelProviderSource).not.toContain("useSessionStatus");
     expect(kernelProviderSource).not.toContain(
       "resolveSimulationStartupOverlayState",

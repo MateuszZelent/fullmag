@@ -2,6 +2,7 @@ export { decodeCrossSection } from "./crossSectionCodec";
 export { decodeCrossSectionQuality } from "./crossSectionQualityCodec";
 export { decodeFieldVector } from "./fieldVectorCodec";
 export { decodeMeshQualityData } from "./meshQualityDataCodec";
+export { decodeTableRows } from "./tableRowsCodec";
 export {
   decodeTopology,
   decodeTopologyHeader,
@@ -17,5 +18,6 @@ export type {
   DecodedCrossSectionQuality,
   DecodedFieldVector,
   DecodedMeshQualityData,
+  DecodedTableRows,
   DecodedTopology,
 } from "./types";

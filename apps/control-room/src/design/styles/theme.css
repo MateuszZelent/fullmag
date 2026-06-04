@@ -30,6 +30,12 @@
   --fm-accent-strong: #b4befe;
   --fm-accent-soft: #2a2d52;
 
+  --fm-chart-blue: #89b4fa;
+  --fm-chart-green: #a6e3a1;
+  --fm-chart-yellow: #f9e2af;
+  --fm-chart-red: #f38ba8;
+  --fm-chart-mauve: #cba6f7;
+
   --fm-success: #a6e3a1;
   --fm-info: #89dceb;
   --fm-warning: #f9e2af;
@@ -73,6 +79,12 @@
   --fm-accent: #1e66f5;
   --fm-accent-strong: #7287fd;
   --fm-accent-soft: #d3e5fd;
+
+  --fm-chart-blue: #1e66f5;
+  --fm-chart-green: #40a02b;
+  --fm-chart-yellow: #df8e1d;
+  --fm-chart-red: #d20f39;
+  --fm-chart-mauve: #8839ef;
 
   --fm-success: #40a02b;
   --fm-info: #04a5e5;

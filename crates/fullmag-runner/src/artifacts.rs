@@ -593,6 +593,7 @@ pub(crate) fn write_artifacts(
     if streamed.is_none_or(|summary| summary.scalar_rows_written == 0) {
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
     }
+    write_table_autosave_artifacts(output_dir, problem, &executed.result.steps)?;
 
     write_field_file(
         &output_dir.join("m_initial.json"),
@@ -1124,6 +1125,30 @@ pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std
         step.max_torque_Apm,
         step.max_torque_T
     )
+}
+
+fn write_table_autosave_artifacts(
+    output_dir: &Path,
+    problem: &fullmag_ir::ProblemIR,
+    steps: &[StepStats],
+) -> std::io::Result<()> {
+    let Some(config_ir) = problem.study.sampling().table_autosave.as_ref() else {
+        return Ok(());
+    };
+    let config =
+        crate::table_autosave::TableAutosaveConfig::from_ir(config_ir).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid table_autosave config: {error}"),
+            )
+        })?;
+    let mut store = crate::table_autosave::TableStore::new(config);
+    for step in steps {
+        store
+            .append_if_due(step)
+            .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+    }
+    store.write_artifacts(output_dir)
 }
 
 pub(crate) fn write_field_file(

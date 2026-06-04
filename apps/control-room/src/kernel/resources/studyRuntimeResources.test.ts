@@ -4,12 +4,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  DATA_TABLE_COLUMNS_PATH,
+  DATA_TABLE_PATH,
   DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  DATA_TABLE_ROWS_PATH,
+  DATA_TABLES_PATH,
 } from "../api/apiPaths";
 import type { LiveStatusResource } from "../api/apiTypes";
 
@@ -352,5 +356,51 @@ describe("study runtime command resource bundles", () => {
         statusWith({ resources: { scalars_revision: 7 } }),
       ),
     ).toBe(true);
+  });
+
+  it("uses a revision-driven table rows resource without interval polling", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const tableHook = source.slice(
+      source.indexOf("export function useTableListResource"),
+      source.indexOf("export function useCheckpointCatalogResource"),
+    );
+    const rowsHook = source.slice(
+      source.indexOf("export function useTableRowsResource"),
+      source.indexOf("export function useCheckpointCatalogResource"),
+    );
+    const binaryRowsHook = source.slice(
+      source.indexOf("export function useTableRowsBinaryResource"),
+      source.indexOf("export function useCheckpointCatalogResource"),
+    );
+
+    expect(source).toContain("export function useTableListResource");
+    expect(source).toContain("export function useTableResource");
+    expect(source).toContain("export function useTableColumnsResource");
+    expect(source).toContain("export function useTableRowsResource");
+    expect(source).toContain("export function useTableRowsBinaryResource");
+    expect(tableHook).toContain(".list(");
+    expect(tableHook).toContain(".detail(");
+    expect(tableHook).toContain(".columns(");
+    expect(tableHook).toContain("api.data.tables");
+    expect(rowsHook).toContain(".rows(");
+    expect(binaryRowsHook).toContain(".rowsBinary(");
+    expect(binaryRowsHook).toContain("}#binary`");
+    expect(rowsHook).toContain("tableRowsResourceKey");
+    expect(binaryRowsHook).toContain("tableRowsResourceKey");
+    expect(rowsHook).toContain("minRefetchIntervalMs");
+    expect(binaryRowsHook).toContain("minRefetchIntervalMs");
+    expect(tableHook).not.toContain("setInterval");
+    expect(DATA_TABLES_PATH).toBe(
+      ["", "v2", "sessions", "current", "data", "tables"].join("/"),
+    );
+    expect(DATA_TABLE_PATH).toBe(
+      ["", "v2", "sessions", "current", "data", "tables", "{table_id}"].join("/"),
+    );
+    expect(DATA_TABLE_COLUMNS_PATH).toBe(
+      ["", "v2", "sessions", "current", "data", "tables", "{table_id}", "columns"].join("/"),
+    );
+    expect(DATA_TABLE_ROWS_PATH).toBe(
+      ["", "v2", "sessions", "current", "data", "tables", "{table_id}", "rows"].join("/"),
+    );
   });
 });

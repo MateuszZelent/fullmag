@@ -36,6 +36,49 @@ SUPPORTED_EQUILIBRIUM_SOURCES = {"provided", "relax", "artifact"}
 SUPPORTED_EIGEN_NORMALIZATIONS = {"unit_l2", "unit_max_amplitude"}
 SUPPORTED_EIGEN_DAMPING_POLICIES = {"ignore", "include"}
 SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_anisotropy"}
+DEFAULT_TABLE_AUTOSAVE_QUANTITIES = (
+    "step",
+    "t",
+    "mx",
+    "my",
+    "mz",
+    "e_total",
+    "max_torque",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TableAutosave:
+    t_sampl: float
+    quantities: Sequence[str] | None = None
+    extra_quantities: Sequence[str] = ()
+    table_id: str = "default"
+
+    def __post_init__(self) -> None:
+        require_positive(self.t_sampl, "t_sampl")
+        table_id = require_non_empty(self.table_id, "table_id")
+        base_quantities = (
+            DEFAULT_TABLE_AUTOSAVE_QUANTITIES
+            if self.quantities is None
+            else tuple(require_non_empty(quantity, "quantity") for quantity in self.quantities)
+        )
+        if not base_quantities:
+            raise ValueError("quantities must not be empty")
+        normalized_extra = tuple(
+            require_non_empty(quantity, "quantity") for quantity in self.extra_quantities
+        )
+        normalized_quantities = tuple(dict.fromkeys((*base_quantities, *normalized_extra)))
+        object.__setattr__(self, "table_id", table_id)
+        object.__setattr__(self, "quantities", normalized_quantities)
+        object.__setattr__(self, "extra_quantities", normalized_extra)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "table_autosave",
+            "table_id": self.table_id,
+            "sample_period_s": self.t_sampl,
+            "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
+        }
 
 
 def _require_supported_eigen_options(
@@ -153,17 +196,53 @@ def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, obje
 class TimeEvolution:
     dynamics: LLG
     outputs: Sequence[TimeOutputSpec]
+    _table_autosave: TableAutosave | None = field(default=None, repr=False)
+
+    def __init__(
+        self,
+        dynamics: LLG,
+        outputs: Sequence[TimeOutputSpec],
+        table_autosave: TableAutosave | None = None,
+    ) -> None:
+        object.__setattr__(self, "dynamics", dynamics)
+        object.__setattr__(self, "outputs", outputs)
+        object.__setattr__(self, "_table_autosave", table_autosave)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if not self.outputs:
             raise ValueError("TimeEvolution requires at least one output")
 
     def to_ir(self) -> dict[str, object]:
+        sampling: dict[str, object] = {
+            "outputs": [output.to_ir() for output in self.outputs],
+        }
+        if self._table_autosave is not None:
+            sampling["table_autosave"] = self._table_autosave.to_ir()
         return {
             "kind": "time_evolution",
             "dynamics": self.dynamics.to_ir(),
-            "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
+            "sampling": sampling,
         }
+
+    def table_autosave(
+        self,
+        *,
+        t_sampl: float,
+        quantities: Sequence[str] | None = None,
+        extra_quantities: Sequence[str] = (),
+        table_id: str = "default",
+    ) -> "TimeEvolution":
+        return TimeEvolution(
+            dynamics=self.dynamics,
+            outputs=self.outputs,
+            table_autosave=TableAutosave(
+                t_sampl=t_sampl,
+                quantities=quantities,
+                extra_quantities=extra_quantities,
+                table_id=table_id,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +335,7 @@ class Relaxation:
     algorithm: str = "llg_overdamped"
     stop: RelaxStop = field(default_factory=RelaxStop)
     dynamics: LLG = field(default_factory=LLG)
+    _table_autosave: TableAutosave | None = field(default=None, repr=False)
     torque_tolerance: float | None = field(init=False)
     energy_tolerance: float | None = field(init=False)
     max_steps: int | None = field(init=False)
@@ -271,6 +351,7 @@ class Relaxation:
         max_pseudotime_s: object = _UNSET,
         max_physical_time_s: object = _UNSET,
         dynamics: LLG = LLG(),
+        table_autosave: TableAutosave | None = None,
     ) -> None:
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "algorithm", algorithm)
@@ -287,6 +368,7 @@ class Relaxation:
             ),
         )
         object.__setattr__(self, "dynamics", dynamics)
+        object.__setattr__(self, "_table_autosave", table_autosave)
         object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
         object.__setattr__(self, "energy_tolerance", self.stop.energy_tolerance_j)
         object.__setattr__(self, "max_steps", self.stop.max_steps)
@@ -309,12 +391,17 @@ class Relaxation:
 
     def to_ir(self) -> dict[str, object]:
         """Serialize to ProblemIR-compatible dictionary."""
+        sampling: dict[str, object] = {
+            "outputs": [output.to_ir() for output in self.outputs],
+        }
+        if self._table_autosave is not None:
+            sampling["table_autosave"] = self._table_autosave.to_ir()
         return {
             "kind": "relaxation",
             "algorithm": self.algorithm,
             "dynamics": self.dynamics.to_ir(),
             "stop": self.stop.to_ir(),
-            "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
+            "sampling": sampling,
         }
 
 

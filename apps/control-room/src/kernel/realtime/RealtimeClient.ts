@@ -1,5 +1,10 @@
 import type { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
 
+import {
+  realtimeReconnectDelayMs,
+  updateRealtimeCommunicationPolicy,
+} from "./communicationPolicy";
+
 export interface RealtimeWebSocketLike {
   addEventListener(type: string, listener: (event: MessageEventLike) => void): void;
   close(): void;
@@ -7,7 +12,6 @@ export interface RealtimeWebSocketLike {
 }
 
 const FULLMAG_LIVE_SUBPROTOCOL = "fullmag.live.v1";
-const REALTIME_RECONNECT_DELAY_MS = 1_000;
 
 interface MessageEventLike {
   data: string;
@@ -59,6 +63,7 @@ export class RealtimeClient {
         requestId: "websocket",
         status: null,
       });
+      updateRealtimePolicyFromEvent(parsed);
       this.bridge.handleEvent(parsed);
       this.recordSequence(parsed);
     } catch {
@@ -143,7 +148,7 @@ export class RealtimeClient {
       if (!this.closedByClient) {
         this.connect();
       }
-    }, REALTIME_RECONNECT_DELAY_MS);
+    }, realtimeReconnectDelayMs());
   }
 
   private connectionUrl(): string {
@@ -169,6 +174,15 @@ export class RealtimeClient {
 
     this.lastSeenSeq = Math.max(this.lastSeenSeq ?? 0, seq);
   }
+}
+
+function updateRealtimePolicyFromEvent(event: Record<string, unknown>): void {
+  if (event.type !== "hello") return;
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : null;
+  updateRealtimeCommunicationPolicy(payload?.communication_policy);
 }
 
 function realtimeDiagnosticDetail(event: Record<string, unknown>): string {

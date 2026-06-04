@@ -35,6 +35,13 @@ describe("session status subscription performance contracts", () => {
     expect(useSessionStatusSource).toContain("export function useSessionStatusSelector");
   });
 
+  it("centrally rate-limits session status refetches across all status consumers", () => {
+    expect(useSessionStatusSource).toContain("statusRefreshIntervalMs");
+    expect(useSessionStatusSource).toContain(
+      "minRefetchIntervalMs: statusRefreshIntervalMs()",
+    );
+  });
+
   it("uses session status selectors in broad shell consumers", () => {
     for (const source of [
       explorerModuleSource,

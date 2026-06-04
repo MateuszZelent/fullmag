@@ -340,6 +340,7 @@ impl ProblemIR {
                     mechanics: None,
                 },
                 sampling: SamplingIR {
+                    table_autosave: None,
                     outputs: vec![
                         OutputIR::Field {
                             name: "m".to_string(),
@@ -560,6 +561,27 @@ impl ProblemIR {
                             quantity_id
                         ));
                     }
+                }
+            }
+        }
+        if let Some(table_autosave) = &self.study.sampling().table_autosave {
+            if table_autosave.kind != "table_autosave" {
+                errors.push("sampling.table_autosave.kind must be 'table_autosave'".to_string());
+            }
+            if table_autosave.table_id.trim().is_empty() {
+                errors.push("sampling.table_autosave.table_id must not be empty".to_string());
+            }
+            if table_autosave.sample_period_s <= 0.0 {
+                errors.push("sampling.table_autosave.sample_period_s must be positive".to_string());
+            }
+            if table_autosave.quantities.is_empty() {
+                errors.push("sampling.table_autosave.quantities must not be empty".to_string());
+            }
+            for quantity in &table_autosave.quantities {
+                if quantity.trim().is_empty() {
+                    errors.push(
+                        "sampling.table_autosave.quantities must not contain empty ids".to_string(),
+                    );
                 }
             }
         }

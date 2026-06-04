@@ -35,7 +35,6 @@ export interface MeshSizeHistogramHighlight {
   resource: MeshHistogramHover | null;
   scope: MeshSizeHistogramHighlightScope;
 }
-
 export interface KernelEventMap {
   "session:status-changed": {
     status: "idle" | "connecting" | "connected" | "disconnected" | "error";
@@ -68,6 +67,14 @@ export interface KernelEventMap {
   "resource:invalidated": {
     resourceKey: string;
     revision: string | number;
+  };
+  "telemetry:scalar-sample": {
+    revision: string | number;
+    row: Record<string, number>;
+    runId: string | null;
+    sessionId: string;
+    step: number;
+    time: number;
   };
   "viewport:mesh-size-bin-hovered": {
     highlight: MeshSizeHistogramHighlight | null;

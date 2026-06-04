@@ -11,7 +11,7 @@ The `charts` module shows scalar histories, energy terms, convergence, selected 
 
 | Source | Resource family |
 |---|---|
-| scalar history | `data/scalars` |
+| scalar history | `data/tables/default/rows` (`data/scalars` compatibility projection) |
 | energy terms | `simulation/solver` or scalar resources |
 | stage convergence | `simulation/stages` |
 | probe/profile | `data/fields` slice/profile resources |
@@ -30,6 +30,7 @@ charts/
   store.ts
   components/
     ChartDock.tsx
+    EChartsSurface.tsx
     ScalarHistoryChart.tsx
     EnergyChart.tsx
     ConvergenceChart.tsx
@@ -77,7 +78,13 @@ Series ids include resource identity and quantity. This allows cache reuse and p
 ## 6. Performance
 
 - Charts request only visible or needed ranges when resources support range queries.
-- Large series are decimated in a worker or pure adapter before rendering.
+- Scalar-history charts request table row values through
+  `useTableRowsBinaryResource` and table schema through table metadata/columns
+  resources. The stable query identity is `cursor`, optional row/time ranges,
+  `limit`, `targetPoints`, `decimation`, and `includeTail`.
+- Large scalar-history windows are decimated server-side for the visible chart
+  budget. Client adapters may further shape rows into ECharts datasets, but
+  they must not invent hidden polling loops or duplicate table ownership.
 - Resize uses `ResizeObserver`, not polling.
 - ECharts instances are created once per chart component and disposed on unmount.
 - Scalar updates do not force viewport re-render.

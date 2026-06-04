@@ -53,3 +53,15 @@ export interface DecodedCrossSectionQuality {
     min: number;
   };
 }
+
+export interface DecodedTableRows {
+  columnCount: number;
+  cursorEnd: number;
+  cursorStart: number;
+  resyncRequired: boolean;
+  revision: number;
+  rowCount: number;
+  schemaRevision: number;
+  totalRows: number;
+  values: Float64Array;
+}

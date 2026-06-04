@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub const FULLMAG_LIVE_SUBPROTOCOL: &str = "fullmag.live.v1";
@@ -71,11 +72,44 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RealtimeCommunicationPolicy {
+    pub ws_replay_capacity: u32,
+    pub ws_heartbeat_ms: u32,
+    pub ws_reconnect_ms: u32,
+    pub lifecycle_coalesce_ms: u32,
+    pub table_rows_min_refetch_ms: u32,
+    pub field_sample_publish_ms: u32,
+    pub scalar_telemetry_publish_ms: u32,
+    pub diagnostics_summary_ms: u32,
+    pub status_refresh_ms: u32,
+    pub error_retry_ms: u32,
+}
+
+impl Default for RealtimeCommunicationPolicy {
+    fn default() -> Self {
+        Self {
+            ws_replay_capacity: 512,
+            ws_heartbeat_ms: 15_000,
+            ws_reconnect_ms: 5_000,
+            lifecycle_coalesce_ms: 250,
+            table_rows_min_refetch_ms: 1_000,
+            field_sample_publish_ms: 2_000,
+            scalar_telemetry_publish_ms: 200,
+            diagnostics_summary_ms: 5_000,
+            status_refresh_ms: 5_000,
+            error_retry_ms: 1_000,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HelloPayload {
     pub server_time: String,
     pub replay_available_after_seq: u64,
     pub current_seq: u64,
     pub resource_revisions: RealtimeResourceRevisionMap,
+    #[serde(default)]
+    pub communication_policy: RealtimeCommunicationPolicy,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -91,13 +125,18 @@ pub struct ResourceBatchChangedPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ScalarSamplePayload {
+    pub revision: u64,
+    pub row: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResyncRequiredPayload {
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_after: Option<u64>,
     pub replay_available_after_seq: u64,
 }
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum LiveRealtimeServerEvent {
@@ -131,6 +170,16 @@ pub enum LiveRealtimeServerEvent {
         contract_version: String,
         payload: ResourceBatchChangedPayload,
     },
+    #[serde(rename = "scalar.sample")]
+    ScalarSample {
+        seq: u64,
+        ts: String,
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
+        contract_version: String,
+        payload: ScalarSamplePayload,
+    },
     #[serde(rename = "resync.required")]
     ResyncRequired {
         seq: u64,
@@ -149,6 +198,7 @@ impl LiveRealtimeServerEvent {
             Self::Hello { seq, .. }
             | Self::Heartbeat { seq, .. }
             | Self::ResourceBatchChanged { seq, .. }
+            | Self::ScalarSample { seq, .. }
             | Self::ResyncRequired { seq, .. } => *seq,
         }
     }

@@ -116,6 +116,26 @@ function binaryResponse(body: ArrayBuffer, init: ResponseInit = {}): Response {
   });
 }
 
+function makeTableRowsBuffer(values: readonly number[]): ArrayBuffer {
+  const buffer = new ArrayBuffer(60 + values.length * Float64Array.BYTES_PER_ELEMENT);
+  const bytes = new Uint8Array(buffer);
+  bytes.set([70, 77, 84, 66], 0);
+  const view = new DataView(buffer);
+  view.setUint16(4, 1, true);
+  view.setUint16(6, 1, true);
+  view.setBigUint64(8, BigInt(12), true);
+  view.setBigUint64(16, BigInt(1), true);
+  view.setBigUint64(24, BigInt(11), true);
+  view.setBigUint64(32, BigInt(12), true);
+  view.setBigUint64(40, BigInt(12), true);
+  view.setBigUint64(48, BigInt(2), true);
+  view.setUint32(56, 3, true);
+  for (let i = 0; i < values.length; i++) {
+    view.setFloat64(60 + i * 8, values[i], true);
+  }
+  return buffer;
+}
+
 function parseByteRange(range: string): [number, number] {
   const match = /^bytes=(\d+)-(\d+)$/.exec(range);
   if (!match) {
@@ -442,6 +462,180 @@ describe("ControlRoomApi", () => {
     expect(window.revision).toBe(12);
     expect(observedUrl).toBe(
       "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10",
+    );
+  });
+
+  it("loads table row windows through the v2 data facade", async () => {
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      observedUrl = String(url);
+      return jsonResponse({
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+          {
+            column_id: "t",
+            component: null,
+            dimension: "time",
+            label: "t",
+            quantity_id: "t",
+            reduction: null,
+            unit: "s",
+            value_type: "float",
+          },
+        ],
+        cursor_end: 12,
+        cursor_start: 11,
+        decimation: {
+          endpoints_preserved: true,
+          extrema_preserved: true,
+          mode: "minmax_lttb",
+          returned_points: 2,
+          source_rows: 10,
+          target_points: 800,
+        },
+        resync_required: false,
+        returned_rows: 2,
+        revision: 12,
+        rows: [
+          [11, 1.1e-12],
+          [12, 1.2e-12],
+        ],
+        schema_revision: 1,
+        table_id: "default",
+        total_rows: 12,
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-table-rows",
+    });
+
+    const rows = await api.data.tables.rows("default", {
+      columns: ["step", "t"],
+      cursor: 10,
+      decimation: "minmax_lttb",
+      fromRow: 3,
+      fromT: 1e-12,
+      includeTail: true,
+      limit: 100,
+      targetPoints: 800,
+      toRow: 12,
+      toT: 2e-12,
+    });
+
+    expect(rows.cursor_end).toBe(12);
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/tables/default/rows?columns=step%2Ct&cursor=10&decimation=minmax_lttb&from_row=3&from_t=1e-12&include_tail=true&limit=100&target_points=800&to_row=12&to_t=2e-12",
+    );
+  });
+
+  it("loads table metadata and binary rows through the v2 data facade", async () => {
+    const observedUrls: string[] = [];
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      const requestUrl = String(url);
+      observedUrls.push(requestUrl);
+      if (requestUrl.endsWith("/v2/sessions/current/data/tables")) {
+        return jsonResponse({
+          revision: 12,
+          tables: [
+            {
+              binary_rows_href:
+                "/v2/sessions/current/data/tables/default/rows.bin",
+              columns: [],
+              columns_href: "/v2/sessions/current/data/tables/default/columns",
+              revision: 12,
+              rows_href: "/v2/sessions/current/data/tables/default/rows",
+              schema_revision: 1,
+              table_id: "default",
+              total_rows: 12,
+            },
+          ],
+        });
+      }
+      if (requestUrl.endsWith("/v2/sessions/current/data/tables/default")) {
+        return jsonResponse({
+          binary_rows_href: "/v2/sessions/current/data/tables/default/rows.bin",
+          columns: [],
+          columns_href: "/v2/sessions/current/data/tables/default/columns",
+          revision: 12,
+          rows_href: "/v2/sessions/current/data/tables/default/rows",
+          schema_revision: 1,
+          table_id: "default",
+          total_rows: 12,
+        });
+      }
+      if (requestUrl.endsWith("/v2/sessions/current/data/tables/default/columns")) {
+        return jsonResponse([
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+        ]);
+      }
+      if (requestUrl.includes("/rows.bin?")) {
+        return binaryResponse(makeTableRowsBuffer([11, 1.1e-12, 7.1, 12, 1.2e-12, 7.2]), {
+          headers: {
+            "content-type": "application/vnd.fullmag.table-rows.v1+octet-stream",
+          },
+        });
+      }
+      throw new Error(`Unexpected URL ${requestUrl}`);
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-table-family",
+    });
+
+    await expect(api.data.tables.list()).resolves.toMatchObject({
+      revision: 12,
+    });
+    await expect(api.data.tables.detail("default")).resolves.toMatchObject({
+      table_id: "default",
+      total_rows: 12,
+    });
+    await expect(api.data.tables.columns("default")).resolves.toHaveLength(1);
+    const binary = await api.data.tables.rowsBinary("default", {
+      columns: ["step", "t", "e_total"],
+      cursor: 10,
+      limit: 2,
+    });
+
+    expect(binary.status).toBe("ready");
+    if (binary.status !== "ready") {
+      throw new Error("expected ready");
+    }
+    expect(binary.data.rowCount).toBe(2);
+    expect(binary.data.columnCount).toBe(3);
+    expect(Array.from(binary.data.values)).toEqual([
+      11,
+      1.1e-12,
+      7.1,
+      12,
+      1.2e-12,
+      7.2,
+    ]);
+
+    expect(observedUrls).toContain(
+      "http://127.0.0.1:8765/v2/sessions/current/data/tables/default/rows.bin?columns=step%2Ct%2Ce_total&cursor=10&limit=2",
     );
   });
 

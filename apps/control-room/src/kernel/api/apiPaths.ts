@@ -99,6 +99,26 @@ export const DATA_SCALARS_PATH = openApiV2Path(
   "/v2/sessions/current/data/scalars",
 );
 
+export const DATA_TABLE_ROWS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/tables/{table_id}/rows",
+);
+
+export const DATA_TABLES_PATH = openApiV2Path(
+  "/v2/sessions/current/data/tables",
+);
+
+export const DATA_TABLE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/tables/{table_id}",
+);
+
+export const DATA_TABLE_COLUMNS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/tables/{table_id}/columns",
+);
+
+export const DATA_TABLE_ROWS_BINARY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/tables/{table_id}/rows.bin",
+);
+
 export const DATA_DOMAIN_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/meta",
 );

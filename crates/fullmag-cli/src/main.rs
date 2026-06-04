@@ -7,6 +7,7 @@ use std::ffi::OsString;
 
 mod args;
 mod command_bridge;
+mod communication_policy;
 mod control_room;
 mod dev_smoke;
 mod diagnostics;
@@ -112,7 +113,10 @@ fn main() -> Result<()> {
                 println!("Native FEM availability");
                 println!(
                     "- CPU: {}",
-                    if payload["native_fem_cpu_available"].as_bool().unwrap_or(false) {
+                    if payload["native_fem_cpu_available"]
+                        .as_bool()
+                        .unwrap_or(false)
+                    {
                         "available"
                     } else {
                         "unavailable"
@@ -120,7 +124,11 @@ fn main() -> Result<()> {
                 );
                 println!(
                     "- GPU: {}",
-                    if gpu.available { "available" } else { "unavailable" }
+                    if gpu.available {
+                        "available"
+                    } else {
+                        "unavailable"
+                    }
                 );
                 println!("- visible CUDA devices: {}", gpu.visible_cuda_device_count);
                 if !gpu.reason_gpu.is_empty() {
@@ -1183,13 +1191,8 @@ mod tests {
 
     #[test]
     fn cli_parses_runtime_fem_availability_json_subcommand() {
-        let cli = Cli::try_parse_from([
-            "fullmag",
-            "runtime",
-            "fem-availability",
-            "--json",
-        ])
-        .expect("cli parse");
+        let cli = Cli::try_parse_from(["fullmag", "runtime", "fem-availability", "--json"])
+            .expect("cli parse");
         assert!(matches!(
             cli.command,
             Command::Runtime(RuntimeCommand::FemAvailability { json: true })
@@ -1290,6 +1293,7 @@ mod tests {
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
             mode_tracking: None,
             sampling: fullmag_ir::SamplingIR {
+                table_autosave: None,
                 outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
                 }],

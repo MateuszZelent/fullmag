@@ -8298,6 +8298,7 @@ mod tests {
                     mechanics: None,
                 },
                 sampling: SamplingIR {
+                    table_autosave: None,
                     outputs: Vec::new(),
                 },
             },

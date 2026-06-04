@@ -75,13 +75,14 @@ from .spin_torque import (
     ZhangLiSTT,
 )
 from .structure import Ferromagnet, Material, Region
-from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TimeEvolution
+from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TableAutosave, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
 
 __all__ = [
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",
+    "TableAutosave",
     "UniaxialAnisotropy",
     "AdaptiveTimestep",
     "AntennaFieldSource",

@@ -174,4 +174,39 @@ describe("RequestDiagnosticsController", () => {
     ]);
   });
 
+  it("aggregates repeated websocket receive diagnostics inside the summary window", () => {
+    const diagnostics = new RequestDiagnosticsController();
+
+    diagnostics.record({
+      byteLength: 100,
+      channel: "websocket",
+      direction: "rx",
+      messageType: "resource.batch_changed",
+      method: "WS",
+      outcome: "ok",
+      path: "/v2/sessions/current/events/ws",
+      requestId: "websocket",
+      timestampMs: 1_000,
+    });
+    diagnostics.record({
+      byteLength: 120,
+      channel: "websocket",
+      direction: "rx",
+      messageType: "resource.batch_changed",
+      method: "WS",
+      outcome: "ok",
+      path: "/v2/sessions/current/events/ws",
+      requestId: "websocket",
+      timestampMs: 1_300,
+    });
+
+    expect(diagnostics.list()).toHaveLength(1);
+    expect(diagnostics.list()[0]).toMatchObject({
+      byteLength: 220,
+      detail: "message (x2 over 300ms)",
+      messageType: "resource.batch_changed",
+      timestampMs: 1_300,
+    });
+  });
+
 });

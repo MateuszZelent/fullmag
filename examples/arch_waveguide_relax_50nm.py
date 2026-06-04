@@ -123,6 +123,17 @@ waveguide.mesh.size_field(
     YCenter=0.0,
     ZCenter=0.0,
 )
+
+/goal przygotuj plan wdrożenia koncpecji "regionów". Moim lokalne zageszczanie meshu powinno byc związane z regionami. Np. w ten sposob 
+ 
+region1 = waveguide.add_region(
+     shape=fm.shapes.cylinder(Tx,Ty,Tz),
+)
+region1.mesh.remesh( maximum_element_size=2e-9,
+    minimum_element_size=1e-9,
+    transition_distance=None,
+    order=1) 
+ 
 # Energy terms
 study.b_ext(B_EXT_T, 0.0, 0.0)
 study.demag(realization="poisson_robin")
@@ -144,7 +155,7 @@ study.solver(
     gamma=GAMMA,
 )
 
-# Outputs
+# Outputs   
 study.tableautosave(10e-12)
 # study.save("m", every=250e-12)
 

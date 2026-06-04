@@ -494,7 +494,6 @@ fn test_app_state() -> Arc<AppState> {
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
-        current_live_realtime_last_scalar_emit_unix_ms: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
@@ -1114,7 +1113,6 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
-        current_live_realtime_last_scalar_emit_unix_ms: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
@@ -2943,6 +2941,334 @@ async fn scalar_history_returns_windowed_columnar_rows() {
         serde_json::json!(["step", "time", "e_total", "mx"])
     );
     assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 0.2]]));
+}
+
+#[tokio::test]
+async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+            sample_scalar_row(3, 3e-12, 7.5),
+        ];
+        snapshot.scalar_revision = 3;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?cursor=1&limit=1&columns=t,e_total,max_torque")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["table_id"], "default");
+    assert_eq!(json["revision"], 3);
+    assert_eq!(json["cursor_start"], 2);
+    assert_eq!(json["cursor_end"], 2);
+    assert_eq!(json["total_rows"], 3);
+    assert_eq!(json["returned_rows"], 1);
+    assert_eq!(
+        json["columns"],
+        serde_json::json!([
+            {
+                "column_id": "step",
+                "quantity_id": "step",
+                "label": "step",
+                "unit": "1",
+                "dimension": "count",
+                "component": null,
+                "reduction": null,
+                "value_type": "integer"
+            },
+            {
+                "column_id": "t",
+                "quantity_id": "t",
+                "label": "t",
+                "unit": "s",
+                "dimension": "time",
+                "component": null,
+                "reduction": null,
+                "value_type": "float"
+            },
+            {
+                "column_id": "e_total",
+                "quantity_id": "e_total",
+                "label": "E total",
+                "unit": "J",
+                "dimension": "energy",
+                "component": null,
+                "reduction": "sum",
+                "value_type": "float"
+            },
+            {
+                "column_id": "max_torque",
+                "quantity_id": "max_torque_Apm",
+                "label": "max torque",
+                "unit": "A/m",
+                "dimension": "effective_field",
+                "component": null,
+                "reduction": "max",
+                "value_type": "float"
+            }
+        ])
+    );
+    assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 2.0]]));
+}
+
+#[tokio::test]
+async fn table_resources_expose_list_detail_and_columns_metadata() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+        ];
+        snapshot.scalar_revision = 2;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list_status = list.status();
+    let list_json = body_json(list).await;
+    assert_eq!(list_status, StatusCode::OK, "{list_json:#}");
+    assert_eq!(list_json["revision"], 2);
+    assert_eq!(list_json["tables"][0]["table_id"], "default");
+    assert_eq!(list_json["tables"][0]["total_rows"], 2);
+    assert_eq!(
+        list_json["tables"][0]["rows_href"],
+        "/v2/sessions/current/data/tables/default/rows"
+    );
+    assert_eq!(
+        list_json["tables"][0]["binary_rows_href"],
+        "/v2/sessions/current/data/tables/default/rows.bin"
+    );
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail_status = detail.status();
+    let detail_json = body_json(detail).await;
+    assert_eq!(detail_status, StatusCode::OK, "{detail_json:#}");
+    assert_eq!(detail_json["table_id"], "default");
+    assert_eq!(detail_json["columns"][1]["column_id"], "t");
+
+    let columns = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/columns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let columns_status = columns.status();
+    let columns_json = body_json(columns).await;
+    assert_eq!(columns_status, StatusCode::OK, "{columns_json:#}");
+    assert_eq!(columns_json[0]["column_id"], "step");
+    assert_eq!(columns_json[5]["column_id"], "e_total");
+}
+
+#[tokio::test]
+async fn table_rows_binary_returns_fmtb_payload_matching_json_window() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+            sample_scalar_row(3, 3e-12, 7.5),
+        ];
+        snapshot.scalar_revision = 3;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows.bin?cursor=1&limit=2&columns=t,e_total")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/vnd.fullmag.table-rows.v1+octet-stream")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[0..4], b"FMTB");
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 0);
+    assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), 3);
+    assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 2);
+    assert_eq!(u64::from_le_bytes(bytes[32..40].try_into().unwrap()), 3);
+    assert_eq!(u64::from_le_bytes(bytes[48..56].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(bytes[56..60].try_into().unwrap()), 3);
+    let values = bytes[60..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec![2.0, 2e-12, 7.3, 3.0, 3e-12, 7.5]);
+}
+
+#[tokio::test]
+async fn table_rows_resource_filters_by_time_range_and_decimates_to_target_points() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = (1..=10)
+            .map(|step| sample_scalar_row(step, step as f64 * 1e-12, step as f64))
+            .collect();
+        snapshot.scalar_revision = 10;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?from_t=2e-12&to_t=9e-12&target_points=4&decimation=minmax_lttb&columns=t,e_total")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["total_rows"], 10);
+    assert!(
+        json["returned_rows"].as_u64().unwrap() <= 4,
+        "target_points should cap returned chart points: {json:#}"
+    );
+    assert_eq!(json["cursor_start"], 2);
+    assert_eq!(json["cursor_end"], 9);
+    assert_eq!(json["decimation"]["mode"], "minmax_lttb");
+    assert_eq!(json["decimation"]["source_rows"], 8);
+    assert_eq!(json["decimation"]["target_points"], 4);
+    assert_eq!(json["decimation"]["endpoints_preserved"], true);
+    assert_eq!(json["decimation"]["extrema_preserved"], true);
+    let rows = json["rows"].as_array().expect("rows must be an array");
+    assert_eq!(rows.first().unwrap(), &serde_json::json!([2.0, 2e-12, 2.0]));
+    assert_eq!(rows.last().unwrap(), &serde_json::json!([9.0, 9e-12, 9.0]));
+}
+
+#[tokio::test]
+async fn table_rows_resource_marks_resync_when_cursor_exceeds_available_rows() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+        ];
+        snapshot.scalar_revision = 2;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/tables/default/rows?cursor=10&columns=t,e_total")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["revision"], 2);
+    assert_eq!(json["returned_rows"], 0);
+    assert_eq!(json["cursor_start"], 10);
+    assert_eq!(json["cursor_end"], 10);
+    assert_eq!(json["resync_required"], true);
+}
+
+#[tokio::test]
+async fn table_rows_binary_marks_resync_when_cursor_exceeds_available_rows() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+        ];
+        snapshot.scalar_revision = 2;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/sessions/current/data/tables/default/rows.bin?cursor=10&columns=t,e_total",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[0..4], b"FMTB");
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 1);
+    assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()) & 1, 1);
+    assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), 2);
+    assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 10);
+    assert_eq!(u64::from_le_bytes(bytes[32..40].try_into().unwrap()), 10);
+    assert_eq!(u64::from_le_bytes(bytes[48..56].try_into().unwrap()), 0);
 }
 
 // ─── quantities endpoints ───────────────────────────────────────────────────

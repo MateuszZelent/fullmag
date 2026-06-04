@@ -498,6 +498,7 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
+            table_autosave: None,
             outputs: vec![
                 OutputIR::EigenSpectrum {
                     quantity: "eigenfrequency".to_string(),
@@ -538,6 +539,7 @@ fn frequency_response_round_trips_as_first_class_study() {
             values_hz: vec![1.0e9, 2.0e9],
         },
         sampling: SamplingIR {
+            table_autosave: None,
             outputs: vec![OutputIR::EigenSpectrum {
                 quantity: "susceptibility".to_string(),
             }],
@@ -585,6 +587,7 @@ fn frequency_response_output_is_first_class_sampling_request() {
             values_hz: vec![1.0e9],
         },
         sampling: SamplingIR {
+            table_autosave: None,
             outputs: vec![OutputIR::FrequencyResponseOutput {
                 observable: FrequencyResponseOutputIR::SusceptibilityTensor,
             }],
@@ -1122,6 +1125,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
         sampling: SamplingIR {
+            table_autosave: None,
             outputs: vec![OutputIR::DispersionCurve {
                 name: "dispersion".to_string(),
             }],

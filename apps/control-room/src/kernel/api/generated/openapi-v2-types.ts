@@ -612,6 +612,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_tables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/tables/{table_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_tables_table_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/tables/{table_id}/columns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_tables_table_id_columns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/tables/{table_id}/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_tables_table_id_rows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/tables/{table_id}/rows.bin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_tables_table_id_rows_bin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/diagnostics/cpu": {
         parameters: {
             query?: never;
@@ -4397,6 +4477,72 @@ export interface components {
         };
         /** @enum {string} */
         SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
+        TableColumnMeta: {
+            column_id: string;
+            component?: string | null;
+            dimension: string;
+            label: string;
+            quantity_id: string;
+            reduction?: string | null;
+            unit: string;
+            value_type: string;
+        };
+        TableDecimationMeta: {
+            endpoints_preserved: boolean;
+            extrema_preserved: boolean;
+            mode: string;
+            /** Format: int64 */
+            returned_points: number;
+            /** Format: int64 */
+            source_rows: number;
+            /** Format: int64 */
+            target_points: number;
+        };
+        TableListResource: {
+            /** Format: int64 */
+            revision: number;
+            tables: components["schemas"]["TableResource"][];
+        };
+        TableResource: {
+            binary_rows_href: string;
+            columns: components["schemas"]["TableColumnMeta"][];
+            columns_href: string;
+            /** Format: int64 */
+            revision: number;
+            rows_href: string;
+            /** Format: int64 */
+            schema_revision: number;
+            table_id: string;
+            /** Format: int64 */
+            total_rows: number;
+        };
+        TableRowsBinaryDescriptor: {
+            endianness: string;
+            format: string;
+            layout: string;
+            value_type: string;
+            /** Format: int32 */
+            version: number;
+        };
+        TableRowsResource: {
+            columns: components["schemas"]["TableColumnMeta"][];
+            /** Format: int64 */
+            cursor_end: number;
+            /** Format: int64 */
+            cursor_start: number;
+            decimation?: null | components["schemas"]["TableDecimationMeta"];
+            resync_required: boolean;
+            /** Format: int64 */
+            returned_rows: number;
+            /** Format: int64 */
+            revision: number;
+            rows: number[][];
+            /** Format: int64 */
+            schema_revision: number;
+            table_id: string;
+            /** Format: int64 */
+            total_rows: number;
+        };
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
             y: components["schemas"]["TrimAxisVisualizationState"];
@@ -6430,6 +6576,188 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScalarWindow"];
                 };
+            };
+        };
+    };
+    data_get_sessions_current_data_tables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available table resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableListResource"];
+                };
+            };
+        };
+    };
+    data_get_sessions_current_data_tables_table_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Table resource id */
+                table_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Table resource metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableResource"];
+                };
+            };
+            /** @description Unknown table id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_tables_table_id_columns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Table resource id */
+                table_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Table column metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableColumnMeta"][];
+                };
+            };
+            /** @description Unknown table id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_tables_table_id_rows: {
+        parameters: {
+            query?: {
+                /** @description Only rows after this cursor */
+                cursor?: number;
+                /** @description Inclusive one-based row cursor lower bound */
+                from_row?: number;
+                /** @description Inclusive one-based row cursor upper bound */
+                to_row?: number;
+                /** @description Inclusive simulation-time lower bound in seconds */
+                from_t?: number;
+                /** @description Inclusive simulation-time upper bound in seconds */
+                to_t?: number;
+                /** @description Max rows to return */
+                limit?: number;
+                /** @description Display point budget for server-side decimation */
+                target_points?: number;
+                /** @description Server-side decimation mode */
+                decimation?: string;
+                /** @description Preserve the latest row in decimated windows */
+                include_tail?: boolean;
+                /** @description Comma-separated table columns to return */
+                columns?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Table resource id */
+                table_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Table row window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableRowsResource"];
+                };
+            };
+            /** @description Unknown table id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_tables_table_id_rows_bin: {
+        parameters: {
+            query?: {
+                /** @description Only rows after this cursor */
+                cursor?: number;
+                /** @description Inclusive one-based row cursor lower bound */
+                from_row?: number;
+                /** @description Inclusive one-based row cursor upper bound */
+                to_row?: number;
+                /** @description Inclusive simulation-time lower bound in seconds */
+                from_t?: number;
+                /** @description Inclusive simulation-time upper bound in seconds */
+                to_t?: number;
+                /** @description Max rows to return */
+                limit?: number;
+                /** @description Display point budget for server-side decimation */
+                target_points?: number;
+                /** @description Server-side decimation mode */
+                decimation?: string;
+                /** @description Preserve the latest row in decimated windows */
+                include_tail?: boolean;
+                /** @description Comma-separated table columns to return */
+                columns?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Table resource id */
+                table_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary table row window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.table-rows.v1+octet-stream": components["schemas"]["TableRowsBinaryDescriptor"];
+                };
+            };
+            /** @description Unknown table id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -1,6 +1,7 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
+import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
@@ -15,6 +16,12 @@ import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import type { InspectorPanelContribution } from "./inspectorTypes";
 
 const PANELS: InspectorPanelContribution[] = [
+  {
+    id: "chart",
+    title: "Charts",
+    selectionKinds: ["analysis.chart"],
+    component: ChartInspectorPanel,
+  },
   {
     id: "geometry-object",
     title: "Geometry Object",

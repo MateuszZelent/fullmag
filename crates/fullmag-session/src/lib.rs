@@ -16,6 +16,7 @@
 
 pub mod capture;
 pub mod cas;
+pub mod communication_policy;
 pub mod fms;
 pub mod store;
 pub mod types;

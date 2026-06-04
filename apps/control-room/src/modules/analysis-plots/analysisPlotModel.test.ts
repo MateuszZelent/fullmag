@@ -47,33 +47,202 @@ describe("analysis plot scalar selection", () => {
   it("uses one stable scalar column query for resource subscriptions", () => {
     expect(__analysisPlotsTestUtils.analysisScalarColumns).toEqual([
       "step",
-      "e_total",
+      "t",
       "mx",
       "my",
       "mz",
+      "e_total",
+      "max_torque",
     ]);
     expect(Object.isFrozen(__analysisPlotsTestUtils.analysisScalarColumns)).toBe(
       true,
     );
   });
 
-  it("uses physical scalar columns before time metadata", () => {
+  it("merges cursor deltas into the bounded table window", () => {
     expect(
-      __analysisPlotsTestUtils.resolveScalarValueColumn([
-        "step",
-        "time",
-        "solver_dt",
-        "mx",
-      ]),
-    ).toBe(3);
+      __analysisPlotsTestUtils.mergeTableRows(
+        {
+          columns: [
+            {
+              column_id: "step",
+              component: null,
+              dimension: "count",
+              label: "step",
+              quantity_id: "step",
+              reduction: null,
+              unit: "1",
+              value_type: "integer",
+            },
+          ],
+          cursor_end: 1,
+          cursor_start: 1,
+          resync_required: false,
+          returned_rows: 1,
+          revision: 1,
+          rows: [[1]],
+          schema_revision: 1,
+          table_id: "default",
+          total_rows: 1,
+        },
+        {
+          columns: [
+            {
+              column_id: "step",
+              component: null,
+              dimension: "count",
+              label: "step",
+              quantity_id: "step",
+              reduction: null,
+              unit: "1",
+              value_type: "integer",
+            },
+          ],
+          cursor_end: 2,
+          cursor_start: 2,
+          resync_required: false,
+          returned_rows: 1,
+          revision: 2,
+          rows: [[2]],
+          schema_revision: 1,
+          table_id: "default",
+          total_rows: 2,
+        },
+      ).rows,
+    ).toEqual([[1], [2]]);
+  });
+
+  it("deduplicates live scalar samples that are already present in a fetched table window", () => {
+    const table = {
+      columns: [
+        {
+          column_id: "step",
+          component: null,
+          dimension: "count",
+          label: "step",
+          quantity_id: "step",
+          reduction: null,
+          unit: "1",
+          value_type: "integer",
+        },
+      ],
+      cursor_end: 2,
+      cursor_start: 1,
+      resync_required: false,
+      returned_rows: 2,
+      revision: 2,
+      rows: [[1], [2]],
+      schema_revision: 1,
+      table_id: "default",
+      total_rows: 2,
+    };
+
     expect(
-      __analysisPlotsTestUtils.scalarPointsFromWindow({
-        columns: ["step", "time", "solver_dt", "e_total"],
-        rows: [[4, 0.25, 0.01, -12.5]],
-      }),
-    ).toMatchObject({
-      points: [{ x: 4, y: -12.5 }],
-      yLabel: "e_total",
+      __analysisPlotsTestUtils.mergeTableRows(table, {
+        ...table,
+        cursor_start: 2,
+        returned_rows: 1,
+        rows: [[2]],
+      }).rows,
+    ).toEqual([[1], [2]]);
+  });
+
+  it("adapts live scalar sample websocket payloads into one-row table resources", () => {
+    const resource =
+      __analysisPlotsTestUtils.tableRowsResourceFromScalarSample({
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+          {
+            column_id: "t",
+            component: null,
+            dimension: "time",
+            label: "t",
+            quantity_id: "t",
+            reduction: null,
+            unit: "s",
+            value_type: "float",
+          },
+          {
+            column_id: "max_torque",
+            component: null,
+            dimension: "effective_field",
+            label: "max torque",
+            quantity_id: "max_torque_Apm",
+            reduction: "max",
+            unit: "A/m",
+            value_type: "float",
+          },
+        ],
+        queryColumns: ["step", "t", "max_torque"],
+        sample: {
+          revision: 9,
+          row: { max_torque_Apm: 0.4, step: 7, time: 0.2 },
+        },
+        tableId: "default",
+      });
+
+    expect(resource?.cursor_end).toBe(9);
+    expect(resource?.rows).toEqual([[7, 0.2, 0.4]]);
+  });
+
+  it("adapts decoded binary table rows into the chart table resource shape", () => {
+    const resource =
+      __analysisPlotsTestUtils.tableRowsResourceFromBinary({
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+          {
+            column_id: "mx",
+            component: "x",
+            dimension: "magnetization",
+            label: "mx",
+            quantity_id: "mx",
+            reduction: "mean",
+            unit: "1",
+            value_type: "float",
+          },
+        ],
+        decoded: {
+          columnCount: 2,
+          cursorEnd: 2,
+          cursorStart: 1,
+          resyncRequired: false,
+          revision: 2,
+          rowCount: 2,
+          schemaRevision: 1,
+          totalRows: 2,
+          values: new Float64Array([1, 0.1, 2, 0.2]),
+        },
+        queryColumns: ["step", "mx"],
+        tableId: "default",
+      });
+
+    expect(resource).toMatchObject({
+      cursor_end: 2,
+      cursor_start: 1,
+      returned_rows: 2,
+      revision: 2,
+      rows: [
+        [1, 0.1],
+        [2, 0.2],
+      ],
     });
   });
 });

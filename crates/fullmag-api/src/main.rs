@@ -47,6 +47,7 @@ mod orientation_color;
 mod preview;
 mod quantities;
 mod quantity_data_plane;
+mod realtime_policy;
 mod router_v2;
 mod schemas;
 mod script;
@@ -60,19 +61,15 @@ use error::ApiError;
 use feature_flags::FeatureFlags;
 use preview::*;
 use quantities::*;
+use realtime_policy::*;
 use schemas::realtime::{
     HeartbeatPayload, HelloPayload, LiveRealtimeServerEvent, RealtimeResourceChange,
     RealtimeResourceName, RealtimeResourceRevisionMap, ResourceBatchChangedPayload,
-    ResyncRequiredPayload,
+    ResyncRequiredPayload, ScalarSamplePayload,
 };
 use script::*;
 use session::*;
 use types::*;
-
-const CURRENT_LIVE_REALTIME_REPLAY_CAPACITY: usize = 512;
-const CURRENT_LIVE_REALTIME_HEARTBEAT_SECS: u64 = 15;
-const CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS: u32 = 250;
-const CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS: u32 = 1_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLiveRealtimeState {
@@ -254,11 +251,11 @@ fn current_live_realtime_changes(
         RealtimeResourceChange {
             resource: RealtimeResourceName::Scalars,
             revision: realtime_state.revisions.scalars_revision,
-            resource_id: None,
+            resource_id: Some("table:default:rows".to_string()),
             quantity_ids: Vec::new(),
             broad: false,
             domain_generation_id: None,
-            recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
+            recommended_fetch: Some("/v2/sessions/current/data/tables/default/rows".to_string()),
         },
         RealtimeResourceChange {
             resource: RealtimeResourceName::Domain,
@@ -678,10 +675,12 @@ mod realtime_change_tests {
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
 
-        // Scalars should show up.
-        assert!(changes
-            .iter()
-            .any(|c| c.recommended_fetch.as_deref() == Some("/v2/sessions/current/data/scalars")));
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Scalars)
+                && change.resource_id.as_deref() == Some("table:default:rows")
+                && change.recommended_fetch.as_deref()
+                    == Some("/v2/sessions/current/data/tables/default/rows")
+        }));
         // Field samples should NOT show up.
         assert!(changes
             .iter()
@@ -788,7 +787,10 @@ mod realtime_change_tests {
             .iter()
             .all(|change| matches!(change.resource, RealtimeResourceName::Stages)));
         assert_eq!(batches[1].1, true);
-        assert_eq!(batches[1].2, 250);
+        assert_eq!(
+            batches[1].2,
+            CURRENT_LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS
+        );
         assert!(batches[1]
             .0
             .iter()
@@ -796,60 +798,50 @@ mod realtime_change_tests {
     }
 
     #[test]
-    fn realtime_qos_slows_scalar_only_batches() {
+    fn realtime_qos_split_uses_slow_windows_for_scalar_rows_and_field_samples() {
         let batches = split_realtime_changes_for_qos(
-            vec![RealtimeResourceChange {
-                resource: RealtimeResourceName::Scalars,
-                revision: 7,
-                resource_id: None,
-                quantity_ids: Vec::new(),
-                broad: false,
-                domain_generation_id: None,
-                recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
-            }],
+            vec![
+                RealtimeResourceChange {
+                    resource: RealtimeResourceName::Scalars,
+                    revision: 5,
+                    resource_id: Some("table:default:rows".to_string()),
+                    quantity_ids: Vec::new(),
+                    broad: false,
+                    domain_generation_id: None,
+                    recommended_fetch: Some(
+                        "/v2/sessions/current/data/tables/default/rows".to_string(),
+                    ),
+                },
+                RealtimeResourceChange {
+                    resource: RealtimeResourceName::Fields,
+                    revision: 6,
+                    resource_id: Some("samples".to_string()),
+                    quantity_ids: vec!["m".to_string()],
+                    broad: false,
+                    domain_generation_id: Some(1),
+                    recommended_fetch: None,
+                },
+            ],
             true,
             250,
         );
 
-        assert_eq!(batches.len(), 1);
+        assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].1, true);
+        assert_eq!(batches[0].2, CURRENT_LIVE_TABLE_ROWS_MIN_REFETCH_MS);
+        assert!(batches[0]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Scalars)));
+        assert_eq!(batches[1].1, true);
         assert_eq!(
-            batches[0].2,
-            CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS
+            batches[1].2,
+            CURRENT_LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS
         );
-    }
-
-    #[test]
-    fn realtime_qos_suppresses_scalar_only_batches_inside_emit_window() {
-        let last_scalar_emit_unix_ms = AtomicU64::new(0);
-        let changes = vec![RealtimeResourceChange {
-            resource: RealtimeResourceName::Scalars,
-            revision: 7,
-            resource_id: None,
-            quantity_ids: Vec::new(),
-            broad: false,
-            domain_generation_id: None,
-            recommended_fetch: Some("/v2/sessions/current/data/scalars".to_string()),
-        }];
-
-        assert!(should_publish_scalar_only_realtime_batch(
-            &last_scalar_emit_unix_ms,
-            &changes,
-            true,
-            10_000,
-        ));
-        assert!(!should_publish_scalar_only_realtime_batch(
-            &last_scalar_emit_unix_ms,
-            &changes,
-            true,
-            10_999,
-        ));
-        assert!(should_publish_scalar_only_realtime_batch(
-            &last_scalar_emit_unix_ms,
-            &changes,
-            true,
-            11_000,
-        ));
+        assert!(batches[1]
+            .0
+            .iter()
+            .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
     }
 }
 
@@ -939,14 +931,6 @@ pub(crate) async fn publish_current_live_realtime_resource_changes(
     if changes.is_empty() {
         return Ok(());
     }
-    if !should_publish_scalar_only_realtime_batch(
-        &state.current_live_realtime_last_scalar_emit_unix_ms,
-        &changes,
-        coalesced,
-        realtime_unix_ms_now(),
-    ) {
-        return Ok(());
-    }
     for (batch_changes, batch_coalesced, batch_window_ms) in
         split_realtime_changes_for_qos(changes, coalesced, window_ms)
     {
@@ -998,11 +982,72 @@ async fn publish_current_live_realtime_resource_changes_unsplit(
     .await
 }
 
-fn is_immediate_realtime_change(change: &RealtimeResourceChange) -> bool {
-    matches!(
+async fn publish_current_live_realtime_scalar_sample(
+    state: &AppState,
+    session_id: String,
+    run_id: Option<String>,
+    revision: u64,
+    row: ScalarRow,
+) -> Result<(), ApiError> {
+    let row = serde_json::to_value(row).map_err(|error| {
+        ApiError::internal(format!("failed to serialize scalar sample row: {error}"))
+    })?;
+    let seq = state
+        .current_live_realtime_next_seq
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    publish_current_live_realtime_event(
+        state,
+        LiveRealtimeServerEvent::ScalarSample {
+            seq,
+            ts: realtime_timestamp_now(),
+            session_id,
+            run_id,
+            contract_version: current_live_realtime_contract_version().to_string(),
+            payload: ScalarSamplePayload { revision, row },
+        },
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RealtimeQosLane {
+    Immediate,
+    Lifecycle,
+    ScalarRows,
+    FieldSamples,
+}
+
+fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
+    if matches!(
         change.resource,
         RealtimeResourceName::Commands | RealtimeResourceName::Stages
-    )
+    ) {
+        return RealtimeQosLane::Immediate;
+    }
+
+    if matches!(change.resource, RealtimeResourceName::Fields)
+        && change.resource_id.as_deref() == Some("samples")
+    {
+        return RealtimeQosLane::FieldSamples;
+    }
+
+    if matches!(change.resource, RealtimeResourceName::Scalars)
+        && change.resource_id.as_deref() == Some("table:default:rows")
+    {
+        return RealtimeQosLane::ScalarRows;
+    }
+
+    RealtimeQosLane::Lifecycle
+}
+
+fn realtime_qos_window_ms(lane: RealtimeQosLane, lifecycle_window_ms: u32) -> u32 {
+    match lane {
+        RealtimeQosLane::Immediate => 0,
+        RealtimeQosLane::Lifecycle => lifecycle_window_ms,
+        RealtimeQosLane::ScalarRows => CURRENT_LIVE_TABLE_ROWS_MIN_REFETCH_MS,
+        RealtimeQosLane::FieldSamples => CURRENT_LIVE_REALTIME_FIELD_SAMPLE_COALESCE_WINDOW_MS,
+    }
 }
 
 fn split_realtime_changes_for_qos(
@@ -1013,80 +1058,49 @@ fn split_realtime_changes_for_qos(
     if changes.is_empty() {
         return Vec::new();
     }
-    if !coalesced || window_ms == 0 || !changes.iter().any(is_immediate_realtime_change) {
-        let window_ms = realtime_effective_coalesce_window_ms(&changes, coalesced, window_ms);
+    if !coalesced || window_ms == 0 {
         return vec![(changes, coalesced, window_ms)];
     }
 
-    let (immediate_changes, coalesced_changes): (Vec<_>, Vec<_>) =
-        changes.into_iter().partition(is_immediate_realtime_change);
-    let mut batches = Vec::with_capacity(2);
+    let mut immediate_changes = Vec::new();
+    let mut lifecycle_changes = Vec::new();
+    let mut scalar_row_changes = Vec::new();
+    let mut field_sample_changes = Vec::new();
+    for change in changes {
+        match realtime_qos_lane(&change) {
+            RealtimeQosLane::Immediate => immediate_changes.push(change),
+            RealtimeQosLane::Lifecycle => lifecycle_changes.push(change),
+            RealtimeQosLane::ScalarRows => scalar_row_changes.push(change),
+            RealtimeQosLane::FieldSamples => field_sample_changes.push(change),
+        }
+    }
+
+    let mut batches = Vec::with_capacity(4);
     if !immediate_changes.is_empty() {
         batches.push((immediate_changes, false, 0));
     }
-    if !coalesced_changes.is_empty() {
-        let window_ms = realtime_effective_coalesce_window_ms(&coalesced_changes, true, window_ms);
-        batches.push((coalesced_changes, true, window_ms));
+    if !lifecycle_changes.is_empty() {
+        batches.push((
+            lifecycle_changes,
+            true,
+            realtime_qos_window_ms(RealtimeQosLane::Lifecycle, window_ms),
+        ));
+    }
+    if !scalar_row_changes.is_empty() {
+        batches.push((
+            scalar_row_changes,
+            true,
+            realtime_qos_window_ms(RealtimeQosLane::ScalarRows, window_ms),
+        ));
+    }
+    if !field_sample_changes.is_empty() {
+        batches.push((
+            field_sample_changes,
+            true,
+            realtime_qos_window_ms(RealtimeQosLane::FieldSamples, window_ms),
+        ));
     }
     batches
-}
-
-fn realtime_effective_coalesce_window_ms(
-    changes: &[RealtimeResourceChange],
-    coalesced: bool,
-    window_ms: u32,
-) -> u32 {
-    if !coalesced || window_ms == 0 {
-        return window_ms;
-    }
-    if changes
-        .iter()
-        .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
-    {
-        return window_ms.max(CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS);
-    }
-    window_ms
-}
-
-fn should_publish_scalar_only_realtime_batch(
-    last_scalar_emit_unix_ms: &AtomicU64,
-    changes: &[RealtimeResourceChange],
-    coalesced: bool,
-    now_ms: u64,
-) -> bool {
-    if !coalesced || !is_scalar_only_realtime_batch(changes) {
-        return true;
-    }
-
-    loop {
-        let last_ms = last_scalar_emit_unix_ms.load(Ordering::Relaxed);
-        if last_ms != 0
-            && now_ms.saturating_sub(last_ms)
-                < u64::from(CURRENT_LIVE_REALTIME_TELEMETRY_COALESCE_WINDOW_MS)
-        {
-            return false;
-        }
-        if last_scalar_emit_unix_ms
-            .compare_exchange(last_ms, now_ms, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return true;
-        }
-    }
-}
-
-fn is_scalar_only_realtime_batch(changes: &[RealtimeResourceChange]) -> bool {
-    !changes.is_empty()
-        && changes
-            .iter()
-            .all(|change| matches!(change.resource, RealtimeResourceName::Scalars))
-}
-
-fn realtime_unix_ms_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
 }
 
 fn parse_texture_projection_mode(value: &str) -> TextureProjectionMode {
@@ -1140,7 +1154,6 @@ async fn main() {
         current_live_realtime_events: broadcast::channel(256).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
-        current_live_realtime_last_scalar_emit_unix_ms: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1886,8 +1899,25 @@ where
     );
     let realtime_state =
         current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
+    let scalar_sample = if has_scalar_row_update {
+        next.scalar_rows.last().cloned().map(|row| {
+            (
+                next.session.session_id.clone(),
+                next.run.as_ref().map(|run| run.run_id.clone()),
+                next.scalar_revision,
+                row,
+            )
+        })
+    } else {
+        None
+    };
     *current = Some(next);
     drop(current);
+
+    if let Some((session_id, run_id, revision, row)) = scalar_sample {
+        publish_current_live_realtime_scalar_sample(&state, session_id, run_id, revision, row)
+            .await?;
+    }
 
     publish_current_live_realtime_batch_changed_since(
         &state,
@@ -1897,7 +1927,6 @@ where
         CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS,
     )
     .await?;
-
     let sync_elapsed_us = sync_start.elapsed().as_micros();
     if sync_elapsed_us > 50_000 {
         eprintln!(
@@ -2017,6 +2046,7 @@ async fn build_current_live_realtime_hello_event(
             replay_available_after_seq,
             current_seq,
             resource_revisions: realtime_state.revisions,
+            communication_policy: current_live_realtime_communication_policy(),
         },
     })
 }

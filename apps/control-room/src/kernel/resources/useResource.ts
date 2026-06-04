@@ -10,6 +10,7 @@ import {
 
 import type { ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+import { errorRetryDelayMs } from "../realtime/communicationPolicy";
 
 import {
   sharedResourceRuntimeStore,
@@ -37,8 +38,6 @@ interface UseResourceSelectorOptions<TData, TSelected>
   selector: (resource: ResourceResult<TData>) => TSelected;
 }
 
-/** Minimum delay before retrying after a network/fetch error (ms). */
-const ERROR_RETRY_DELAY_MS = 1_000;
 const NOOP_SUBSCRIBE = () => undefined;
 
 export function useResource<TData>({
@@ -250,7 +249,7 @@ function useResourceLoader<TData>({
 
     // If the last attempt failed, wait before retrying to avoid
     // a hot render loop when the backend is unreachable.
-    const delay = errorCountRef.current > 0 ? ERROR_RETRY_DELAY_MS : 0;
+    const delay = errorCountRef.current > 0 ? errorRetryDelayMs() : 0;
     const timeoutId = setTimeout(() => {
       runtimeStore
         .ensureLoad({

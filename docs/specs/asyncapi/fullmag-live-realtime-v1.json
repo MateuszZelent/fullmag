@@ -3,7 +3,7 @@
   "info": {
     "title": "Fullmag Live Realtime API",
     "version": "1.0.0",
-    "description": "Draft AsyncAPI contract for the canonical Fullmag realtime websocket. HTTP resources remain the source of truth; the websocket is an invalidation and lifecycle notification bus."
+    "description": "Draft AsyncAPI contract for the canonical Fullmag realtime websocket. HTTP resources remain the source of truth for heavy data; the websocket carries invalidations, lifecycle notifications, and lightweight scalar telemetry."
   },
   "defaultContentType": "application/json",
   "servers": {
@@ -24,6 +24,7 @@
             { "$ref": "#/components/messages/HelloEvent" },
             { "$ref": "#/components/messages/HeartbeatEvent" },
             { "$ref": "#/components/messages/ResourceBatchChangedEvent" },
+            { "$ref": "#/components/messages/ScalarSampleEvent" },
             { "$ref": "#/components/messages/ResyncRequiredEvent" }
           ]
         }
@@ -68,6 +69,10 @@
       "ResourceBatchChangedEvent": {
         "name": "resource.batch_changed",
         "payload": { "$ref": "#/components/schemas/ResourceBatchChangedEvent" }
+      },
+      "ScalarSampleEvent": {
+        "name": "scalar.sample",
+        "payload": { "$ref": "#/components/schemas/ScalarSampleEvent" }
       },
       "ResyncRequiredEvent": {
         "name": "resync.required",
@@ -178,6 +183,33 @@
           "recommended_fetch": { "type": ["string", "null"] }
         }
       },
+      "RealtimeCommunicationPolicy": {
+        "type": "object",
+        "required": [
+          "ws_replay_capacity",
+          "ws_heartbeat_ms",
+          "ws_reconnect_ms",
+          "lifecycle_coalesce_ms",
+          "table_rows_min_refetch_ms",
+          "field_sample_publish_ms",
+          "scalar_telemetry_publish_ms",
+          "diagnostics_summary_ms",
+          "status_refresh_ms",
+          "error_retry_ms"
+        ],
+        "properties": {
+          "ws_replay_capacity": { "type": "integer", "minimum": 1 },
+          "ws_heartbeat_ms": { "type": "integer", "minimum": 1 },
+          "ws_reconnect_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+          "lifecycle_coalesce_ms": { "type": "integer", "minimum": 0, "default": 250 },
+          "table_rows_min_refetch_ms": { "type": "integer", "minimum": 1, "default": 1000 },
+          "field_sample_publish_ms": { "type": "integer", "minimum": 1, "default": 2000 },
+          "scalar_telemetry_publish_ms": { "type": "integer", "minimum": 1, "default": 200 },
+          "diagnostics_summary_ms": { "type": "integer", "minimum": 1 },
+          "status_refresh_ms": { "type": "integer", "minimum": 1, "default": 5000 },
+          "error_retry_ms": { "type": "integer", "minimum": 1 }
+        }
+      },
       "HelloEvent": {
         "allOf": [
           { "$ref": "#/components/schemas/EnvelopeBase" },
@@ -191,7 +223,8 @@
                   "server_time",
                   "replay_available_after_seq",
                   "current_seq",
-                  "resource_revisions"
+                  "resource_revisions",
+                  "communication_policy"
                 ],
                 "properties": {
                   "server_time": { "type": "string", "format": "date-time" },
@@ -199,6 +232,9 @@
                   "current_seq": { "type": "integer", "minimum": 0 },
                   "resource_revisions": {
                     "$ref": "#/components/schemas/RealtimeResourceRevisionMap"
+                  },
+                  "communication_policy": {
+                    "$ref": "#/components/schemas/RealtimeCommunicationPolicy"
                   }
                 }
               }
@@ -241,6 +277,33 @@
                   },
                   "coalesced": { "type": "boolean" },
                   "window_ms": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ScalarSampleEvent": {
+        "allOf": [
+          { "$ref": "#/components/schemas/EnvelopeBase" },
+          {
+            "type": "object",
+            "properties": {
+              "type": { "const": "scalar.sample" },
+              "payload": {
+                "type": "object",
+                "required": ["revision", "row"],
+                "properties": {
+                  "revision": { "type": "integer", "minimum": 0 },
+                  "row": {
+                    "type": "object",
+                    "required": ["step", "time"],
+                    "additionalProperties": { "type": "number" },
+                    "properties": {
+                      "step": { "type": "integer", "minimum": 0 },
+                      "time": { "type": "number" }
+                    }
+                  }
                 }
               }
             }

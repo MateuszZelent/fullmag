@@ -273,6 +273,22 @@ export interface ScalarWindowQuery {
   limit?: number;
   sinceRevision?: number;
 }
+export type TableRowsResource = components["schemas"]["TableRowsResource"];
+export type TableColumnMeta = components["schemas"]["TableColumnMeta"];
+export type TableListResource = components["schemas"]["TableListResource"];
+export type TableResource = components["schemas"]["TableResource"];
+export interface TableRowsQuery {
+  columns?: readonly string[];
+  cursor?: number;
+  decimation?: "minmax_lttb" | "none";
+  fromRow?: number;
+  fromT?: number;
+  includeTail?: boolean;
+  limit?: number;
+  targetPoints?: number;
+  toRow?: number;
+  toT?: number;
+}
 export type SessionExportRequest =
   components["schemas"]["SessionExportRequest"];
 export type ScriptSyncRequest = components["schemas"]["ScriptSyncRequest"];

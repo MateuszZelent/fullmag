@@ -56,6 +56,9 @@ The default frontend base path is `/v2/sessions/current`.
 - `completion_status` is command outcome, not queue state; public command states are `queued`, `accepted`, `dispatched`, `running`, `completed`, `rejected`, and `failed`.
 - `data/quantities` describes supported quantities and preview capability.
 - `data/fields` describes materialized field resources; an empty field catalog does not make a quantity unsupported.
+- `data/tables/{table_id}/rows` owns table-shaped scalar histories for charts.
+  The default chart table is `data/tables/default/rows`; `data/scalars` is a
+  compatibility projection until all scalar-history consumers migrate.
 - `visualization/display` owns the legacy display-selection projection.
 - `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, a complete effective target registry for current scene objects/mesh parts, and diagnostics while retaining flat display fields as a compatibility projection.
 - `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.
@@ -81,9 +84,10 @@ contract has stricter ownership rules than the HTTP routes:
   (`/data/fields/{quantity_id}/samples/vector`, slice, projection, and related
   derivative resources). A camera-only patch must never cause a
   `field_revision`-equivalent invalidation.
-- `scalars_revision` owns scalar-history freshness only. Scalar appends may
-  trigger downstream field invalidation only when the backend also proves that
-  the materialized field payload changed.
+- `scalars_revision` owns scalar-history/table freshness only during the
+  transition to named table resources. Scalar appends may trigger downstream
+  field invalidation only when the backend also proves that the materialized
+  field payload changed.
 - `recommended_fetch` must be derived from resources that actually changed. The
   backend must not emit blanket fetch hints for every possible viewport field
   vector just because a session snapshot was rebuilt.
@@ -118,6 +122,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/stages/execution` | full stage tree and stage state |
 | `simulation/solver/status` | live solver state: runtime state, step, dt, torque, convergence, warnings |
 | `simulation/solver/energies/*` | current and historical energy samples |
+| `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
+| `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
 | `meshing/builds` | mesh build history collection |
 | `meshing/builds/current` | current build/pipeline state, current resolved build target, and mesh provenance (`source_scene_revision`, `geometry_realization_revision`) |

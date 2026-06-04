@@ -35,6 +35,7 @@ pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
 mod solver_profile;
+pub mod table_autosave;
 mod types;
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────

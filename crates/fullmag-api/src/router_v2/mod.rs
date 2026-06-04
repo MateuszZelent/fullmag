@@ -391,6 +391,26 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_scalars),
         )
         .route(
+            "/v2/sessions/current/data/tables",
+            get(handlers::data::list_tables),
+        )
+        .route(
+            "/v2/sessions/current/data/tables/:table_id",
+            get(handlers::data::get_table),
+        )
+        .route(
+            "/v2/sessions/current/data/tables/:table_id/columns",
+            get(handlers::data::get_table_columns),
+        )
+        .route(
+            "/v2/sessions/current/data/tables/:table_id/rows",
+            get(handlers::data::get_table_rows),
+        )
+        .route(
+            "/v2/sessions/current/data/tables/:table_id/rows.bin",
+            get(handlers::data::get_table_rows_binary),
+        )
+        .route(
             "/v2/sessions/current/data/artifacts",
             get(handlers::data::list_artifacts),
         )

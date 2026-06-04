@@ -27,6 +27,7 @@ import type {
   DecodedTopology,
 } from "@/kernel/api/codecs";
 import { useKernel } from "@/kernel/KernelContext";
+import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { useResource } from "@/kernel/resources/useResource";
 
@@ -52,7 +53,6 @@ const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
 };
-const VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS = 250;
 
 export interface Viewport3DQuantityFieldVectorRequest {
   key: string;
@@ -368,7 +368,7 @@ export function useViewport3DFieldVector(
   const resource = useResource({
     enabled,
     load,
-    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
+    minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     resolveRevision,
     resourceKey: requestKey,
   });
@@ -448,7 +448,7 @@ export function useViewport3DAirboxFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
-    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
+    minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     resolveRevision,
     resourceKey,
   });
@@ -532,7 +532,7 @@ export function useViewport3DQuantityFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
-    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
+    minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     resolveRevision,
     resourceKey,
   });
@@ -604,7 +604,7 @@ export function useViewport3DPartFieldVectors(
   const resource = useResource({
     enabled: enabled && requestKeys.size > 0,
     load,
-    minRefetchIntervalMs: VIEWPORT_3D_FIELD_VECTOR_MIN_REFETCH_INTERVAL_MS,
+    minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     resolveRevision,
     resourceKey,
   });

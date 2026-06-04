@@ -4,6 +4,7 @@ import { useCallback } from "react";
 
 import type { LiveStatusResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 
 import { useResourceSelector } from "./useResource";
 import type { ResourceResult } from "./resourceTypes";
@@ -58,6 +59,7 @@ export function useSessionStatusSelector<TSelected>(
     enabled: options.enabled,
     isEqual: options.isEqual,
     load,
+    minRefetchIntervalMs: statusRefreshIntervalMs(),
     resolveRevision: resolveSessionStatusRevision,
     resourceKey: SESSION_STATUS_RESOURCE_KEY,
     selector,

@@ -429,6 +429,44 @@ impl Default for OerstedRealization {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplingIR {
     pub outputs: Vec<OutputIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_autosave: Option<TableAutosaveIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableAutosaveIR {
+    #[serde(default = "default_table_autosave_kind")]
+    pub kind: String,
+    #[serde(default = "default_table_id")]
+    pub table_id: String,
+    pub sample_period_s: f64,
+    pub quantities: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sampling_ir_deserializes_table_autosave_contract() {
+        let sampling: SamplingIR = serde_json::from_value(serde_json::json!({
+            "outputs": [],
+            "table_autosave": {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_s": 2e-12,
+                "quantities": ["step", "t", "mx", "e_total"]
+            }
+        }))
+        .expect("sampling table autosave should deserialize");
+
+        let table = sampling
+            .table_autosave
+            .expect("sampling should preserve table autosave");
+        assert_eq!(table.table_id, "default");
+        assert_eq!(table.sample_period_s, 2e-12);
+        assert_eq!(table.quantities, ["step", "t", "mx", "e_total"]);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -683,6 +721,14 @@ fn default_axis_z() -> [f64; 3] {
 
 fn default_current_distribution_uniform() -> String {
     "uniform".to_string()
+}
+
+fn default_table_autosave_kind() -> String {
+    "table_autosave".to_string()
+}
+
+fn default_table_id() -> String {
+    "default".to_string()
 }
 
 fn default_antenna_air_box_factor() -> f64 {

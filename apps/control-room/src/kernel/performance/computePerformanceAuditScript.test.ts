@@ -156,7 +156,8 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("MAX_LINE_CHART_POINTS");
     expect(auditScript).toContain("decimateLinePoints");
     expect(auditScript).toContain("const pathPoints = decimateLinePoints(finitePoints)");
-    expect(auditScript).toContain("Object.freeze([");
+    expect(auditScript).toContain("DEFAULT_TABLE_CHART_COLUMNS");
+    expect(auditScript).toContain("mergeTableRows");
     expect(auditScript).toContain("computePerformanceMicrobench.test.ts");
     expect(auditScript).toContain("makeLargeTopologyBuffer");
     expect(auditScript).toContain("makeLargeQualityBuffer");

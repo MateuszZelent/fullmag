@@ -1,4 +1,6 @@
 import type { ResourceRevision } from "../api/apiTypes";
+import type { EventBus } from "../events/EventBus";
+import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
@@ -57,7 +59,18 @@ interface RealtimeResyncRequiredEvent {
   type: string;
 }
 
+interface RealtimeScalarSampleEvent {
+  payload: {
+    revision: ResourceRevision;
+    row: Record<string, number>;
+  };
+  run_id?: string | null;
+  session_id: string;
+  type: string;
+}
+
 interface RealtimeInvalidationBridgeOptions {
+  bus?: EventBus<KernelEventMap>;
   scheduleFlush?: (callback: () => void) => () => void;
   shouldSuppressInvalidation?: (
     resourceKey: string,
@@ -94,6 +107,43 @@ function isRealtimeResyncRequiredEvent(
 
   const record = event as Record<string, unknown>;
   return record.type === "resync.required";
+}
+
+function isRealtimeScalarSampleEvent(
+  event: unknown,
+): event is RealtimeScalarSampleEvent {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+
+  const record = event as Record<string, unknown>;
+  const payload =
+    record.payload && typeof record.payload === "object"
+      ? (record.payload as Record<string, unknown>)
+      : null;
+  const row =
+    payload?.row && typeof payload.row === "object"
+      ? (payload.row as Record<string, unknown>)
+      : null;
+  const revision = payload?.revision;
+  return (
+    record.type === "scalar.sample" &&
+    typeof record.session_id === "string" &&
+    (typeof revision === "number" || typeof revision === "string") &&
+    row !== null &&
+    typeof row.step === "number" &&
+    typeof row.time === "number"
+  );
+}
+
+function scalarSampleRow(row: Record<string, unknown>): Record<string, number> {
+  const numericRow: Record<string, number> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      numericRow[key] = value;
+    }
+  }
+  return numericRow;
 }
 
 function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
@@ -199,6 +249,19 @@ export class RealtimeInvalidationBridge {
           typeof replayAfter === "number" ? replayAfter : Date.now(),
         );
       }
+      return true;
+    }
+
+    if (isRealtimeScalarSampleEvent(event)) {
+      const row = scalarSampleRow(event.payload.row);
+      this.options.bus?.emit("telemetry:scalar-sample", {
+        revision: event.payload.revision,
+        row,
+        runId: event.run_id ?? null,
+        sessionId: event.session_id,
+        step: row.step,
+        time: row.time,
+      });
       return true;
     }
 

@@ -5,7 +5,7 @@ import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
-  DATA_SCALARS_PATH,
+  DATA_TABLE_ROWS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -479,19 +479,21 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(fieldKey)).toBe(8);
   });
 
-  it("refreshes scalar resources for scalar result batches without runtime or field fanout", () => {
+  it("refreshes table row windows for scalar result batches without runtime or field fanout", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
     const bridge = new RealtimeInvalidationBridge(resources);
-    const scalarWindowKey = `${DATA_SCALARS_PATH}?limit=100`;
+    const tableRowsPath = DATA_TABLE_ROWS_PATH.replace("{table_id}", "default");
+    const tableWindowKey = `${tableRowsPath}?columns=time%2Ce_total&cursor=10&limit=100`;
 
-    resources.subscribe(scalarWindowKey, () => {});
+    resources.subscribe(tableWindowKey, () => {});
 
     const handled = bridge.handleEvent({
       payload: {
         changes: [
           {
-            recommended_fetch: DATA_SCALARS_PATH,
+            recommended_fetch: tableRowsPath,
+            resource_id: "table:default:rows",
             resource: "scalars",
             revision: 10,
           },
@@ -502,10 +504,42 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(handled).toBe(true);
     expect(resources.getRevision("session:status")).toBeNull();
-    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(10);
-    expect(resources.getRevision(scalarWindowKey)).toBe(10);
+    expect(resources.getRevision(tableRowsPath)).toBe(10);
+    expect(resources.getRevision(tableWindowKey)).toBe(10);
     expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBeNull();
+    expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
+  });
+
+  it("emits scalar sample payload events without invalidating resources", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const samples: KernelEventMap["telemetry:scalar-sample"][] = [];
+    bus.on("telemetry:scalar-sample", (sample) => samples.push(sample));
+    const bridge = new RealtimeInvalidationBridge(resources, { bus });
+
+    const handled = bridge.handleEvent({
+      payload: { revision: 12, row: { e_total: 0.3, step: 7, time: 0.2 } },
+      run_id: "run-1",
+      session_id: "session-1",
+      type: "scalar.sample",
+    });
+
+    expect(handled).toBe(true);
+    expect(samples).toEqual([
+      {
+        revision: 12,
+        row: { e_total: 0.3, step: 7, time: 0.2 },
+        runId: "run-1",
+        sessionId: "session-1",
+        step: 7,
+        time: 0.2,
+      },
+    ]);
+    expect(resources.getRevision("session:status")).toBeNull();
+    expect(resources.getRevision(DATA_TABLE_ROWS_PATH)).toBeNull();
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBeNull();
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBeNull();
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBeNull();
   });

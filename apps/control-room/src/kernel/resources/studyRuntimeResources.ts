@@ -6,6 +6,10 @@ import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
+  DATA_TABLE_COLUMNS_PATH,
+  DATA_TABLE_PATH,
+  DATA_TABLE_ROWS_PATH,
+  DATA_TABLES_PATH,
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
@@ -29,6 +33,7 @@ import {
 } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
+  BinaryResourceResult,
   CommandQueueStatusResource,
   CommandDetailResource,
   CheckpointEntry,
@@ -48,8 +53,15 @@ import type {
   StageExecutionResource,
   ScalarWindowQuery,
   ScalarWindowResource,
+  TableColumnMeta,
+  TableListResource,
+  TableResource,
+  TableRowsQuery,
+  TableRowsResource,
 } from "../api/apiTypes";
+import type { DecodedTableRows } from "../api/codecs";
 import { useKernel } from "../KernelContext";
+import { tableRowsMinRefetchIntervalMs } from "../realtime/communicationPolicy";
 
 import {
   useGeometryValidationResource,
@@ -94,8 +106,6 @@ const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
   "scene_revision",
   "stages_revision",
 ] as const satisfies ReadonlyArray<keyof LiveStatusResource["resources"]>;
-
-const SCALAR_WINDOW_MIN_REFETCH_INTERVAL_MS = 1_000;
 
 type StudyRuntimeCommandSessionStatus = {
   capabilities: Pick<
@@ -524,8 +534,219 @@ export function useScalarWindowResource({
   return useResource<ScalarWindowResource | null>({
     enabled,
     load,
-    minRefetchIntervalMs: SCALAR_WINDOW_MIN_REFETCH_INTERVAL_MS,
+    minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
     resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useTableListResource({ enabled = true }: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.tables
+        .list({ signal })
+        .catch(ignoreMissingResource<TableListResource>),
+    [api],
+  );
+
+  return useResource<TableListResource | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey: DATA_TABLES_PATH,
+  });
+}
+
+export function useTableResource(
+  tableId = "default",
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = DATA_TABLE_PATH.replace("{table_id}", tableId);
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.tables
+        .detail(tableId, { signal })
+        .catch(ignoreMissingResource<TableResource>),
+    [api, tableId],
+  );
+
+  return useResource<TableResource | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useTableColumnsResource(
+  tableId = "default",
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = DATA_TABLE_COLUMNS_PATH.replace("{table_id}", tableId);
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.tables
+        .columns(tableId, { signal })
+        .catch(ignoreMissingResource<TableColumnMeta[]>),
+    [api, tableId],
+  );
+
+  return useResource<TableColumnMeta[] | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.length ?? null,
+    resourceKey,
+  });
+}
+
+export function useTableRowsResource(
+  tableId = "default",
+  {
+    columns,
+    cursor,
+    decimation,
+    enabled = true,
+    fromRow,
+    fromT,
+    includeTail,
+    limit = 5_000,
+    targetPoints,
+    toRow,
+    toT,
+  }: TableRowsQuery & { enabled?: boolean } = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = tableRowsResourceKey(tableId, {
+    columns,
+    cursor,
+    decimation,
+    fromRow,
+    fromT,
+    includeTail,
+    limit,
+    targetPoints,
+    toRow,
+    toT,
+  });
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.tables
+        .rows(
+          tableId,
+          {
+            columns,
+            cursor,
+            decimation,
+            fromRow,
+            fromT,
+            includeTail,
+            limit,
+            targetPoints,
+            toRow,
+            toT,
+          },
+          { signal },
+        )
+        .catch(ignoreMissingResource<TableRowsResource>),
+    [
+      api,
+      columns,
+      cursor,
+      decimation,
+      fromRow,
+      fromT,
+      includeTail,
+      limit,
+      tableId,
+      targetPoints,
+      toRow,
+      toT,
+    ],
+  );
+
+  return useResource<TableRowsResource | null>({
+    enabled,
+    load,
+    minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useTableRowsBinaryResource(
+  tableId = "default",
+  {
+    columns,
+    cursor,
+    decimation,
+    enabled = true,
+    fromRow,
+    fromT,
+    includeTail,
+    limit = 5_000,
+    targetPoints,
+    toRow,
+    toT,
+  }: TableRowsQuery & { enabled?: boolean } = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = `${tableRowsResourceKey(tableId, {
+    columns,
+    cursor,
+    decimation,
+    fromRow,
+    fromT,
+    includeTail,
+    limit,
+    targetPoints,
+    toRow,
+    toT,
+  })}#binary`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.tables
+        .rowsBinary(
+          tableId,
+          {
+            columns,
+            cursor,
+            decimation,
+            fromRow,
+            fromT,
+            includeTail,
+            limit,
+            targetPoints,
+            toRow,
+            toT,
+          },
+          { signal },
+        )
+        .catch(ignoreMissingResource<BinaryResourceResult<DecodedTableRows>>),
+    [
+      api,
+      columns,
+      cursor,
+      decimation,
+      fromRow,
+      fromT,
+      includeTail,
+      limit,
+      tableId,
+      targetPoints,
+      toRow,
+      toT,
+    ],
+  );
+
+  return useResource<BinaryResourceResult<DecodedTableRows> | null>({
+    enabled,
+    load,
+    minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
+    resolveRevision: (data) =>
+      data?.status === "ready" ? data.data.revision : null,
     resourceKey,
   });
 }
@@ -805,4 +1026,55 @@ function scalarWindowResourceKey({
   }
   const query = params.toString();
   return query ? `${DATA_SCALARS_PATH}?${query}` : DATA_SCALARS_PATH;
+}
+
+function tableRowsResourceKey(
+  tableId: string,
+  {
+    columns,
+    cursor,
+    decimation,
+    fromRow,
+    fromT,
+    includeTail,
+    limit,
+    targetPoints,
+    toRow,
+    toT,
+  }: TableRowsQuery,
+): string {
+  const params = new URLSearchParams();
+  if (columns && columns.length > 0) {
+    params.set("columns", columns.join(","));
+  }
+  if (cursor !== undefined) {
+    params.set("cursor", String(cursor));
+  }
+  if (decimation !== undefined) {
+    params.set("decimation", decimation);
+  }
+  if (fromRow !== undefined) {
+    params.set("from_row", String(fromRow));
+  }
+  if (fromT !== undefined) {
+    params.set("from_t", String(fromT));
+  }
+  if (includeTail !== undefined) {
+    params.set("include_tail", String(includeTail));
+  }
+  if (limit !== undefined) {
+    params.set("limit", String(limit));
+  }
+  if (targetPoints !== undefined) {
+    params.set("target_points", String(targetPoints));
+  }
+  if (toRow !== undefined) {
+    params.set("to_row", String(toRow));
+  }
+  if (toT !== undefined) {
+    params.set("to_t", String(toT));
+  }
+  const query = params.toString();
+  const path = DATA_TABLE_ROWS_PATH.replace("{table_id}", tableId);
+  return query ? `${path}?${query}` : path;
 }

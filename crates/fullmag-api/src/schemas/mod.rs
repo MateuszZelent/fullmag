@@ -12,5 +12,6 @@ pub mod realtime;
 pub mod runtime;
 pub mod scalars;
 pub mod status;
+pub mod tables;
 pub mod visualization_state;
 pub mod workspace;

@@ -61,6 +61,13 @@ export type SelectionRef =
       visualizationTargetId: `cross-section:plot:${string}`;
     }
   | {
+      chartId: string;
+      kind: "analysis.chart";
+      nodeId: string;
+      tableId: string;
+      type: "analysis-chart";
+    }
+  | {
       kind:
         | "study.stage.action"
         | "study.stage.eigenmodes"
@@ -170,6 +177,14 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.plotId === right.plotId &&
         left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "analysis-chart":
+      return (
+        right.type === "analysis-chart" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.chartId === right.chartId &&
+        left.tableId === right.tableId
       );
     case "study-stage":
       return (

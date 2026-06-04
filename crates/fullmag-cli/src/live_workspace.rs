@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+use crate::communication_policy::{
+    LIVE_PUBLISH_FAST_INTERVAL, LIVE_PUBLISH_MIN_INTERVAL, LIVE_SCALAR_TELEMETRY_INTERVAL,
+};
 use crate::control_room::{
     api_is_ready, api_port, sync_current_live_delta, sync_current_live_snapshot,
 };
@@ -459,11 +462,47 @@ pub(crate) struct CurrentLivePublisher {
     sending: Arc<AtomicBool>,
     fast_mode: Arc<AtomicBool>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
+    scalar_gate: Arc<Mutex<LiveTelemetryPublishGate>>,
     wake_tx: mpsc::SyncSender<()>,
 }
 
-const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1000);
-const CURRENT_LIVE_FAST_PUBLISH_INTERVAL: Duration = Duration::from_millis(200);
+#[derive(Debug, Default)]
+struct LiveTelemetryPublishGate {
+    last_scalar_publish_at: Option<Instant>,
+}
+
+impl LiveTelemetryPublishGate {
+    fn filter_payload(&mut self, payload: &mut CurrentLiveSnapshotPayload) {
+        let Some(row) = payload.latest_scalar_row.as_ref() else {
+            return;
+        };
+        if self.should_publish_scalar(row.step, scalar_payload_finished(payload)) {
+            self.last_scalar_publish_at = Some(Instant::now());
+        } else {
+            payload.latest_scalar_row = None;
+        }
+    }
+
+    fn should_publish_scalar(&self, step: u64, finished: bool) -> bool {
+        if step <= 1 || finished {
+            return true;
+        }
+        self.last_scalar_publish_at
+            .is_none_or(|last| last.elapsed() >= LIVE_SCALAR_TELEMETRY_INTERVAL)
+    }
+}
+
+fn scalar_payload_finished(payload: &CurrentLiveSnapshotPayload) -> bool {
+    payload
+        .live_state
+        .as_ref()
+        .is_some_and(|state| state.latest_step.finished || state.status == "completed")
+        || payload
+            .run
+            .as_ref()
+            .is_some_and(|run| run.status == "completed")
+        || payload.session_status.as_deref() == Some("completed")
+}
 
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
@@ -472,6 +511,7 @@ impl CurrentLivePublisher {
         let sending = Arc::new(AtomicBool::new(false));
         let fast_mode = Arc::new(AtomicBool::new(true));
         let payload = Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default()));
+        let scalar_gate = Arc::new(Mutex::new(LiveTelemetryPublishGate::default()));
         let worker_pending = Arc::clone(&pending);
         let worker_sending = Arc::clone(&sending);
         let worker_fast_mode = Arc::clone(&fast_mode);
@@ -497,6 +537,7 @@ impl CurrentLivePublisher {
             sending,
             fast_mode,
             payload,
+            scalar_gate,
             wake_tx,
         }
     }
@@ -513,7 +554,10 @@ impl CurrentLivePublisher {
         }
     }
 
-    pub fn replace(&self, payload: CurrentLiveSnapshotPayload) {
+    pub fn replace(&self, mut payload: CurrentLiveSnapshotPayload) {
+        if let Ok(mut gate) = self.scalar_gate.lock() {
+            gate.filter_payload(&mut payload);
+        }
         if let Ok(mut slot) = self.payload.lock() {
             let should_merge_pending =
                 self.pending.load(Ordering::Acquire) || self.sending.load(Ordering::Acquire);
@@ -527,8 +571,8 @@ impl CurrentLivePublisher {
 mod tests {
     use super::{
         apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
-        CurrentLivePublisher, CurrentLiveSnapshotPayload, LocalLiveWorkspace,
-        LocalLiveWorkspaceState,
+        CurrentLivePublisher, CurrentLiveScalarRow, CurrentLiveSnapshotPayload,
+        LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState,
     };
     use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 
@@ -601,6 +645,9 @@ mod tests {
             fast_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             payload: std::sync::Arc::new(std::sync::Mutex::new(
                 CurrentLiveSnapshotPayload::default(),
+            )),
+            scalar_gate: std::sync::Arc::new(std::sync::Mutex::new(
+                LiveTelemetryPublishGate::default(),
             )),
             wake_tx,
         }
@@ -687,6 +734,28 @@ mod tests {
             fem_mesh,
             preview_fields,
             ..CurrentLiveSnapshotPayload::default()
+        }
+    }
+
+    fn scalar_row(step: u64) -> CurrentLiveScalarRow {
+        CurrentLiveScalarRow {
+            step,
+            time: step as f64,
+            solver_dt: 1.0,
+            mx: 0.0,
+            my: 0.0,
+            mz: 1.0,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
+            e_total: step as f64,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_T: 0.0,
         }
     }
 
@@ -839,6 +908,39 @@ mod tests {
             Some("mesh-gen-2")
         );
     }
+
+    #[test]
+    fn live_scalar_telemetry_gate_keeps_first_and_final_samples_only_inside_window() {
+        let mut gate = LiveTelemetryPublishGate::default();
+        let mut first = CurrentLiveSnapshotPayload {
+            latest_scalar_row: Some(scalar_row(1)),
+            ..CurrentLiveSnapshotPayload::default()
+        };
+        gate.filter_payload(&mut first);
+        assert_eq!(
+            first.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(1)
+        );
+
+        let mut intermediate = CurrentLiveSnapshotPayload {
+            latest_scalar_row: Some(scalar_row(2)),
+            ..CurrentLiveSnapshotPayload::default()
+        };
+        gate.filter_payload(&mut intermediate);
+        assert!(intermediate.latest_scalar_row.is_none());
+
+        let mut final_payload = payload_with_live_step(3, None, None, None, None);
+        if let Some(live_state) = final_payload.live_state.as_mut() {
+            live_state.status = "completed".to_string();
+            live_state.latest_step.finished = true;
+        }
+        final_payload.latest_scalar_row = Some(scalar_row(3));
+        gate.filter_payload(&mut final_payload);
+        assert_eq!(
+            final_payload.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(3)
+        );
+    }
 }
 
 fn current_live_publisher_loop(
@@ -854,9 +956,9 @@ fn current_live_publisher_loop(
     while wake_rx.recv().is_ok() {
         while pending.swap(false, Ordering::AcqRel) {
             let min_interval = if fast_mode.load(Ordering::Acquire) {
-                CURRENT_LIVE_FAST_PUBLISH_INTERVAL
+                LIVE_PUBLISH_FAST_INTERVAL
             } else {
-                CURRENT_LIVE_MIN_PUBLISH_INTERVAL
+                LIVE_PUBLISH_MIN_INTERVAL
             };
             if let Some(last_publish_at) = last_publish_at {
                 let elapsed = last_publish_at.elapsed();

@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import type { LiveStatusResource } from "../api/apiTypes";
+import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { useSessionStatusSelector } from "../resources/useSessionStatus";
 
@@ -19,8 +20,6 @@ interface SimulationStartupOverlayHiddenState {
 export type SimulationStartupOverlayState =
   | SimulationStartupOverlayHiddenState
   | SimulationStartupOverlayVisibleState;
-
-export const SIMULATION_STARTUP_STATUS_REFRESH_MS = 1_000;
 
 const BOOTSTRAPPING_STATUSES = new Set(["bootstrapping"]);
 const MATERIALIZING_STATUSES = new Set(["materializing_script"]);
@@ -230,9 +229,9 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
     const tick = () => {
       if (cancelled) return;
       startupRefetch();
-      timeoutId = setTimeout(tick, SIMULATION_STARTUP_STATUS_REFRESH_MS);
+      timeoutId = setTimeout(tick, statusRefreshIntervalMs());
     };
-    timeoutId = setTimeout(tick, SIMULATION_STARTUP_STATUS_REFRESH_MS);
+    timeoutId = setTimeout(tick, statusRefreshIntervalMs());
     return () => {
       cancelled = true;
       if (timeoutId !== null) {

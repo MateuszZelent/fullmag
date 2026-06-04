@@ -7,6 +7,11 @@ import {
   DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
   DATA_SCALARS_PATH,
+  DATA_TABLE_COLUMNS_PATH,
+  DATA_TABLE_PATH,
+  DATA_TABLE_ROWS_PATH,
+  DATA_TABLE_ROWS_BINARY_PATH,
+  DATA_TABLES_PATH,
   DIAGNOSTICS_CPU_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
@@ -148,6 +153,11 @@ import type {
   RequestOptions,
   ScalarWindowQuery,
   ScalarWindowResource,
+  TableColumnMeta,
+  TableListResource,
+  TableResource,
+  TableRowsQuery,
+  TableRowsResource,
   SceneResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
@@ -178,6 +188,7 @@ import {
   decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
+  decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
   decodeTopologySections,
@@ -188,6 +199,7 @@ import {
   type DecodedCrossSectionQuality,
   type DecodedFieldVector,
   type DecodedMeshQualityData,
+  type DecodedTableRows,
   type DecodedTopology,
   type TopologyHeader,
   type TopologySections,
@@ -323,6 +335,46 @@ export class ControlRoomApi {
           DATA_SCALARS_PATH,
           options,
           { query: scalarWindowQueryParams(query) },
+        ),
+    },
+    tables: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<TableListResource>(DATA_TABLES_PATH, options),
+      detail: (tableId: string, options?: RequestOptions) =>
+        this.requestJson<TableResource>(
+          DATA_TABLE_PATH,
+          options,
+          { path: { table_id: tableId } },
+        ),
+      columns: (tableId: string, options?: RequestOptions) =>
+        this.requestJson<TableColumnMeta[]>(
+          DATA_TABLE_COLUMNS_PATH,
+          options,
+          { path: { table_id: tableId } },
+        ),
+      rows: (
+        tableId: string,
+        query: TableRowsQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<TableRowsResource>(
+          DATA_TABLE_ROWS_PATH,
+          options,
+          {
+            path: { table_id: tableId },
+            query: tableRowsQueryParams(query),
+          },
+        ),
+      rowsBinary: (
+        tableId: string,
+        query: TableRowsQuery = {},
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestTableRowsBinary(
+          DATA_TABLE_ROWS_BINARY_PATH,
+          { table_id: tableId },
+          query,
+          options,
         ),
     },
   };
@@ -1155,6 +1207,22 @@ export class ControlRoomApi {
     );
   }
 
+  private requestTableRowsBinary(
+    path: OpenApiV2Path,
+    pathParams: PathParams,
+    query: TableRowsQuery = {},
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedTableRows>> {
+    return this.requestBinaryResource(
+      path,
+      "table-rows",
+      decodeTableRows,
+      options,
+      pathParams,
+      tableRowsQueryParams(query),
+    );
+  }
+
   private requestCrossSection(
     path: OpenApiV2Path,
     query: CrossSectionQuery,
@@ -1575,6 +1643,24 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
         : undefined,
     limit: query.limit,
     since_revision: query.sinceRevision,
+  };
+}
+
+function tableRowsQueryParams(query: TableRowsQuery): QueryParams {
+  return {
+    columns:
+      query.columns && query.columns.length > 0
+        ? query.columns.join(",")
+        : undefined,
+    cursor: query.cursor,
+    decimation: query.decimation,
+    from_row: query.fromRow,
+    from_t: query.fromT,
+    include_tail: query.includeTail,
+    limit: query.limit,
+    target_points: query.targetPoints,
+    to_row: query.toRow,
+    to_t: query.toT,
   };
 }
 

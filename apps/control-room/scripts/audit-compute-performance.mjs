@@ -1529,17 +1529,22 @@ function checkComputePerformanceMicrobenchCoverage() {
 function checkAnalysisPlotsStableResourceInputs() {
   const source = readFileSync(analysisPlotsModulePath, "utf8");
   requireTokens(source, "analysis plots stable resource inputs", [
-    'import { useMemo } from "react";',
-    "const ANALYSIS_SCALAR_COLUMNS = Object.freeze([",
+    'import { useCallback, useEffect, useMemo, useReducer, useState } from "react";',
+    "DEFAULT_TABLE_CHART_COLUMNS",
+    "useTableColumnsResource",
+    "useTableRowsBinaryResource",
     "columns: ANALYSIS_SCALAR_COLUMNS",
-    "const energyPoints = useMemo(",
-    "const scalarPoints = useMemo(",
-    "const model = useMemo(",
-    "buildLineChartModel(points)",
+    "targetPoints: 1_600",
+    "tableRowsResourceFromBinary",
+    "const table = useMemo<TableRowsLike | null>(",
+    "<EChartsSurface table={table} xAxisId={xAxisId} yAxisIds={yAxisIds} />",
+    "mergeTableRows",
     "analysisScalarColumns: ANALYSIS_SCALAR_COLUMNS",
   ]);
   forbidTokens(source, "analysis plots stable resource inputs", [
+    "useTableRowsResource(",
     'columns: ["step", "e_total", "mx", "my", "mz"]',
+    "buildLineChartModel(points)",
   ]);
 }
 
