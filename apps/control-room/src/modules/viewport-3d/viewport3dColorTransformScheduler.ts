@@ -68,11 +68,6 @@ export async function buildVertexScalarColorsOffMainThread(
   return buildVertexScalarColorsChunked(fieldVector, options);
 }
 
-export function disposeViewport3DColorTransformWorkerForTests(): void {
-  colorTransformWorkerClient?.dispose();
-  colorTransformWorkerClient = undefined;
-}
-
 function getColorTransformWorkerClient(): ColorTransformWorkerClient | null {
   if (colorTransformWorkerClient !== undefined) {
     return colorTransformWorkerClient;

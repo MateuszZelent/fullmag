@@ -9,19 +9,28 @@ function controlRoomApiProxyTarget(): string {
   ).replace(/\/+$/, "");
 }
 
+const staticExport = process.env.FULLMAG_CONTROL_ROOM_STATIC_EXPORT === "1";
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["fullmag.amucontainers.orion.zfns.eu.org"],
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
-  async rewrites() {
-    const apiTarget = controlRoomApiProxyTarget();
-    return [
-      {
-        source: "/v2/:path*",
-        destination: `${apiTarget}/v2/:path*`,
-      },
-    ];
-  },
+  ...(staticExport
+    ? {
+        output: "export" as const,
+        trailingSlash: true,
+      }
+    : {
+        async rewrites() {
+          const apiTarget = controlRoomApiProxyTarget();
+          return [
+            {
+              source: "/v2/:path*",
+              destination: `${apiTarget}/v2/:path*`,
+            },
+          ];
+        },
+      }),
   turbopack: {
     root: path.resolve(process.cwd(), "../.."),
   },

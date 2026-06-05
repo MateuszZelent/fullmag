@@ -238,13 +238,15 @@ function resolveSingleMagneticPartAlias(
 
 function resolveMagneticInterfaceOwnerAlias(label: string | null | undefined): string | null {
   if (!label) return null;
-  const sides = label
-    .split("↔")
-    .map((side) => side.trim())
-    .filter(Boolean);
+  const sides = label.split("↔").flatMap((side) => {
+    const trimmed = side.trim();
+    return trimmed ? [trimmed] : [];
+  });
   if (sides.length !== 2) return null;
 
-  const magneticSides = sides.filter((side) => normalizeMeshPartAlias(side) !== "air");
+  const magneticSides = sides.flatMap((side) =>
+    normalizeMeshPartAlias(side) !== "air" ? [side] : [],
+  );
   return magneticSides.length === 1 ? magneticSides[0] ?? null : null;
 }
 

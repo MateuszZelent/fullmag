@@ -142,11 +142,12 @@ function columnsForQuery(
   queryColumns: readonly string[],
 ): TableRowsResource["columns"] {
   const byId = new Map(columns.map((column) => [column.column_id, column]));
-  return queryColumns
-    .map((columnId) => byId.get(columnId))
-    .filter((column): column is TableRowsResource["columns"][number] =>
-      Boolean(column),
-    );
+  const selectedColumns: TableRowsResource["columns"] = [];
+  for (const columnId of queryColumns) {
+    const column = byId.get(columnId);
+    if (column) selectedColumns.push(column);
+  }
+  return selectedColumns;
 }
 
 function scalarSampleColumnValue(

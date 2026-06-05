@@ -44,7 +44,10 @@ describe("useViewport3DChunkedScalarColors", () => {
     const source = readFileSync(sourceUrl, "utf8");
 
     expect(source).toContain("const chunkedScalarColorBuffers = new WeakMap");
+    expect(source).toContain("useReducer");
+    expect(source).toContain("chunkedScalarColorReducer");
     expect(source).toContain("releaseChunkedScalarColorToken");
+    expect(source).not.toContain("useState");
     expect(source).not.toContain("buffers: Map<string, ScalarColorBuffer>");
   });
 

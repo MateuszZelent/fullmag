@@ -324,6 +324,15 @@ describe("buildModelTree", () => {
             artifact_name: "m-relaxed",
             kind: "save_state",
           },
+          {
+            field_steps: 11,
+            kind: "hysteresis",
+            stage_id: "hysteresis-1",
+          },
+          {
+            kind: "frequency_response",
+            stage_id: "freq-1",
+          },
         ],
       },
     });
@@ -331,13 +340,15 @@ describe("buildModelTree", () => {
     const flattened = flattenExplorerNodes(buildModelTree(snapshot));
 
     expect(flattened.find((node) => node.id === "model:study")?.badge).toBe(
-      "3 stages",
+      "5 stages",
     );
     expect(flattened.map((node) => node.id)).toEqual(
       expect.arrayContaining([
         "model:study:stage:stage-relax",
         "model:study:stage:1",
         "model:study:stage:2",
+        "model:study:stage:hysteresis-1",
+        "model:study:stage:freq-1",
       ]),
     );
     expect(
@@ -358,8 +369,20 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:study:stage:2"),
     ).toMatchObject({
       badge: "m-relaxed",
-      kind: "study.stage.action",
+      kind: "study.stage.save_state",
       label: "Save State 3",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:hysteresis-1"),
+    ).toMatchObject({
+      kind: "study.stage.hysteresis",
+      label: "Hysteresis 4",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:freq-1"),
+    ).toMatchObject({
+      kind: "study.stage.frequency_response",
+      label: "Frequency Response 5",
     });
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:relax",

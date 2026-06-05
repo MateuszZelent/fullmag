@@ -408,6 +408,78 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Tangent-plane implicit");
   });
 
+  it("keeps root pipeline validation visible when stage editor is hidden", () => {
+    const draft = { ...createDefaultStudyStageDraft("relax", 0), stageId: "" };
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={0}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested(),
+            runtime: {
+              activeStageLabel: "Relax 1",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No queued commands",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [
+              {
+                algorithm: "llg_overdamped",
+                artifactRefs: [],
+                checkpointRef: null,
+                commandId: null,
+                completedAtIso: null,
+                completedAtUnixMs: null,
+                energyTolerance: null,
+                index: 0,
+                kind: "relax",
+                label: "Relax 1",
+                maxSteps: "50000",
+                progressPercent: 0,
+                runtimeMetric: null,
+                stageId: "relax-1",
+                status: "queued",
+                stopReason: null,
+                torqueTolerance: "1e-6",
+                torqueToleranceFormatted: null,
+                torqueToleranceShortFormatted: null,
+                untilSeconds: null,
+              },
+            ],
+          }}
+          showDraftEditor={false}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+
+    expect(html).toContain("Selected stage has validation errors");
+    expect(html).not.toContain("Stage ID is required.");
+  });
+
   it("renders editable global study settings", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["boundary"]}>

@@ -278,6 +278,41 @@ run-headless-bench script:
     FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
     fullmag {{script}} --headless --json
 
+run-fdm-cpu-smoke:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_DISABLE_CHARTS=1 FULLMAG_DISABLE_PREVIEW_3D=1 \
+    fullmag examples/fdm_cpu_relax_smoke.py --backend fdm --headless --json
+
+run-permalloy-box-relax-fdm web_port="3100":
+    just run-permalloy-box-relax-fdm-interactive "{{web_port}}"
+
+run-permalloy-box-relax-fdm-interactive web_port="3100" cpu_threads="auto":
+    just ensure-python
+    just build fullmag
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    PATH="{{local_bin}}:$PATH" \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    fullmag --dev -i examples/permalloy_box_relax_300x1000x10nm_fdm.py --backend fdm --web-port "{{web_port}}"
+
+run-permalloy-box-relax-fdm-ui web_port="3100" cpu_threads="auto":
+    just run-permalloy-box-relax-fdm-interactive "{{web_port}}" "{{cpu_threads}}"
+
+run-permalloy-box-relax-fdm-headless cpu_threads="auto":
+    just ensure-python
+    just build fullmag
+    if [ "{{cpu_threads}}" = "auto" ]; then cpu_threads_env=auto; else cpu_threads_env="{{cpu_threads}}"; fi; \
+    PATH="{{local_bin}}:$PATH" \
+    FULLMAG_PYTHON="{{repo_python}}" \
+    FULLMAG_FDM_EXECUTION=cpu \
+    FULLMAG_CPU_THREADS="$cpu_threads_env" \
+    FULLMAG_DISABLE_CHARTS=1 \
+    FULLMAG_DISABLE_PREVIEW_3D=1 \
+    fullmag examples/permalloy_box_relax_300x1000x10nm_fdm.py --backend fdm --headless --json
+
 run-py-layer-hole:
     just ensure-python
     just build fullmag

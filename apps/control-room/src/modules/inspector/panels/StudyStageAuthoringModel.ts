@@ -5,6 +5,7 @@ type JsonRecord = Record<string, unknown>;
 export type StudyStageDraftKind =
   | "eigenmodes"
   | "frequency_response"
+  | "hysteresis"
   | "relax"
   | "run"
   | "save_state";
@@ -23,6 +24,7 @@ export interface StudyStageDraft {
   equilibriumSource: string;
   excitationField: string;
   fieldEvery: string;
+  fieldSteps: string;
   format: string;
   frequenciesHz: string;
   includeDemag: boolean;
@@ -38,6 +40,8 @@ export interface StudyStageDraft {
   relaxAlpha: string;
   solver: string;
   stageId: string;
+  startField: string;
+  stopField: string;
   target: string;
   targetFrequency: string;
   torqueTolerance: string;
@@ -63,6 +67,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
   fieldEvery: "",
+  fieldSteps: "",
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -78,6 +83,8 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   relaxAlpha: "1",
   solver: "rk23",
   stageId: "",
+  startField: "0, 0, -0.1",
+  stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
   torqueTolerance: "1e-6",
@@ -98,6 +105,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   equilibriumSource: "relax",
   excitationField: "0, 0, 1",
   fieldEvery: "",
+  fieldSteps: "",
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -113,6 +121,8 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   relaxAlpha: "",
   solver: "",
   stageId: "",
+  startField: "0, 0, -0.1",
+  stopField: "0, 0, 0.1",
   target: "lowest",
   targetFrequency: "",
   torqueTolerance: "",
@@ -140,6 +150,19 @@ const DEFAULT_SAVE_STATE_STAGE_DRAFT: StudyStageDraft = {
   ...DEFAULT_RUN_STAGE_DRAFT,
   kind: "save_state",
   untilSeconds: "",
+};
+
+const DEFAULT_HYSTERESIS_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RELAX_STAGE_DRAFT,
+  algorithm: "",
+  dt: "",
+  fieldSteps: "21",
+  kind: "hysteresis",
+  maxSteps: "",
+  relaxAlpha: "",
+  solver: "",
+  startField: "0, 0, -0.1",
+  stopField: "0, 0, 0.1",
 };
 
 export function createStudyStageDraft(
@@ -181,6 +204,30 @@ export function createStudyStageDraft(
       dataset: scalarText(record?.dataset, ""),
       format: scalarText(record?.format, ""),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+    };
+  }
+  if (kind === "hysteresis") {
+    return {
+      ...DEFAULT_HYSTERESIS_STAGE_DRAFT,
+      fieldSteps: scalarText(
+        record?.field_steps ?? record?.steps ?? record?.hysteresis_steps,
+        DEFAULT_HYSTERESIS_STAGE_DRAFT.fieldSteps,
+      ),
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+      startField: vectorText(
+        record?.start_field ?? record?.hysteresis_start_field,
+        DEFAULT_HYSTERESIS_STAGE_DRAFT.startField,
+      ),
+      stopField: vectorText(
+        record?.stop_field ?? record?.hysteresis_stop_field,
+        DEFAULT_HYSTERESIS_STAGE_DRAFT.stopField,
+      ),
+      torqueTolerance: scalarText(
+        record?.torque_tolerance ??
+          record?.hysteresis_torque_tolerance ??
+          record?.torque_tolerance_apm,
+        DEFAULT_HYSTERESIS_STAGE_DRAFT.torqueTolerance,
+      ),
     };
   }
 
@@ -232,9 +279,11 @@ export function createDefaultStudyStageDraft(
         ? DEFAULT_EIGENMODES_STAGE_DRAFT
         : kind === "frequency_response"
           ? DEFAULT_FREQUENCY_RESPONSE_STAGE_DRAFT
-          : kind === "save_state"
-            ? DEFAULT_SAVE_STATE_STAGE_DRAFT
-            : DEFAULT_RELAX_STAGE_DRAFT;
+          : kind === "hysteresis"
+            ? DEFAULT_HYSTERESIS_STAGE_DRAFT
+            : kind === "save_state"
+              ? DEFAULT_SAVE_STATE_STAGE_DRAFT
+              : DEFAULT_RELAX_STAGE_DRAFT;
   return {
     ...base,
     kind,
@@ -287,6 +336,26 @@ export function studyStageDraftToSceneStage(
     setOptionalText(stage, "format", draft.format);
     setOptionalText(stage, "dataset", draft.dataset);
     return stage;
+  }
+  if (draft.kind === "hysteresis") {
+    const startField = requiredVector3(draft.startField, "start_field");
+    const stopField = requiredVector3(draft.stopField, "stop_field");
+    const torqueTolerance = requiredNumber(
+      draft.torqueTolerance,
+      "torque_tolerance",
+    );
+    return {
+      entrypoint_kind: "flat_hysteresis",
+      field_steps: requiredInteger(draft.fieldSteps, "field_steps"),
+      hysteresis_start_field: startField,
+      hysteresis_stop_field: stopField,
+      hysteresis_torque_tolerance: torqueTolerance,
+      kind: "hysteresis",
+      stage_id: requiredText(draft.stageId, "hysteresis"),
+      start_field: startField,
+      stop_field: stopField,
+      torque_tolerance: torqueTolerance,
+    };
   }
 
   const stage: JsonObject = {
@@ -353,6 +422,13 @@ export function validateStudyStageDraft(
     if (!draft.artifactName.trim()) {
       issues.push({ message: "Artifact name is required.", severity: "error" });
     }
+    return issues;
+  }
+  if (draft.kind === "hysteresis") {
+    validatePositiveNumber(issues, draft.torqueTolerance, "Torque tolerance", true);
+    validateRequiredVector3(issues, draft.startField, "Start field");
+    validateRequiredVector3(issues, draft.stopField, "Stop field");
+    validatePositiveInteger(issues, draft.fieldSteps, "Field steps", true);
     return issues;
   }
 
@@ -447,6 +523,7 @@ function stageKind(record: JsonRecord | null): StudyStageDraftKind {
   const normalized = kind.toLowerCase();
   if (normalized.includes("frequency")) return "frequency_response";
   if (normalized.includes("eigen")) return "eigenmodes";
+  if (normalized.includes("hysteresis")) return "hysteresis";
   if (normalized.includes("save")) return "save_state";
   if (normalized.includes("run")) return "run";
   return "relax";

@@ -121,6 +121,51 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("creates and serializes hysteresis drafts", () => {
+    expect(
+      createStudyStageDraft(
+        {
+          field_steps: 17,
+          kind: "hysteresis",
+          stage_id: "h-loop",
+          start_field: [0, 0, -0.1],
+          stop_field: [0, 0, 0.1],
+          torque_tolerance: 1e-6,
+        },
+        4,
+      ),
+    ).toMatchObject({
+      fieldSteps: "17",
+      kind: "hysteresis",
+      stageId: "h-loop",
+      startField: "0, 0, -0.1",
+      stopField: "0, 0, 0.1",
+      torqueTolerance: "0.000001",
+    });
+
+    expect(
+      studyStageDraftToSceneStage({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldSteps: "21",
+        stageId: "h-loop",
+        startField: "0, 0, -0.2",
+        stopField: "0, 0, 0.2",
+        torqueTolerance: "5e-7",
+      }),
+    ).toEqual({
+      entrypoint_kind: "flat_hysteresis",
+      field_steps: 21,
+      hysteresis_start_field: [0, 0, -0.2],
+      hysteresis_stop_field: [0, 0, 0.2],
+      hysteresis_torque_tolerance: 5e-7,
+      kind: "hysteresis",
+      stage_id: "h-loop",
+      start_field: [0, 0, -0.2],
+      stop_field: [0, 0, 0.2],
+      torque_tolerance: 5e-7,
+    });
+  });
+
   it("serializes relax and run drafts into a study stages merge patch", () => {
     const relax = {
       ...createDefaultStudyStageDraft("relax", 0),
@@ -312,5 +357,20 @@ describe("StudyStageAuthoringModel", () => {
         untilSeconds: "",
       }).map((issue) => issue.message),
     ).toEqual(["Until seconds is required."]);
+
+    expect(
+      validateStudyStageDraft({
+        ...createDefaultStudyStageDraft("hysteresis", 0),
+        fieldSteps: "0",
+        startField: "0, 1",
+        stopField: "",
+        torqueTolerance: "-1",
+      }).map((issue) => issue.message),
+    ).toEqual([
+      "Torque tolerance must be a positive finite number.",
+      "Start field must contain three finite numbers.",
+      "Stop field must contain three finite numbers.",
+      "Field steps must be a positive integer.",
+    ]);
   });
 });

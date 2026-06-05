@@ -209,13 +209,16 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
 export function resolveViewport3DQuantityFieldVectorResourceKeys(
   quantityIds: readonly string[],
 ): Map<string, string> {
-  const canonicalQuantityIds = quantityIds
-    .map((quantityId) => quantityId.trim())
-    .filter((quantityId) => quantityId.length > 0)
-    .map(resolveCanonicalQuantityId);
+  const canonicalQuantityIds = new Set<string>();
+  for (const quantityId of quantityIds) {
+    const trimmed = quantityId.trim();
+    if (trimmed.length > 0) {
+      canonicalQuantityIds.add(resolveCanonicalQuantityId(trimmed));
+    }
+  }
   return new Map(
-    [...new Set(canonicalQuantityIds)]
-      .sort()
+    Array.from(canonicalQuantityIds)
+      .toSorted()
       .map((quantityId) => [
         quantityId,
         resolveViewport3DFieldVectorResourceKey(quantityId, {

@@ -93,6 +93,27 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("routes study root separately from concrete study stage inspectors", () => {
+    expect(resolveInspectorPanel({ kind: "study.root" })?.id).toBe(
+      "study-root",
+    );
+    expect(resolveInspectorPanel({ kind: "study.stage.relax" })?.id).toBe(
+      "study-stage",
+    );
+    expect(resolveInspectorPanel({ kind: "study.stage.run" })?.id).toBe(
+      "study-stage",
+    );
+    expect(resolveInspectorPanel({ kind: "study.stage.hysteresis" })?.id).toBe(
+      "study-stage",
+    );
+    expect(
+      resolveInspectorPanel({ kind: "study.stage.frequency_response" })?.id,
+    ).toBe("study-stage");
+    expect(resolveInspectorPanel({ kind: "study.stage.save_state" })?.id).toBe(
+      "study-stage",
+    );
+  });
+
   it("returns null when there is no selection kind", () => {
     expect(resolveInspectorPanel({ kind: null })).toBeNull();
   });

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -442,6 +442,57 @@ function ApiConnectionErrorDialog({
   );
 }
 
+interface AppMenuDialogState {
+  apiDialogError: Error | null;
+  communicationOpen: boolean;
+  dataPreviewOpen: boolean;
+  registryOpen: boolean;
+  threadManagerOpen: boolean;
+}
+
+type AppMenuDialogAction =
+  | { error: Error | null; type: "api-error" }
+  | { open: boolean; type: "communication" }
+  | { open: boolean; type: "data-preview" }
+  | { open: boolean; type: "registry" }
+  | { open: boolean; type: "thread-manager" };
+
+const APP_MENU_DIALOG_INITIAL_STATE: AppMenuDialogState = {
+  apiDialogError: null,
+  communicationOpen: false,
+  dataPreviewOpen: false,
+  registryOpen: false,
+  threadManagerOpen: false,
+};
+
+function appMenuDialogReducer(
+  state: AppMenuDialogState,
+  action: AppMenuDialogAction,
+): AppMenuDialogState {
+  switch (action.type) {
+    case "api-error":
+      return state.apiDialogError === action.error
+        ? state
+        : { ...state, apiDialogError: action.error };
+    case "communication":
+      return state.communicationOpen === action.open
+        ? state
+        : { ...state, communicationOpen: action.open };
+    case "data-preview":
+      return state.dataPreviewOpen === action.open
+        ? state
+        : { ...state, dataPreviewOpen: action.open };
+    case "registry":
+      return state.registryOpen === action.open
+        ? state
+        : { ...state, registryOpen: action.open };
+    case "thread-manager":
+      return state.threadManagerOpen === action.open
+        ? state
+        : { ...state, threadManagerOpen: action.open };
+  }
+}
+
 export function AppMenuBar() {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
@@ -457,13 +508,20 @@ export function AppMenuBar() {
     sessionStatus,
     hydrated,
   );
-  const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
-  const [dataPreviewOpen, setDataPreviewOpen] = useState(false);
-  const [communicationOpen, setCommunicationOpen] = useState(false);
-  const [registryOpen, setRegistryOpen] = useState(false);
-  const [threadManagerOpen, setThreadManagerOpen] = useState(false);
+  const [dialogState, dispatchDialogState] = useReducer(
+    appMenuDialogReducer,
+    APP_MENU_DIALOG_INITIAL_STATE,
+  );
+  const setDataPreviewOpen = (open: boolean) =>
+    dispatchDialogState({ open, type: "data-preview" });
+  const setCommunicationOpen = (open: boolean) =>
+    dispatchDialogState({ open, type: "communication" });
+  const setRegistryOpen = (open: boolean) =>
+    dispatchDialogState({ open, type: "registry" });
+  const setThreadManagerOpen = (open: boolean) =>
+    dispatchDialogState({ open, type: "thread-manager" });
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
-    registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+    dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
   const runtimeResourceData = useRuntimeCommandControlResourceData();
   const sessionDisplay = resolveHeaderSessionDisplay(
@@ -489,14 +547,16 @@ export function AppMenuBar() {
     });
   }, [hydrated, kernel, sessionStatus.error]);
   const apiDialogOpen = Boolean(
-    apiErrorDetails && apiDialogError === sessionStatus.error,
+    apiErrorDetails && dialogState.apiDialogError === sessionStatus.error,
   );
   const openApiDialog = () => {
-    if (hydrated && sessionStatus.error) setApiDialogError(sessionStatus.error);
+    if (hydrated && sessionStatus.error) {
+      dispatchDialogState({ error: sessionStatus.error, type: "api-error" });
+    }
   };
   const onApiDialogOpenChange = (open: boolean) => {
     if (open) openApiDialog();
-    else setApiDialogError(null);
+    else dispatchDialogState({ error: null, type: "api-error" });
   };
   const commandContext = createCommandContext("menu", kernel, {
     resourceData: runtimeResourceData,
@@ -636,7 +696,7 @@ export function AppMenuBar() {
       />
 
       <RegistryInspectorDialog
-        open={registryOpen}
+        open={dialogState.registryOpen}
         snapshot={visualizationSnapshot}
         syncSnapshot={visualizationSyncSnapshot}
         visualizationState={visualizationState.data}
@@ -646,17 +706,17 @@ export function AppMenuBar() {
       <ThreadManagerDialog
         kernel={kernel}
         onOpenChange={setThreadManagerOpen}
-        open={threadManagerOpen}
+        open={dialogState.threadManagerOpen}
       />
 
       <DataPreviewDialog
         onOpenChange={setDataPreviewOpen}
-        open={dataPreviewOpen}
+        open={dialogState.dataPreviewOpen}
       />
 
       <CommunicationPolicyDialog
         onOpenChange={setCommunicationOpen}
-        open={communicationOpen}
+        open={dialogState.communicationOpen}
       />
 
       <div className="fm-header__separator" />

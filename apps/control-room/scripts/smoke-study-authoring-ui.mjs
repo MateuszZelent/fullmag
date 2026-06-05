@@ -155,32 +155,10 @@ try {
     state: "visible",
     timeout: timeoutMs,
   });
-  try {
-    await page.locator(".fm-inspector").getByText("Stage 1: Relax").waitFor({
-      state: "visible",
-      timeout: timeoutMs,
-    });
-  } catch (error) {
-    const inspectorDiagnostics = await page
-      .locator(".fm-inspector .fm-inspector-panel")
-      .evaluate((node) => ({
-        sceneHasPayload: node.getAttribute("data-scene-has-payload"),
-        sceneRevision: node.getAttribute("data-scene-revision"),
-        sceneStageCount: node.getAttribute("data-scene-stage-count"),
-        sceneStatus: node.getAttribute("data-scene-status"),
-        stageDraftCount: node.getAttribute("data-stage-draft-count"),
-      }))
-      .catch((diagnosticError) => ({
-        error:
-          diagnosticError instanceof Error
-            ? diagnosticError.message
-            : String(diagnosticError),
-      }));
-    const inspectorText = await page.locator(".fm-inspector").textContent();
-    throw new Error(
-      `Initial relax stage was not visible. Inspector diagnostics: ${JSON.stringify(inspectorDiagnostics)}. Fixture requests: ${JSON.stringify(summarizeFixtureRequests())}. Browser errors: ${JSON.stringify(errors)}. Failed responses: ${JSON.stringify(failedResponses)}. Scene stages: ${JSON.stringify(scene.study.stages)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 3000))}. ${error}`,
-    );
-  }
+  await page.locator(".fm-inspector").getByText("Stage 1: Relax").waitFor({
+    state: "hidden",
+    timeout: timeoutMs,
+  });
 
   await page.getByLabel("CPU threads").fill("16");
   await page
@@ -198,27 +176,38 @@ try {
     .getByRole("button", { name: /^Run$/i })
     .click();
   try {
-    await inspector.getByText("Stage 2: Run").waitFor({
-      state: "visible",
-      timeout: timeoutMs,
-    });
+    await inspector.getByRole("button", { name: /Save stages/i }).click();
   } catch (error) {
-    const editorText = await inspector
-      .locator(".fm-study-stage-editor")
-      .allTextContents();
+    const inspectorText = await inspector.textContent();
     const toolbarText = await inspector
       .getByTestId("study-stage-authoring-toolbar")
-      .textContent();
+      .textContent()
+      .catch((toolbarError) =>
+        toolbarError instanceof Error ? toolbarError.message : String(toolbarError),
+      );
     throw new Error(
-      `Run stage was not added. Editor text: ${JSON.stringify(editorText)}. Toolbar text: ${JSON.stringify(toolbarText)}. ${error}`,
+      `Save stages button was not available after adding Run. Toolbar text: ${JSON.stringify(toolbarText)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 3000))}. ${error}`,
     );
   }
-  await inspector.getByLabel("Until").fill("2e-9");
-  await inspector.getByRole("button", { name: /Save stages/i }).click();
   await waitForTransactionCount(2);
+  await page
+    .locator('[data-node-id="model:study:stage:run-2"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await page.locator('[data-node-id="model:study:stage:run-2"]').click();
+  await inspector.getByText("Run Results").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByText("Stage 2: Run").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector.getByLabel("Until").fill("2e-9");
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(3);
 
   assertGlobalTransaction(transactions[0]);
-  assertStageTransaction(transactions[1]);
+  assertStageTransaction(transactions[2]);
 
   if (errors.length > 0) {
     throw new Error(`Browser errors:\n${errors.join("\n")}`);

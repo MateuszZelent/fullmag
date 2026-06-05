@@ -1,4 +1,4 @@
-export interface AnalysisChartPoint {
+interface AnalysisChartPoint {
   rowIndex: number;
   x: number;
   y: number;

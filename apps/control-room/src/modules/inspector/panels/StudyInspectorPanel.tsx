@@ -476,7 +476,7 @@ function studyInspectorRuntimeStatusEquals(
   );
 }
 
-function useStudyInspectorPanelController(
+export function useStudyInspectorPanelController(
   selection: InspectorPanelProps["selection"],
 ) {
   const kernel = useKernel();
@@ -867,6 +867,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
             dispatch({ type: "updateStageDraft", index, patch })
           }
           runCommand={runCommand}
+          showDraftEditor={false}
         />
 
         <StudyRecoverySection

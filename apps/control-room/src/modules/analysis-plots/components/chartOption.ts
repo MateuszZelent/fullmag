@@ -120,12 +120,17 @@ function groupChartSeriesByUnit(
   chartSeries: readonly ChartSeries[],
 ): { axisIndex: number; seriesIds: string[]; unit: string }[] {
   const groups: { axisIndex: number; seriesIds: string[]; unit: string }[] = [];
+  const groupsByUnit = new Map<
+    string,
+    { axisIndex: number; seriesIds: string[]; unit: string }
+  >();
   for (const series of chartSeries) {
-    let group = groups.find((candidate) => candidate.unit === series.unit);
+    let group = groupsByUnit.get(series.unit);
     if (!group) {
       if (groups.length >= 2) continue;
       group = { axisIndex: groups.length, seriesIds: [], unit: series.unit };
       groups.push(group);
+      groupsByUnit.set(series.unit, group);
     }
     group.seriesIds.push(series.id);
   }

@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  Gauge,
   Plus,
   Save,
   Sigma,
@@ -48,6 +49,7 @@ export function StudyPipelineSection({
   onSelectDraft,
   onUpdateDraft,
   runCommand,
+  showDraftEditor = true,
 }: {
   activeStageIndex: number | null;
   authoringBusy: boolean;
@@ -68,6 +70,7 @@ export function StudyPipelineSection({
   onSelectDraft: (index: number) => void;
   onUpdateDraft: (index: number, patch: Partial<StudyStageDraft>) => void;
   runCommand: StudyCommandRunner;
+  showDraftEditor?: boolean;
 }) {
   const validation = draft ? validateStudyStageDraft(draft) : [];
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
@@ -88,16 +91,22 @@ export function StudyPipelineSection({
           />
         ))}
       </div>
-      {draft ? (
+      {showDraftEditor && draft ? (
         <StudyStageDraftEditor
           draft={draft}
           index={draftIndex}
           validation={validation}
           onUpdate={(patch) => onUpdateDraft(draftIndex, patch)}
         />
-      ) : (
+      ) : !showDraftEditor ? null : (
         <div className="fm-study-stage-empty">No stages configured.</div>
       )}
+      {!showDraftEditor && hasDraftErrors ? (
+        <FeedbackBanner
+          kind="warning"
+          message="Selected stage has validation errors. Open the stage node to edit its detailed settings."
+        />
+      ) : null}
       {authoringFeedback ? (
         <FeedbackBanner
           kind={authoringFeedback.kind}
@@ -143,6 +152,15 @@ export function StudyPipelineSection({
         >
           <Activity size={13} aria-hidden="true" />
           Frequency
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("hysteresis")}
+        >
+          <Gauge size={13} aria-hidden="true" />
+          Hysteresis
         </Button>
         <Button
           size="sm"
@@ -290,7 +308,7 @@ function StageCard({
   );
 }
 
-function StudyStageDraftEditor({
+export function StudyStageDraftEditor({
   draft,
   index,
   onUpdate,
@@ -330,6 +348,7 @@ function StudyStageDraftEditor({
       >
         <option value="relax">Relax</option>
         <option value="run">Run</option>
+        <option value="hysteresis">Hysteresis</option>
         <option value="eigenmodes">Eigenmodes</option>
         <option value="frequency_response">Frequency response</option>
         <option value="save_state">Save state</option>
@@ -346,6 +365,8 @@ function StudyStageDraftEditor({
           value={draft.untilSeconds}
           onChange={(event) => onUpdate({ untilSeconds: event.target.value })}
         />
+      ) : draft.kind === "hysteresis" ? (
+        <HysteresisStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : draft.kind === "eigenmodes" ? (
         <EigenmodesStageDraftFields draft={draft} onUpdate={onUpdate} />
       ) : draft.kind === "frequency_response" ? (
@@ -365,9 +386,45 @@ function StudyStageDraftEditor({
 function studyStageDraftKindLabel(kind: StudyStageDraftKind): string {
   if (kind === "eigenmodes") return "Eigenmodes";
   if (kind === "frequency_response") return "Frequency Response";
+  if (kind === "hysteresis") return "Hysteresis";
   if (kind === "save_state") return "Save State";
   if (kind === "run") return "Run";
   return "Relax";
+}
+
+function HysteresisStageDraftFields({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <>
+      <FormField
+        label="Start field"
+        unit="T"
+        value={draft.startField}
+        onChange={(event) => onUpdate({ startField: event.target.value })}
+      />
+      <FormField
+        label="Stop field"
+        unit="T"
+        value={draft.stopField}
+        onChange={(event) => onUpdate({ stopField: event.target.value })}
+      />
+      <FormField
+        label="Field steps"
+        value={draft.fieldSteps}
+        onChange={(event) => onUpdate({ fieldSteps: event.target.value })}
+      />
+      <FormField
+        label="Torque tol"
+        value={draft.torqueTolerance}
+        onChange={(event) => onUpdate({ torqueTolerance: event.target.value })}
+      />
+    </>
+  );
 }
 
 function RelaxStageDraftFields({

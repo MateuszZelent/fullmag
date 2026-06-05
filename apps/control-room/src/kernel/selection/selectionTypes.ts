@@ -86,8 +86,11 @@ export type SelectionRef =
       kind:
         | "study.stage.action"
         | "study.stage.eigenmodes"
+        | "study.stage.frequency_response"
+        | "study.stage.hysteresis"
         | "study.stage.relax"
-        | "study.stage.run";
+        | "study.stage.run"
+        | "study.stage.save_state";
       nodeId: string;
       stageId: string;
       stageIndex: number;

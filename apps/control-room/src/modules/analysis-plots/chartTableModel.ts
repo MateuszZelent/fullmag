@@ -15,7 +15,7 @@ export const DEFAULT_TABLE_CHART_COLUMNS = Object.freeze([
   "max_torque",
 ] as const);
 
-export type TableDecimationMode = "minmax_lttb";
+type TableDecimationMode = "minmax_lttb";
 
 export interface TableRowsQuery {
   columns: readonly string[];
@@ -42,7 +42,7 @@ export interface ChartValueRange {
   toValue: number;
 }
 
-export interface TableColumnMeta {
+interface TableColumnMeta {
   column_id: string;
   dimension: string;
   label: string;
@@ -77,13 +77,13 @@ export interface EChartsDatasetModel {
   yAxis: { name: string }[];
 }
 
-export interface ChartPoint {
+interface ChartPoint {
   rowIndex: number;
   x: number;
   y: number;
 }
 
-export type ChartResourceRef = AnalysisChartResourceRef;
+type ChartResourceRef = AnalysisChartResourceRef;
 
 export interface ChartSeries {
   id: string;
@@ -101,7 +101,7 @@ export type ChartCursorPoint = AnalysisChartCursorPoint;
 const DEFAULT_TABLE_ROW_LIMIT = 5_000;
 const MIN_TARGET_POINTS = 160;
 const MAX_TARGET_POINTS = 5_000;
-export const DEFAULT_X_AXIS_COLUMN_ID = "step";
+const DEFAULT_X_AXIS_COLUMN_ID = "step";
 
 export function buildTableRowsQuery({
   columns = DEFAULT_TABLE_CHART_COLUMNS,
@@ -189,8 +189,9 @@ export function groupSeriesByAxisUnit(
   series: readonly { columnId: string; unit: string }[],
 ): AxisUnitGroup[] {
   const groups: AxisUnitGroup[] = [];
+  const groupsByUnit = new Map<string, AxisUnitGroup>();
   for (const item of series) {
-    let group = groups.find((candidate) => candidate.unit === item.unit);
+    let group = groupsByUnit.get(item.unit);
     if (!group) {
       if (groups.length >= 2) continue;
       group = {
@@ -199,6 +200,7 @@ export function groupSeriesByAxisUnit(
         unit: item.unit,
       };
       groups.push(group);
+      groupsByUnit.set(item.unit, group);
     }
     group.columnIds.push(item.columnId);
   }
@@ -240,16 +242,20 @@ export function buildChartSeriesModel(
     dataset: {
       source: [columnIds, ...table.rows.map((row) => [...row])],
     },
-    series: yColumns
-      .filter((column) => axisIndexByColumn.has(column.column_id))
-      .map((column) => ({
-        encode: { x: resolvedXAxisId, y: column.column_id },
-        name: column.unit
-          ? `${column.label || column.column_id} [${column.unit}]`
-          : (column.label || column.column_id),
-        type: "line",
-        yAxisIndex: axisIndexByColumn.get(column.column_id) ?? 0,
-      })),
+    series: yColumns.flatMap((column) => {
+      const yAxisIndex = axisIndexByColumn.get(column.column_id);
+      if (yAxisIndex === undefined) return [];
+      return [
+        {
+          encode: { x: resolvedXAxisId, y: column.column_id },
+          name: column.unit
+            ? `${column.label || column.column_id} [${column.unit}]`
+            : (column.label || column.column_id),
+          type: "line",
+          yAxisIndex,
+        },
+      ];
+    }),
     xAxisId: resolvedXAxisId,
     yAxis: axisGroups.map((group) => ({ name: group.unit })),
   };
@@ -295,11 +301,11 @@ export function buildScalarChartSeries(
     tableId,
   };
 
-  return yColumns
-    .filter((column) => allowedColumnIds.has(column.column_id))
-    .map((column) => {
-      const yColumnIndex = columnIds.indexOf(column.column_id);
-      return {
+  return yColumns.flatMap((column) => {
+    if (!allowedColumnIds.has(column.column_id)) return [];
+    const yColumnIndex = columnIds.indexOf(column.column_id);
+    return [
+      {
         id: `data.table:${tableId}:${resolvedXAxisId}:${column.column_id}`,
         label: column.label || column.column_id,
         points: table.rows.flatMap((row, rowIndex) => {
@@ -314,11 +320,12 @@ export function buildScalarChartSeries(
         status,
         unit: column.unit,
         xUnit: xColumn?.unit ?? "",
-      };
-    });
+      },
+    ];
+  });
 }
 
-export function chartCursorPointFromSeriesPoint(
+function chartCursorPointFromSeriesPoint(
   series: ChartSeries,
   point: ChartPoint,
 ): ChartCursorPoint {

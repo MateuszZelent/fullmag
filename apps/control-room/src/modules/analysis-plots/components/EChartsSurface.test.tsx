@@ -79,6 +79,8 @@ describe("EChartsSurface", () => {
     expect(source).toContain("if (onRangeChangeRef.current)");
     expect(source).toContain("recordChartDispatchDataZoom");
     expect(source).toContain("scheduleRangeCommit");
+    expect(source).toContain('chart.off("dataZoom"');
+    expect(source).toContain('chart.off("click"');
     expect(source).toContain("resizeScheduler.schedule");
     expect(source).toContain(".catch(() =>");
     expect(source).toContain("Chart renderer unavailable");

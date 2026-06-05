@@ -15,7 +15,7 @@ study.device("cpu", precision="double")
 # FDM grid and simulation domain (box fits in this manual universe; keep thin-z thickness).
 study.universe(
     mode="manual",
-    size=(1.4e-6, 1.6e-6, 25e-9),
+    size=(400e-9, 1100e-9, 20e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )

@@ -13,6 +13,7 @@ import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
+import { StudyStageInspectorRouter } from "./panels/StudyStageInspectorRouter";
 import type { InspectorPanelContribution } from "./inspectorTypes";
 
 const PANELS: InspectorPanelContribution[] = [
@@ -112,16 +113,24 @@ const PANELS: InspectorPanelContribution[] = [
     component: CrossSectionInspectorPanel,
   },
   {
-    id: "study-runtime",
+    id: "study-root",
     title: "Study",
+    selectionKinds: ["study.root"],
+    component: StudyInspectorPanel,
+  },
+  {
+    id: "study-stage",
+    title: "Study Stage",
     selectionKinds: [
-      "study.root",
       "study.stage.action",
       "study.stage.eigenmodes",
+      "study.stage.frequency_response",
+      "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",
+      "study.stage.save_state",
     ],
-    component: StudyInspectorPanel,
+    component: StudyStageInspectorRouter,
   },
   {
     id: "placeholder",

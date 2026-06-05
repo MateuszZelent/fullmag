@@ -388,6 +388,11 @@ function studyStageKind(kind: string): ExplorerNode["kind"] {
   if (normalized === "relax") return "study.stage.relax";
   if (normalized === "run") return "study.stage.run";
   if (normalized === "eigenmodes") return "study.stage.eigenmodes";
+  if (normalized === "frequency_response") {
+    return "study.stage.frequency_response";
+  }
+  if (normalized === "hysteresis") return "study.stage.hysteresis";
+  if (normalized === "save_state") return "study.stage.save_state";
   return "study.stage.action";
 }
 

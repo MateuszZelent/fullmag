@@ -22,10 +22,11 @@ cargo-test:
 	docker compose run --rm --no-deps dev cargo test --workspace
 
 web-install:
-	docker compose run --rm --no-deps dev pnpm install --dir apps/web
+	docker compose run --rm --no-deps dev pnpm install --dir apps/control-room
 
 web-build-static:
 	@set -e; \
+	WEB_APP_DIR="apps/control-room"; \
 	if command -v pnpm >/dev/null 2>&1; then \
 		PNPM_CMD="pnpm"; \
 	elif command -v corepack >/dev/null 2>&1; then \
@@ -34,17 +35,17 @@ web-build-static:
 		echo "Neither pnpm nor corepack is available on PATH." >&2; \
 		exit 127; \
 	fi; \
-	if [ ! -d "apps/web/node_modules" ] && [ ! -d "node_modules" ]; then \
-		$$PNPM_CMD install --dir apps/web; \
+	if [ ! -d "$$WEB_APP_DIR/node_modules" ] && [ ! -d "node_modules" ]; then \
+		$$PNPM_CMD install --dir "$$WEB_APP_DIR"; \
 	fi; \
-	rm -rf apps/web/.next apps/web/out .fullmag/local/web.new; \
-	if ! $$PNPM_CMD --dir apps/web build; then \
+	rm -rf "$$WEB_APP_DIR/.next" "$$WEB_APP_DIR/out" .fullmag/local/web.new; \
+	if ! FULLMAG_CONTROL_ROOM_STATIC_EXPORT=1 $$PNPM_CMD --dir "$$WEB_APP_DIR" run build:webpack; then \
 		echo "Static control room build failed; retrying once from a clean Next cache..."; \
-		rm -rf apps/web/.next apps/web/out; \
-		$$PNPM_CMD --dir apps/web build; \
+		rm -rf "$$WEB_APP_DIR/.next" "$$WEB_APP_DIR/out"; \
+		FULLMAG_CONTROL_ROOM_STATIC_EXPORT=1 $$PNPM_CMD --dir "$$WEB_APP_DIR" run build:webpack; \
 	fi; \
 	mkdir -p .fullmag/local; \
-	cp -a apps/web/out .fullmag/local/web.new; \
+	cp -a "$$WEB_APP_DIR/out" .fullmag/local/web.new; \
 	touch .fullmag/local/web.new/.build-stamp; \
 	rm -rf .fullmag/local/web; \
 	mv .fullmag/local/web.new .fullmag/local/web; \
@@ -53,13 +54,14 @@ web-build-static:
 
 web-build-static-if-needed:
 	@set -e; \
+	WEB_APP_DIR="apps/control-room"; \
 	stamp=".fullmag/local/web/.build-stamp"; \
 	index=".fullmag/local/web/index.html"; \
 	if [ ! -f "$$stamp" ] || [ ! -f "$$index" ]; then \
 		$(MAKE) web-build-static; \
 	else \
-		stale_path="$$(find apps/web \
-			\( -path 'apps/web/node_modules' -o -path 'apps/web/.next' -o -path 'apps/web/out' \) -prune \
+		stale_path="$$(find "$$WEB_APP_DIR" \
+			\( -path "$$WEB_APP_DIR/node_modules" -o -path "$$WEB_APP_DIR/.next" -o -path "$$WEB_APP_DIR/out" \) -prune \
 			-o -type f -newer "$$stamp" -print -quit)"; \
 		if [ -n "$$stale_path" ]; then \
 			echo "Static control room is stale; rebuilding..."; \

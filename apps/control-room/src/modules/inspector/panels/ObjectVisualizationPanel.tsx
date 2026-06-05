@@ -838,9 +838,9 @@ function useObjectVisualizationPanelState(
     }),
   });
   const airboxPartIds =
-    manifest.data?.mesh_parts
-      ?.filter((part) => part.role === "air" || part.role === "airbox")
-      .map((part) => part.id) ?? [];
+    manifest.data?.mesh_parts?.flatMap((part) =>
+      part.role === "air" || part.role === "airbox" ? [part.id] : [],
+    ) ?? [];
   const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
   const topologyFreshness =
     scene.data && manifest.data

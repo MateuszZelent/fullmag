@@ -2,7 +2,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import type { FdmCuboidInstanceModel } from "./layers/FdmCuboidLayer";
 
-export interface Viewport3DInspectComponent {
+interface Viewport3DInspectComponent {
   label: string;
   value: number;
 }
@@ -12,7 +12,7 @@ export interface Viewport3DInspectScreenPosition {
   y: number;
 }
 
-export interface Viewport3DInspectReadySample {
+interface Viewport3DInspectReadySample {
   components: Viewport3DInspectComponent[];
   pointIndex: number;
   quantityId: string;
@@ -22,7 +22,7 @@ export interface Viewport3DInspectReadySample {
   worldPosition: [number, number, number];
 }
 
-export interface Viewport3DInspectUnavailableSample {
+interface Viewport3DInspectUnavailableSample {
   message: string;
   quantityId: string;
   status: "unavailable";

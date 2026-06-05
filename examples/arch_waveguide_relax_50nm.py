@@ -21,7 +21,7 @@ LENGTH = 3000e-9
 WIDTH = 1500e-9
 HEIGHT = 2e-9
 AIRBOX_LATERAL_MARGIN = 500e-9
-AIRBOX_VERTICAL_MARGIN = 350e-9
+AIRBOX_VERTICAL_MARGIN = 150e-9
 AIRBOX_X = LENGTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Y = WIDTH + AIRBOX_LATERAL_MARGIN
 AIRBOX_Z = HEIGHT + AIRBOX_VERTICAL_MARGIN
@@ -109,31 +109,21 @@ waveguide.visualization(show=True, mode="surface", active_quantity_id="m")
 # rest of the magnetic film can stay near 10 nm.
 waveguide.mesh(
     maximum_element_size=10e-9,
-    minimum_element_size=1e-9,
+    minimum_element_size=2e-9,
     transition_distance=120e-9,
     order=1,
 )
-waveguide.mesh.size_field(
-    "ComponentRestrictedCylinder",
-    GeometryName="arch_waveguide_geom",
-    VIn=1e-9,
-    VOut=10e-9,
-    Radius=350e-9,
-    XCenter=0.0,
-    YCenter=0.0,
-    ZCenter=0.0,
-)
+# waveguide.mesh.size_field(
+#     "ComponentRestrictedCylinder",
+#     GeometryName="arch_waveguide_geom",
+#     VIn=1e-9,
+#     VOut=10e-9,
+#     Radius=350e-9,
+#     XCenter=0.0,
+#     YCenter=0.0,
+#     ZCenter=0.0,
+# )
 
-/goal przygotuj plan wdrożenia koncpecji "regionów". Moim lokalne zageszczanie meshu powinno byc związane z regionami. Np. w ten sposob 
- 
-region1 = waveguide.add_region(
-     shape=fm.shapes.cylinder(Tx,Ty,Tz),
-)
-region1.mesh.remesh( maximum_element_size=2e-9,
-    minimum_element_size=1e-9,
-    transition_distance=None,
-    order=1) 
- 
 # Energy terms
 study.b_ext(B_EXT_T, 0.0, 0.0)
 study.demag(realization="poisson_robin")
@@ -148,18 +138,24 @@ study.build_domain_mesh()
 
 # Solver — max_error=1e-4 is adequate for relaxation where the physical
 # convergence criterion (torque < tol) dominates over integrator accuracy.
-study.solver(
-    integrator="rk23",
-    max_error=ADAPTIVE_MAX_ERROR,
-    dt_min=ADAPTIVE_DT_MIN,
-    gamma=GAMMA,
-)
+# study.solver(
+#     integrator="rk23",
+#     max_error=ADAPTIVE_MAX_ERROR,
+#     dt_min=ADAPTIVE_DT_MIN,
+#     gamma=GAMMA,
+# )
 
 # Outputs   
 study.tableautosave(10e-12)
 # study.save("m", every=250e-12)
 
 # Stage
+study.stages.add_minimize(
+    method="bb",
+    max_steps=1000,
+    tol=1e-30,
+)
+
 study.stages.add_relax(
     algorithm="llg_overdamped",
     solver="rk23",

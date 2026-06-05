@@ -6,7 +6,7 @@ export interface AnalysisTableState {
   visibleTable: TableRowsResource | null;
 }
 
-export interface AnalysisChartRange {
+interface AnalysisChartRange {
   fromValue: number;
   toValue: number;
 }

@@ -78,9 +78,9 @@ export function resolveAnalysisPlotsYAxisIds(
   const fallbackYAxisIds =
     preferredYAxisIds.length > 0
       ? preferredYAxisIds
-      : columns
-          .map((column) => column.column_id)
-          .filter((columnId) => columnId !== xAxisId);
+      : columns.flatMap((column) =>
+          column.column_id === xAxisId ? [] : [column.column_id],
+        );
 
   return sanitizeYAxisIdsForUnitLimit(fallbackYAxisIds, columns, xAxisId);
 }

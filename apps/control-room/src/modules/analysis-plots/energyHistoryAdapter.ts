@@ -26,20 +26,26 @@ export function buildSolverEnergyHistoryChartSeries(
     tableId: ENERGY_HISTORY_TABLE_ID,
   };
 
-  return ENERGY_TERMS.map((term) => ({
-    id: `simulation.solver.energies:${term.id}`,
-    label: term.label,
-    points: resource.rows.flatMap((row, rowIndex) => {
+  return ENERGY_TERMS.flatMap((term) => {
+    const points = resource.rows.flatMap((row, rowIndex) => {
       const x = Number(row.time_seconds);
       const y = Number(row[term.id]);
       return Number.isFinite(x) && Number.isFinite(y)
         ? [{ rowIndex, x, y }]
         : [];
-    }),
-    quantity: term.id,
-    source,
-    status,
-    unit: "J",
-    xUnit: "s",
-  })).filter((series) => series.points.length > 0);
+    });
+    if (points.length === 0) return [];
+    return [
+      {
+        id: `simulation.solver.energies:${term.id}`,
+        label: term.label,
+        points,
+        quantity: term.id,
+        source,
+        status,
+        unit: "J",
+        xUnit: "s",
+      },
+    ];
+  });
 }

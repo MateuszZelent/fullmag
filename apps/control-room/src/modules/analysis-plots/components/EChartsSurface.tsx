@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { ECharts } from "echarts";
 
@@ -55,8 +55,11 @@ export function EChartsSurface({
   const model = useMemo(() => series, [series]);
   const modelRef = useRef(model);
   const xAxisLabelRef = useRef(xAxisLabel);
-  const [rendererStatus, setRendererStatus] =
-    useState<ChartRendererStatus>("loading");
+  const [rendererStatus, setRendererStatus] = useReducer(
+    (_status: ChartRendererStatus, nextStatus: ChartRendererStatus) =>
+      nextStatus,
+    "loading",
+  );
   const hasSamples = series.some((item) => item.points.length > 0);
   const overlay = chartStatusOverlay({
     dataStatus,
@@ -84,6 +87,7 @@ export function EChartsSurface({
     const element = elementRef.current;
     if (!element) return;
     let disposed = false;
+    let cleanupChartEvents: (() => void) | null = null;
     let resizeObserver: ResizeObserver | null = null;
     const resizeScheduler = createChartFrameScheduler();
     const setOptionScheduler = createChartFrameScheduler();
@@ -123,21 +127,27 @@ export function EChartsSurface({
             xAxisLabel: xAxisLabelRef.current,
           });
         }
-        chart.on("dataZoom", (event: unknown) => {
+        const handleDataZoom = (event: unknown) => {
           const range = chartRangeFromDataZoomEvent(event);
           if (!range) return;
           scheduleRangeCommit(rangeCommitTimerRef, () => {
             onRangeChangeRef.current?.(range);
           });
-        });
-        chart.on("click", (event: unknown) => {
+        };
+        const handleClick = (event: unknown) => {
           const point = chartCursorPointFromEChartsClick(
             event,
             modelRef.current,
           );
           if (!point) return;
           onPointSelectRef.current?.(point);
-        });
+        };
+        chart.on("dataZoom", handleDataZoom);
+        chart.on("click", handleClick);
+        cleanupChartEvents = () => {
+          chart.off("dataZoom", handleDataZoom);
+          chart.off("click", handleClick);
+        };
         resizeObserver = new ResizeObserver(() => {
           resizeScheduler.schedule(() => {
             recordChartResize();
@@ -158,6 +168,7 @@ export function EChartsSurface({
       cancelRangeCommit(rangeCommitTimerRef);
       resizeSchedulerRef.current = null;
       setOptionSchedulerRef.current = null;
+      cleanupChartEvents?.();
       if (chartRef.current) {
         chartRef.current.dispose();
         recordChartInstanceDisposed();

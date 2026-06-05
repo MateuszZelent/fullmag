@@ -76,8 +76,11 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.stageIndex !== undefined &&
     (node.kind === "study.stage.action" ||
       node.kind === "study.stage.eigenmodes" ||
+      node.kind === "study.stage.frequency_response" ||
+      node.kind === "study.stage.hysteresis" ||
       node.kind === "study.stage.relax" ||
-      node.kind === "study.stage.run")
+      node.kind === "study.stage.run" ||
+      node.kind === "study.stage.save_state")
   ) {
     return {
       kind: node.kind,
