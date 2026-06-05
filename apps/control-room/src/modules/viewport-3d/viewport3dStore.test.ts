@@ -58,6 +58,8 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
       hslReferenceMode: "auto",
+      inspectEnabled: false,
+      inspectRevision: 0,
       rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
@@ -85,6 +87,8 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "z",
       fdmTopographyEnabled: false,
       hslReferenceMode: "off",
+      inspectEnabled: false,
+      inspectRevision: 0,
       rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
@@ -133,6 +137,21 @@ describe("viewport3dStore", () => {
       fdmTopographyComponent: "magnitude",
       fdmTopographyEnabled: true,
     });
+  });
+
+  it("toggles the inspect tool as a viewport-local mode", () => {
+    viewport3dStore.resetForTest();
+
+    expect(viewport3dStore.getSnapshot().widgets.inspectEnabled).toBe(false);
+    expect(viewport3dStore.getSnapshot().widgets.inspectRevision).toBe(0);
+
+    viewport3dStore.toggleInspect();
+    expect(viewport3dStore.getSnapshot().widgets.inspectEnabled).toBe(true);
+    expect(viewport3dStore.getSnapshot().widgets.inspectRevision).toBe(1);
+
+    viewport3dStore.setInspectEnabled(false);
+    expect(viewport3dStore.getSnapshot().widgets.inspectEnabled).toBe(false);
+    expect(viewport3dStore.getSnapshot().widgets.inspectRevision).toBe(2);
   });
 
   it("opens and closes the camera dialog from module commands", () => {

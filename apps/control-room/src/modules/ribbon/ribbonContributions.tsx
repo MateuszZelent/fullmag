@@ -886,6 +886,13 @@ const viewTab: RibbonTabContent = {
           ],
         },
         {
+          id: "viewport-3d.inspect-toggle",
+          icon: icon(Target),
+          label: "Inspect",
+          iconColor: "text-emerald-300",
+          tooltip: "Inspect displayed field values under the cursor",
+        },
+        {
           id: "view-transform-gizmo",
           icon: icon(Move3D),
           label: "Gizmo",
@@ -1626,6 +1633,8 @@ export function buildRibbonTabContent(
           ? buildViewGlobalDisplayGroup(group, context)
           : group.id === "view-orientation-tools"
             ? buildViewOrientationGroup(group, context)
+          : group.id === "view-manipulate"
+            ? buildViewManipulateGroup(group, context)
           : group.id === "view-slice-2d"
             ? buildViewSlice2DGroup(group, context)
           : group.id === "view-display"
@@ -2398,6 +2407,25 @@ function buildSliceQualityAction(
           }),
       },
     ],
+  };
+}
+
+function buildViewManipulateGroup(
+  group: RibbonTabContent["groups"][number],
+  { commandContext = { source: "ribbon" }, commands }: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: group.actions.map((action) =>
+      action.id === "viewport-3d.inspect-toggle"
+        ? {
+            ...action,
+            active: Boolean(
+              commands?.isActive("viewport-3d.inspect-toggle", commandContext),
+            ),
+          }
+        : action,
+    ),
   };
 }
 

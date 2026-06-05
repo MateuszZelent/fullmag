@@ -114,6 +114,11 @@ void source_facades_document_module_boundaries() {
         api.find("fullmag::fem::gpu_state_info(handle->context)") != std::string::npos,
         "api source file must delegate GPU-state info through owning module");
     check(
+        api.find("fullmag_fem_backend_set_step_profile(") != std::string::npos &&
+            api.find("fullmag::fem::set_gpu_step_profile(handle->context") !=
+                std::string::npos,
+        "api source file must delegate step-profile configuration through the GPU runtime module");
+    check(
         context.find("FEM Context facade source contract") != std::string::npos,
         "context source file must document its source contract");
     check(

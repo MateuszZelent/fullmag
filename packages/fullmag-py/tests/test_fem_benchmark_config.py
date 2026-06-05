@@ -2147,6 +2147,22 @@ def test_benchmark_build_accepts_demag_solver_policy_env(monkeypatch):
     assert policy.print_level == 2
 
 
+def test_benchmark_build_can_omit_demag_solver_policy_env(monkeypatch):
+    bench = load_benchmark_module()
+    mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
+    monkeypatch.setenv("FULLMAG_BENCH_DEMAG_PRECONDITIONER", "OMIT")
+
+    problem = bench.build(
+        mesh_path=mesh_path,
+        dt=1e-13,
+        steps=1,
+        scenario="exchange_demag",
+        integrator="heun",
+    )
+
+    assert problem.discretization.fem.demag_solver_policy is None
+
+
 def test_benchmark_build_can_request_adaptive_timestep():
     bench = load_benchmark_module()
     mesh_path = REPO_ROOT / "examples" / "assets" / "box_40x20x10_coarse.mesh.json"
@@ -2360,12 +2376,19 @@ def test_analysis_demag_policy_args_validate_known_values():
 
     assert bench.demag_solver_arg("gmres") == "GMRES"
     assert bench.demag_preconditioner_arg("jacobi") == "JACOBI"
+    assert bench.demag_preconditioner_arg("omit") == "OMIT"
     assert bench.nonnegative_int_arg("0") == 0
+    assert bench.parse_args(["--gpu-warmup"]).gpu_warmup is True
+    assert (
+        bench.parse_args(["--min-gpu-demag-total-speedup", "2.5"]).min_gpu_demag_total_speedup
+        == 2.5
+    )
     assert bench.resolve_demag_solvers("cg,gmres,cg", "CG") == ["CG", "GMRES"]
-    assert bench.resolve_demag_preconditioners("amg,jacobi,none", "AMG") == [
+    assert bench.resolve_demag_preconditioners("amg,jacobi,none,omit", "AMG") == [
         "AMG",
         "JACOBI",
         "NONE",
+        "OMIT",
     ]
 
 
@@ -3518,6 +3541,46 @@ def test_cpu_gpu_consistency_summary_reports_deltas_and_timing(capsys):
     assert '"pair_count": 1' in output
 
 
+def test_gpu_demag_total_speedup_failures_rejects_slow_total_demag():
+    bench = load_analysis_benchmark_module()
+
+    summary = {
+        "pairs": [
+            {
+                "scenario": "box500_airbox_exchange_demag",
+                "relaxation_algorithm": "llg_overdamped",
+                "cpu_demag_wall_time_ms": 120.0,
+                "gpu_demag_wall_time_ms": 100.0,
+                "demag_wall_time_speedup_cpu_over_gpu": 1.2,
+            }
+        ]
+    }
+
+    failures = bench.gpu_demag_total_speedup_failures(summary, min_speedup=2.0)
+
+    assert failures == [
+        "box500_airbox_exchange_demag:llg_overdamped demag_wall_time_speedup_cpu_over_gpu=1.2 below required minimum 2"
+    ]
+
+
+def test_gpu_demag_total_speedup_failures_accepts_fast_total_demag():
+    bench = load_analysis_benchmark_module()
+
+    summary = {
+        "pairs": [
+            {
+                "scenario": "box500_airbox_exchange_demag",
+                "relaxation_algorithm": "llg_overdamped",
+                "cpu_demag_wall_time_ms": 120.0,
+                "gpu_demag_wall_time_ms": 30.0,
+                "demag_wall_time_speedup_cpu_over_gpu": 4.0,
+            }
+        ]
+    }
+
+    assert bench.gpu_demag_total_speedup_failures(summary, min_speedup=2.0) == []
+
+
 def test_cpu_gpu_consistency_summary_records_failure_reasons():
     bench = load_analysis_benchmark_module()
     rows = [
@@ -4120,6 +4183,95 @@ def test_gpu_control_readback_budget_rejects_algorithm_specific_counter_growth()
     assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
     assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
     assert any("hot_loop_control_scalar_host_sync_count=1 > 0" in failure for failure in failures)
+
+
+def test_gpu_phase_timing_failures_require_positive_executed_llg_phase_timings():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "llg_overdamped",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "uses_gpu_poisson": "True",
+            "exchange_wall_time_ms": 0.0,
+            "rhs_wall_time_ms": 0.0,
+            "demag_wall_time_ms": 0.0,
+        },
+    ]
+
+    failures = bench.gpu_phase_timing_failures(rows)
+
+    assert len(failures) == 3
+    assert any("exchange_wall_time_ms" in failure for failure in failures)
+    assert any("rhs_wall_time_ms" in failure for failure in failures)
+    assert any("demag_wall_time_ms" in failure for failure in failures)
+
+
+def test_gpu_phase_timing_failures_allow_direct_minimizer_without_rhs_timing():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "nonlinear_cg",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "uses_gpu_poisson": True,
+            "exchange_wall_time_ms": 0.15,
+            "rhs_wall_time_ms": 0.0,
+            "demag_wall_time_ms": 9.5,
+        },
+    ]
+
+    assert bench.gpu_phase_timing_failures(rows) == []
+
+
+def test_min_solver_node_failures_reject_completed_tiny_solver_mesh():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "llg_overdamped",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "node_count": 8,
+        },
+        {
+            "backend": "fem_cpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "llg_overdamped",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "node_count": 64,
+        },
+    ]
+
+    failures = bench.min_solver_node_failures(rows, min_nodes=50)
+
+    assert len(failures) == 1
+    assert "node_count=8" in failures[0]
+    assert "required minimum 50" in failures[0]
 
 
 def test_cpu_gpu_consistency_rejects_scenario_specific_energy_drift():
@@ -5312,8 +5464,61 @@ def test_best_demag_policy_rows_selects_fastest_converged_policy():
     assert len(summaries) == 1
     assert summaries[0]["demag_solver"] == "GMRES"
     assert summaries[0]["demag_preconditioner"] == "JACOBI"
+    assert summaries[0]["selection_timing_field"] == "demag_solver_apply_wall_time_ms"
     assert summaries[0]["average_demag_timing_ms"] == 4.0
+    assert summaries[0]["average_demag_wall_time_ms"] is None
+    assert summaries[0]["average_demag_solver_apply_wall_time_ms"] == 4.0
     assert summaries[0]["converged_policy_count"] == 2
+
+
+def test_best_demag_policy_rows_selects_full_demag_wall_time_before_apply_time():
+    bench = load_analysis_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "coarse",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 2,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": "1e-8",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "status": "ok",
+        "demag_final_residual_norm": 8e-9,
+        "demag_actual_iterations": 12,
+    }
+
+    summaries = bench.best_demag_policy_rows(
+        [
+            {
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_wall_time_ms": 90.0,
+                "demag_solver_apply_wall_time_ms": 10.0,
+            },
+            {
+                **base_row,
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_wall_time_ms": 40.0,
+                "demag_solver_apply_wall_time_ms": 25.0,
+            },
+        ],
+        max_residual=1e-8,
+        max_iterations=100,
+    )
+
+    assert len(summaries) == 1
+    assert summaries[0]["demag_solver"] == "CG"
+    assert summaries[0]["demag_preconditioner"] == "JACOBI"
+    assert summaries[0]["selection_timing_field"] == "demag_wall_time_ms"
+    assert summaries[0]["average_demag_timing_ms"] == 40.0
+    assert summaries[0]["average_demag_wall_time_ms"] == 40.0
+    assert summaries[0]["average_demag_solver_apply_wall_time_ms"] == 25.0
 
 
 def test_best_demag_policy_selection_ignores_policy_specific_mesh_signature():
@@ -10928,10 +11133,12 @@ def test_cpu_gpu_human_report_summarizes_case_matrix():
                 "status": "pass",
                 "cpu_average_timing_ms": {
                     "wall_time_ms": 10.0,
+                    "demag_wall_time_ms": 6.0,
                     "demag_solver_apply_wall_time_ms": 4.0,
                 },
                 "gpu_average_timing_ms": {
                     "wall_time_ms": 5.0,
+                    "demag_wall_time_ms": 3.0,
                     "demag_solver_apply_wall_time_ms": 2.0,
                 },
                 "cpu_observable_summary": {
@@ -10951,6 +11158,7 @@ def test_cpu_gpu_human_report_summarizes_case_matrix():
                 "scenario": "box500_airbox_exchange_demag",
                 "executed_step_delta": 1,
                 "wall_time_speedup_cpu_over_gpu": 2.0,
+                "demag_wall_time_speedup_cpu_over_gpu": 2.0,
                 "demag_solver_apply_wall_time_speedup_cpu_over_gpu": 2.0,
                 "final_e_demag_j_abs_diff": 0.0,
                 "final_torque_t_abs_diff": 0.0,
@@ -11153,6 +11361,10 @@ def test_cpu_gpu_rich_report_prints_bordered_color_table():
     assert "┏" in text
     assert "Case Runtime And Step Rate" in text
     assert "Demag And Numerical Parity" in text
+    assert "CPU demag total ms" in text
+    assert "GPU demag total ms" in text
+    assert "CPU demag apply ms" in text
+    assert "GPU demag apply ms" in text
     assert "12000.000" in text
     assert "2.000x" in text
 
@@ -11163,8 +11375,22 @@ def test_ensure_python_installs_rich_for_benchmark_reports():
     assert "'rich>=13.7'" in justfile_text
 
 
+def just_recipe_block(justfile_text: str, recipe_name: str) -> str:
+    marker = f"{recipe_name}:"
+    start = justfile_text.index(marker)
+    end = len(justfile_text)
+    for next_recipe in re.finditer(r"(?m)^[A-Za-z0-9_-]+(?:\s+[^:\n]+)?:$", justfile_text[start + len(marker) :]):
+        end = start + len(marker) + next_recipe.start()
+        break
+    return justfile_text[start:end]
+
+
 def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
     justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    production_recipe = just_recipe_block(
+        justfile_text,
+        "verify-fem-relaxation-production-benchmark",
+    )
 
     assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile_text
     assert "verify-fem-relaxation-production-benchmark:" in justfile_text
@@ -11200,6 +11426,10 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
         '-e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-2}"'
         in justfile_text
     )
+    assert (
+        '-e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-50}"'
+        in justfile_text
+    )
     assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke.csv}"' in justfile_text
     assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}"' in justfile_text
     assert '--relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS"' in justfile_text
@@ -11208,6 +11438,8 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
     assert "--require-adaptive-gpu-rk-acceptance" in justfile_text
     assert "--require-best-demag-policy" in justfile_text
     assert "--require-gpu-control-readback-budget" in justfile_text
+    assert "--require-gpu-phase-timings" in justfile_text
+    assert "--gpu-warmup" not in production_recipe
     assert (
         '--gpu-control-readback-per-step "$FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP"'
         in justfile_text
@@ -11224,9 +11456,54 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
         '--gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP"'
         in justfile_text
     )
+    assert '--require-min-solver-nodes "$FULLMAG_BENCH_MIN_SOLVER_NODES"' in justfile_text
     assert "--require-demag-converged" in justfile_text
     assert "--require-gpu-strict-residency" in justfile_text
     assert "--relax-algorithms \"${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}\"" not in justfile_text
+
+
+def test_fem_gpu_demag_performance_benchmark_is_a_larger_mesh_demag_gate():
+    justfile_text = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    demag_recipe = just_recipe_block(
+        justfile_text,
+        "verify-fem-gpu-demag-performance-benchmark",
+    )
+
+    assert "verify-fem-gpu-demag-performance-benchmark:" in justfile_text
+    assert '-e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-50e-9}"' in justfile_text
+    assert '-e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-100e-9}"' in justfile_text
+    assert (
+        '-e FULLMAG_BENCH_SCENARIOS="${FULLMAG_BENCH_SCENARIOS:-box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_anis_cubic}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,nonlinear_cg}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-OMIT,AMG,JACOBI}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-800}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}"'
+        in justfile_text
+    )
+    assert '-e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-1}"' in justfile_text
+    assert '--scenarios "$FULLMAG_BENCH_SCENARIOS"' in justfile_text
+    assert "--gpu-warmup" in demag_recipe
+    assert "--require-gpu-phase-timings" in justfile_text
+    assert "--require-best-demag-policy" in justfile_text
+    assert "--require-gpu-strict-residency" in justfile_text
+    assert "--require-min-solver-nodes \"$FULLMAG_BENCH_MIN_SOLVER_NODES\"" in justfile_text
+    assert "--min-gpu-demag-total-speedup \"$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP\"" in justfile_text
+    assert "--max-performance-regression-percent \"$FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT\"" in justfile_text
+    assert 'baseline_args+=(--accepted-baseline "$FULLMAG_BENCH_ACCEPTED_BASELINE")' in justfile_text
+    assert 'baseline_args+=(--require-accepted-baseline)' in justfile_text
+    assert ".fullmag/reports/fullmag_fem_gpu_demag_performance_benchmark.csv" in justfile_text
 
 
 def test_box500_consistency_just_target_defaults_to_multistep_relaxation():

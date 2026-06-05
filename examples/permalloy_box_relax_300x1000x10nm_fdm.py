@@ -1,21 +1,21 @@
 """Permalloy 300 nm × 1000 nm × 10 nm box relaxation (FDM).
 
-Canonical single-body FDM example used by `just run-permalloy-box-relax`.
+FDM study with uniform +y initial magnetization, no external field.
 """
 
 import fullmag as fm
 
 
-study = fm.study("permalloy_box_relax_300x1000x10nm")
+study = fm.study("permalloy_box_relax_300x1000x10nm_fdm")
 
 # Engine
 study.engine("fdm")
 study.device("cpu", precision="double")
 
-# FDM grid and simulation domain
+# FDM grid and simulation domain (box fits in this manual universe; keep thin-z thickness).
 study.universe(
     mode="manual",
-    size=(1.4e-6, 1.6e-6, 4.0e-7),
+    size=(1.4e-6, 1.6e-6, 25e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
@@ -31,7 +31,7 @@ layer.Aex = 1.55e-11
 layer.alpha = 0.1
 layer.m = fm.texture.uniform(0.0, 1.0, 0.0)
 
-# Solver / output / stage
+# Solver / run setup
 study.demag(realization="poisson_robin")
 study.solver(dt=1e-13, g=2.115)
 study.tableautosave(1e-12, quantities=["time", "step", "mx", "my", "mz", "E_total"])

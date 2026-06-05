@@ -14,11 +14,26 @@
 #include <algorithm>
 #include <limits>
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
 namespace fullmag::fem {
 
 namespace {
 
 constexpr uint32_t kCudaBlockSize = 256;
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
+{
+    if (rc == cudaSuccess) {
+        return true;
+    }
+    error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
+    return false;
+}
+#endif
 
 } // namespace
 
@@ -42,6 +57,16 @@ bool gpu_reduction_workspace_allocate(
     }
     if (!gpu_device_allocate_double(reductions.scalar_workspace, reduce_blocks, device_bytes, error) ||
         !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error)) {
+        return false;
+    }
+    if (!cuda_ok(
+            cudaHostAlloc(
+                reinterpret_cast<void **>(&reductions.host_scalar_result),
+                FEM_GPU_SCALAR_RESULT_SLOTS * sizeof(double),
+                cudaHostAllocDefault),
+            "cudaHostAlloc FemGpuState scalar readback staging",
+            error)) {
+        reductions.host_scalar_result = nullptr;
         return false;
     }
 
@@ -89,6 +114,14 @@ bool gpu_reduction_workspace_allocate(
 
 void gpu_reduction_workspace_free(FemGpuReductionWorkspaceDeviceState &reductions)
 {
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (reductions.host_scalar_result != nullptr) {
+        cudaFreeHost(reductions.host_scalar_result);
+        reductions.host_scalar_result = nullptr;
+    }
+#else
+    reductions.host_scalar_result = nullptr;
+#endif
     gpu_device_free_double(reductions.scalar_workspace);
     gpu_device_free_double(reductions.scalar_result);
     gpu_device_free_bytes(reductions.temp_storage);

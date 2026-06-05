@@ -630,6 +630,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "verify-fem-relaxation-convergence:" in justfile
     assert "verify-fem-relaxation-cpu-gpu-consistency-smoke:" in justfile
     assert "verify-fem-relaxation-production-benchmark:" in justfile
+    assert "verify-fem-gpu-demag-performance-benchmark:" in justfile
     consistency_recipe = just_recipe_source(
         justfile,
         "verify-fem-relaxation-cpu-gpu-consistency-smoke",
@@ -638,7 +639,11 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         justfile,
         "verify-fem-relaxation-production-benchmark",
     )
-    for recipe in [consistency_recipe, production_recipe]:
+    demag_performance_recipe = just_recipe_source(
+        justfile,
+        "verify-fem-gpu-demag-performance-benchmark",
+    )
+    for recipe in [consistency_recipe, production_recipe, demag_performance_recipe]:
         assert "docker compose --profile fem-gpu run --rm" in recipe
         assert "cd /workspace" in recipe
         assert "python3 scripts/analysis/fem_gpu_benchmark.py" in recipe
@@ -662,6 +667,9 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "--box500-airbox-exchange-only-preset" in justfile
     assert "--box500-airbox-interaction-consistency-preset" in justfile
     assert "--require-cpu-gpu-consistency" in justfile
+    assert "--require-gpu-phase-timings" in demag_performance_recipe
+    assert "--require-min-solver-nodes" in demag_performance_recipe
+    assert "--max-performance-regression-percent" in demag_performance_recipe
     assert "--relax-algorithms" in justfile
     assert (
         'FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg'

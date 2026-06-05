@@ -4,7 +4,8 @@
  * GPU CUDA scalar reduction workspace memory module header.
  *
  * Owns device allocation and cleanup helpers for shared scalar-reduction
- * workspace, scalar result slots, and CUB temporary storage.
+ * workspace, scalar result slots, pinned scalar staging, and CUB temporary
+ * storage.
  */
 
 #include "gpu/cuda/reductions/reduction_workspace_state.hpp"

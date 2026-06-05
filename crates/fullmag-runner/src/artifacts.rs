@@ -61,6 +61,7 @@ fn demag_runtime_metadata(
             }
 
             let policy = fem.demag_solver_policy.clone().unwrap_or_default();
+            let resolved_policy = provenance.fem_poisson_demag.as_ref();
             let resolved_demag = fem
                 .demag_realization
                 .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
@@ -81,15 +82,22 @@ fn demag_runtime_metadata(
                     "total": entry.demag_wall_time_ns,
                 })
             });
+            let linear_solver =
+                resolved_policy.map_or(policy.solver, |entry| entry.linear_solver.clone());
+            let preconditioner =
+                resolved_policy.map_or(policy.preconditioner, |entry| entry.preconditioner.clone());
+            let relative_tolerance = resolved_policy.map_or(policy.rtol, |entry| entry.rtol);
+            let max_iterations =
+                resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
                 "boundary_variant": boundary_variant,
-                "linear_solver": policy.solver,
-                "preconditioner": policy.preconditioner,
-                "relative_tolerance": policy.rtol,
+                "linear_solver": linear_solver,
+                "preconditioner": preconditioner,
+                "relative_tolerance": relative_tolerance,
                 "absolute_tolerance": policy.atol,
-                "max_iterations": policy.max_iterations,
+                "max_iterations": max_iterations,
                 "print_level": policy.print_level,
                 "actual_iterations": last.map(|entry| entry.poisson_iterations),
                 "final_residual_norm": last.map(|entry| entry.poisson_final_residual),

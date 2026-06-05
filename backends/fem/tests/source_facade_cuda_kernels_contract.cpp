@@ -551,6 +551,10 @@ void gpu_rk_device_io_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             scalar_source.find("gpu_rk_read_scalar_results(") !=
                 std::string::npos &&
+            scalar_source.find("gpu.reductions.host_scalar_result") !=
+                std::string::npos &&
+            scalar_source.find("std::copy_n(gpu.reductions.host_scalar_result") !=
+                std::string::npos &&
             scalar_source.find("cudaMemcpyAsync") !=
                 std::string::npos &&
             scalar_source.find("cudaStreamSynchronize") !=
@@ -1114,10 +1118,16 @@ void gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop() {
 
     check(
         runtime_header.find("bool configured = false;") != std::string::npos &&
-            runtime_header.find("bool enabled = false;") != std::string::npos,
+            runtime_header.find("bool enabled = false;") != std::string::npos &&
+            runtime_header.find("bool override_configured = false;") != std::string::npos &&
+            runtime_header.find("bool override_enabled = false;") != std::string::npos,
         "GPU RK phase timing runtime state must default to disabled");
     check(
         step_stats_source.find("FULLMAG_FEM_STEP_PROFILE") != std::string::npos &&
+            step_stats_source.find("bool phase_timing_requested(Context &ctx)") !=
+                std::string::npos &&
+            step_stats_source.find("if (timings.override_configured) {\n        return timings.override_enabled;\n    }") !=
+                std::string::npos &&
             step_stats_source.find("void refresh_phase_timing_enablement(Context &ctx)") !=
                 std::string::npos &&
             step_stats_source.find("refresh_phase_timing_enablement(ctx);") !=

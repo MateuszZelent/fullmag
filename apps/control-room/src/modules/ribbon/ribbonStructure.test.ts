@@ -2060,6 +2060,14 @@ describe("ribbon structure", () => {
       run: () => ({ status: "completed" }),
     });
     commands.register({
+      id: "viewport-3d.inspect-toggle",
+      title: "Inspect Field Value",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => true,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
       id: "viewport-3d.capture-frame",
       title: "Capture 3D Frame",
       group: "viewport-3d",
@@ -2148,6 +2156,9 @@ describe("ribbon structure", () => {
     const orientationGroup = content?.groups.find(
       (group) => group.id === "view-orientation-tools",
     );
+    const manipulateGroup = content?.groups.find(
+      (group) => group.id === "view-manipulate",
+    );
     const globalGroup = content?.groups.find(
       (group) => group.id === "view-global-display",
     );
@@ -2162,6 +2173,9 @@ describe("ribbon structure", () => {
     );
     const viewCubeAction = orientationGroup?.actions.find(
       (action) => action.id === "viewport-3d.toggle-viewcube",
+    );
+    const inspectAction = manipulateGroup?.actions.find(
+      (action) => action.id === "viewport-3d.inspect-toggle",
     );
     const hslAction = orientationGroup?.actions.find(
       (action) => action.id === "view-hsl-reference",
@@ -2195,6 +2209,11 @@ describe("ribbon structure", () => {
       active: true,
       id: "viewport-3d.toggle-viewcube",
       label: "3D Box",
+    });
+    expect(inspectAction).toMatchObject({
+      active: true,
+      id: "viewport-3d.inspect-toggle",
+      label: "Inspect",
     });
     expect(hslAction).toMatchObject({
       active: true,

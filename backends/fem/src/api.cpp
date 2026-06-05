@@ -21,6 +21,7 @@
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -142,6 +143,18 @@ int fullmag_fem_backend_set_interrupt_poll(
         return FULLMAG_FEM_ERR_INVALID;
     }
     fullmag::fem::set_interrupt_poll(handle->context, poll_fn, user_data);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_set_step_profile(
+    fullmag_fem_backend *handle,
+    int enabled
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_set_step_profile received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    fullmag::fem::set_gpu_step_profile(handle->context, enabled != 0);
     return FULLMAG_FEM_OK;
 }
 

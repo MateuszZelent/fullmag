@@ -48,6 +48,8 @@ interface Viewport3DWidgetState {
   fdmTopographyComponent: Viewport3DFdmTopographyComponent;
   fdmTopographyEnabled: boolean;
   hslReferenceMode: Viewport3DHslReferenceMode;
+  inspectEnabled: boolean;
+  inspectRevision: number;
   rotationMode: Viewport3DRotationMode;
   scaleLabelsVisible: boolean;
   scaleUnitMode: Viewport3DScaleUnitMode;
@@ -83,6 +85,8 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     fdmTopographyComponent: "z",
     fdmTopographyEnabled: false,
     hslReferenceMode: "auto",
+    inspectEnabled: false,
+    inspectRevision: 0,
     rotationMode: "object",
     scaleLabelsVisible: true,
     scaleUnitMode: "auto",
@@ -348,6 +352,23 @@ class Viewport3DStore {
       },
     };
     this.notify();
+  }
+
+  setInspectEnabled(enabled: boolean): void {
+    if (this.snapshot.widgets.inspectEnabled === enabled) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        inspectEnabled: enabled,
+        inspectRevision: this.snapshot.widgets.inspectRevision + 1,
+      },
+    };
+    this.notify();
+  }
+
+  toggleInspect(): void {
+    this.setInspectEnabled(!this.snapshot.widgets.inspectEnabled);
   }
 
   setEffectAmbientOcclusion(enabled: boolean): void {

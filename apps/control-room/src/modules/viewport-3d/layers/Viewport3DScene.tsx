@@ -45,6 +45,10 @@ import type {
   Viewport3DMeshPart,
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
+import type {
+  Viewport3DInspectSample,
+  Viewport3DInspectScreenPosition,
+} from "../viewport3dInspect";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DBounds,
@@ -161,6 +165,13 @@ interface Viewport3DSceneProps {
   vectorStyle: VectorFieldLayerVectorStyle;
   visualizationRevision: number | null;
   hslReferenceVisible: boolean;
+  inspectEnabled: boolean;
+  inspectQuantityId: string;
+  onInspectClear?: () => void;
+  onInspectSample?: (
+    sample: Viewport3DInspectSample,
+    screenPosition: Viewport3DInspectScreenPosition,
+  ) => void;
   scaleLabelsVisible: boolean;
   scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
@@ -570,12 +581,16 @@ function Viewport3DModelLayerStack({
   femDomain,
   getObjectSettings,
   getPartSettings,
+  inspectEnabled,
+  inspectQuantityId,
   magnetizationTexturePreviews,
   materialProfile,
   maxVectorGlyphs,
   meshQualityColors,
   meshQualityOverlayVisible,
   meshSizeHighlightModel,
+  onInspectClear,
+  onInspectSample,
   onSelectDomain,
   onSelectObject,
   onSelectPart,
@@ -606,6 +621,10 @@ function Viewport3DModelLayerStack({
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
   | "meshSizeHighlightModel"
+  | "inspectEnabled"
+  | "inspectQuantityId"
+  | "onInspectClear"
+  | "onInspectSample"
   | "onSelectDomain"
   | "onSelectObject"
   | "onSelectPart"
@@ -630,8 +649,12 @@ function Viewport3DModelLayerStack({
           domain={fdmDomain}
           fieldVector={fieldVector}
           instanceModel={fdmInstanceModel}
+          inspectEnabled={inspectEnabled}
+          inspectQuantityId={inspectQuantityId}
           maxVectorGlyphs={maxVectorGlyphs}
           materialProfile={materialProfile}
+          onInspectClear={onInspectClear}
+          onInspectSample={onInspectSample}
           onSelectDomain={onSelectDomain}
           settings={fdmSettings}
           surfaceColors={fdmSurfaceColors}
@@ -824,6 +847,10 @@ export function Viewport3DScene({
   vectorStyle,
   visualizationRevision,
   hslReferenceVisible,
+  inspectEnabled,
+  inspectQuantityId,
+  onInspectClear,
+  onInspectSample,
   scaleLabelsVisible,
   scaleUnitMode,
   viewCubeVisible,
@@ -939,6 +966,8 @@ export function Viewport3DScene({
         fdmSurfaceColors={fdmSurfaceColors}
         fieldModel={fieldModel}
         fieldVector={fieldVector}
+        inspectEnabled={inspectEnabled}
+        inspectQuantityId={inspectQuantityId}
         fallbackSettings={fallbackSettings}
         femDomain={femDomain}
         getObjectSettings={getObjectSettings}
@@ -949,6 +978,8 @@ export function Viewport3DScene({
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         meshSizeHighlightModel={meshSizeHighlightModel}
+        onInspectClear={onInspectClear}
+        onInspectSample={onInspectSample}
         onSelectDomain={onSelectDomain}
         onSelectObject={onSelectObject}
         onSelectPart={onSelectPart}

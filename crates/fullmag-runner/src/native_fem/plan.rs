@@ -48,6 +48,21 @@ pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     }
 }
 
+#[cfg(feature = "fem-gpu")]
+pub(crate) fn resolved_native_fem_demag_solver_policy(
+    plan: &fullmag_ir::FemPlanIR,
+) -> fullmag_ir::FemLinearSolverPolicy {
+    if let Some(policy) = plan.demag_solver_policy.clone() {
+        return policy;
+    }
+
+    let mut policy = fullmag_ir::FemLinearSolverPolicy::default();
+    if plan.enable_demag && native_fem_plan_requests_gpu_mfem_device(plan) {
+        policy.preconditioner = "JACOBI".to_string();
+    }
+    policy
+}
+
 #[allow(dead_code)]
 pub(crate) fn native_fem_plan_requests_gpu_mfem_device(plan: &fullmag_ir::FemPlanIR) -> bool {
     if let Some(device) = plan

@@ -434,6 +434,11 @@ int fullmag_fem_backend_set_interrupt_poll(
     void *user_data
 );
 
+int fullmag_fem_backend_set_step_profile(
+    fullmag_fem_backend *handle,
+    int enabled
+);
+
 int fullmag_fem_backend_copy_field_f64(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable,

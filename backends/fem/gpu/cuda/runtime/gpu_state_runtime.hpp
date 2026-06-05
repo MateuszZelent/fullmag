@@ -57,6 +57,8 @@ struct GpuRkPhaseTimingRuntimeState {
 
     bool configured = false;
     bool enabled = false;
+    bool override_configured = false;
+    bool override_enabled = false;
     uint64_t exchange_wall_time_ns = 0;
     uint64_t demag_assemble_wall_time_ns = 0;
     uint64_t demag_recover_wall_time_ns = 0;
@@ -108,5 +110,7 @@ struct GpuStateRuntimeState {
  * stages, or own state I/O.
  */
 bool initialize_context_gpu_state(Context &ctx, std::string &error);
+
+void set_gpu_step_profile(Context &ctx, bool enabled);
 
 } // namespace fullmag::fem

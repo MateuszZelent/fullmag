@@ -342,8 +342,8 @@ def demag_solver_arg(value: str) -> str:
 
 def demag_preconditioner_arg(value: str) -> str:
     parsed = value.strip().upper()
-    if parsed not in {"AMG", "JACOBI", "NONE"}:
-        raise argparse.ArgumentTypeError("value must be AMG, JACOBI, or NONE")
+    if parsed not in {"AMG", "JACOBI", "NONE", "OMIT"}:
+        raise argparse.ArgumentTypeError("value must be AMG, JACOBI, NONE, or OMIT")
     return parsed
 
 
@@ -385,7 +385,24 @@ def demag_policy_pairs_for_scenario(
     ]
 
 
-def parse_args() -> argparse.Namespace:
+def demag_policy_env(
+    demag_solver: str,
+    demag_preconditioner: str,
+    args: argparse.Namespace,
+) -> dict[str, str]:
+    env = {
+        "FULLMAG_BENCH_DEMAG_SOLVER": demag_solver,
+        "FULLMAG_BENCH_DEMAG_PRECONDITIONER": demag_preconditioner,
+        "FULLMAG_BENCH_DEMAG_RTOL": repr(args.demag_rtol),
+        "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(args.demag_max_iterations),
+        "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(args.demag_print_level),
+    }
+    if args.demag_atol is not None:
+        env["FULLMAG_BENCH_DEMAG_ATOL"] = repr(args.demag_atol)
+    return env
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="FEM CPU/GPU benchmark sweep",
         allow_abbrev=False,
@@ -478,13 +495,13 @@ def parse_args() -> argparse.Namespace:
         "--demag-preconditioner",
         type=demag_preconditioner_arg,
         default="AMG",
-        help="Native FEM demag preconditioner: AMG, JACOBI, or NONE",
+        help="Native FEM demag preconditioner: AMG, JACOBI, NONE, or OMIT to leave policy unspecified",
     )
     parser.add_argument(
         "--demag-preconditioners",
         type=str,
         default=None,
-        help="Comma-separated native FEM demag preconditioners for policy sweeps",
+        help="Comma-separated native FEM demag preconditioners for policy sweeps; use OMIT to leave policy unspecified",
     )
     parser.add_argument(
         "--demag-rtol",
@@ -534,6 +551,20 @@ def parse_args() -> argparse.Namespace:
         "--require-gpu-control-readback-budget",
         action="store_true",
         help="Fail unless completed FEM GPU rows stay within the configured hot-loop control-scalar readback budget",
+    )
+    parser.add_argument(
+        "--require-gpu-phase-timings",
+        action="store_true",
+        help=(
+            "When FULLMAG_FEM_STEP_PROFILE is enabled, fail unless completed FEM GPU rows "
+            "publish positive phase timings for the executed GPU work"
+        ),
+    )
+    parser.add_argument(
+        "--require-min-solver-nodes",
+        type=positive_int_arg,
+        default=None,
+        help="Fail unless completed benchmark rows report at least this many solver mesh nodes",
     )
     parser.add_argument(
         "--gpu-control-readback-base",
@@ -667,6 +698,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum accepted performance regression versus --accepted-baseline for identical solver_mesh_signature cases",
     )
     parser.add_argument(
+        "--min-gpu-demag-total-speedup",
+        type=positive_float_arg,
+        default=None,
+        help="Fail unless completed CPU/GPU demag pairs reach this CPU/GPU speedup on full demag_wall_time_ms",
+    )
+    parser.add_argument(
         "--cpu-gpu-energy-rtol",
         type=positive_float_arg,
         default=DEFAULT_CPU_GPU_ENERGY_RTOL,
@@ -741,7 +778,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail if repeated rows for the same logical case produce different solver mesh signatures",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--gpu-warmup",
+        action="store_true",
+        help="Run one unrecorded FEM GPU case before measured rows to remove CUDA/Hypre cold-start from policy timing",
+    )
+    return parser.parse_args(argv)
 
 
 def resolve_relax_torque_tolerance_apm(args: argparse.Namespace) -> float | None:
@@ -2052,6 +2094,14 @@ def as_float(value: object) -> float | None:
         return None
 
 
+def as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "on", "true", "yes"}
+
+
 def gpu_rk_block_reason_suffix(row: dict[str, object]) -> str:
     reason = row.get("fem_gpu_rk_block_reason")
     return f";gpu_rk_block_reason={reason}" if reason else ""
@@ -2568,6 +2618,55 @@ def gpu_control_readback_budget_failures(
     return failures
 
 
+def gpu_phase_timing_failures(results: list[dict[str, object]]) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("backend") != "fem_gpu" or row.get("status") != "ok":
+            continue
+        executed_steps = as_int(row.get("executed_steps"))
+        if executed_steps is None or executed_steps <= 0:
+            continue
+        case = repeated_case_key(row)
+        exchange_ms = as_float(row.get("exchange_wall_time_ms"))
+        if exchange_ms is None or exchange_ms <= 0.0:
+            failures.append(
+                f"case={case} fem_gpu phase timing missing positive exchange_wall_time_ms"
+            )
+        if row.get("relaxation_algorithm") == "llg_overdamped":
+            rhs_ms = as_float(row.get("rhs_wall_time_ms"))
+            if rhs_ms is None or rhs_ms <= 0.0:
+                failures.append(
+                    f"case={case} fem_gpu phase timing missing positive rhs_wall_time_ms"
+                )
+        if as_bool(row.get("uses_gpu_poisson")):
+            demag_ms = as_float(row.get("demag_wall_time_ms"))
+            if demag_ms is None or demag_ms <= 0.0:
+                failures.append(
+                    f"case={case} fem_gpu phase timing missing positive demag_wall_time_ms"
+                )
+    return failures
+
+
+def min_solver_node_failures(
+    results: list[dict[str, object]],
+    *,
+    min_nodes: int,
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("status") != "ok":
+            continue
+        case = repeated_case_key(row)
+        node_count = as_int(row.get("node_count"))
+        if node_count is None:
+            failures.append(f"case={case} completed row is missing solver node_count")
+        elif node_count < min_nodes:
+            failures.append(
+                f"case={case} solver node_count={node_count} is below required minimum {min_nodes}"
+            )
+    return failures
+
+
 def numeric_abs_diff(left: object, right: object) -> float | None:
     left_value = as_float(left)
     right_value = as_float(right)
@@ -3076,6 +3175,43 @@ def write_cpu_gpu_consistency_summary(
     return summary
 
 
+def gpu_demag_total_speedup_failures(
+    cpu_gpu_summary: Mapping[str, object],
+    *,
+    min_speedup: float,
+) -> list[str]:
+    failures: list[str] = []
+    pairs = cpu_gpu_summary.get("pairs")
+    if not isinstance(pairs, list):
+        return ["CPU/GPU demag total speedup gate has no pair summary"]
+    demag_pair_count = 0
+    for pair in pairs:
+        if not isinstance(pair, Mapping):
+            continue
+        cpu_demag_ms = as_float(pair.get("cpu_demag_wall_time_ms"))
+        gpu_demag_ms = as_float(pair.get("gpu_demag_wall_time_ms"))
+        if cpu_demag_ms is None and gpu_demag_ms is None:
+            continue
+        demag_pair_count += 1
+        case = summary_case_key(
+            str(pair.get("scenario") or "-"),
+            pair.get("relaxation_algorithm"),
+        )
+        speedup = as_float(pair.get("demag_wall_time_speedup_cpu_over_gpu"))
+        if cpu_demag_ms is None or gpu_demag_ms is None or speedup is None:
+            failures.append(
+                f"{case} is missing CPU/GPU demag_wall_time_ms needed for GPU demag total speedup gate"
+            )
+            continue
+        if speedup < min_speedup:
+            failures.append(
+                f"{case} demag_wall_time_speedup_cpu_over_gpu={speedup:.3g} below required minimum {min_speedup:.3g}"
+            )
+    if demag_pair_count == 0:
+        failures.append("CPU/GPU demag total speedup gate found no demag-bearing pairs")
+    return failures
+
+
 def report_value(value: object, *, precision: int = 3, suffix: str = "") -> str:
     if value is None or value == "":
         return "-"
@@ -3354,9 +3490,9 @@ def render_cpu_gpu_benchmark_report(
         lines.append(f"- json: {summary_path}")
     lines.extend(["", "## Case Matrix", ""])
     lines.append(
-        "| Case | Status | CPU compute ms | GPU compute ms | Wall speedup | CPU steps | GPU steps | Step delta | CPU steps/min | GPU steps/min | CPU demag apply ms | GPU demag apply ms | Demag apply speedup | Demag energy diff J | Torque diff T |"
+        "| Case | Status | CPU compute ms | GPU compute ms | Wall speedup | CPU steps | GPU steps | Step delta | CPU steps/min | GPU steps/min | CPU demag total ms | GPU demag total ms | Demag total speedup | CPU demag apply ms | GPU demag apply ms | Demag apply speedup | Demag energy diff J | Torque diff T |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     for case in cpu_gpu_summary.get("case_coverage", []):
         if not isinstance(case, Mapping):
@@ -3386,6 +3522,9 @@ def render_cpu_gpu_benchmark_report(
                     report_steps(pair.get("executed_step_delta")),
                     report_rate(steps_per_minute(cpu_steps, cpu_wall_ms)),
                     report_rate(steps_per_minute(gpu_steps, gpu_wall_ms)),
+                    report_ms(cpu_timing.get("demag_wall_time_ms")),
+                    report_ms(gpu_timing.get("demag_wall_time_ms")),
+                    report_value(pair.get("demag_wall_time_speedup_cpu_over_gpu"), suffix="x"),
                     report_ms(cpu_timing.get("demag_solver_apply_wall_time_ms")),
                     report_ms(gpu_timing.get("demag_solver_apply_wall_time_ms")),
                     report_value(pair.get("demag_solver_apply_wall_time_speedup_cpu_over_gpu"), suffix="x"),
@@ -3513,9 +3652,12 @@ def print_cpu_gpu_benchmark_rich_report(
         header_style="bold magenta",
     )
     detail_table.add_column("Case", overflow="fold", style="white", max_width=48)
-    detail_table.add_column("CPU demag ms", justify="right", no_wrap=True)
-    detail_table.add_column("GPU demag ms", justify="right", no_wrap=True)
-    detail_table.add_column("Demag speedup", justify="right", style="green", no_wrap=True)
+    detail_table.add_column("CPU demag total ms", justify="right", no_wrap=True)
+    detail_table.add_column("GPU demag total ms", justify="right", no_wrap=True)
+    detail_table.add_column("Demag total speedup", justify="right", style="green", no_wrap=True)
+    detail_table.add_column("CPU demag apply ms", justify="right", no_wrap=True)
+    detail_table.add_column("GPU demag apply ms", justify="right", no_wrap=True)
+    detail_table.add_column("Demag apply speedup", justify="right", style="green", no_wrap=True)
     detail_table.add_column("Demag energy diff J", justify="right", no_wrap=True)
     detail_table.add_column("Torque diff T", justify="right", no_wrap=True)
 
@@ -3547,6 +3689,9 @@ def print_cpu_gpu_benchmark_rich_report(
         )
         detail_table.add_row(
             case_label,
+            report_ms(cpu_timing.get("demag_wall_time_ms")),
+            report_ms(gpu_timing.get("demag_wall_time_ms")),
+            report_value(pair.get("demag_wall_time_speedup_cpu_over_gpu"), suffix="x"),
             report_ms(cpu_timing.get("demag_solver_apply_wall_time_ms")),
             report_ms(gpu_timing.get("demag_solver_apply_wall_time_ms")),
             report_value(pair.get("demag_solver_apply_wall_time_speedup_cpu_over_gpu"), suffix="x"),
@@ -4205,11 +4350,35 @@ def demag_policy_identity(row: Mapping[str, object]) -> tuple[object, ...]:
 
 
 def demag_policy_timing_ms(row: Mapping[str, object]) -> float | None:
-    return first_present(
-        as_float(row.get("demag_solver_apply_wall_time_ms")),
-        as_float(row.get("demag_solve_wall_time_ms")),
-        as_float(row.get("wall_time_ms")),
-    )
+    timing = demag_policy_timing(row)
+    return timing[0] if timing is not None else None
+
+
+def demag_policy_timing(row: Mapping[str, object]) -> tuple[float, str] | None:
+    for field in (
+        "demag_wall_time_ms",
+        "demag_solve_wall_time_ms",
+        "demag_solver_apply_wall_time_ms",
+        "wall_time_ms",
+    ):
+        value = as_float(row.get(field))
+        if value is not None:
+            return value, field
+    return None
+
+
+def average_demag_policy_metric(
+    rows: list[dict[str, object]],
+    field: str,
+) -> float | None:
+    values = [
+        value
+        for row in rows
+        if (value := as_float(row.get(field))) is not None
+    ]
+    if not values:
+        return None
+    return sum(values) / len(values)
 
 
 def best_demag_policy_rows(
@@ -4240,11 +4409,12 @@ def best_demag_policy_rows(
         best_summary: dict[str, object] | None = None
         best_sort_key: tuple[float, float, int] | None = None
         for policy, rows in rows_by_policy.items():
-            timings = [
+            timing_pairs = [
                 timing
                 for row in rows
-                if (timing := demag_policy_timing_ms(row)) is not None
+                if (timing := demag_policy_timing(row)) is not None
             ]
+            timings = [timing for timing, _ in timing_pairs]
             residuals = [
                 residual
                 for row in rows
@@ -4258,6 +4428,17 @@ def best_demag_policy_rows(
             if not timings or not residuals or not iterations:
                 continue
             average_timing = sum(timings) / len(timings)
+            selection_timing_fields = sorted({field for _, field in timing_pairs})
+            selection_timing_field = (
+                selection_timing_fields[0]
+                if len(selection_timing_fields) == 1
+                else ",".join(selection_timing_fields)
+            )
+            wall_timing = average_demag_policy_metric(rows, "demag_wall_time_ms")
+            apply_timing = average_demag_policy_metric(
+                rows,
+                "demag_solver_apply_wall_time_ms",
+            )
             max_residual_seen = max(residuals)
             max_iterations_seen = max(iterations)
             sort_key = (average_timing, max_residual_seen, max_iterations_seen)
@@ -4266,7 +4447,16 @@ def best_demag_policy_rows(
                 "demag_solver": policy[0],
                 "demag_preconditioner": policy[1],
                 "row_count": len(rows),
+                "selection_timing_field": selection_timing_field,
                 "average_demag_timing_ms": round(average_timing, 6),
+                "average_demag_wall_time_ms": (
+                    round(wall_timing, 6) if wall_timing is not None
+                    else None
+                ),
+                "average_demag_solver_apply_wall_time_ms": (
+                    round(apply_timing, 6) if apply_timing is not None
+                    else None
+                ),
                 "max_demag_final_residual_norm": max_residual_seen,
                 "max_demag_actual_iterations": max_iterations_seen,
             }
@@ -4403,6 +4593,52 @@ def main() -> None:
     print(
         f"FEM benchmark sweep: backends={','.join(backends)} meshes={len(meshes)} scenarios={len(scenarios)} integrators={len(integrators)} relaxation_algorithms={','.join(relaxation_algorithms)} timestep_policies={','.join(timestep_policies)} demag_solvers={','.join(demag_solvers)} demag_preconditioners={','.join(demag_preconditioners)} repeat={repeat_count} steps={args.steps} dt={args.dt:.3e} s"
     )
+    if args.gpu_warmup and "fem_gpu" in backends:
+        warmup_mesh = meshes[0]
+        warmup_scenario = scenarios[0]
+        warmup_relaxation_algorithms = (
+            relaxation_algorithms_for_scenario(warmup_scenario, relaxation_algorithms)
+            if warmup_scenario in BOX500_AIRBOX_SCENARIO_ALIASES
+            else [None]
+        )
+        warmup_relaxation_algorithm = warmup_relaxation_algorithms[0]
+        if relaxation_algorithm_supported_on_backend(
+            warmup_relaxation_algorithm,
+            "fem_gpu",
+        ):
+            warmup_solver, warmup_preconditioner = demag_policy_pairs_for_scenario(
+                warmup_scenario,
+                demag_solvers,
+                demag_preconditioners,
+            )[0]
+            print(
+                f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} demag_policy={warmup_solver}/{warmup_preconditioner}",
+                flush=True,
+            )
+            warmup_row = run_backend(
+                backend_label="fem_gpu",
+                binary=FULLMAG_GPU,
+                mesh_path=warmup_mesh,
+                scenario=warmup_scenario,
+                integrator=integrators[0],
+                relaxation_algorithm=warmup_relaxation_algorithm,
+                steps=args.steps,
+                dt=args.dt,
+                timestep_policy=timestep_policies[0],
+                thread_spec=thread_specs[0],
+                timeout_s=args.case_timeout_s,
+                extra_env={
+                    **mesh_env,
+                    **relax_env,
+                    **demag_policy_env(warmup_solver, warmup_preconditioner, args),
+                },
+            )
+            if warmup_row.get("status") != "ok":
+                print(
+                    f"FEM_GPU_WARMUP_ERROR={warmup_row.get('status')}: {warmup_row.get('error')}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
     for mesh_path in meshes:
         mesh_stats = load_mesh_stats(mesh_path)
         print(f"  {input_mesh_summary(mesh_stats)}")
@@ -4426,21 +4662,11 @@ def main() -> None:
                                 print(
                                     f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner}"
                                 )
-                                demag_env = {
-                                    "FULLMAG_BENCH_DEMAG_SOLVER": demag_solver,
-                                    "FULLMAG_BENCH_DEMAG_PRECONDITIONER": demag_preconditioner,
-                                    "FULLMAG_BENCH_DEMAG_RTOL": repr(args.demag_rtol),
-                                    "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(
-                                        args.demag_max_iterations
-                                    ),
-                                    "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(
-                                        args.demag_print_level
-                                    ),
-                                }
-                                if args.demag_atol is not None:
-                                    demag_env["FULLMAG_BENCH_DEMAG_ATOL"] = repr(
-                                        args.demag_atol
-                                    )
+                                demag_env = demag_policy_env(
+                                    demag_solver,
+                                    demag_preconditioner,
+                                    args,
+                                )
                                 for repeat_index in range(repeat_count):
                                     for backend in backends:
                                         if not relaxation_algorithm_supported_on_backend(
@@ -4594,6 +4820,41 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 9
+    if args.require_gpu_phase_timings and env_flag_enabled(
+        os.environ.get("FULLMAG_FEM_STEP_PROFILE")
+    ):
+        failures = gpu_phase_timing_failures(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 10
+    if args.require_min_solver_nodes is not None:
+        failures = min_solver_node_failures(
+            results,
+            min_nodes=args.require_min_solver_nodes,
+        )
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 11
+    if args.min_gpu_demag_total_speedup is not None:
+        if cpu_gpu_summary_for_report is None:
+            cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
+                results,
+                case_manifests=cpu_gpu_manifests,
+                require_gpu_strict_residency=args.require_gpu_strict_residency,
+                energy_rtol=args.cpu_gpu_energy_rtol,
+                energy_atol=args.cpu_gpu_energy_atol,
+                torque_rtol=args.cpu_gpu_torque_rtol,
+                torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+                torque_atol_t=args.cpu_gpu_torque_atol_t,
+                max_step_delta=args.cpu_gpu_max_step_delta,
+            )
+        failures = gpu_demag_total_speedup_failures(
+            cpu_gpu_summary_for_report,
+            min_speedup=args.min_gpu_demag_total_speedup,
+        )
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 12
     if args.accepted_baseline:
         baseline_path = Path(args.accepted_baseline)
         if not baseline_path.is_file():

@@ -8,6 +8,8 @@
 #include "context.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
+#include <algorithm>
+
 namespace fullmag::fem {
 
 namespace {
@@ -30,9 +32,13 @@ bool read_scalar_result_impl(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
+    if (gpu.reductions.host_scalar_result == nullptr) {
+        reason = "GPU RK scalar readback requires pinned scalar host staging";
+        return false;
+    }
     if (!cuda_ok(
             cudaMemcpyAsync(
-                &value,
+                gpu.reductions.host_scalar_result,
                 gpu.reductions.scalar_result,
                 sizeof(double),
                 cudaMemcpyDeviceToHost,
@@ -44,6 +50,7 @@ bool read_scalar_result_impl(
     if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
         return false;
     }
+    value = gpu.reductions.host_scalar_result[0];
     if (control_scalar_readback) {
         record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(double));
     } else {
@@ -65,9 +72,17 @@ bool read_scalar_results_impl(
         return true;
     }
     auto &gpu = ctx.gpu_state.device;
+    if (count > FEM_GPU_SCALAR_RESULT_SLOTS) {
+        reason = "GPU RK scalar readback count exceeds pinned scalar staging capacity";
+        return false;
+    }
+    if (gpu.reductions.host_scalar_result == nullptr) {
+        reason = "GPU RK scalar readback requires pinned scalar host staging";
+        return false;
+    }
     if (!cuda_ok(
             cudaMemcpyAsync(
-                values,
+                gpu.reductions.host_scalar_result,
                 gpu.reductions.scalar_result,
                 count * sizeof(double),
                 cudaMemcpyDeviceToHost,
@@ -79,6 +94,7 @@ bool read_scalar_results_impl(
     if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize GPU RK scalar stats", reason)) {
         return false;
     }
+    std::copy_n(gpu.reductions.host_scalar_result, count, values);
     if (control_scalar_readback) {
         record_device_control_scalar_to_host(
             ctx.transfer_audit.audit,

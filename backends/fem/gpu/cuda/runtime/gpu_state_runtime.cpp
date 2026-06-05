@@ -151,4 +151,12 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     return true;
 }
 
+void set_gpu_step_profile(Context &ctx, bool enabled)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.override_configured = true;
+    timings.override_enabled = enabled;
+    timings.configured = false;
+}
+
 } // namespace fullmag::fem

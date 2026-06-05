@@ -69,6 +69,11 @@ import {
 } from "./viewport3dDiagnostics";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
 import {
+  formatViewport3DInspectComponents,
+  type Viewport3DInspectSample,
+  type Viewport3DInspectScreenPosition,
+} from "./viewport3dInspect";
+import {
   type Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
 import { toCameraTuple } from "./viewport3dCameraModel";
@@ -97,6 +102,12 @@ type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 interface MeshQualityRange {
   max: number;
   min: number;
+}
+
+interface Viewport3DInspectHover {
+  inspectRevision: number;
+  sample: Viewport3DInspectSample;
+  screenPosition: Viewport3DInspectScreenPosition;
 }
 
 function formatLegendValue(value: number): string {
@@ -148,6 +159,7 @@ interface Viewport3DFrameProps
   domainSummary: string;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldRefresh: Viewport3DFieldRefreshState;
+  inspectRevision: number;
   kernel: ModuleProps["kernel"];
   meshQualityMetric: MeshQualityColorMetric;
   meshQualityRange: MeshQualityRange | null;
@@ -277,6 +289,9 @@ export default function Viewport3DModule({
       onCameraInteractionEnd={endCameraInteraction}
       onCameraInteractionStart={beginCameraInteraction}
       captureRevision={commandState.captureRevision}
+      inspectEnabled={commandState.widgets.inspectEnabled}
+      inspectQuantityId={sceneModel.quantityId}
+      inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
       rotationMode={commandState.widgets.rotationMode}
@@ -349,6 +364,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   domainSummary,
   fieldDataIssue,
   fieldRefresh,
+  inspectRevision,
   kernel,
   meshQualityMetric,
   meshQualityRange,
@@ -385,6 +401,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
+  const [inspectHover, setInspectHover] =
+    useState<Viewport3DInspectHover | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const discretizationKind = sceneProps.fdmDomain
@@ -475,6 +493,24 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const commitOrbitDebugAngles = useCallback(() => {
     setOrbitDebugCommitRevision((revision) => revision + 1);
   }, []);
+  const clearInspectHover = useCallback(() => {
+    setInspectHover(null);
+  }, []);
+  const updateInspectHover = useCallback(
+    (
+      sample: Viewport3DInspectSample,
+      screenPosition: Viewport3DInspectScreenPosition,
+    ) => {
+      setInspectHover({ inspectRevision, sample, screenPosition });
+    },
+    [inspectRevision],
+  );
+  const visibleInspectHover =
+    sceneProps.inspectEnabled &&
+    inspectHover?.inspectRevision === inspectRevision &&
+    inspectHover.sample.quantityId === quantityId
+      ? inspectHover
+      : null;
 
   return (
     <section
@@ -484,6 +520,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-camera-projection={sceneProps.cameraProjection}
       data-camera-target={sceneProps.cameraState.target.join(" ")}
       data-camera-up={sceneProps.cameraState.up.join(" ")}
+      data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
       data-topology-freshness={sceneProps.topologyFreshness}
@@ -530,7 +567,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             canvasRef.current = gl.domElement;
             configureViewport3DRenderer(gl, visualProfile);
           }}
-          onPointerMissed={onClearSelection}
+          onPointerMissed={() => {
+            clearInspectHover();
+            onClearSelection();
+          }}
         >
           <Viewport3DScene
             {...sceneProps}
@@ -541,6 +581,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onOrbitDebugAnglesChange={
               orbitDebugEnabled ? syncOrbitDebugAngles : undefined
             }
+            onInspectClear={clearInspectHover}
+            onInspectSample={updateInspectHover}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -556,6 +598,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
+      {visibleInspectHover ? (
+        <Viewport3DInspectTooltip hover={visibleInspectHover} />
+      ) : null}
       {orbitDebugEnabled && clientReady && colors ? (
         <Viewport3DOrbitDebugPanel
           angles={orbitDebugAngles}
@@ -580,6 +625,41 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         onOpenChange={setResourceIssueOpen}
       />
     </section>
+  );
+});
+
+const INSPECT_TOOLTIP_OFFSET_PX = 14;
+
+const Viewport3DInspectTooltip = memo(function Viewport3DInspectTooltip({
+  hover,
+}: {
+  hover: Viewport3DInspectHover;
+}) {
+  const { sample, screenPosition } = hover;
+  const lines =
+    sample.status === "ready"
+      ? formatViewport3DInspectComponents(sample)
+      : [sample.message];
+  return (
+    <div
+      aria-live="polite"
+      className="fm-viewport-3d__inspect-tooltip"
+      role="status"
+      style={{
+        left: screenPosition.x + INSPECT_TOOLTIP_OFFSET_PX,
+        top: screenPosition.y + INSPECT_TOOLTIP_OFFSET_PX,
+      }}
+    >
+      <div className="fm-viewport-3d__inspect-tooltip-header">
+        <span>{sample.quantityId}</span>
+        <span>{sample.targetLabel}</span>
+      </div>
+      <div className="fm-viewport-3d__inspect-tooltip-values">
+        {lines.map((line) => (
+          <span key={line}>{line}</span>
+        ))}
+      </div>
+    </div>
   );
 });
 

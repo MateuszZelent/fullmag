@@ -142,6 +142,7 @@ verify-fem-relaxation-production-benchmark:
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
       -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-2}" \
+      -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-50}" \
       -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}" \
       -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_production_benchmark_summary.json}" \
       -e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-}" \
@@ -164,13 +165,81 @@ verify-fem-relaxation-production-benchmark:
         --emit-best-demag-policy \
         --require-best-demag-policy \
         --require-gpu-control-readback-budget \
+        --require-gpu-phase-timings \
         --gpu-control-readback-per-step "$FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP" \
         --gpu-llg-control-readback-per-step "$FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP" \
         --gpu-pgbb-control-readback-per-step "$FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP" \
         --gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP" \
+        --require-min-solver-nodes "$FULLMAG_BENCH_MIN_SOLVER_NODES" \
         --require-demag-converged \
         --require-cpu-gpu-consistency \
         --require-gpu-strict-residency'
+
+verify-fem-gpu-demag-performance-benchmark:
+    just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-50e-9}" \
+      -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-100e-9}" \
+      -e FULLMAG_BENCH_SCENARIOS="${FULLMAG_BENCH_SCENARIOS:-box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_anis_cubic}" \
+      -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
+      -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,nonlinear_cg}" \
+      -e FULLMAG_BENCH_DEMAG_SOLVERS="${FULLMAG_BENCH_DEMAG_SOLVERS:-CG}" \
+      -e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-OMIT,AMG,JACOBI}" \
+      -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-4}" \
+      -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
+      -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-2}" \
+      -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-800}" \
+      -e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}" \
+      -e FULLMAG_BENCH_ACCEPTED_BASELINE="${FULLMAG_BENCH_ACCEPTED_BASELINE:-}" \
+      -e FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE="${FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE:-0}" \
+      -e FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT="${FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT:-10}" \
+      -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_fem_gpu_demag_performance_benchmark.csv}" \
+      -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_fem_gpu_demag_performance_benchmark_summary.json}" \
+      -e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-1}" \
+      -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC="${FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC:-1}" \
+      fem-gpu bash -lc 'cd /workspace && \
+        baseline_args=(); \
+        if [ -n "$FULLMAG_BENCH_ACCEPTED_BASELINE" ]; then baseline_args+=(--accepted-baseline "$FULLMAG_BENCH_ACCEPTED_BASELINE"); fi; \
+        if [ "$FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE" = "1" ]; then baseline_args+=(--require-accepted-baseline); fi; \
+        python3 scripts/analysis/fem_gpu_benchmark.py \
+        --meshes coarse \
+        --scenarios "$FULLMAG_BENCH_SCENARIOS" \
+        --integrators "$FULLMAG_BENCH_INTEGRATORS" \
+        --relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS" \
+        --demag-solvers "$FULLMAG_BENCH_DEMAG_SOLVERS" \
+        --demag-preconditioners "$FULLMAG_BENCH_DEMAG_PRECONDITIONERS" \
+        --steps "$FULLMAG_BENCH_STEPS" \
+        --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
+        --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
+        --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
+        --cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL" \
+        --output "$FULLMAG_BENCH_OUTPUT" \
+        --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
+        --quiet-json-summary \
+        --gpu-warmup \
+        --require-adaptive-gpu-rk-acceptance \
+        --emit-best-demag-policy \
+        --require-best-demag-policy \
+        --require-gpu-control-readback-budget \
+        --require-gpu-phase-timings \
+        --gpu-control-readback-per-step "$FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP" \
+        --gpu-llg-control-readback-per-step "$FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP" \
+        --gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP" \
+        --require-min-solver-nodes "$FULLMAG_BENCH_MIN_SOLVER_NODES" \
+        --min-gpu-demag-total-speedup "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP" \
+        --require-demag-converged \
+        --require-cpu-gpu-consistency \
+        --require-gpu-strict-residency \
+        --max-performance-regression-percent "$FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT" \
+        "${baseline_args[@]}"'
 
 resource-first-gates mode="strict":
     if [ "{{mode}}" = "report" ]; then ./scripts/ci-resource-first-gates.sh --report; \

@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-05-15
+- Last updated: 2026-06-05
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -73,6 +73,12 @@ When omitted, the canonical default remains:
 - `atol = None`
 - `max_iterations = 500`
 - `print_level = 0`
+
+For strict native FEM GPU Poisson demag, an omitted solver policy is resolved at
+runtime to `CG/JACOBI` while preserving the same tolerance and iteration
+defaults. This is a runtime policy selection, not a public authoring default:
+explicit user-provided `FemLinearSolverPolicy` values are not rewritten, and
+CPU native FEM continues to resolve the omitted policy to `CG/AMG`.
 
 ### 3.3 Hybrid
 
@@ -214,10 +220,14 @@ multiple demag solvers and preconditioners in one run. The sweep expands only
 for demag scenarios, so non-demag baselines are not duplicated by irrelevant
 Poisson policy settings.
 
-Update 2026-05-15 policy selection: the benchmark harness can emit a
-best-policy summary for each logical demag case, selecting the fastest row that
-satisfies the configured convergence residual and iteration gates. This remains
-benchmark analysis only; it does not silently change runtime solver policy.
+Update 2026-05-15/2026-06-05 policy selection: the benchmark harness can emit a
+best-policy summary for each logical demag case, selecting the fastest completed
+row that satisfies the configured convergence residual and iteration gates.
+Selection uses full `demag_wall_time_ms` first, with solve/apply timing only as
+a fallback for older rows that lack full demag timing. The summary also reports
+`average_demag_solver_apply_wall_time_ms`, but that is diagnostic; runtime
+policy changes must be made explicitly in the runner and reflected in
+provenance.
 
 Update 2026-06-05 GPU control-readback budget: the production FEM relaxation
 benchmark now gates FEM GPU hot-loop control-scalar readbacks separately from
@@ -256,9 +266,10 @@ preserves exchange, DMI, demag, local-field, and `H_eff` accumulation semantics
 while skipping the LLG RHS kernel that direct minimizers do not consume. With
 native phase timing enabled, exchange and demag remain attributable; `RHS
 total` may remain zero for these minimizers because no LLG RHS is evaluated.
-The phase-profiling env gate is cached in GPU RK timing runtime state during
-timing preparation, so ordinary step resets do not repeatedly query process
-environment variables.
+The phase-profiling env gate is refreshed during GPU RK preflight and tears
+down event pools when disabled, so ordinary disabled runs do not retain timing
+events and direct-minimizer runs can enable/disable profiling without rebuilding
+the runtime.
 
 Update 2026-06-05 GPU demag stream boundary: strict FEM GPU demag keeps RHS
 assembly, recovery, and energy reductions on the Fullmag CUDA compute stream,
@@ -324,6 +335,61 @@ Update 2026-06-05 production benchmark policy gate: the managed
 the FEM GPU container. Its default policy matrix compares `CG/AMG` and
 `CG/JACOBI` and runs with `--require-best-demag-policy`, so the production
 benchmark cannot pass demag qualification from a single converged policy row.
+
+Update 2026-06-05 GPU phase timing benchmark gate: when
+`FULLMAG_FEM_STEP_PROFILE=1`, the managed
+`verify-fem-relaxation-production-benchmark` recipe now passes
+`--require-gpu-phase-timings`. Executed `fem_gpu` rows must report positive
+`exchange_wall_time_ms`; LLG rows must also report positive `rhs_wall_time_ms`;
+and rows using strict GPU Poisson demag must report positive
+`demag_wall_time_ms`. Direct minimizers intentionally skip the LLG RHS kernel,
+so their `rhs_wall_time_ms == 0` remains valid when exchange and demag phase
+timings are present.
+
+Update 2026-06-05 pinned scalar readback staging: GPU RK and relaxation scalar
+readbacks now copy device scalar slots into a preallocated pinned host staging
+buffer owned by the CUDA reductions workspace before publishing values to the
+caller. This does not remove the required host wait for RK/adaptive/Armijo
+control decisions, but it removes pageable host destinations from the scalar
+D2H path and keeps the transfer-audit accounting unchanged.
+
+Update 2026-06-05 solver-mesh size gate: the managed production relaxation
+benchmark now requires completed rows to report at least
+`FULLMAG_BENCH_MIN_SOLVER_NODES` solver nodes. The default managed threshold is
+50 nodes, which is a smoke-floor guard against trivial mesh regressions, not a
+claim that the benchmark covers production-scale GPU performance. Larger
+performance qualification runs should raise this environment variable together
+with tighter `FULLMAG_BENCH_DOMAIN_HMAX` / `FULLMAG_BENCH_AIRBOX_HMAX`.
+
+Update 2026-06-05 demag performance gate: strict FEM GPU Poisson demag now has
+an opt-in managed performance recipe,
+`just verify-fem-gpu-demag-performance-benchmark`. It narrows the sweep to
+demag-bearing Box500 airbox cases, enables native GPU phase timing by default,
+uses tighter default mesh targets (`FULLMAG_BENCH_DOMAIN_HMAX=50e-9`,
+`FULLMAG_BENCH_AIRBOX_HMAX=100e-9`), and requires at least
+`FULLMAG_BENCH_MIN_SOLVER_NODES=800`. It also requires the completed demag
+CPU/GPU pairs to reach `FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP=2` on full
+`demag_wall_time_ms`, not only on the narrower
+`demag_solver_apply_wall_time_ms` phase. The recipe accepts
+`FULLMAG_BENCH_ACCEPTED_BASELINE` and
+`FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE=1` for regression-qualified runs. The
+recipe runs one unrecorded FEM GPU warmup case before measured rows, so CUDA and
+Hypre cold-start cost does not contaminate first-policy timing comparisons. The
+standard production relaxation benchmark remains the broader correctness and
+contract smoke; this demag recipe is the preferred gate before claiming GPU
+Poisson demag performance progress.
+
+Update 2026-06-05 strict GPU resolved default: the runner now resolves an
+omitted strict native FEM GPU Poisson demag solver policy to `CG/JACOBI`.
+Managed demag performance qualification on the 258-node Box500 airbox smoke
+showed the warmed strict GPU `CG/JACOBI` path materially faster than `CG/AMG`
+for the current qualification scale while preserving convergence gates. This
+does not change the public Python/IR default and does not override explicit
+authoring choices; runtime logs, provenance, and demag metadata must report the
+resolved policy actually used by the native solver.
+The dedicated demag performance recipe now includes an `OMIT` policy sentinel
+alongside explicit `AMG` and `JACOBI` rows, so the benchmark protects the
+runtime-resolved default path instead of only explicit solver-policy authoring.
 
 Update 2026-05-15 recovery scratch: non-PBC Poisson demag recovery now keeps
 serial and per-thread element scratch buffers in the context-owned recovery

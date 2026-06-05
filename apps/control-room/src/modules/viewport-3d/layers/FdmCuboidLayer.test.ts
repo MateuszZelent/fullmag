@@ -223,6 +223,17 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("instanceModel !== undefined");
   });
 
+  it("uses a native raycast path for FDM inspect hover sampling", () => {
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(layerSource).toContain('canvas.addEventListener("pointermove"');
+    expect(layerSource).toContain("raycaster.setFromCamera");
+    expect(layerSource).toContain("intersectObjects(targets, false)");
+    expect(layerSource).toContain("resolveProjectedFdmInspectHit");
+    expect(layerSource).toContain("FDM_INSPECT_PROJECTION_FALLBACK_LIMIT");
+    expect(layerSource).toContain("buildViewport3DFdmInspectSample");
+  });
+
   it("reuses FDM vector segment buffers for the same model, field, and sampling options", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const field = vectorField([

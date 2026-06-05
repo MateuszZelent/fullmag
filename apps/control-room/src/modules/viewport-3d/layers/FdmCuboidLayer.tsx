@@ -2,16 +2,19 @@
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-import { type ThreeEvent } from "@react-three/fiber";
+import { type ThreeEvent, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, memo } from "react";
 import {
   BoxGeometry,
+  type Camera,
   Color,
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
   MeshStandardMaterial,
   Quaternion,
+  Raycaster,
+  Vector2,
   Vector3,
 } from "three";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -28,6 +31,11 @@ import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
+  buildViewport3DFdmInspectSample,
+  type Viewport3DInspectSample,
+  type Viewport3DInspectScreenPosition,
+} from "../viewport3dInspect";
+import {
   opacityFromSettings,
   surfaceMaterialColorFromSettings,
   vectorColorModeFromSettings,
@@ -42,6 +50,8 @@ import {
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const VECTOR_SEGMENT_STRIDE = 7;
+const FDM_INSPECT_PROJECTION_FALLBACK_LIMIT = 5000;
+const FDM_INSPECT_PROJECTION_HIT_RADIUS_PX = 36;
 
 export interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
@@ -406,6 +416,69 @@ export function resolveFdmVectorGlyphScale(
   return Math.min(safeScale, localCap);
 }
 
+interface FdmInspectProjectionFallbackInput {
+  camera: Camera;
+  model: FdmCuboidInstanceModel;
+  pointerX: number;
+  pointerY: number;
+  projected: Vector3;
+  rectHeight: number;
+  rectWidth: number;
+}
+
+function resolveProjectedFdmInspectHit({
+  camera,
+  model,
+  pointerX,
+  pointerY,
+  projected,
+  rectHeight,
+  rectWidth,
+}: FdmInspectProjectionFallbackInput): {
+  instanceId: number;
+  worldPosition: [number, number, number];
+} | null {
+  if (model.count > FDM_INSPECT_PROJECTION_FALLBACK_LIMIT) return null;
+
+  const maxDistanceSq =
+    FDM_INSPECT_PROJECTION_HIT_RADIUS_PX *
+    FDM_INSPECT_PROJECTION_HIT_RADIUS_PX;
+  let bestDistanceSq = maxDistanceSq;
+  let bestInstanceId = -1;
+
+  for (let instanceId = 0; instanceId < model.count; instanceId += 1) {
+    const offset = instanceId * 3;
+    const worldX = model.centers[offset] ?? 0;
+    const worldY = model.centers[offset + 1] ?? 0;
+    const worldZ = model.centers[offset + 2] ?? 0;
+
+    projected.set(worldX, worldY, worldZ).project(camera);
+    if (projected.z < -1 || projected.z > 1) continue;
+
+    const screenX = (projected.x * 0.5 + 0.5) * rectWidth;
+    const screenY = (-projected.y * 0.5 + 0.5) * rectHeight;
+    const dx = screenX - pointerX;
+    const dy = screenY - pointerY;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq >= bestDistanceSq) continue;
+
+    bestDistanceSq = distanceSq;
+    bestInstanceId = instanceId;
+  }
+
+  if (bestInstanceId < 0) return null;
+
+  const offset = bestInstanceId * 3;
+  return {
+    instanceId: bestInstanceId,
+    worldPosition: [
+      model.centers[offset] ?? 0,
+      model.centers[offset + 1] ?? 0,
+      model.centers[offset + 2] ?? 0,
+    ],
+  };
+}
+
 interface FdmCuboidMatrixUploadOptions {
   invalidate: () => void;
   model: FdmCuboidInstanceModel | null;
@@ -598,7 +671,11 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   vectorStyle,
   fieldVector,
   instanceModel,
+  inspectEnabled,
+  inspectQuantityId,
   maxVectorGlyphs,
+  onInspectClear,
+  onInspectSample,
   voxelFillRatio,
   voxelMagnitudeThreshold,
   voxelTopography,
@@ -607,8 +684,15 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   domain: FdmGridRenderDomain | null;
   fieldVector: DecodedFieldVector | null | undefined;
   instanceModel?: FdmCuboidInstanceModel | null;
+  inspectEnabled: boolean;
+  inspectQuantityId: string;
   maxVectorGlyphs: number;
   materialProfile: Viewport3DMaterialProfile;
+  onInspectClear?: () => void;
+  onInspectSample?: (
+    sample: Viewport3DInspectSample,
+    screenPosition: Viewport3DInspectScreenPosition,
+  ) => void;
   onSelectDomain: () => void;
   settings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
@@ -623,6 +707,15 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   const invalidate = useBatchedInvalidate();
   const surfaceRef = useRef<InstancedMesh>(null);
   const wireframeRef = useRef<InstancedMesh>(null);
+  const { camera, gl } = useThree();
+  const inspectRaycastState = useMemo(
+    () => ({
+      pointer: new Vector2(),
+      projected: new Vector3(),
+      raycaster: new Raycaster(),
+    }),
+    [],
+  );
   const renderSettings = settings;
   const model = useMemo(
     () =>
@@ -745,6 +838,91 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     usesInstanceColors,
   });
 
+  useEffect(() => {
+    if (!inspectEnabled || !model) return undefined;
+
+    const canvas = gl.domElement;
+    const handleInspectPointerMove = (event: PointerEvent) => {
+      if (event.buttons !== 0) return;
+
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      inspectRaycastState.pointer.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      inspectRaycastState.raycaster.setFromCamera(
+        inspectRaycastState.pointer,
+        camera,
+      );
+
+      const targets = [surfaceRef.current, wireframeRef.current].filter(
+        (mesh): mesh is InstancedMesh => Boolean(mesh),
+      );
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const hit = inspectRaycastState.raycaster
+        .intersectObjects(targets, false)
+        .find((intersection) => typeof intersection.instanceId === "number");
+
+      const fallbackHit = hit
+        ? null
+        : resolveProjectedFdmInspectHit({
+            camera,
+            model,
+            pointerX,
+            pointerY,
+            projected: inspectRaycastState.projected,
+            rectHeight: rect.height,
+            rectWidth: rect.width,
+          });
+      const instanceId = hit?.instanceId ?? fallbackHit?.instanceId;
+      const worldPosition: [number, number, number] | null = hit
+        ? [hit.point.x, hit.point.y, hit.point.z]
+        : (fallbackHit?.worldPosition ?? null);
+
+      if (typeof instanceId !== "number" || !worldPosition) {
+        onInspectClear?.();
+        return;
+      }
+
+      onInspectSample?.(
+        buildViewport3DFdmInspectSample({
+          fieldVector,
+          instanceId,
+          model,
+          quantityId: inspectQuantityId,
+          worldPosition,
+        }),
+        {
+          x: pointerX,
+          y: pointerY,
+        },
+      );
+    };
+    const handleInspectPointerLeave = () => {
+      onInspectClear?.();
+    };
+
+    canvas.addEventListener("pointermove", handleInspectPointerMove);
+    canvas.addEventListener("pointerleave", handleInspectPointerLeave);
+    return () => {
+      canvas.removeEventListener("pointermove", handleInspectPointerMove);
+      canvas.removeEventListener("pointerleave", handleInspectPointerLeave);
+    };
+  }, [
+    camera,
+    fieldVector,
+    gl,
+    inspectEnabled,
+    inspectQuantityId,
+    inspectRaycastState,
+    model,
+    onInspectClear,
+    onInspectSample,
+  ]);
+
   if (
     !model ||
     !renderSettings.visible ||
@@ -757,6 +935,27 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     event.stopPropagation();
     onSelectDomain();
   };
+  const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
+    if (!inspectEnabled) return;
+    event.stopPropagation();
+    onInspectSample?.(
+      buildViewport3DFdmInspectSample({
+        fieldVector,
+        instanceId: event.instanceId,
+        model,
+        quantityId: inspectQuantityId,
+        worldPosition: [event.point.x, event.point.y, event.point.z],
+      }),
+      {
+        x: event.nativeEvent.offsetX,
+        y: event.nativeEvent.offsetY,
+      },
+    );
+  };
+  const handlePointerOut = () => {
+    if (!inspectEnabled) return;
+    onInspectClear?.();
+  };
 
   return (
     <group onPointerDown={handlePointerDown}>
@@ -765,6 +964,8 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           args={[geometry, surfaceMaterial, model.count]}
           frustumCulled={false}
           key={`fdm-cuboids-surface-${model.count}-${usesInstanceColors ? "field" : "solid"}`}
+          onPointerMove={handlePointerMove}
+          onPointerOut={handlePointerOut}
           ref={surfaceRef}
           renderOrder={surfacePolicy.renderOrder}
         />
@@ -774,6 +975,8 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           args={[geometry, wireframeMaterial, model.count]}
           frustumCulled={false}
           key={`fdm-cuboids-wire-${model.count}`}
+          onPointerMove={handlePointerMove}
+          onPointerOut={handlePointerOut}
           ref={wireframeRef}
           renderOrder={wireframePolicy.renderOrder}
         />

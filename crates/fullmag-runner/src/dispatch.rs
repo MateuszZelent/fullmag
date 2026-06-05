@@ -3131,7 +3131,7 @@ fn execute_native_fem(
     let execution_engine = native_fem_execution_engine(plan);
     let execution_mode = native_fem_execution_mode(plan);
     validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
-    let demag_policy = plan.demag_solver_policy.clone().unwrap_or_default();
+    let demag_policy = crate::native_fem::resolved_native_fem_demag_solver_policy(plan);
     runtime_info_once(&format!(
         "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse llg_mode={} demag_solver={} preconditioner={} demag_mode={} hypre_gpu_policy={} demag_residency={}",
         execution_engine,
@@ -3326,7 +3326,7 @@ pub(crate) fn fem_poisson_demag_provenance(
         fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => "fredkin_koehler_fem_bem",
         _ => return None,
     };
-    let policy = plan.demag_solver_policy.clone().unwrap_or_default();
+    let policy = crate::native_fem::resolved_native_fem_demag_solver_policy(plan);
 
     Some(FemPoissonDemagProvenance {
         linear_solver: policy.solver,
@@ -3904,6 +3904,23 @@ mod tests {
         assert_eq!(provenance.final_residual, Some(4.0e-9));
         assert_eq!(provenance.boundary_condition, "robin");
         assert_eq!(provenance.robin_beta, Some(2.5));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_poisson_demag_provenance_records_resolved_gpu_default_policy() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+
+        let provenance = fem_poisson_demag_provenance(&plan, None)
+            .expect("poisson demag provenance should be present");
+
+        assert_eq!(provenance.linear_solver, "CG");
+        assert_eq!(provenance.preconditioner, "JACOBI");
+        assert_eq!(provenance.rtol, 1e-8);
+        assert_eq!(provenance.max_iterations, 500);
     }
 
     #[cfg(feature = "fem-gpu")]

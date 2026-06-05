@@ -68,6 +68,9 @@ type RuntimeCommandWithPrecondition = StructuredCommandRequest & {
   precondition?: RuntimeCommandPrecondition | null;
 };
 
+const SOLVER_PROFILE_DEFAULT_MAX_SAMPLES = 256;
+const SOLVER_PROFILE_DEFAULT_SAMPLE_INTERVAL_WALL_MS = 5_000;
+
 interface RuntimePreconditionRefreshApi {
   commands?: {
     list?: () => Promise<CommandQueueStatusResource>;
@@ -718,9 +721,19 @@ function buildSolverProfileCommand(
       : !solverProfileEnabled(context);
   const current = solverProfileResource(context);
   const maxSamples = requestedEnabled
-    ? Math.max(current?.config.max_samples ?? 4096, 4096)
-    : current?.config.max_samples ?? 4096;
+    ? Math.min(
+        Math.max(current?.config.max_samples ?? SOLVER_PROFILE_DEFAULT_MAX_SAMPLES, 1),
+        SOLVER_PROFILE_DEFAULT_MAX_SAMPLES,
+      )
+    : current?.config.max_samples ?? SOLVER_PROFILE_DEFAULT_MAX_SAMPLES;
   const sampleEvery = current?.config.sample_every ?? 1;
+  const sampleIntervalWallMs = requestedEnabled
+    ? Math.max(
+        current?.config.sample_interval_wall_ms ??
+          SOLVER_PROFILE_DEFAULT_SAMPLE_INTERVAL_WALL_MS,
+        SOLVER_PROFILE_DEFAULT_SAMPLE_INTERVAL_WALL_MS,
+      )
+    : current?.config.sample_interval_wall_ms ?? 0;
   const reason = requestedEnabled
     ? "enable_solver_profile"
     : "disable_solver_profile";
@@ -729,11 +742,12 @@ function buildSolverProfileCommand(
     client_intent_id: createSolverProfileClientIntentId(reason),
     kind: "set_solver_profile",
     profile: {
-      emit_engine_log: requestedEnabled,
+      emit_engine_log: false,
       enabled: requestedEnabled,
       max_samples: maxSamples,
-      persist_artifact: requestedEnabled,
+      persist_artifact: false,
       sample_every: sampleEvery,
+      sample_interval_wall_ms: sampleIntervalWallMs,
     },
     reason,
     requested_at_unix_ms: Date.now(),

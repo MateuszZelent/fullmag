@@ -46,6 +46,15 @@ bool phase_timing_env_enabled()
            std::strcmp(raw, "YES") == 0;
 }
 
+bool phase_timing_requested(Context &ctx)
+{
+    const auto &timings = ctx.gpu_state.rk_phase_timings;
+    if (timings.override_configured) {
+        return timings.override_enabled;
+    }
+    return phase_timing_env_enabled();
+}
+
 void destroy_phase_timing_events(
     std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events)
 {
@@ -157,10 +166,18 @@ void reset_phase_timing_accumulators(Context &ctx)
 void refresh_phase_timing_enablement(Context &ctx)
 {
     auto &timings = ctx.gpu_state.rk_phase_timings;
-    const bool enabled = phase_timing_env_enabled();
+    const bool enabled = phase_timing_requested(ctx);
     if (!timings.configured) {
+        if (!enabled) {
+            destroy_phase_timing_events(timings.exchange_events);
+            destroy_phase_timing_events(timings.demag_assemble_events);
+            destroy_phase_timing_events(timings.demag_recover_events);
+            destroy_phase_timing_events(timings.demag_energy_events);
+            destroy_phase_timing_events(timings.rhs_events);
+        }
         timings.enabled = enabled;
         timings.configured = true;
+        reset_phase_timing_accumulators(ctx);
         return;
     }
     if (timings.enabled == enabled) {

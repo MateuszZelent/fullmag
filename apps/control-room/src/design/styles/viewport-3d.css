@@ -204,6 +204,50 @@
   user-select: none;
 }
 
+.fm-viewport-3d__inspect-tooltip {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  min-width: 10rem;
+  max-width: min(18rem, calc(100% - var(--fm-space-6)));
+  gap: var(--fm-space-2);
+  border: 1px solid var(--fm-border-strong);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 92%, transparent);
+  box-shadow: var(--fm-shadow-panel);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  pointer-events: none;
+  padding: var(--fm-space-2);
+  transform: translateZ(0);
+  user-select: none;
+  backdrop-filter: blur(6px);
+}
+
+.fm-viewport-3d__inspect-tooltip-header {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: var(--fm-space-3);
+  color: var(--fm-text-secondary);
+  font-weight: 650;
+}
+
+.fm-viewport-3d__inspect-tooltip-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-viewport-3d__inspect-tooltip-values {
+  display: grid;
+  gap: var(--fm-space-1);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
 .fm-viewport-3d__primitive-label {
   display: inline-flex;
   max-width: 9rem;

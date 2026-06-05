@@ -39,6 +39,7 @@ BOX500_AIRBOX_SCENARIO_ALIASES = {
 BOX500_AIRBOX_SCENARIOS = set(BOX500_AIRBOX_SCENARIO_ALIASES)
 DEFAULT_DEMAG_SOLVER = "CG"
 DEFAULT_DEMAG_PRECONDITIONER = "AMG"
+OMITTED_DEMAG_POLICY_PRECONDITIONER = "OMIT"
 DEFAULT_DEMAG_RTOL = 1e-8
 DEFAULT_DEMAG_ATOL = None
 DEFAULT_DEMAG_MAX_ITERATIONS = 500
@@ -145,6 +146,19 @@ def env_demag_preconditioner() -> str:
         "FULLMAG_BENCH_DEMAG_PRECONDITIONER",
         DEFAULT_DEMAG_PRECONDITIONER,
     ).strip().upper()
+
+
+def env_demag_solver_policy() -> fm.FemLinearSolverPolicy | None:
+    if env_demag_preconditioner() == OMITTED_DEMAG_POLICY_PRECONDITIONER:
+        return None
+    return fm.FemLinearSolverPolicy(
+        solver=env_demag_solver(),
+        preconditioner=env_demag_preconditioner(),
+        rtol=env_float("FULLMAG_BENCH_DEMAG_RTOL", DEFAULT_DEMAG_RTOL),
+        atol=env_demag_atol(),
+        max_iterations=env_demag_max_iterations(),
+        print_level=env_demag_print_level(),
+    )
 
 
 def env_demag_max_iterations() -> int:
@@ -380,14 +394,7 @@ def build(
                     scenario_domain_hmax(scenario) if requires_shared_domain else 3e-9
                 ),
                 mesh=None if requires_shared_domain else str(mesh_path),
-                demag_solver_policy=fm.FemLinearSolverPolicy(
-                    solver=env_demag_solver(),
-                    preconditioner=env_demag_preconditioner(),
-                    rtol=env_float("FULLMAG_BENCH_DEMAG_RTOL", DEFAULT_DEMAG_RTOL),
-                    atol=env_demag_atol(),
-                    max_iterations=env_demag_max_iterations(),
-                    print_level=env_demag_print_level(),
-                ),
+                demag_solver_policy=env_demag_solver_policy(),
             ),
         ),
         runtime=fm.backend.engine("fem"),

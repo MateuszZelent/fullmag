@@ -222,6 +222,18 @@ export const viewport3dManifest: ModuleManifest = {
         },
       },
       {
+        id: "viewport-3d.inspect-toggle",
+        title: "Inspect Field Value",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => viewport3dStore.getSnapshot().widgets.inspectEnabled,
+        run: () => {
+          viewport3dStore.toggleInspect();
+          return { status: "completed" };
+        },
+      },
+      {
         id: "workspace.visualization-settings",
         title: "Visualization Settings",
         group: "viewport-3d",

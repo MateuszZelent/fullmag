@@ -481,6 +481,11 @@ extern "C" {
         user_data: *mut c_void,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_set_step_profile(
+        handle: *mut fullmag_fem_backend,
+        enabled: i32,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_copy_field_f64(
         handle: *mut fullmag_fem_backend,
         observable: fullmag_fem_observable,

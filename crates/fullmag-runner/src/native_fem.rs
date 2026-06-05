@@ -22,6 +22,7 @@ pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
 #[allow(unused_imports)]
 pub(crate) use plan::{
     native_fem_mfem_device_string_requests_gpu, native_fem_plan_requests_gpu_mfem_device,
+    resolved_native_fem_demag_solver_policy,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
@@ -544,11 +545,7 @@ impl NativeFemBackend {
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
             demag_solver: {
-                let policy = plan
-                    .demag_solver_policy
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_default();
+                let policy = resolved_native_fem_demag_solver_policy(plan);
                 let solver = match policy.solver.as_str() {
                     "CG" => ffi::fullmag_fem_linear_solver::FULLMAG_FEM_LINEAR_SOLVER_CG,
                     "GMRES" => ffi::fullmag_fem_linear_solver::FULLMAG_FEM_LINEAR_SOLVER_GMRES,
@@ -1738,9 +1735,9 @@ mod tests {
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
         AdaptiveTimeStepIR, AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision,
-        FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice,
-        MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, RelaxStopIR,
-        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFemDemagIR,
+        FemLinearSolverPolicy, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector, FemPlanIR,
+        IntegratorChoice, MaterialIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
+        RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFemDemagIR,
     };
 
     struct EnvVarGuard {
@@ -3298,6 +3295,49 @@ mod tests {
             boundary_marker_source: Some("parity_fixture".to_string()),
         });
         plan
+    }
+
+    #[test]
+    fn unresolved_gpu_demag_policy_prefers_jacobi_preconditioner() {
+        let mut plan = with_poisson_demag(make_exchange_only_plan());
+        plan.mfem_device_string = Some("cuda".to_string());
+
+        let policy = resolved_native_fem_demag_solver_policy(&plan);
+
+        assert_eq!(policy.solver, "CG");
+        assert_eq!(policy.preconditioner, "JACOBI");
+        assert_eq!(policy.rtol, 1e-8);
+        assert_eq!(policy.max_iterations, 500);
+    }
+
+    #[test]
+    fn unresolved_cpu_demag_policy_keeps_public_default_preconditioner() {
+        let mut plan = with_poisson_demag(make_exchange_only_plan());
+        plan.mfem_device_string = Some("cpu".to_string());
+
+        let policy = resolved_native_fem_demag_solver_policy(&plan);
+
+        assert_eq!(policy.preconditioner, "AMG");
+    }
+
+    #[test]
+    fn explicit_gpu_demag_policy_is_not_rewritten() {
+        let mut plan = with_poisson_demag(make_exchange_only_plan());
+        plan.mfem_device_string = Some("cuda".to_string());
+        plan.demag_solver_policy = Some(FemLinearSolverPolicy {
+            solver: "GMRES".to_string(),
+            preconditioner: "AMG".to_string(),
+            rtol: 1e-6,
+            max_iterations: 77,
+            ..Default::default()
+        });
+
+        let policy = resolved_native_fem_demag_solver_policy(&plan);
+
+        assert_eq!(policy.solver, "GMRES");
+        assert_eq!(policy.preconditioner, "AMG");
+        assert_eq!(policy.rtol, 1e-6);
+        assert_eq!(policy.max_iterations, 77);
     }
 
     fn with_adaptive_dt(mut plan: FemPlanIR) -> FemPlanIR {

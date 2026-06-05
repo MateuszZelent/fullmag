@@ -67,6 +67,7 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.rotation-object")).toBeDefined();
     expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
     expect(registry.get("viewport-3d.fdm-topography-toggle")).toBeDefined();
+    expect(registry.get("viewport-3d.inspect-toggle")).toBeDefined();
     expect(registry.get("viewport-3d.fdm-topography-component-magnitude"))
       .toBeDefined();
 
@@ -94,6 +95,16 @@ describe("viewport3dManifest", () => {
 
     await registry.execute("viewport-3d.fdm-topography-toggle", { source: "test" });
     expect(viewport3dStore.getSnapshot().widgets.fdmTopographyEnabled).toBe(true);
+
+    expect(
+      registry.isActive("viewport-3d.inspect-toggle", { source: "test" }),
+    ).toBe(false);
+    await registry.execute("viewport-3d.inspect-toggle", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.inspectEnabled).toBe(true);
+    expect(
+      registry.isActive("viewport-3d.inspect-toggle", { source: "test" }),
+    ).toBe(true);
+
     await registry.execute(
       "viewport-3d.fdm-topography-component-magnitude",
       { source: "test" },
