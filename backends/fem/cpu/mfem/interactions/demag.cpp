@@ -30,7 +30,10 @@ struct FreshDemagSolveSideEffects {
     double last_residual = 0.0;
     uint64_t last_setup_wall_time_ns = 0;
     uint64_t last_solver_apply_wall_time_ns = 0;
+    uint64_t step_assemble_wall_time_ns = 0;
     uint64_t step_solver_apply_wall_time_ns = 0;
+    uint64_t step_recover_wall_time_ns = 0;
+    uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
 
@@ -42,7 +45,10 @@ struct FreshDemagSolveSideEffects {
         , last_residual(ctx.poisson_demag.last_residual)
         , last_setup_wall_time_ns(ctx.poisson_demag.last_setup_wall_time_ns)
         , last_solver_apply_wall_time_ns(ctx.poisson_demag.last_solver_apply_wall_time_ns)
+        , step_assemble_wall_time_ns(ctx.poisson_demag.step_assemble_wall_time_ns)
         , step_solver_apply_wall_time_ns(ctx.poisson_demag.step_solver_apply_wall_time_ns)
+        , step_recover_wall_time_ns(ctx.poisson_demag.step_recover_wall_time_ns)
+        , step_energy_wall_time_ns(ctx.poisson_demag.step_energy_wall_time_ns)
         , last_solver_setup_reused(ctx.poisson_demag.last_solver_setup_reused)
         , solves_current_step(ctx.poisson_demag.solves_current_step)
     {
@@ -57,7 +63,10 @@ struct FreshDemagSolveSideEffects {
         ctx.poisson_demag.last_residual = last_residual;
         ctx.poisson_demag.last_setup_wall_time_ns = last_setup_wall_time_ns;
         ctx.poisson_demag.last_solver_apply_wall_time_ns = last_solver_apply_wall_time_ns;
+        ctx.poisson_demag.step_assemble_wall_time_ns = step_assemble_wall_time_ns;
         ctx.poisson_demag.step_solver_apply_wall_time_ns = step_solver_apply_wall_time_ns;
+        ctx.poisson_demag.step_recover_wall_time_ns = step_recover_wall_time_ns;
+        ctx.poisson_demag.step_energy_wall_time_ns = step_energy_wall_time_ns;
         ctx.poisson_demag.last_solver_setup_reused = last_solver_setup_reused;
         ctx.poisson_demag.solves_current_step = solves_current_step;
     }

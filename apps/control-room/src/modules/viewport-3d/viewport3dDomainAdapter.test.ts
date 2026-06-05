@@ -143,19 +143,27 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.objectPartIds.get("object-1_geom")).toEqual(["part-magnet"]);
   });
 
-  it("keeps helper boundary and interface parts out of renderable FEM part lists", () => {
+  it("keeps helper boundary parts out of renderable FEM part lists", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
     expect(domain.partsById.get("part-outer-boundary")?.role).toBe(
       "outer_boundary",
     );
-    expect(domain.partsById.get("part-interface")?.role).toBe("interface");
     expect(domain.airboxParts.map((part) => part.id)).not.toContain(
       "part-outer-boundary",
     );
-    expect(domain.magneticParts.map((part) => part.id)).not.toEqual(
-      expect.arrayContaining(["part-outer-boundary", "part-interface"]),
+    expect(domain.magneticParts.map((part) => part.id)).not.toContain(
+      "part-outer-boundary",
     );
+  });
+
+  it("assigns air-magnetic interface surfaces to the owning magnetic part", () => {
+    const domain = adaptFemSharedDomainManifest(manifestFixture());
+
+    expect(domain.partsById.get("part-interface")?.role).toBe("interface");
+    expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);
+    expect(domain.magneticSurfacePartsByPartId.get("part-magnet")?.map((part) => part.id))
+      .toEqual(["part-interface"]);
   });
 
   it("resolves FEM picking selection from mesh-part boundary faces", () => {

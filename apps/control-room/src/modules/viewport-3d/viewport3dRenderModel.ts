@@ -242,6 +242,7 @@ export function buildViewport3DTopologyRenderModel<
   topology: DecodedTopology | null | undefined,
   magneticParts: readonly TPart[],
   airboxParts: readonly TPart[],
+  magneticSurfacePartsByPartId?: ReadonlyMap<string, readonly TPart[]>,
 ): Viewport3DTopologyRenderModel<TPart> | null {
   if (!topology) return null;
 
@@ -273,7 +274,12 @@ export function buildViewport3DTopologyRenderModel<
       return fallbackVolumeEdgeIndices();
     },
     magneticParts: magneticParts.map((part) =>
-      buildViewport3DTopologyPartRenderModel(part, topology),
+      buildViewport3DTopologyPartRenderModel(
+        part,
+        topology,
+        null,
+        magneticSurfacePartsByPartId?.get(part.id) ?? [],
+      ),
     ),
     nodeCount: topology.nodeCount,
     positions: buildTopologyPositions(topology),
@@ -286,11 +292,13 @@ function buildViewport3DTopologyPartRenderModel<
   part: TPart,
   topology: DecodedTopology,
   fallbackVolumeEdgeIndices: (() => Uint32Array | null) | null = null,
+  supplementalSurfaceParts: readonly TPart[] = [],
 ): Viewport3DTopologyPartRenderModel<TPart> {
   const topologyModel = buildPartTopologyModel(
     part,
     topology,
     fallbackVolumeEdgeIndices,
+    supplementalSurfaceParts,
   );
   return {
     get edgeIndices() {
@@ -1225,6 +1233,7 @@ function buildPartTopologyModel(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
   fallbackVolumeEdgeIndices: (() => Uint32Array | null) | null = null,
+  supplementalSurfaceParts: readonly Viewport3DSurfacePart[] = [],
 ): Pick<
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
@@ -1232,7 +1241,13 @@ function buildPartTopologyModel(
   | "surfaceNodeSelection"
   | "volumeEdgeIndices"
 > {
-  const surfaceIndices = lazyValue(() => buildPartSurfaceIndices(part, topology));
+  const surfaceIndices = lazyValue(() =>
+    buildPartSurfaceIndicesWithSupplemental(
+      part,
+      topology,
+      supplementalSurfaceParts,
+    ),
+  );
   const edgeIndices = lazyValue(() =>
     buildCachedSurfaceEdgeIndices(surfaceIndices()),
   );
@@ -1260,6 +1275,131 @@ function buildPartTopologyModel(
       return volumeEdgeIndices();
     },
   };
+}
+
+function buildPartSurfaceIndicesWithSupplemental(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+  supplementalSurfaceParts: readonly Viewport3DSurfacePart[],
+): Uint32Array | null {
+  const primarySurfaceIndices = buildPartSurfaceIndices(part, topology);
+  if (supplementalSurfaceParts.length === 0) return primarySurfaceIndices;
+
+  const surfaceIndexBuffers: Uint32Array[] = [];
+  if (primarySurfaceIndices?.length) {
+    surfaceIndexBuffers.push(primarySurfaceIndices);
+  }
+  for (const supplementalPart of supplementalSurfaceParts) {
+    const supplementalSurfaceIndices = buildPartSurfaceIndices(
+      supplementalPart,
+      topology,
+    );
+    if (supplementalSurfaceIndices?.length) {
+      surfaceIndexBuffers.push(supplementalSurfaceIndices);
+    }
+  }
+
+  return mergeSurfaceIndexBuffers(surfaceIndexBuffers, topology.nodeCount);
+}
+
+function mergeSurfaceIndexBuffers(
+  buffers: readonly Uint32Array[],
+  nodeCount: number,
+): Uint32Array | null {
+  const validBuffers = buffers.filter((buffer) => buffer.length >= 3);
+  if (validBuffers.length === 0) return null;
+  if (validBuffers.length === 1) return validBuffers[0] ?? null;
+
+  const totalLength = validBuffers.reduce(
+    (sum, buffer) => sum + buffer.length - (buffer.length % 3),
+    0,
+  );
+  if (totalLength <= 0) return null;
+
+  const merged = new Uint32Array(totalLength);
+  const numericKeyBase = resolveNumericTriangleKeyBase(nodeCount);
+  const seenNumeric = numericKeyBase ? new Set<number>() : null;
+  const seenString = seenNumeric ? null : new Set<string>();
+  let target = 0;
+
+  for (const buffer of validBuffers) {
+    for (let index = 0; index + 2 < buffer.length; index += 3) {
+      const a = buffer[index] ?? 0;
+      const b = buffer[index + 1] ?? 0;
+      const c = buffer[index + 2] ?? 0;
+      if (a >= nodeCount || b >= nodeCount || c >= nodeCount) continue;
+      const key = numericKeyBase
+        ? triangleNumericKey(numericKeyBase, a, b, c)
+        : triangleStringKey(a, b, c);
+      if (seenNumeric) {
+        if (seenNumeric.has(key as number)) continue;
+        seenNumeric.add(key as number);
+      } else if (seenString) {
+        const stringKey = key as string;
+        if (seenString.has(stringKey)) continue;
+        seenString.add(stringKey);
+      }
+      merged[target++] = a;
+      merged[target++] = b;
+      merged[target++] = c;
+    }
+  }
+
+  return target > 0 ? merged.slice(0, target) : null;
+}
+
+function resolveNumericTriangleKeyBase(nodeCount: number): number | null {
+  const keyBase = Math.max(0, Math.floor(nodeCount)) + 1;
+  return keyBase ** 3 <= Number.MAX_SAFE_INTEGER ? keyBase : null;
+}
+
+function triangleNumericKey(
+  keyBase: number,
+  first: number,
+  second: number,
+  third: number,
+): number {
+  let a = first;
+  let b = second;
+  let c = third;
+  if (a > b) {
+    const next = a;
+    a = b;
+    b = next;
+  }
+  if (b > c) {
+    const next = b;
+    b = c;
+    c = next;
+  }
+  if (a > b) {
+    const next = a;
+    a = b;
+    b = next;
+  }
+  return (a * keyBase + b) * keyBase + c;
+}
+
+function triangleStringKey(first: number, second: number, third: number): string {
+  let a = first;
+  let b = second;
+  let c = third;
+  if (a > b) {
+    const next = a;
+    a = b;
+    b = next;
+  }
+  if (b > c) {
+    const next = b;
+    b = c;
+    c = next;
+  }
+  if (a > b) {
+    const next = a;
+    a = b;
+    b = next;
+  }
+  return `${a}:${b}:${c}`;
 }
 
 export function resolveDomainBounds(

@@ -77,6 +77,7 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         icon: "wave",
         objectId,
         status: object.magnetization ? "ready" : "degraded",
+        contextCommands: ["magnetization-texture.activate-load-file"],
         children: magneticTextureChildren(parentId, object),
       },
       {
@@ -218,7 +219,7 @@ function magneticTextureChildren(
   const children: ExplorerNode[] = [
     {
       id: `${textureParent}:asset`,
-      kind: "object.magnetic-texture",
+      kind: "object.magnetic-texture.asset",
       label: object.magnetizationLabel ?? object.magnetization ?? "No texture assigned",
       parentId: textureParent,
       badge: object.magnetization ?? "unassigned",
@@ -228,10 +229,24 @@ function magneticTextureChildren(
     },
   ];
 
+  if (object.textureLoadEnabled) {
+    children.push({
+      id: `${textureParent}:load`,
+      kind: "object.magnetic-texture.load",
+      label: "Load texture",
+      parentId: textureParent,
+      badge: "h5/zarr",
+      icon: "file",
+      objectId: object.id,
+      status: "ready",
+      contextCommands: ["study.load-field-state"],
+    });
+  }
+
   if (object.textureTransformAvailable) {
     children.push({
       id: `${textureParent}:transform`,
-      kind: "object.magnetic-texture",
+      kind: "object.magnetic-texture.transform",
       label: "Texture Transform",
       parentId: textureParent,
       badge: "m0",

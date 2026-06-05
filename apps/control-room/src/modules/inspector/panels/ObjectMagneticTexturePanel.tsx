@@ -6,6 +6,7 @@ import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
 } from "@/kernel/api/apiPaths";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   MODEL_REGIONS_RESOURCE_KEY,
@@ -65,9 +66,50 @@ function targetFromModel(
   return { kind: "object", objectId: model.objectId };
 }
 
+interface AuthoringScriptSyncApi {
+  model: {
+    syncAuthoringScript: (request: Record<string, never>) => Promise<unknown>;
+  };
+}
+
+export async function syncAuthoringScriptBestEffort(
+  api: AuthoringScriptSyncApi,
+): Promise<string | null> {
+  try {
+    await api.model.syncAuthoringScript({});
+    return null;
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
 type MagneticTexturePanelModel = ReturnType<
   typeof resolveObjectMagneticTexturePanelModel
 >;
+
+type MagneticTextureInspectorView =
+  | "overview"
+  | "asset"
+  | "load"
+  | "region"
+  | "transform";
+
+export function magneticTextureInspectorView(
+  selectionKind: string | null,
+): MagneticTextureInspectorView {
+  switch (selectionKind) {
+    case "object.magnetic-texture.asset":
+      return "asset";
+    case "object.magnetic-texture.load":
+      return "load";
+    case "object.magnetic-texture.transform":
+      return "transform";
+    case "object.region-magnetic-texture":
+      return "region";
+    default:
+      return "overview";
+  }
+}
 
 type UpdateMagneticTextureDraft = (
   patch: Partial<ObjectMagneticTextureDraft>,
@@ -578,11 +620,45 @@ function MagneticTextureRawAssetSection({
   );
 }
 
+function MagneticTextureLoadFileSection({
+  feedback,
+  model,
+  onLoad,
+  pending,
+}: {
+  feedback: Feedback;
+  model: MagneticTexturePanelModel;
+  onLoad: () => void;
+  pending: boolean;
+}) {
+  return (
+    <InspectorSection value="load" title="Load Texture">
+      <div className="fm-inspector-toolbar">
+        <Button
+          disabled={pending || model.mode !== "committed"}
+          size="sm"
+          type="button"
+          variant="primary"
+          onClick={onLoad}
+        >
+          Load File
+        </Button>
+      </div>
+      <FieldRow label="Target" value={model.objectId} />
+      <FieldRow label="Quantity" value="m" />
+      <FieldRow label="Formats" value="H5, Zarr ZIP" />
+      <FieldRow label="Mode" value="ready to load" />
+      {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
+    </InspectorSection>
+  );
+}
+
 function MagneticTextureActionsSection({
   dirty,
   feedback,
   model,
   onClear,
+  onActivateLoad,
   onRevert,
   onSave,
   pending,
@@ -591,6 +667,7 @@ function MagneticTextureActionsSection({
   feedback: Feedback;
   model: MagneticTexturePanelModel;
   onClear: () => void;
+  onActivateLoad: () => void;
   onRevert: () => void;
   onSave: () => void;
   pending: boolean;
@@ -606,6 +683,15 @@ function MagneticTextureActionsSection({
           onClick={onSave}
         >
           Save Texture
+        </Button>
+        <Button
+          disabled={pending || model.mode !== "committed" || model.targetKind !== "object"}
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={onActivateLoad}
+        >
+          Load Texture
         </Button>
         <Button
           disabled={pending}
@@ -635,7 +721,8 @@ function MagneticTextureActionsSection({
 export function ObjectMagneticTexturePanel({
   selection,
 }: InspectorPanelProps) {
-  const { api, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, resources } = kernel;
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const model = useMemo(
@@ -660,6 +747,7 @@ export function ObjectMagneticTexturePanel({
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const inspectorView = magneticTextureInspectorView(selection.kind);
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
     setDraftState((current) => ({
@@ -711,14 +799,16 @@ export function ObjectMagneticTexturePanel({
           ? response.revision
           : assetResponse.scene_revision ?? model.baseRevision ?? 0;
       invalidateTextureResources(revision);
-      await api.model.syncAuthoringScript({});
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
         draft: { ...draft, magnetizationRef: asset.id },
         key: draftKey,
       });
       setFeedback({
         kind: "success",
-        message: "Magnetic texture saved.",
+        message: syncWarning
+          ? `Magnetic texture saved. Authoring script sync skipped: ${syncWarning}`
+          : "Magnetic texture saved.",
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -750,14 +840,64 @@ export function ObjectMagneticTexturePanel({
           ? response.revision
           : model.baseRevision ?? 0;
       invalidateTextureResources(revision);
-      await api.model.syncAuthoringScript({});
+      const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
         draft: { ...baseDraft, magnetizationRef: "" },
         key: draftKey,
       });
-      setFeedback({ kind: "success", message: "Magnetic texture cleared." });
+      setFeedback({
+        kind: "success",
+        message: syncWarning
+          ? `Magnetic texture cleared. Authoring script sync skipped: ${syncWarning}`
+          : "Magnetic texture cleared.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function activateLoadTextureNode(): Promise<void> {
+    setPending(true);
+    try {
+      const result = await kernel.commands.execute(
+        "magnetization-texture.activate-load-file",
+        createCommandContext("inspector", kernel, {
+          sourceDetail: "object-magnetic-texture",
+        }),
+      );
+      if (result.status !== "completed") {
+        setFeedback({
+          kind: "error",
+          message: result.message ?? "Could not activate texture load.",
+        });
+      } else {
+        setFeedback(null);
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function loadTextureFile(): Promise<void> {
+    if (model.mode !== "committed") {
+      setFeedback({ kind: "error", message: "No committed scene object." });
+      return;
+    }
+
+    setPending(true);
+    try {
+      const result = await kernel.commands.execute(
+        "study.load-field-state",
+        createCommandContext("inspector", kernel, {
+          sourceDetail: "object-magnetic-texture-load",
+        }),
+      );
+      setFeedback({
+        kind: result.status === "completed" ? "success" : "error",
+        message: result.message ?? "Magnetic texture load finished.",
+      });
     } finally {
       setPending(false);
     }
@@ -767,34 +907,57 @@ export function ObjectMagneticTexturePanel({
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["summary", "assignment", "preset", "transform", "mapping", "actions"]}
+      defaultValue={["summary", "assignment", "preset", "transform", "mapping", "load", "actions"]}
     >
       <MagneticTextureSummarySection
         model={model}
         regionsStatus={regions.status}
         sceneStatus={scene.status}
       />
-      <MagneticTextureAssignmentSection
-        draft={draft}
-        model={model}
-        updateDraft={updateDraft}
-      />
-      <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />
-      <MagneticTextureTransformSection draft={draft} model={model} updateDraft={updateDraft} />
-      <MagneticTextureMappingSection draft={draft} updateDraft={updateDraft} />
-      <MagneticTextureRawAssetSection model={model} />
-      <MagneticTextureActionsSection
-        dirty={dirty}
-        feedback={feedback}
-        model={model}
-        onClear={() => void clearTexture()}
-        onRevert={() => {
-          setDraftState({ draft: baseDraft, key: draftKey });
-          setFeedback(null);
-        }}
-        onSave={() => void saveTexture()}
-        pending={pending}
-      />
+      {inspectorView === "asset" || inspectorView === "region" ? (
+        <>
+          <MagneticTextureAssignmentSection
+            draft={draft}
+            model={model}
+            updateDraft={updateDraft}
+          />
+          <MagneticTexturePresetParametersSection draft={draft} updateDraft={updateDraft} />
+          <MagneticTextureRawAssetSection model={model} />
+        </>
+      ) : null}
+      {inspectorView === "transform" ? (
+        <>
+          <MagneticTextureTransformSection draft={draft} model={model} updateDraft={updateDraft} />
+          <MagneticTextureMappingSection draft={draft} updateDraft={updateDraft} />
+          <MagneticTextureRawAssetSection model={model} />
+        </>
+      ) : null}
+      {inspectorView === "overview" ? (
+        <MagneticTextureRawAssetSection model={model} />
+      ) : null}
+      {inspectorView === "load" ? (
+        <MagneticTextureLoadFileSection
+          feedback={feedback}
+          model={model}
+          onLoad={() => void loadTextureFile()}
+          pending={pending}
+        />
+      ) : null}
+      {inspectorView !== "load" ? (
+        <MagneticTextureActionsSection
+          dirty={dirty}
+          feedback={feedback}
+          model={model}
+          onClear={() => void clearTexture()}
+          onActivateLoad={() => void activateLoadTextureNode()}
+          onRevert={() => {
+            setDraftState({ draft: baseDraft, key: draftKey });
+            setFeedback(null);
+          }}
+          onSave={() => void saveTexture()}
+          pending={pending}
+        />
+      ) : null}
     </Accordion>
   );
 }

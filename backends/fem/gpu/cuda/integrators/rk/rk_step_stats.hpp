@@ -70,4 +70,11 @@ bool gpu_rk_finalize_step_stats_control_readback(
     fullmag_fem_step_stats &stats,
     std::string &reason);
 
+bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    double *tail_scalars,
+    size_t tail_count,
+    std::string &reason);
+
 } // namespace fullmag::fem

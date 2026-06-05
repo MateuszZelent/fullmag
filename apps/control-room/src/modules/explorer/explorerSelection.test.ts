@@ -160,6 +160,72 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects object texture load nodes as scene-object selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer:magnetic-texture:load",
+      kind: "object.magnetic-texture.load",
+      label: "Load texture",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:magnetic-texture",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.magnetic-texture.load",
+      label: "Load texture",
+      nodeId: "model:object:free-layer:magnetic-texture:load",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.magnetic-texture.load",
+        objectId: "free-layer",
+        type: "scene-object",
+        visualizationTargetId: "object:free-layer",
+      },
+    });
+  });
+
+  it("selects object texture asset and transform nodes as distinct scene-object selections", () => {
+    const kernel = makeKernel();
+    const assetNode: ExplorerNode = {
+      id: "model:object:free-layer:magnetic-texture:asset",
+      kind: "object.magnetic-texture.asset",
+      label: "Uniform",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:magnetic-texture",
+    };
+    const transformNode: ExplorerNode = {
+      id: "model:object:free-layer:magnetic-texture:transform",
+      kind: "object.magnetic-texture.transform",
+      label: "Texture Transform",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:magnetic-texture",
+    };
+
+    selectExplorerNode(kernel, assetNode, "explorer");
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.magnetic-texture.asset",
+      label: "Uniform",
+      ref: {
+        kind: "object.magnetic-texture.asset",
+        objectId: "free-layer",
+        type: "scene-object",
+      },
+    });
+
+    selectExplorerNode(kernel, transformNode, "explorer");
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.magnetic-texture.transform",
+      label: "Texture Transform",
+      ref: {
+        kind: "object.magnetic-texture.transform",
+        objectId: "free-layer",
+        type: "scene-object",
+      },
+    });
+  });
+
   it("selects region magnetic texture nodes as inspector-only region selections", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

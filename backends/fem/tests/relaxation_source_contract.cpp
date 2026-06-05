@@ -851,6 +851,10 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     check(
         pgbb_source.find("gpu_relax_compute_effective_field_and_energy(") !=
                 std::string::npos &&
+            pgbb_source.find("gpu_rk_compute_effective_field_for_magnetization(") !=
+                std::string::npos &&
+            pgbb_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
+                std::string::npos &&
             pgbb_source.find("fullmag_cuda_relax_retract_field(") !=
                 std::string::npos &&
             pgbb_source.find("kArmijoCoefficient") != std::string::npos &&
@@ -1201,6 +1205,10 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         ncg_source.find("gpu_relax_compute_effective_field_and_energy(") !=
                 std::string::npos &&
+            ncg_source.find("gpu_rk_compute_effective_field_for_magnetization(") !=
+                std::string::npos &&
+            ncg_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
+                std::string::npos &&
             ncg_source.find("gpu_relax_prepare_descent_direction(") !=
                 std::string::npos &&
             ncg_source.find("gpu_relax_update_next_direction(") !=
@@ -1230,6 +1238,35 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("gpu_rk_read_scalar_results(") ==
                 std::string::npos,
         "native FEM GPU nonlinear-CG must account scalar minimizer decisions as control readbacks, not compute D2H");
+    check(
+        ncg_source.find("gpu_relax_compute_effective_field_energy_gradient_and_direction(") !=
+                std::string::npos &&
+            ncg_source.find("fullmag_cuda_relax_ncg_gradient_direction_and_norm_blocks(") !=
+                std::string::npos &&
+            ncg_source.find("current energy/gradient/direction scalars device->host") !=
+                std::string::npos &&
+            ncg_source.find("double scalars[4]") != std::string::npos &&
+            ncg_source.find("reset_descent_direction") != std::string::npos &&
+            ncg_source.find("gpu_relax_prepare_descent_direction(") !=
+                std::string::npos &&
+            ncg_source.find("fullmag_cuda_relax_ncg_reset_direction_if_not_descent(") !=
+                std::string::npos &&
+            ncg_source.find("reset direction scalars device->host") ==
+                std::string::npos,
+        "native FEM GPU nonlinear-CG must batch current energy, gradient norm, and descent-direction scalars while keeping reset fallback device-side");
+    check(
+        ncg_source.find("kNcgScalarTailCount = 2") != std::string::npos &&
+            ncg_source.find("fullmag_cuda_relax_ncg_update_direction_from_reduced_pr_plus(") !=
+                std::string::npos &&
+            ncg_source.find("gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(") !=
+                std::string::npos &&
+            ncg_source.find("accepted gradient/PR+ scalars device->host") ==
+                std::string::npos &&
+            ncg_source.find("accepted-step gradient validation failure") !=
+                std::string::npos &&
+            ncg_source.find("accepted-step PR+ validation failure") !=
+                std::string::npos,
+        "native FEM GPU nonlinear-CG must fold accepted PR+ validation into the final control readback instead of adding a separate host sync");
     check(
         ncg_source.find("constexpr double kDefaultStepSize = 1.0e-6") !=
                 std::string::npos &&
@@ -1361,6 +1398,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
     check(
         kernels_header.find("fullmag_cuda_relax_ncg_prepare_direction_blocks(") !=
                 std::string::npos &&
+            kernels_header.find("fullmag_cuda_relax_ncg_gradient_direction_and_norm_blocks(") !=
+                std::string::npos &&
             kernels_header.find("fullmag_cuda_relax_ncg_pr_plus_numerator_blocks(") !=
                 std::string::npos &&
             kernels_header.find("fullmag_cuda_relax_ncg_update_direction_blocks(") !=
@@ -1368,6 +1407,16 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             kernels_header.find("fullmag_cuda_relax_ncg_reset_direction_if_not_descent(") !=
                 std::string::npos &&
             kernels_source.find("ncg_prepare_direction_kernel") !=
+                std::string::npos &&
+            kernels_source.find("ncg_gradient_direction_and_norm_kernel") !=
+                std::string::npos &&
+            kernels_source.find("block_reduce_triple_sum(") !=
+                std::string::npos &&
+            kernels_source.find("block_gradient_norm_sq[blockIdx.x]") !=
+                std::string::npos &&
+            kernels_source.find("block_p_dot_g[blockIdx.x]") !=
+                std::string::npos &&
+            kernels_source.find("block_direction_norm_sq[blockIdx.x]") !=
                 std::string::npos &&
             kernels_source.find("ncg_pr_plus_numerator_kernel") !=
                 std::string::npos &&

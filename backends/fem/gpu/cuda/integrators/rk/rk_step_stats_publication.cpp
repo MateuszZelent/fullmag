@@ -91,11 +91,18 @@ void gpu_rk_publish_final_step_stats(
         if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
             ctx.poisson_demag.solves_current_step > 0) {
             DemagPoissonPhaseTimings demag_timings{};
-            demag_timings.wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns;
+            demag_timings.assemble_wall_time_ns = ctx.poisson_demag.step_assemble_wall_time_ns;
             demag_timings.solve_wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns;
             demag_timings.solver_setup_wall_time_ns = ctx.poisson_demag.last_setup_wall_time_ns;
             demag_timings.solver_apply_wall_time_ns = ctx.poisson_demag.step_solver_apply_wall_time_ns;
             demag_timings.solver_setup_reused = ctx.poisson_demag.last_solver_setup_reused;
+            demag_timings.recover_wall_time_ns = ctx.poisson_demag.step_recover_wall_time_ns;
+            demag_timings.energy_wall_time_ns = ctx.poisson_demag.step_energy_wall_time_ns;
+            demag_timings.wall_time_ns =
+                demag_timings.assemble_wall_time_ns +
+                demag_timings.solve_wall_time_ns +
+                demag_timings.recover_wall_time_ns +
+                demag_timings.energy_wall_time_ns;
             fill_demag_poisson_phase_stats(demag_timings, stats);
         }
 #endif // FULLMAG_HAS_MFEM_STACK

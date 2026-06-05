@@ -29,6 +29,7 @@ export interface FdmGridRenderDomain {
 export interface FemManifestRenderDomain {
   airboxParts: MeshPart[];
   magneticParts: MeshPart[];
+  magneticSurfacePartsByPartId: Map<string, MeshPart[]>;
   objectPartIds: Map<string, string[]>;
   partsById: Map<string, MeshPart>;
 }
@@ -104,6 +105,9 @@ export function adaptFemSharedDomainManifest(
   const partsById = new Map<string, MeshPart>();
   const airboxParts: MeshPart[] = [];
   const magneticParts: MeshPart[] = [];
+  const interfaceParts: MeshPart[] = [];
+  const magneticPartIdsByAlias = new Map<string, Set<string>>();
+  const magneticSurfacePartsByPartId = new Map<string, MeshPart[]>();
 
   for (const part of parts) {
     partsById.set(part.id, part);
@@ -111,15 +115,30 @@ export function adaptFemSharedDomainManifest(
       airboxParts.push(part);
     } else if (isMagneticRenderablePart(part)) {
       magneticParts.push(part);
+      addMagneticPartAliases(magneticPartIdsByAlias, part);
+    } else if (isInterfaceSurfacePart(part)) {
+      interfaceParts.push(part);
     }
 
     addObjectPartAlias(objectPartIds, part.object_id, part.id);
     addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
   }
 
+  for (const part of interfaceParts) {
+    const owningPartId = resolveMagneticInterfaceOwnerPartId(
+      part,
+      magneticPartIdsByAlias,
+    );
+    if (!owningPartId) continue;
+    const target = magneticSurfacePartsByPartId.get(owningPartId) ?? [];
+    target.push(part);
+    magneticSurfacePartsByPartId.set(owningPartId, target);
+  }
+
   return {
     airboxParts,
     magneticParts,
+    magneticSurfacePartsByPartId,
     objectPartIds,
     partsById,
   };
@@ -157,6 +176,82 @@ function isMagneticRenderablePart(part: MeshPart): boolean {
       part.role === "magnetic" ||
       part.role === "magnetic_object",
   );
+}
+
+function isInterfaceSurfacePart(part: MeshPart): boolean {
+  return Boolean(
+    part.role === "interface" &&
+      ((part.surface_faces?.length ?? 0) > 0 ||
+        (part.boundary_face_indices?.length ?? 0) > 0 ||
+        part.boundary_face_count > 0),
+  );
+}
+
+function addMagneticPartAliases(
+  index: Map<string, Set<string>>,
+  part: MeshPart,
+): void {
+  addMagneticPartAlias(index, part.object_id, part.id);
+  addMagneticPartAlias(index, part.geometry_id, part.id);
+  addMagneticPartAlias(index, part.label, part.id);
+  addMagneticPartAlias(index, part.id, part.id);
+  if (part.id.startsWith("part:")) {
+    addMagneticPartAlias(index, part.id.slice("part:".length), part.id);
+  }
+}
+
+function addMagneticPartAlias(
+  index: Map<string, Set<string>>,
+  value: string | null | undefined,
+  partId: string,
+): void {
+  const alias = normalizeMeshPartAlias(value);
+  if (!alias) return;
+  const ids = index.get(alias) ?? new Set<string>();
+  ids.add(partId);
+  index.set(alias, ids);
+}
+
+function resolveMagneticInterfaceOwnerPartId(
+  part: MeshPart,
+  magneticPartIdsByAlias: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  const direct =
+    resolveSingleMagneticPartAlias(part.object_id, magneticPartIdsByAlias) ??
+    resolveSingleMagneticPartAlias(part.geometry_id, magneticPartIdsByAlias);
+  if (direct) return direct;
+
+  const labelOwner = resolveMagneticInterfaceOwnerAlias(part.label);
+  return resolveSingleMagneticPartAlias(labelOwner, magneticPartIdsByAlias);
+}
+
+function resolveSingleMagneticPartAlias(
+  value: string | null | undefined,
+  index: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  const alias = normalizeMeshPartAlias(value);
+  if (!alias) return null;
+  const ids = index.get(alias);
+  if (!ids || ids.size !== 1) return null;
+  return ids.values().next().value ?? null;
+}
+
+function resolveMagneticInterfaceOwnerAlias(label: string | null | undefined): string | null {
+  if (!label) return null;
+  const sides = label
+    .split("↔")
+    .map((side) => side.trim())
+    .filter(Boolean);
+  if (sides.length !== 2) return null;
+
+  const magneticSides = sides.filter((side) => normalizeMeshPartAlias(side) !== "air");
+  return magneticSides.length === 1 ? magneticSides[0] ?? null : null;
+}
+
+function normalizeMeshPartAlias(value: string | null | undefined): string | null {
+  const alias = value?.trim().toLowerCase();
+  if (!alias) return null;
+  return alias.endsWith("_geom") ? alias.slice(0, -"_geom".length) : alias;
 }
 
 export function resolveFemPartSelectionByBoundaryFace(

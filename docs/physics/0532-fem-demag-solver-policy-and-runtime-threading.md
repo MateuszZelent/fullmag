@@ -219,6 +219,64 @@ best-policy summary for each logical demag case, selecting the fastest row that
 satisfies the configured convergence residual and iteration gates. This remains
 benchmark analysis only; it does not silently change runtime solver policy.
 
+Update 2026-06-05 GPU control-readback budget: the production FEM relaxation
+benchmark now gates FEM GPU hot-loop control-scalar readbacks separately from
+compute host/device transfers. Strict GPU RK still requires zero compute
+readbacks; direct minimizers (`projected_gradient_bb`, `nonlinear_cg`) are
+temporarily allowed a bounded control-readback budget of `base + per_step *
+executed_steps + per_rejected_attempt * rejected_attempts` until their
+line-search/curvature decisions move fully device-side. This is a performance
+regression gate only; it does not change solver physics, units, demag boundary
+conditions, or CPU/GPU parity tolerances.
+
+Update 2026-06-05 algorithm-specific control budgets: the production gate now
+uses algorithm-specific per-step limits instead of only the global fallback:
+`llg_overdamped = 0`, `projected_gradient_bb = 3`, and `nonlinear_cg = 2`.
+This prevents projected-gradient BB from regressing up to the looser nonlinear
+CG budget while preserving the current verified direct-minimizer behavior.
+Nonlinear CG reaches the same per-step budget by batching current energy,
+tangent-gradient norm, direction-gradient dot product, and direction norm into
+one control readback on the common descent-direction path.
+When the existing nonlinear-CG direction is non-descent, the GPU reset fallback
+now keeps the reset itself device-side and reuses the already-read tangent
+gradient norm: after setting `p = -g`, `p·g = -||g||²` and `||p||² = ||g||²`.
+This removes the extra reset-direction scalar readback without changing the
+Armijo condition, PR+ update, tangent projection, or metric definition.
+The accepted-step nonlinear-CG PR+ numerator and accepted tangent-gradient norm
+now stay in reserved scalar-result tail slots until the existing final stats
+control readback. The next direction beta is computed from those reduced values
+on the GPU, then the same final control readback validates the accepted
+gradient norm and PR+ numerator on the host. This removes the standalone
+accepted-gradient/PR+ synchronization without dropping the rollback checks.
+
+Update 2026-06-05 direct-minimizer effective-field path: GPU
+`projected_gradient_bb` and `nonlinear_cg` now call the device-resident
+effective-field pipeline directly instead of the full RK RHS helper. This
+preserves exchange, DMI, demag, local-field, and `H_eff` accumulation semantics
+while skipping the LLG RHS kernel that direct minimizers do not consume. With
+native phase timing enabled, exchange and demag remain attributable; `RHS
+total` may remain zero for these minimizers because no LLG RHS is evaluated.
+The phase-profiling env gate is cached in GPU RK timing runtime state during
+timing preparation, so ordinary step resets do not repeatedly query process
+environment variables.
+
+Update 2026-06-05 GPU demag stream boundary: strict FEM GPU demag keeps RHS
+assembly, recovery, and energy reductions on the Fullmag CUDA compute stream,
+while the MFEM/Hypre Poisson `Mult` call remains bridged through explicit CUDA
+events to the MFEM/Hypre stream/default-stream execution path. The current
+bundled Hypre headers expose public memory-location and execution-policy
+controls, but not a public CUDA stream-binding setter. Until that contract is
+available, the production invariant is: no `cudaStreamSynchronize`,
+`cudaEventSynchronize`, or `cudaDeviceSynchronize` in the strict GPU demag
+stage; the only stream ordering around Hypre is the explicit event bridge.
+The `fem_cuda_demag_timing_contract` source test now enforces that boundary.
+Strict GPU demag solver setup also best-effort enables Hypre's public vendor
+sparse-kernel switches for device builds: SpTrans, SpMV, and SpGEMM. This keeps
+CUDA Hypre AMG setup and solver application on the optimized vendor sparse path
+where the bundled Hypre build supports it, without making optional Hypre
+configuration setters a runtime precondition and without changing the Poisson
+weak form, boundary condition, tolerance, or residual telemetry.
+
 Update 2026-05-15 readiness preset: the benchmark harness exposes
 `--fem-cpu-no-pbc-adaptive-ready-preset` as a shorthand for the existing FEM CPU
 no-PBC adaptive exchange+demag+anisotropy readiness sweep and gates. The preset
@@ -254,8 +312,18 @@ defect, executed steps, and benchmark gate version so downstream tooling does
 not need to infer these values from logs.
 `--require-best-demag-policy` turns missing converged policy summaries into a
 benchmark failure, so Hypre/AMG tuning sweeps cannot silently produce no
-actionable policy. If all candidate rows fail before convergence telemetry is
-available, the missing-policy error includes their `error_kind` values.
+actionable policy. It requires at least two converged policy candidates per
+logical case before a "best" policy can be selected; a single successful row is
+only a smoke proof, not a policy optimization result. If all candidate rows
+fail before convergence telemetry is available, the missing-policy error
+includes their `error_kind` values.
+
+Update 2026-06-05 production benchmark policy gate: the managed
+`verify-fem-relaxation-production-benchmark` recipe passes
+`FULLMAG_BENCH_DEMAG_SOLVERS` and `FULLMAG_BENCH_DEMAG_PRECONDITIONERS` into
+the FEM GPU container. Its default policy matrix compares `CG/AMG` and
+`CG/JACOBI` and runs with `--require-best-demag-policy`, so the production
+benchmark cannot pass demag qualification from a single converged policy row.
 
 Update 2026-05-15 recovery scratch: non-PBC Poisson demag recovery now keeps
 serial and per-thread element scratch buffers in the context-owned recovery

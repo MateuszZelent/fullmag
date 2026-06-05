@@ -664,9 +664,15 @@ export function useViewport3DSceneModel({
             topology.data,
             femDomain.magneticParts,
             femDomain.airboxParts,
+            femDomain.magneticSurfacePartsByPartId,
           ),
       ),
-    [femDomain.airboxParts, femDomain.magneticParts, topology.data],
+    [
+      femDomain.airboxParts,
+      femDomain.magneticParts,
+      femDomain.magneticSurfacePartsByPartId,
+      topology.data,
+    ],
   );
   const primitiveModel = useMemo(
     () =>

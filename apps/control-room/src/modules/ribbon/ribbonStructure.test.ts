@@ -126,6 +126,28 @@ describe("ribbon structure", () => {
     }
   });
 
+  it("keeps field state save and load in the Home project group", () => {
+    const homeProjectActions = ALL_TAB_CONTENT.home.groups
+      .find((group) => group.id === "project")
+      ?.actions.map((action) => action.id);
+    const studyControlActions = ALL_TAB_CONTENT.study.groups
+      .find((group) => group.id === "control")
+      ?.actions.map((action) => action.id);
+
+    expect(homeProjectActions).toEqual(
+      expect.arrayContaining([
+        "study.save-field-state",
+        "study.load-field-state",
+      ]),
+    );
+    expect(studyControlActions).not.toEqual(
+      expect.arrayContaining([
+        "study.save-field-state",
+        "study.load-field-state",
+      ]),
+    );
+  });
+
   it("keeps ribbon visual tokens theme-driven instead of hardcoded", () => {
     const source = readFileSync(
       path.join(process.cwd(), "src/modules/ribbon/ribbonContributions.tsx"),

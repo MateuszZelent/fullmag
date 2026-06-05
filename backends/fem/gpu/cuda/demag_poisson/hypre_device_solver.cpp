@@ -26,6 +26,33 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+void configure_hypre_device_vendor_kernels()
+{
+#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
+    if (HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE) != 0) {
+        HYPRE_ClearAllErrors();
+    }
+    if (HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE) != 0) {
+        HYPRE_ClearAllErrors();
+    }
+    if (HYPRE_SetSpTransUseVendor(1) != 0) {
+        HYPRE_ClearAllErrors();
+    }
+    if (HYPRE_SetSpMVUseVendor(1) != 0) {
+        HYPRE_ClearAllErrors();
+    }
+    if (HYPRE_SetSpGemmUseVendor(1) != 0) {
+        HYPRE_ClearAllErrors();
+    }
+#endif
+}
+#endif
+
+} // namespace
+
 bool initialize_demag_poisson_hypre_device_solver(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
@@ -34,10 +61,7 @@ bool initialize_demag_poisson_hypre_device_solver(
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
-    HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
-    HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
-#endif
+    configure_hypre_device_vendor_kernels();
 
     auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);
     if (A_bc == nullptr) {

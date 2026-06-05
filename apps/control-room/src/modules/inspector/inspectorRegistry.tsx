@@ -60,7 +60,13 @@ const PANELS: InspectorPanelContribution[] = [
   {
     id: "object-magnetic-texture",
     title: "Magnetic Texture",
-    selectionKinds: ["object.magnetic-texture", "object.region-magnetic-texture"],
+    selectionKinds: [
+      "object.magnetic-texture",
+      "object.magnetic-texture.asset",
+      "object.magnetic-texture.load",
+      "object.magnetic-texture.transform",
+      "object.region-magnetic-texture",
+    ],
     component: ObjectMagneticTexturePanel,
   },
   {

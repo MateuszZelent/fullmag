@@ -798,7 +798,7 @@ describe("study runtime command contributions", () => {
     });
 
     expect(result).toEqual({
-      message: "Field state loaded.",
+      message: "Field state loaded from field-states/body-m.field-state.json.",
       status: "completed",
     });
     expect(inspectImport).toHaveBeenCalledWith({
@@ -875,7 +875,7 @@ describe("study runtime command contributions", () => {
     });
 
     expect(result).toEqual({
-      message: "Field state loaded.",
+      message: "Field state loaded from imports/body-m.h5.",
       status: "completed",
     });
     expect(importAsset).toHaveBeenCalledWith({
@@ -954,7 +954,7 @@ describe("study runtime command contributions", () => {
     });
 
     expect(result).toEqual({
-      message: "Field state loaded.",
+      message: "Field state loaded from imports/airbox-h-eff.h5.",
       status: "completed",
     });
     expect(inspectImport).toHaveBeenCalledWith({

@@ -26,5 +26,13 @@ bool gpu_rk_compute_rhs_for_magnetization(
     const char *label,
     std::string &reason);
 
+bool gpu_rk_compute_effective_field_for_magnetization(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    int n,
+    const char *label,
+    std::string &reason);
+
 } // namespace fullmag::fem
 #endif

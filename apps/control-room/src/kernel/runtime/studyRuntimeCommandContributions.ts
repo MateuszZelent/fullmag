@@ -1476,7 +1476,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       );
 
       return {
-        message: "Field state loaded.",
+        message: `Field state loaded from ${artifactRef}.`,
         status: "completed",
       };
     },

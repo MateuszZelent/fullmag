@@ -71,6 +71,7 @@ function femDomainFixture(): FemManifestRenderDomain {
   return {
     airboxParts: [airboxPart],
     magneticParts: [objectPart],
+    magneticSurfacePartsByPartId: new Map(),
     objectPartIds: new Map([
       ["arch_waveguide", ["arch_waveguide"]],
       ["arch_waveguide_geom", ["arch_waveguide"]],

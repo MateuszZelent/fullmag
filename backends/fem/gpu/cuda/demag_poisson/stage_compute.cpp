@@ -13,6 +13,7 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
@@ -39,6 +40,67 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
     error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
     return false;
 }
+
+struct GpuDemagPhaseTimer {
+    GpuRkPhaseTimingRuntimeState::EventPair *event = nullptr;
+    cudaStream_t stream = nullptr;
+    const char *label = nullptr;
+    bool active = false;
+
+    bool start(
+        bool enabled,
+        std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events,
+        size_t &used_count,
+        uint64_t &overflow_count,
+        cudaStream_t phase_stream,
+        const char *phase_label,
+        std::string &reason)
+    {
+        if (!enabled) {
+            return true;
+        }
+        stream = phase_stream;
+        label = phase_label;
+        if (used_count >= events.size()) {
+            overflow_count += 1;
+            return true;
+        }
+        event = &events[used_count];
+        used_count += 1;
+        if (event->start_event == nullptr || event->stop_event == nullptr) {
+            reason = std::string(label) + " was not prepared before GPU demag hot loop";
+            event = nullptr;
+            return false;
+        }
+        if (!cuda_ok(
+                cudaEventRecord(static_cast<cudaEvent_t>(event->start_event), stream),
+                label,
+                reason)) {
+            event = nullptr;
+            return false;
+        }
+        active = true;
+        return true;
+    }
+
+    bool finish(std::string &reason)
+    {
+        if (!active) {
+            return true;
+        }
+        if (!cuda_ok(
+                cudaEventRecord(static_cast<cudaEvent_t>(event->stop_event), stream),
+                label,
+                reason)) {
+            active = false;
+            event = nullptr;
+            return false;
+        }
+        active = false;
+        event = nullptr;
+        return true;
+    }
+};
 #endif
 
 } // namespace
@@ -70,6 +132,18 @@ bool compute_device_demag_for_device_stage(
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    GpuDemagPhaseTimer assemble_timer;
+    if (!assemble_timer.start(
+            timings.enabled,
+            timings.demag_assemble_events,
+            timings.demag_assemble_used,
+            timings.demag_assemble_overflow_count,
+            stream,
+            "GPU Poisson demag assemble phase timing",
+            reason)) {
+        return false;
+    }
     fullmag_cuda_demag_rhs_csr(
         workspace->rhs.d_row_offsets,
         workspace->rhs.d_col_indices,
@@ -91,6 +165,9 @@ bool compute_device_demag_for_device_stage(
         static_cast<int>(workspace->ess_tdofs.size()),
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag essential RHS zero", reason)) {
+        return false;
+    }
+    if (!assemble_timer.finish(reason)) {
         return false;
     }
 
@@ -126,6 +203,17 @@ bool compute_device_demag_for_device_stage(
                 "cudaStreamWaitEvent GPU demag compute stream wait solve", reason)) {
             return false;
         }
+    }
+    GpuDemagPhaseTimer recover_timer;
+    if (!recover_timer.start(
+            timings.enabled,
+            timings.demag_recover_events,
+            timings.demag_recover_used,
+            timings.demag_recover_overflow_count,
+            stream,
+            "GPU Poisson demag recover phase timing",
+            reason)) {
+        return false;
     }
     fullmag_cuda_zero_indexed_values(
         gpu.demag_poisson.poisson_solution,
@@ -165,9 +253,23 @@ bool compute_device_demag_for_device_stage(
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
         return false;
     }
+    if (!recover_timer.finish(reason)) {
+        return false;
+    }
 
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + 255) / 256;
+    GpuDemagPhaseTimer energy_timer;
+    if (!energy_timer.start(
+            timings.enabled,
+            timings.demag_energy_events,
+            timings.demag_energy_used,
+            timings.demag_energy_overflow_count,
+            stream,
+            "GPU Poisson demag energy phase timing",
+            reason)) {
+        return false;
+    }
     fullmag_cuda_demag_energy_blocks(
         m.x,
         m.y,
@@ -193,6 +295,9 @@ bool compute_device_demag_for_device_stage(
         reduce_bytes,
         stream);
     if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
+        return false;
+    }
+    if (!energy_timer.finish(reason)) {
         return false;
     }
     ctx.poisson_demag.solves_current_step += 1;

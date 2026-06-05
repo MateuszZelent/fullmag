@@ -23,6 +23,9 @@ type ExplorerNodeKind =
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
+  | "object.magnetic-texture.asset"
+  | "object.magnetic-texture.load"
+  | "object.magnetic-texture.transform"
   | "object.mesh"
   | "object.visualization"
   | "airbox.mesh"
@@ -128,6 +131,7 @@ export interface ModelTreeObjectSnapshot {
   regionMagnetization?: string | null;
   regionMagnetizationKind?: string | null;
   regionMagnetizationLabel?: string | null;
+  textureLoadEnabled?: boolean;
   textureTransformAvailable?: boolean;
 }
 

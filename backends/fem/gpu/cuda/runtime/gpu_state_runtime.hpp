@@ -55,14 +55,27 @@ struct GpuRkPhaseTimingRuntimeState {
         void *stop_event = nullptr;
     };
 
+    bool configured = false;
     bool enabled = false;
     uint64_t exchange_wall_time_ns = 0;
+    uint64_t demag_assemble_wall_time_ns = 0;
+    uint64_t demag_recover_wall_time_ns = 0;
+    uint64_t demag_energy_wall_time_ns = 0;
     uint64_t rhs_wall_time_ns = 0;
     size_t exchange_used = 0;
+    size_t demag_assemble_used = 0;
+    size_t demag_recover_used = 0;
+    size_t demag_energy_used = 0;
     size_t rhs_used = 0;
     uint64_t exchange_overflow_count = 0;
+    uint64_t demag_assemble_overflow_count = 0;
+    uint64_t demag_recover_overflow_count = 0;
+    uint64_t demag_energy_overflow_count = 0;
     uint64_t rhs_overflow_count = 0;
     std::vector<EventPair> exchange_events{};
+    std::vector<EventPair> demag_assemble_events{};
+    std::vector<EventPair> demag_recover_events{};
+    std::vector<EventPair> demag_energy_events{};
     std::vector<EventPair> rhs_events{};
 };
 

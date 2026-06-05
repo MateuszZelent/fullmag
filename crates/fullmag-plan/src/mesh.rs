@@ -844,12 +844,14 @@ pub(crate) fn pack_mesh_by_analysis(
             .map(|set| set.into_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         let bounds = mesh_bounds_from_node_indices(&reordered_mesh, &node_indices);
+        let owning_object_id =
+            interface_air_magnetic_owner_id(left_marker, right_marker, &marker_to_label);
         mesh_parts.push(FemMeshPartIR {
             id: format!("part:interface:{left_marker}:{right_marker}"),
             label: format!("{left_label} ↔ {right_label}"),
             role: FemMeshPartRole::Interface,
-            object_id: None,
-            geometry_id: None,
+            object_id: owning_object_id.clone(),
+            geometry_id: owning_object_id.clone(),
             material_id: None,
             element_selector: FemMeshPartSelector::ElementRange { start: 0, count: 0 },
             boundary_face_selector: FemMeshPartSelector::BoundaryFaceRange { start: 0, count: 0 },
@@ -859,11 +861,27 @@ pub(crate) fn pack_mesh_by_analysis(
             surface_faces,
             bounds_min: bounds.map(|(min, _)| min),
             bounds_max: bounds.map(|(_, max)| max),
-            parent_id: None,
+            parent_id: owning_object_id.map(|object_id| format!("part:{object_id}")),
         });
     }
 
     Ok((reordered_mesh, object_segments, mesh_parts))
+}
+
+fn interface_air_magnetic_owner_id(
+    left_marker: u32,
+    right_marker: u32,
+    marker_to_label: &BTreeMap<u32, String>,
+) -> Option<String> {
+    let magnetic_marker = match (
+        left_marker == AIR_REGION_MARKER,
+        right_marker == AIR_REGION_MARKER,
+    ) {
+        (true, false) => right_marker,
+        (false, true) => left_marker,
+        _ => return None,
+    };
+    marker_to_label.get(&magnetic_marker).cloned()
 }
 
 pub(crate) fn reorder_shared_domain_mesh(

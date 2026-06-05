@@ -10,6 +10,9 @@ type ObjectSelectionKind =
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
+  | "object.magnetic-texture.asset"
+  | "object.magnetic-texture.load"
+  | "object.magnetic-texture.transform"
   | "object.mesh"
   | "object.visualization";
 

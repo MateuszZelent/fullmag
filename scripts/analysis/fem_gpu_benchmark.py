@@ -202,6 +202,12 @@ DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
 MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
+DEFAULT_GPU_CONTROL_READBACK_BASE = 2
+DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
+DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
+DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 3
+DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 2
+DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 MU0 = 4.0 * math.pi * 1e-7
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
@@ -523,6 +529,47 @@ def parse_args() -> argparse.Namespace:
         "--require-gpu-strict-residency",
         action="store_true",
         help="Fail unless completed FEM GPU rows report device source-of-truth and zero hot-loop compute host transfers/syncs",
+    )
+    parser.add_argument(
+        "--require-gpu-control-readback-budget",
+        action="store_true",
+        help="Fail unless completed FEM GPU rows stay within the configured hot-loop control-scalar readback budget",
+    )
+    parser.add_argument(
+        "--gpu-control-readback-base",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_CONTROL_READBACK_BASE,
+        help="Allowed fixed FEM GPU hot-loop control-scalar readbacks per row",
+    )
+    parser.add_argument(
+        "--gpu-control-readback-per-step",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_CONTROL_READBACK_PER_STEP,
+        help="Allowed FEM GPU hot-loop control-scalar readbacks per executed step",
+    )
+    parser.add_argument(
+        "--gpu-llg-control-readback-per-step",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP,
+        help="Allowed FEM GPU hot-loop control-scalar readbacks per LLG executed step",
+    )
+    parser.add_argument(
+        "--gpu-pgbb-control-readback-per-step",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP,
+        help="Allowed FEM GPU hot-loop control-scalar readbacks per projected-gradient BB executed step",
+    )
+    parser.add_argument(
+        "--gpu-ncg-control-readback-per-step",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP,
+        help="Allowed FEM GPU hot-loop control-scalar readbacks per nonlinear-CG executed step",
+    )
+    parser.add_argument(
+        "--gpu-control-readback-per-rejected-attempt",
+        type=nonnegative_int_arg,
+        default=DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT,
+        help="Allowed FEM GPU hot-loop control-scalar readbacks per rejected attempt",
     )
     parser.add_argument(
         "--cpu-gpu-summary-output",
@@ -1582,6 +1629,9 @@ def run_backend(
     }
     env = os.environ.copy()
     env.update(extra_env)
+    if backend_label != "fem_gpu":
+        env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", None)
+        env.pop("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC", None)
     apply_bundled_openmpi_runtime_env(env)
     if "FULLMAG_FEM_EXECUTION" not in extra_env:
         if backend_label == "fem_cpu":
@@ -2459,6 +2509,62 @@ def gpu_strict_residency_failures(results: list[dict[str, object]]) -> list[str]
                 failures.append(
                     f"case={case} fem_gpu strict residency requires {key}=0 got {value}"
                 )
+    return failures
+
+
+def gpu_control_readback_budget_failures(
+    results: list[dict[str, object]],
+    *,
+    base: int,
+    per_step: int,
+    llg_per_step: int,
+    pgbb_per_step: int,
+    ncg_per_step: int,
+    per_rejected_attempt: int,
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("backend") != "fem_gpu" or row.get("status") != "ok":
+            continue
+        case = repeated_case_key(row)
+        control_sync = as_int(row.get("hot_loop_control_scalar_host_sync_count"))
+        executed_steps = as_int(row.get("executed_steps"))
+        if control_sync is None:
+            failures.append(
+                f"case={case} fem_gpu control-readback budget missing "
+                "hot_loop_control_scalar_host_sync_count"
+            )
+            continue
+        if executed_steps is None:
+            failures.append(
+                f"case={case} fem_gpu control-readback budget missing executed_steps"
+            )
+            continue
+        rejected_attempts = as_int(row.get("rejected_attempts")) or 0
+        algorithm = row.get("relaxation_algorithm")
+        algorithm_base = base
+        algorithm_per_step = per_step
+        if algorithm == "llg_overdamped":
+            algorithm_base = 0
+            algorithm_per_step = llg_per_step
+        elif algorithm == "projected_gradient_bb":
+            algorithm_per_step = pgbb_per_step
+        elif algorithm == "nonlinear_cg":
+            algorithm_per_step = ncg_per_step
+        allowed = (
+            algorithm_base
+            + algorithm_per_step * max(0, executed_steps)
+            + per_rejected_attempt * max(0, rejected_attempts)
+        )
+        if control_sync > allowed:
+            failures.append(
+                f"case={case} fem_gpu control-readback budget exceeded: "
+                f"hot_loop_control_scalar_host_sync_count={control_sync} > {allowed} "
+                f"(relaxation_algorithm={algorithm or 'missing'}, "
+                f"base={algorithm_base}, per_step={algorithm_per_step}, "
+                f"executed_steps={executed_steps}, "
+                f"per_rejected_attempt={per_rejected_attempt}, rejected_attempts={rejected_attempts})"
+            )
     return failures
 
 
@@ -4168,6 +4274,7 @@ def best_demag_policy_rows(
                 best_sort_key = sort_key
                 best_summary = candidate
         if best_summary is not None:
+            best_summary["converged_policy_count"] = len(rows_by_policy)
             summaries.append(best_summary)
     return summaries
 
@@ -4196,8 +4303,8 @@ def best_demag_policy_failures(
                 error_kind
             )
 
-    selected_cases = {
-        tuple(summary["case_key"])
+    selected_summaries = {
+        tuple(summary["case_key"]): summary
         for summary in best_demag_policy_rows(
             results,
             max_residual=max_residual,
@@ -4206,11 +4313,18 @@ def best_demag_policy_failures(
     }
     failures: list[str] = []
     for case in sorted(candidate_cases, key=str):
-        if case in selected_cases:
+        summary = selected_summaries.get(case)
+        if summary is None:
+            error_kinds = sorted(str(kind) for kind in error_kinds_by_case.get(case, set()))
+            suffix = f"; error_kind={','.join(error_kinds)}" if error_kinds else ""
+            failures.append(f"no converged demag policy for case={case}{suffix}")
             continue
-        error_kinds = sorted(str(kind) for kind in error_kinds_by_case.get(case, set()))
-        suffix = f"; error_kind={','.join(error_kinds)}" if error_kinds else ""
-        failures.append(f"no converged demag policy for case={case}{suffix}")
+        converged_policy_count = as_int(summary.get("converged_policy_count")) or 0
+        if converged_policy_count < MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST:
+            failures.append(
+                f"case={case} has {converged_policy_count} converged demag policy; "
+                f"at least {MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST} are required to select a best policy"
+            )
     return failures
 
 
@@ -4467,6 +4581,19 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 6
+    if args.require_gpu_control_readback_budget:
+        failures = gpu_control_readback_budget_failures(
+            results,
+            base=args.gpu_control_readback_base,
+            per_step=args.gpu_control_readback_per_step,
+            llg_per_step=args.gpu_llg_control_readback_per_step,
+            pgbb_per_step=args.gpu_pgbb_control_readback_per_step,
+            ncg_per_step=args.gpu_ncg_control_readback_per_step,
+            per_rejected_attempt=args.gpu_control_readback_per_rejected_attempt,
+        )
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 9
     if args.accepted_baseline:
         baseline_path = Path(args.accepted_baseline)
         if not baseline_path.is_file():

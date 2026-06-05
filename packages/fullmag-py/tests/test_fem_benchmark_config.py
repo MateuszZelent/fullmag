@@ -2557,6 +2557,55 @@ def test_run_backend_propagates_requested_gmsh_threads(monkeypatch, tmp_path):
     assert row["requested_demag_print_level"] == "2"
 
 
+def test_run_backend_does_not_apply_gpu_hot_loop_sync_gate_to_cpu_rows(
+    monkeypatch,
+    tmp_path,
+):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", "1")
+    monkeypatch.setenv("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC", "1")
+    binary = tmp_path / "fullmag"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    mesh_path = tmp_path / "mesh.mesh.json"
+    mesh_path.write_text(
+        json.dumps(
+            {
+                "mesh_name": "tiny",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured_env = {}
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        captured_env.update(env)
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 1, "final_time_s": 1e-13}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    bench.run_backend(
+        backend_label="fem_cpu",
+        binary=binary,
+        mesh_path=mesh_path,
+        scenario="exchange_demag",
+        integrator="heun",
+        steps=1,
+        dt=1e-13,
+        extra_env={"FULLMAG_FEM_EXECUTION": "cpu"},
+    )
+
+    assert "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC" not in captured_env
+    assert "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC" not in captured_env
+
+
 def test_run_backend_defaults_fullmag_python_to_benchmark_interpreter(monkeypatch, tmp_path):
     bench = load_analysis_benchmark_module()
     monkeypatch.delenv("FULLMAG_PYTHON", raising=False)
@@ -3964,6 +4013,115 @@ def test_cpu_gpu_consistency_rejects_gpu_strict_residency_counter_drift():
     assert any("hot_loop_compute_h2d_bytes" in failure for failure in summary["failures"])
 
 
+def test_gpu_control_readback_budget_allows_current_direct_minimizer_contract():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "projected_gradient_bb",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "rejected_attempts": "",
+            "hot_loop_control_scalar_host_sync_count": 8,
+        },
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "nonlinear_cg",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "rejected_attempts": "",
+            "hot_loop_control_scalar_host_sync_count": 8,
+        },
+    ]
+
+    failures = bench.gpu_control_readback_budget_failures(
+        rows,
+        base=2,
+        per_step=4,
+        llg_per_step=0,
+        pgbb_per_step=3,
+        ncg_per_step=3,
+        per_rejected_attempt=2,
+    )
+
+    assert failures == []
+
+
+def test_gpu_control_readback_budget_rejects_algorithm_specific_counter_growth():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "nonlinear_cg",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "rejected_attempts": "",
+            "hot_loop_control_scalar_host_sync_count": 9,
+        },
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "projected_gradient_bb",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "rejected_attempts": "",
+            "hot_loop_control_scalar_host_sync_count": 9,
+        },
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "solver_mesh_signature": "mesh-a",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "llg_overdamped",
+            "timestep_policy": "fixed",
+            "dt_s": 1e-13,
+            "steps": 2,
+            "executed_steps": 2,
+            "rejected_attempts": "",
+            "hot_loop_control_scalar_host_sync_count": 1,
+        },
+    ]
+
+    failures = bench.gpu_control_readback_budget_failures(
+        rows,
+        base=2,
+        per_step=4,
+        llg_per_step=0,
+        pgbb_per_step=3,
+        ncg_per_step=3,
+        per_rejected_attempt=2,
+    )
+
+    assert len(failures) == 3
+    assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
+    assert any("hot_loop_control_scalar_host_sync_count=9 > 8" in failure for failure in failures)
+    assert any("hot_loop_control_scalar_host_sync_count=1 > 0" in failure for failure in failures)
+
+
 def test_cpu_gpu_consistency_rejects_scenario_specific_energy_drift():
     bench = load_analysis_benchmark_module()
     rows = [
@@ -5155,6 +5313,7 @@ def test_best_demag_policy_rows_selects_fastest_converged_policy():
     assert summaries[0]["demag_solver"] == "GMRES"
     assert summaries[0]["demag_preconditioner"] == "JACOBI"
     assert summaries[0]["average_demag_timing_ms"] == 4.0
+    assert summaries[0]["converged_policy_count"] == 2
 
 
 def test_best_demag_policy_selection_ignores_policy_specific_mesh_signature():
@@ -5238,6 +5397,40 @@ def test_best_demag_policy_failures_report_missing_converged_candidate():
     assert len(failures) == 1
     assert "no converged demag policy" in failures[0]
     assert "exchange_demag_anisotropy" in failures[0]
+
+
+def test_best_demag_policy_failures_require_policy_comparison():
+    bench = load_analysis_benchmark_module()
+    row = {
+        "backend": "fem_gpu",
+        "mesh_path": "coarse",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 3,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": "1e-8",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "JACOBI",
+        "status": "ok",
+        "demag_solver_apply_wall_time_ms": 23.0,
+        "demag_final_residual_norm": 9e-9,
+        "demag_actual_iterations": 12,
+    }
+
+    failures = bench.best_demag_policy_failures(
+        [row],
+        max_residual=1e-8,
+        max_iterations=500,
+    )
+
+    assert len(failures) == 1
+    assert "has 1 converged demag policy" in failures[0]
+    assert "at least 2 are required" in failures[0]
 
 
 def test_best_demag_policy_failures_include_runtime_error_kind():
@@ -9117,12 +9310,18 @@ def test_gpu_rk_cuda_step_recomputes_exchange_for_each_heun_stage():
     refresh_source = GPU_RK_FINAL_REFRESH_CU_PATH.read_text(encoding="utf-8")
     function_start = source.index("bool gpu_rk_device_resident_step(")
     function_source = source[function_start:]
-    helper_start = rhs_source.index("bool gpu_rk_compute_rhs_for_magnetization(")
+    helper_start = rhs_source.index(
+        "bool gpu_rk_accumulate_effective_field_for_magnetization("
+    )
     helper_end = rhs_source.index("} // namespace", helper_start)
     helper_source = rhs_source[helper_start:helper_end]
+    rhs_helper_start = rhs_source.index("bool gpu_rk_compute_rhs_for_magnetization(")
+    rhs_helper_end = rhs_source.index("} // namespace", rhs_helper_start)
+    rhs_helper_source = rhs_source[rhs_helper_start:rhs_helper_end]
 
     assert "fullmag_cuda_legacy_sparse_exchange(" in exchange_source
     assert "gpu_rk_compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)" in helper_source
+    assert "gpu_rk_accumulate_effective_field_for_magnetization(" in rhs_helper_source
     assert "gpu_rk_run_accepted_attempt_loop(" in function_source
     assert "gpu_rk_run_stage_attempt(" in attempt_loop_source
     assert "gpu_rk_prepare_stage_attempt(" in schedule_source
@@ -10975,9 +11174,58 @@ def test_relaxation_consistency_smoke_passes_benchmark_env_into_container():
     )
     assert '-e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-16}"' in justfile_text
     assert '-e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}"' in justfile_text
+    assert '-e FULLMAG_BENCH_DEMAG_SOLVERS="${FULLMAG_BENCH_DEMAG_SOLVERS:-CG}"' in justfile_text
+    assert (
+        '-e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-AMG,JACOBI}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC="${FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC:-1}"'
+        in justfile_text
+    )
+    assert '-e FULLMAG_FEM_STEP_PROFILE="${FULLMAG_FEM_STEP_PROFILE:-}"' in justfile_text
+    assert (
+        '-e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-4}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-3}"'
+        in justfile_text
+    )
+    assert (
+        '-e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-2}"'
+        in justfile_text
+    )
     assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke.csv}"' in justfile_text
     assert '-e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}"' in justfile_text
     assert '--relax-algorithms "$FULLMAG_BENCH_RELAX_ALGORITHMS"' in justfile_text
+    assert '--demag-solvers "$FULLMAG_BENCH_DEMAG_SOLVERS"' in justfile_text
+    assert '--demag-preconditioners "$FULLMAG_BENCH_DEMAG_PRECONDITIONERS"' in justfile_text
+    assert "--require-adaptive-gpu-rk-acceptance" in justfile_text
+    assert "--require-best-demag-policy" in justfile_text
+    assert "--require-gpu-control-readback-budget" in justfile_text
+    assert (
+        '--gpu-control-readback-per-step "$FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP"'
+        in justfile_text
+    )
+    assert (
+        '--gpu-llg-control-readback-per-step "$FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP"'
+        in justfile_text
+    )
+    assert (
+        '--gpu-pgbb-control-readback-per-step "$FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP"'
+        in justfile_text
+    )
+    assert (
+        '--gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP"'
+        in justfile_text
+    )
+    assert "--require-demag-converged" in justfile_text
+    assert "--require-gpu-strict-residency" in justfile_text
     assert "--relax-algorithms \"${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg,tangent_plane_implicit}\"" not in justfile_text
 
 

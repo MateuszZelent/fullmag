@@ -53,6 +53,10 @@ export interface KernelEventMap {
   "workspace:focus-changed": {
     state: LayoutState;
   };
+  "explorer:texture-load-node-requested": {
+    objectId: string;
+    source: ModuleId;
+  };
   "footer:tab-requested": {
     reason?: string;
     tab: "engine" | "logs" | "telemetry";

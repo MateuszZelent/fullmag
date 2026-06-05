@@ -450,6 +450,9 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
         .find(|part| part.role == fullmag_ir::FemMeshPartRole::Interface)
         .expect("expected a materialized interface part");
     assert_eq!(interface_part.label, "Air ↔ flower");
+    assert_eq!(interface_part.object_id.as_deref(), Some("flower"));
+    assert_eq!(interface_part.geometry_id.as_deref(), Some("flower"));
+    assert_eq!(interface_part.parent_id.as_deref(), Some("part:flower"));
     assert!(!interface_part.node_indices.is_empty());
     assert_eq!(interface_part.surface_faces.len(), 1);
     assert!(interface_part.bounds_min.is_some());

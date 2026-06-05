@@ -4,6 +4,7 @@ import type {
   FieldCatalogResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -504,7 +505,7 @@ describe("ObjectVisualizationPanelModel", () => {
         {
           label: "Expected resource",
           value:
-            "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox&max_samples=1200",
+            `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=airbox&max_samples=1200`,
         },
         { label: "Catalog quantity", value: "available r3 full_domain" },
       ]),

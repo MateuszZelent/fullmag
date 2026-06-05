@@ -427,6 +427,41 @@ describe("viewport3dRenderModel", () => {
     ).toEqual([1, 2, 3]);
   });
 
+  it("merges air-magnetic interface faces into the owning magnetic part surface", () => {
+    const topology = topologyFixture();
+    const magneticPart = {
+      boundary_face_count: 1,
+      boundary_face_start: 0,
+      id: "part-magnet",
+    };
+    const interfacePart = {
+      boundary_face_count: 0,
+      boundary_face_start: 0,
+      id: "part-interface",
+      surface_faces: [[3, 2, 1]],
+    };
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topology,
+      [magneticPart],
+      [],
+      new Map([["part-magnet", [interfacePart]]]),
+    );
+
+    expect(Array.from(topologyModel?.magneticParts[0]?.surfaceIndices ?? []))
+      .toEqual([
+        0, 1, 2,
+        3, 2, 1,
+      ]);
+    expect(Array.from(topologyModel?.magneticParts[0]?.edgeIndices ?? []))
+      .toEqual([
+        0, 1,
+        1, 2,
+        0, 2,
+        2, 3,
+        1, 3,
+      ]);
+  });
+
   it("builds part volume edges from the part element range", () => {
     expect(
       Array.from(

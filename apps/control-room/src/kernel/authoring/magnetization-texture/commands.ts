@@ -38,6 +38,17 @@ function disabledReason(context: CommandContext): string | null {
   return null;
 }
 
+function loadFileDisabledReason(context: CommandContext): string | null {
+  const target = selectedTarget(context);
+  if (!target) {
+    return "Select an object texture target.";
+  }
+  if (target.kind !== "object") {
+    return "Field-state texture loading is available on object texture targets.";
+  }
+  return null;
+}
+
 function sceneRevision(context: CommandContext): number | null {
   const scene = context.resourceData?.[MODEL_SCENE_PATH];
   if (!scene || typeof scene !== "object" || Array.isArray(scene)) return null;
@@ -112,6 +123,34 @@ function presetCommand(
 }
 
 export const MAGNETIZATION_TEXTURE_COMMANDS: CommandContribution[] = [
+  {
+    category: "magnetization-texture",
+    disabledReason: loadFileDisabledReason,
+    group: "magnetization-texture",
+    id: "magnetization-texture.activate-load-file",
+    isEnabled: (context) => loadFileDisabledReason(context) === null,
+    run: (context) => {
+      const target = selectedTarget(context);
+      if (!target || target.kind !== "object") {
+        return {
+          status: "failed",
+          message:
+            loadFileDisabledReason(context) ??
+            "Object texture target unavailable.",
+        };
+      }
+      context.bus?.emit("explorer:texture-load-node-requested", {
+        objectId: target.objectId,
+        source: context.source === "test" ? "explorer" : context.source,
+      });
+      return {
+        status: "completed",
+        message: "Load texture node activated.",
+      };
+    },
+    scope: "selection",
+    title: "Load Texture",
+  },
   presetCommand(
     "magnetization-texture.assign-uniform",
     "Assign Uniform Magnetization",

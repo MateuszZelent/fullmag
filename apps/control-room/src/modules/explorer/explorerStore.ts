@@ -14,6 +14,7 @@ export interface ExplorerStoreState {
   activeTab: ExplorerTabId;
   expandedIds: ExpandedIdsByTab;
   filterText: string;
+  textureLoadObjectIds: ReadonlySet<string>;
   keyboardRow: string | null;
 }
 
@@ -33,6 +34,7 @@ const INITIAL_STATE: ExplorerStoreState = {
   activeTab: "model",
   expandedIds: defaultExpandedIds(),
   filterText: "",
+  textureLoadObjectIds: new Set(),
   keyboardRow: null,
 };
 
@@ -113,6 +115,22 @@ export function expandExplorerNodes(tabId: ExplorerTabId, nodeIds: readonly stri
       ...state.expandedIds,
       [tabId]: new Set([...state.expandedIds[tabId], ...nodeIds]),
     },
+  });
+}
+
+export function activateTextureLoadNode(objectId: string): void {
+  const state = explorerStore.getSnapshot();
+  explorerStore.setState({
+    activeTab: "model",
+    expandedIds: {
+      ...state.expandedIds,
+      model: new Set([
+        ...state.expandedIds.model,
+        `model:object:${objectId}`,
+        `model:object:${objectId}:magnetic-texture`,
+      ]),
+    },
+    textureLoadObjectIds: new Set([...state.textureLoadObjectIds, objectId]),
   });
 }
 

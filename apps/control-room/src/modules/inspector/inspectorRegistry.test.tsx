@@ -35,6 +35,15 @@ describe("inspectorRegistry", () => {
       "object-magnetic-texture",
     );
     expect(
+      resolveInspectorPanel({ kind: "object.magnetic-texture.asset" })?.id,
+    ).toBe("object-magnetic-texture");
+    expect(
+      resolveInspectorPanel({ kind: "object.magnetic-texture.load" })?.id,
+    ).toBe("object-magnetic-texture");
+    expect(
+      resolveInspectorPanel({ kind: "object.magnetic-texture.transform" })?.id,
+    ).toBe("object-magnetic-texture");
+    expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
     ).toBe("object-magnetic-texture");
   });

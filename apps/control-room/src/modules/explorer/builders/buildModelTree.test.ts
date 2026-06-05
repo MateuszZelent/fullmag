@@ -191,6 +191,19 @@ describe("buildModelTree", () => {
     ).toBe("Vortex texture");
     expect(
       flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
+      )?.kind,
+    ).toBe("object.magnetic-texture.asset");
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:box-1:magnetic-texture:load",
+    );
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture",
+      )?.contextCommands,
+    ).toEqual(expect.arrayContaining(["magnetization-texture.activate-load-file"]));
+    expect(
+      flattened.find(
         (node) =>
           node.id === "model:object:box-1:regions:primary:magnetic-texture",
       ),
@@ -205,6 +218,11 @@ describe("buildModelTree", () => {
       "model:object:box-1:magnetic-texture:transform",
     );
     expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture:transform",
+      )?.kind,
+    ).toBe("object.magnetic-texture.transform");
+    expect(
       flattened.find((node) => node.id === "model:object:box-1")
         ?.contextCommands,
     ).toEqual(
@@ -214,6 +232,32 @@ describe("buildModelTree", () => {
         "mesh.build-selected",
       ]),
     );
+  });
+
+  it("shows object texture load nodes only after activation", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree({
+        objects: [
+          {
+            id: "box-1",
+            label: "Box 1",
+            textureLoadEnabled: true,
+          },
+        ],
+      }),
+    );
+
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture:load",
+      ),
+    ).toMatchObject({
+      badge: "h5/zarr",
+      contextCommands: ["study.load-field-state"],
+      kind: "object.magnetic-texture.load",
+      label: "Load texture",
+      objectId: "box-1",
+    });
   });
 
   it("keeps the explorer renderable before the scene resource is loaded", () => {

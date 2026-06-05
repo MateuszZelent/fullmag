@@ -254,6 +254,8 @@ const homeTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         { id: "open",       icon: icon(FileText),            label: "Open",      shortcut: "Ctrl+O", disabled: true, iconColor: C.blue, menu: menu("home-open", "Project", [["New problem", "Ctrl+N"], ["Open project", "Ctrl+O"], "Open example", "Recent sessions"]) },
+        { id: "study.save-field-state", icon: icon(Save), label: "Save Field", iconColor: C.blue },
+        { id: "study.load-field-state", icon: icon(Upload), label: "Load Field", iconColor: C.lavender },
         { id: "vis-preset", icon: icon(Sparkles),            label: "3D Visual", disabled: true,                     iconColor: C.lavender, menu: menu("home-visual", "Visual preset", ["Publication figure", "Live control room", "Debug overlays"]) },
       ],
     },
@@ -1412,8 +1414,6 @@ const studyTab: RibbonTabContent = {
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
         { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
-        { id: "study.save-field-state", icon: icon(Save), label: "Save Field", iconColor: C.blue },
-        { id: "study.load-field-state", icon: icon(Upload), label: "Load Field", iconColor: C.lavender },
         { id: "study.import-state", icon: icon(Upload), label: "Import State", iconColor: C.lavender },
         { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },

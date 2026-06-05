@@ -1015,6 +1015,10 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
     check(
         rhs_source.find("gpu_rk_compute_rhs_for_magnetization(") !=
                 std::string::npos &&
+            rhs_source.find("gpu_rk_compute_effective_field_for_magnetization(") !=
+                std::string::npos &&
+            rhs_source.find("gpu_rk_accumulate_effective_field_for_magnetization(") !=
+                std::string::npos &&
             rhs_source.find("gpu_rk_compute_legacy_sparse_exchange(") !=
                 std::string::npos &&
             rhs_source.find("gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason)") !=
@@ -1109,17 +1113,28 @@ void gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop() {
         read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
 
     check(
-        runtime_header.find("bool enabled = false;") != std::string::npos,
+        runtime_header.find("bool configured = false;") != std::string::npos &&
+            runtime_header.find("bool enabled = false;") != std::string::npos,
         "GPU RK phase timing runtime state must default to disabled");
     check(
         step_stats_source.find("FULLMAG_FEM_STEP_PROFILE") != std::string::npos &&
-            step_stats_source.find("static const bool enabled") ==
-                std::string::npos,
-        "GPU RK phase timing env gate must be explicit and runtime-toggleable");
-    check(
-        step_stats_source.find("timings.enabled = phase_timing_env_enabled();") !=
+            step_stats_source.find("void refresh_phase_timing_enablement(Context &ctx)") !=
                 std::string::npos &&
-            step_stats_source.find("if (!timings.enabled) {\n        return true;\n    }") !=
+            step_stats_source.find("refresh_phase_timing_enablement(ctx);") !=
+                std::string::npos &&
+            step_stats_source.find("if (timings.enabled == enabled) {\n        return;\n    }") !=
+                std::string::npos &&
+            step_stats_source.find("void gpu_rk_reset_phase_timing_events(Context &ctx)") !=
+                std::string::npos &&
+            step_stats_source.find("void gpu_rk_reset_phase_timing_events(Context &ctx)\n{\n    auto &timings = ctx.gpu_state.rk_phase_timings;\n    timings.enabled = phase_timing_env_enabled();") ==
+                std::string::npos,
+        "GPU RK phase timing env gate must refresh at step preflight without entering the step reset hot path");
+    check(
+        step_stats_source.find("if (!enabled) {\n        destroy_phase_timing_events(timings.exchange_events);") !=
+                std::string::npos &&
+            step_stats_source.find("refresh_phase_timing_enablement(ctx);\n    if (!gpu.lifecycle.allocated)") !=
+                std::string::npos &&
+            step_stats_source.find("if (!timings.enabled) {\n        return true;\n    }\n\n    if (!ensure_phase_timing_events(") !=
                 std::string::npos &&
             step_stats_source.find("ensure_phase_timing_events(") !=
                 std::string::npos,

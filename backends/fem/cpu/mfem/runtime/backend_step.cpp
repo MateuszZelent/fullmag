@@ -145,7 +145,10 @@ int run_backend_relaxation_step(
         }
         gpu_rk_reset_phase_timing_events(ctx);
         ctx.poisson_demag.solves_current_step = 0;
+        ctx.poisson_demag.step_assemble_wall_time_ns = 0;
         ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
+        ctx.poisson_demag.step_recover_wall_time_ns = 0;
+        ctx.poisson_demag.step_energy_wall_time_ns = 0;
         int gpu_status = FULLMAG_FEM_OK;
         {
             TransferAuditScope hot_loop(

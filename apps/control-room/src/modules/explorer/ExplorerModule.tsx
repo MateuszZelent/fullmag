@@ -45,6 +45,7 @@ import {
   selectExplorerCrossSections,
 } from "./explorerCrossSections";
 import {
+  activateTextureLoadNode,
   expandExplorerNodes,
   setExplorerActiveTab,
   setExplorerFilterText,
@@ -128,6 +129,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const expandedIds = useExplorerStoreSelector(
     (explorer) => explorer.expandedIds[activeTab],
   );
+  const textureLoadObjectIds = useExplorerStoreSelector(
+    (explorer) => explorer.textureLoadObjectIds,
+  );
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -200,9 +204,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         realizedSizeFields.data?.realized_size_fields?.fields?.length ?? null,
       regionCount: manifest.data?.regions?.length ?? null,
     };
+    const objects = modelSnapshot.objects?.map((object) => ({
+      ...object,
+      textureLoadEnabled: textureLoadObjectIds.has(object.id),
+    }));
     const baseNodes =
       activeTab === "model"
-        ? buildModelTree({ ...modelSnapshot, crossSections, mesh })
+        ? buildModelTree({ ...modelSnapshot, crossSections, mesh, objects })
         : buildExplorerTree(activeTab);
     return filterExplorerNodes(baseNodes, filterText);
   }, [
@@ -214,9 +222,32 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     meshSummary.data,
     modelResource.data,
     stageExecution.data,
+    textureLoadObjectIds,
     qualityGates.data,
     realizedSizeFields.data,
   ]);
+
+  useEffect(() => {
+    return kernel.bus.on("explorer:texture-load-node-requested", (event) => {
+      activateTextureLoadNode(event.objectId);
+      kernel.selection.set(
+        {
+          kind: "object.magnetic-texture.load",
+          label: "Load texture",
+          nodeId: `model:object:${event.objectId}:magnetic-texture:load`,
+          objectId: event.objectId,
+          ref: {
+            kind: "object.magnetic-texture.load",
+            nodeId: `model:object:${event.objectId}:magnetic-texture:load`,
+            objectId: event.objectId,
+            type: "scene-object",
+            visualizationTargetId: `object:${event.objectId}`,
+          },
+        },
+        event.source,
+      );
+    });
+  }, [kernel.bus, kernel.selection]);
 
   useEffect(() => {
     if (crossSectionExpansionIds.length === 0) return;

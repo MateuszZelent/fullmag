@@ -15,6 +15,9 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
       node.kind === "object.magnetic-texture" ||
+      node.kind === "object.magnetic-texture.asset" ||
+      node.kind === "object.magnetic-texture.load" ||
+      node.kind === "object.magnetic-texture.transform" ||
       node.kind === "object.mesh" ||
       node.kind === "object.visualization")
   ) {

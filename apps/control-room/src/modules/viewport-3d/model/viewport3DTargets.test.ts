@@ -96,7 +96,13 @@ describe("viewport3DTargets", () => {
 
     const bounds = resolveViewport3DSelectionBounds(
       selection,
-      { airboxParts: [], magneticParts: [], objectPartIds: new Map(), partsById: new Map() },
+      {
+        airboxParts: [],
+        magneticParts: [],
+        magneticSurfacePartsByPartId: new Map(),
+        objectPartIds: new Map(),
+        partsById: new Map(),
+      },
       { center: [0, 0, 0], radius: 10, size: [20, 20, 20] },
     );
 

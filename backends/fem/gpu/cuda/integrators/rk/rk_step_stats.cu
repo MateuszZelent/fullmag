@@ -129,6 +129,54 @@ bool collect_phase_timing_events(
     return true;
 }
 
+void reset_phase_timing_accumulators(Context &ctx)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.exchange_wall_time_ns = 0;
+    timings.demag_assemble_wall_time_ns = 0;
+    timings.demag_recover_wall_time_ns = 0;
+    timings.demag_energy_wall_time_ns = 0;
+    timings.rhs_wall_time_ns = 0;
+    timings.exchange_used = 0;
+    timings.demag_assemble_used = 0;
+    timings.demag_recover_used = 0;
+    timings.demag_energy_used = 0;
+    timings.rhs_used = 0;
+    timings.exchange_overflow_count = 0;
+    timings.demag_assemble_overflow_count = 0;
+    timings.demag_recover_overflow_count = 0;
+    timings.demag_energy_overflow_count = 0;
+    timings.rhs_overflow_count = 0;
+#if FULLMAG_HAS_MFEM_STACK
+    ctx.poisson_demag.step_assemble_wall_time_ns = 0;
+    ctx.poisson_demag.step_recover_wall_time_ns = 0;
+    ctx.poisson_demag.step_energy_wall_time_ns = 0;
+#endif
+}
+
+void refresh_phase_timing_enablement(Context &ctx)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    const bool enabled = phase_timing_env_enabled();
+    if (!timings.configured) {
+        timings.enabled = enabled;
+        timings.configured = true;
+        return;
+    }
+    if (timings.enabled == enabled) {
+        return;
+    }
+    if (!enabled) {
+        destroy_phase_timing_events(timings.exchange_events);
+        destroy_phase_timing_events(timings.demag_assemble_events);
+        destroy_phase_timing_events(timings.demag_recover_events);
+        destroy_phase_timing_events(timings.demag_energy_events);
+        destroy_phase_timing_events(timings.rhs_events);
+    }
+    timings.enabled = enabled;
+    reset_phase_timing_accumulators(ctx);
+}
+
 bool collect_gpu_rk_phase_timing_events(
     Context &ctx,
     fullmag_fem_step_stats &stats,
@@ -136,6 +184,9 @@ bool collect_gpu_rk_phase_timing_events(
 {
     auto &timings = ctx.gpu_state.rk_phase_timings;
     timings.exchange_wall_time_ns = 0;
+    timings.demag_assemble_wall_time_ns = 0;
+    timings.demag_recover_wall_time_ns = 0;
+    timings.demag_energy_wall_time_ns = 0;
     timings.rhs_wall_time_ns = 0;
     if (!timings.enabled) {
         stats.exchange_wall_time_ns = 0;
@@ -151,6 +202,30 @@ bool collect_gpu_rk_phase_timing_events(
         return false;
     }
     if (!collect_phase_timing_events(
+            timings.demag_assemble_events,
+            timings.demag_assemble_used,
+            timings.demag_assemble_wall_time_ns,
+            "GPU RK demag assemble phase timing readback",
+            reason)) {
+        return false;
+    }
+    if (!collect_phase_timing_events(
+            timings.demag_recover_events,
+            timings.demag_recover_used,
+            timings.demag_recover_wall_time_ns,
+            "GPU RK demag recover phase timing readback",
+            reason)) {
+        return false;
+    }
+    if (!collect_phase_timing_events(
+            timings.demag_energy_events,
+            timings.demag_energy_used,
+            timings.demag_energy_wall_time_ns,
+            "GPU RK demag energy phase timing readback",
+            reason)) {
+        return false;
+    }
+    if (!collect_phase_timing_events(
             timings.rhs_events,
             timings.rhs_used,
             timings.rhs_wall_time_ns,
@@ -160,6 +235,14 @@ bool collect_gpu_rk_phase_timing_events(
     }
     stats.exchange_wall_time_ns = timings.exchange_wall_time_ns;
     stats.rhs_wall_time_ns = timings.rhs_wall_time_ns;
+#if FULLMAG_HAS_MFEM_STACK
+    ctx.poisson_demag.step_assemble_wall_time_ns =
+        timings.demag_assemble_wall_time_ns;
+    ctx.poisson_demag.step_recover_wall_time_ns =
+        timings.demag_recover_wall_time_ns;
+    ctx.poisson_demag.step_energy_wall_time_ns =
+        timings.demag_energy_wall_time_ns;
+#endif
     return true;
 }
 
@@ -194,7 +277,7 @@ bool gpu_rk_prepare_phase_timing_event_count(
 {
     auto &gpu = ctx.gpu_state.device;
     auto &timings = ctx.gpu_state.rk_phase_timings;
-    timings.enabled = phase_timing_env_enabled();
+    refresh_phase_timing_enablement(ctx);
     if (!gpu.lifecycle.allocated) {
         return true;
     }
@@ -209,6 +292,27 @@ bool gpu_rk_prepare_phase_timing_event_count(
             reason)) {
         return false;
     }
+    if (!ensure_phase_timing_events(
+            timings.demag_assemble_events,
+            required_count,
+            "GPU RK demag assemble phase timing pool",
+            reason)) {
+        return false;
+    }
+    if (!ensure_phase_timing_events(
+            timings.demag_recover_events,
+            required_count,
+            "GPU RK demag recover phase timing pool",
+            reason)) {
+        return false;
+    }
+    if (!ensure_phase_timing_events(
+            timings.demag_energy_events,
+            required_count,
+            "GPU RK demag energy phase timing pool",
+            reason)) {
+        return false;
+    }
     return ensure_phase_timing_events(
         timings.rhs_events,
         required_count,
@@ -218,27 +322,33 @@ bool gpu_rk_prepare_phase_timing_event_count(
 
 void gpu_rk_reset_phase_timing_events(Context &ctx)
 {
-    auto &timings = ctx.gpu_state.rk_phase_timings;
-    timings.enabled = phase_timing_env_enabled();
-    timings.exchange_wall_time_ns = 0;
-    timings.rhs_wall_time_ns = 0;
-    timings.exchange_used = 0;
-    timings.rhs_used = 0;
-    timings.exchange_overflow_count = 0;
-    timings.rhs_overflow_count = 0;
+    reset_phase_timing_accumulators(ctx);
 }
 
 void gpu_rk_destroy_phase_timing_events(Context &ctx)
 {
     auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.configured = false;
     timings.enabled = false;
     destroy_phase_timing_events(timings.exchange_events);
+    destroy_phase_timing_events(timings.demag_assemble_events);
+    destroy_phase_timing_events(timings.demag_recover_events);
+    destroy_phase_timing_events(timings.demag_energy_events);
     destroy_phase_timing_events(timings.rhs_events);
     timings.exchange_wall_time_ns = 0;
+    timings.demag_assemble_wall_time_ns = 0;
+    timings.demag_recover_wall_time_ns = 0;
+    timings.demag_energy_wall_time_ns = 0;
     timings.rhs_wall_time_ns = 0;
     timings.exchange_used = 0;
+    timings.demag_assemble_used = 0;
+    timings.demag_recover_used = 0;
+    timings.demag_energy_used = 0;
     timings.rhs_used = 0;
     timings.exchange_overflow_count = 0;
+    timings.demag_assemble_overflow_count = 0;
+    timings.demag_recover_overflow_count = 0;
+    timings.demag_energy_overflow_count = 0;
     timings.rhs_overflow_count = 0;
 }
 
@@ -246,8 +356,17 @@ bool finalize_step_stats_impl(
     Context &ctx,
     fullmag_fem_step_stats &stats,
     bool control_scalar_readback,
+    double *tail_scalars,
+    size_t tail_count,
     std::string &reason)
 {
+    if (tail_count > 0 &&
+        (tail_scalars == nullptr ||
+         kGpuFinalScalarSlots + tail_count > FEM_GPU_SCALAR_RESULT_SLOTS)) {
+        reason = "GPU RK final scalar tail readback request exceeds scalar result slots";
+        return false;
+    }
+
     auto &gpu = ctx.gpu_state.device;
     if (gpu.residency.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
         gpu.reductions.scalar_result == nullptr ||
@@ -256,7 +375,7 @@ bool finalize_step_stats_impl(
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
-    std::array<double, kGpuFinalScalarSlots> scalars{};
+    std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> scalar_storage{};
 
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
@@ -272,20 +391,22 @@ bool finalize_step_stats_impl(
         return false;
     }
 
+    const size_t read_count =
+        tail_count > 0 ? FEM_GPU_SCALAR_RESULT_SLOTS : kGpuFinalScalarSlots;
     const bool read_ok = control_scalar_readback
         ? gpu_rk_read_control_scalar_results(
               ctx,
               stream,
               "cudaMemcpyAsync GPU RK final scalar stats device->host",
-              scalars.data(),
-              scalars.size(),
+              scalar_storage.data(),
+              read_count,
               reason)
         : gpu_rk_read_scalar_results(
               ctx,
               stream,
               "cudaMemcpyAsync GPU RK final scalar stats device->host",
-              scalars.data(),
-              scalars.size(),
+              scalar_storage.data(),
+              read_count,
               reason);
     if (!read_ok) {
         return false;
@@ -295,6 +416,11 @@ bool finalize_step_stats_impl(
         return false;
     }
 
+    std::array<double, kGpuFinalScalarSlots> scalars{};
+    std::copy_n(scalar_storage.begin(), kGpuFinalScalarSlots, scalars.begin());
+    for (size_t i = 0; i < tail_count; ++i) {
+        tail_scalars[i] = scalar_storage[kGpuFinalScalarSlots + i];
+    }
     gpu_rk_publish_final_step_stats(ctx, scalars, stats);
     return true;
 }
@@ -304,7 +430,7 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, false, reason);
+    return finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason);
 }
 
 bool gpu_rk_finalize_step_stats_control_readback(
@@ -312,7 +438,17 @@ bool gpu_rk_finalize_step_stats_control_readback(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, reason);
+    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, reason);
+}
+
+bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    double *tail_scalars,
+    size_t tail_count,
+    std::string &reason)
+{
+    return finalize_step_stats_impl(ctx, stats, true, tail_scalars, tail_count, reason);
 }
 
 } // namespace fullmag::fem

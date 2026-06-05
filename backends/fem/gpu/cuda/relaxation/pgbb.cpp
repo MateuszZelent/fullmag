@@ -222,10 +222,9 @@ bool gpu_relax_compute_effective_field_and_energy(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_rhs_for_magnetization(
+    if (!gpu_rk_compute_effective_field_for_magnetization(
             ctx,
             gpu.magnetization.m,
-            gpu.rk.error,
             stream,
             n,
             "launch GPU projected-gradient BB h_eff accumulation",
@@ -269,10 +268,9 @@ bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_rhs_for_magnetization(
+    if (!gpu_rk_compute_effective_field_for_magnetization(
             ctx,
             gpu.magnetization.m,
-            gpu.rk.error,
             stream,
             n,
             "launch GPU projected-gradient BB h_eff accumulation",

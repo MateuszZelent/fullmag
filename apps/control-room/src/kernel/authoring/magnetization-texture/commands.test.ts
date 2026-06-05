@@ -8,6 +8,9 @@ import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
 const uniformCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
   (command) => command.id === "magnetization-texture.assign-uniform",
 );
+const activateLoadFileCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+  (command) => command.id === "magnetization-texture.activate-load-file",
+);
 
 describe("magnetization texture commands", () => {
   it("assigns a uniform texture to the selected region target", async () => {
@@ -86,6 +89,68 @@ describe("magnetization texture commands", () => {
     expect(uniformCommand?.isEnabled?.(context)).toBe(false);
     expect(uniformCommand?.disabledReason?.(context)).toBe(
       "Select an object or region texture target.",
+    );
+  });
+
+  it("activates the object texture load node through the event bus", async () => {
+    const emit = vi.fn();
+    const context = {
+      bus: { emit },
+      selection: {
+        get: () => ({
+          kind: "object.magnetic-texture",
+          label: "Magnetic Texture",
+          moduleSource: "explorer",
+          nodeId: "model:object:body:magnetic-texture",
+          objectId: "body",
+          ref: {
+            kind: "object.magnetic-texture",
+            nodeId: "model:object:body:magnetic-texture",
+            objectId: "body",
+            type: "scene-object",
+            visualizationTargetId: "object:body",
+          },
+        }),
+      },
+      source: "inspector",
+    } as unknown as CommandContext;
+
+    expect(activateLoadFileCommand?.isEnabled?.(context)).toBe(true);
+    expect(activateLoadFileCommand?.run(context)).toMatchObject({
+      message: "Load texture node activated.",
+      status: "completed",
+    });
+    expect(emit).toHaveBeenCalledWith("explorer:texture-load-node-requested", {
+      objectId: "body",
+      source: "inspector",
+    });
+  });
+
+  it("does not activate texture file loading for region targets", () => {
+    const context = {
+      selection: {
+        get: () => ({
+          kind: "object.region-magnetic-texture",
+          label: "Magnetic Texture",
+          moduleSource: "explorer",
+          nodeId: "node-1",
+          objectId: "body",
+          ref: {
+            kind: "object.region-magnetic-texture",
+            nodeId: "node-1",
+            objectId: "body",
+            regionId: "region:body",
+            type: "scene-object",
+            visualizationTargetId: "object:body",
+          },
+        }),
+      },
+      source: "test",
+    } as unknown as CommandContext;
+
+    expect(activateLoadFileCommand?.isEnabled?.(context)).toBe(false);
+    expect(activateLoadFileCommand?.disabledReason?.(context)).toBe(
+      "Field-state texture loading is available on object texture targets.",
     );
   });
 });

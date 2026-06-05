@@ -110,10 +110,14 @@ void gpu_rk_audit04_demag_and_dmi_contracts_are_source_visible() {
     check(rhs_pos != std::string::npos, "GPU RK RHS runtime source must expose gpu_rk_compute_rhs_for_magnetization");
     const auto rhs_source = gpu_rk_rhs.substr(rhs_pos);
     check(
-        rhs_source.find("gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason)") != std::string::npos &&
+        gpu_rk_rhs.find("gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason)") != std::string::npos &&
             gpu_rk_demag_dispatch.find("compute_device_demag_for_device_stage") != std::string::npos &&
             gpu_rk_demag_dispatch.find("gpu_rk_compute_hybrid_cpu_demag_for_device_stage") != std::string::npos,
         "RHS demag must delegate to a demag dispatch module that chooses strict device Poisson by default and reserves hybrid CPU Poisson for explicit compatibility mode");
+    check(
+        gpu_rk_rhs.find("bool gpu_rk_compute_effective_field_for_magnetization") != std::string::npos &&
+            gpu_rk_rhs.find("gpu_rk_accumulate_effective_field_for_magnetization(") != std::string::npos,
+        "GPU RK RHS runtime must expose an effective-field-only path for direct minimizers");
     check(
         gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy(") != std::string::npos &&
             gpu_rk_dmi_fields.find("fullmag_cuda_dmi_field_energy_serial(") == std::string::npos,

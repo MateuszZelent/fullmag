@@ -97,12 +97,9 @@ struct GpuRkPhaseTimer {
     }
 };
 
-} // namespace
-
-bool gpu_rk_compute_rhs_for_magnetization(
+bool gpu_rk_accumulate_effective_field_for_magnetization(
     Context &ctx,
     const FemGpuComponentField &m,
-    FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
     const char *label,
@@ -135,10 +132,38 @@ bool gpu_rk_compute_rhs_for_magnetization(
     if (!gpu_rk_compute_local_field_contributions(ctx, m, stream, n, reason)) {
         return false;
     }
-    if (!gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason)) {
+    return gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason);
+}
+
+} // namespace
+
+bool gpu_rk_compute_effective_field_for_magnetization(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    cudaStream_t stream,
+    int n,
+    const char *label,
+    std::string &reason)
+{
+    return gpu_rk_accumulate_effective_field_for_magnetization(
+        ctx, m, stream, n, label, reason);
+}
+
+bool gpu_rk_compute_rhs_for_magnetization(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    FemGpuComponentField &rhs,
+    cudaStream_t stream,
+    int n,
+    const char *label,
+    std::string &reason)
+{
+    if (!gpu_rk_accumulate_effective_field_for_magnetization(
+            ctx, m, stream, n, label, reason)) {
         return false;
     }
 
+    auto &timings = ctx.gpu_state.rk_phase_timings;
     GpuRkPhaseTimer rhs_timer;
     if (!rhs_timer.start(
             timings.enabled,
