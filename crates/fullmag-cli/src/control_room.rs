@@ -868,15 +868,6 @@ pub(crate) fn sync_current_live_delta(
     Ok(())
 }
 
-/// Apply initial visualization overrides derived from the script's `visualization_hint`.
-///
-/// This is a one-time startup call that PATCHes `visualization_overrides` in the API
-/// server's `DisplayPresentationState` before the first control-room frame is painted.
-/// Errors are non-fatal — the control room opens with defaults if the PATCH fails.
-pub(crate) fn sync_initial_visualization_overrides(overrides: serde_json::Value) -> Result<()> {
-    sync_initial_visualization_state(serde_json::json!({ "overrides": overrides }))
-}
-
 /// Send a full `VisualizationStatePatch` JSON body to the visualization state endpoint before
 /// the first control-room frame is painted.  Accepts the complete patch object (may include
 /// `overrides`, `quantity`, `clip`, `vector_style`, `layers`, etc.).

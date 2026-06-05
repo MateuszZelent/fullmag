@@ -615,6 +615,10 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     loaded_state_ref: None,
                     resume_from_checkpoint_ref: None,
                     state_transition: None,
+                    state_transition_kind: None,
+                    state_transition_reason: None,
+                    state_transfer_operator_kind: None,
+                    state_transition_ui_presentation: None,
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
@@ -632,6 +636,10 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
                     loaded_state_ref: None,
                     resume_from_checkpoint_ref: None,
                     state_transition: None,
+                    state_transition_kind: None,
+                    state_transition_reason: None,
+                    state_transfer_operator_kind: None,
+                    state_transition_ui_presentation: None,
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
@@ -830,6 +838,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     loaded_state_ref: None,
                     resume_from_checkpoint_ref: None,
                     state_transition: Some("preserved".into()),
+                    state_transition_kind: Some("save_checkpoint".into()),
+                    state_transition_reason: Some("user_export".into()),
+                    state_transfer_operator_kind: None,
+                    state_transition_ui_presentation: Some("boundary_bar".into()),
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
@@ -847,6 +859,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                     loaded_state_ref: Some("states/imported-state.fmstate".into()),
                     resume_from_checkpoint_ref: Some("cp-000041".into()),
                     state_transition: Some("restored".into()),
+                    state_transition_kind: Some("load_state".into()),
+                    state_transition_reason: Some("checkpoint_load".into()),
+                    state_transfer_operator_kind: Some("checkpoint_load".into()),
+                    state_transition_ui_presentation: Some("boundary_bar".into()),
                     metric_name: Some("max_torque_T".into()),
                     metric_value: Some(14.0),
                     threshold: Some(1.0e-4),
@@ -8388,6 +8404,10 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
                 loaded_state_ref: None,
                 resume_from_checkpoint_ref: None,
                 state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
@@ -8860,6 +8880,10 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 loaded_state_ref: Some("states/imported-state.fmstate".into()),
                 resume_from_checkpoint_ref: Some("cp-000040".into()),
                 state_transition: Some("restored".into()),
+                state_transition_kind: Some("load_state".into()),
+                state_transition_reason: Some("checkpoint_load".into()),
+                state_transfer_operator_kind: Some("checkpoint_load".into()),
+                state_transition_ui_presentation: Some("boundary_bar".into()),
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
@@ -9070,6 +9094,15 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["stages"][0]["artifact_refs"][0], "artifacts/stage-000");
     assert_eq!(json["stages"][0]["checkpoint_ref"], "cp-000041");
     assert_eq!(json["stages"][0]["state_transition"], "preserved");
+    assert_eq!(
+        json["stages"][0]["state_transition_kind"],
+        "save_checkpoint"
+    );
+    assert_eq!(json["stages"][0]["state_transition_reason"], "user_export");
+    assert_eq!(
+        json["stages"][0]["state_transition_ui_presentation"],
+        "boundary_bar"
+    );
     assert_eq!(json["stages"][1]["stage_id"], "stage-001");
     assert_eq!(json["stages"][1]["kind"], "relax");
     assert_eq!(json["stages"][1]["command_id"], "cmd-stage-1");
@@ -9085,6 +9118,19 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     );
     assert_eq!(json["stages"][1]["resume_from_checkpoint_ref"], "cp-000041");
     assert_eq!(json["stages"][1]["state_transition"], "restored");
+    assert_eq!(json["stages"][1]["state_transition_kind"], "load_state");
+    assert_eq!(
+        json["stages"][1]["state_transition_reason"],
+        "checkpoint_load"
+    );
+    assert_eq!(
+        json["stages"][1]["state_transfer_operator_kind"],
+        "checkpoint_load"
+    );
+    assert_eq!(
+        json["stages"][1]["state_transition_ui_presentation"],
+        "boundary_bar"
+    );
 }
 
 #[tokio::test]
@@ -9108,6 +9154,10 @@ async fn stage_execution_endpoint_exposes_completed_relaxation_stop_metric() {
                 loaded_state_ref: None,
                 resume_from_checkpoint_ref: None,
                 state_transition: Some("preserved".into()),
+                state_transition_kind: Some("save_checkpoint".into()),
+                state_transition_reason: Some("user_export".into()),
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: Some("boundary_bar".into()),
                 metric_name: Some("max_torque_apm".into()),
                 metric_value: Some(75.0f64),
                 threshold: Some(80.0f64),

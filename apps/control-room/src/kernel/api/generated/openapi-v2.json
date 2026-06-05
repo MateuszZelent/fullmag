@@ -9609,7 +9609,31 @@
               "null"
             ]
           },
+          "state_transfer_operator_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "state_transition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_transition_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_transition_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state_transition_ui_presentation": {
             "type": [
               "string",
               "null"

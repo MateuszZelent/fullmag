@@ -171,7 +171,7 @@ impl LocalLiveWorkspace {
         if config.enabled {
             std::env::set_var("FULLMAG_FEM_STEP_PROFILE", "1");
         } else {
-            std::env::remove_var("FULLMAG_FEM_STEP_PROFILE");
+            std::env::set_var("FULLMAG_FEM_STEP_PROFILE", "0");
         }
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.set_config(config);
@@ -192,6 +192,13 @@ impl LocalLiveWorkspace {
             );
         }
         self.publish_snapshot();
+    }
+
+    pub fn solver_profile_config(&self) -> fullmag_runner::SolverProfileConfig {
+        self.state
+            .lock()
+            .map(|state| state.solver_profile.config().clone())
+            .unwrap_or_default()
     }
 
     pub fn record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
@@ -738,16 +745,24 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(std::env::var("FULLMAG_FEM_STEP_PROFILE").as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var("FULLMAG_FEM_STEP_PROFILE").as_deref(),
+            Ok("1")
+        );
 
         workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
             enabled: false,
             ..Default::default()
         });
 
-        assert!(std::env::var_os("FULLMAG_FEM_STEP_PROFILE").is_none());
+        assert_eq!(
+            std::env::var("FULLMAG_FEM_STEP_PROFILE").as_deref(),
+            Ok("0")
+        );
         if let Some(value) = previous {
             std::env::set_var("FULLMAG_FEM_STEP_PROFILE", value);
+        } else {
+            std::env::remove_var("FULLMAG_FEM_STEP_PROFILE");
         }
     }
 

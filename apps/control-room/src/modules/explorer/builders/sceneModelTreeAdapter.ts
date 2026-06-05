@@ -84,6 +84,24 @@ export function modelTreeSnapshotWithStageExecution(
           ...stage,
           stageId: runtimeStage?.stage_id ?? stage.stageId,
           status: explorerStatusFromRuntimeStage(runtimeStatus) ?? stage.status,
+          stateTransition:
+            runtimeStage?.state_transition ?? stage.stateTransition ?? null,
+          stateTransitionKind:
+            runtimeStage?.state_transition_kind ??
+            stage.stateTransitionKind ??
+            null,
+          stateTransitionReason:
+            runtimeStage?.state_transition_reason ??
+            stage.stateTransitionReason ??
+            null,
+          stateTransferOperatorKind:
+            runtimeStage?.state_transfer_operator_kind ??
+            stage.stateTransferOperatorKind ??
+            null,
+          stateTransitionUiPresentation:
+            runtimeStage?.state_transition_ui_presentation ??
+            stage.stateTransitionUiPresentation ??
+            null,
         };
       }),
     },

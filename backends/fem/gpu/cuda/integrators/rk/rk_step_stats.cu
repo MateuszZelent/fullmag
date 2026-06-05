@@ -31,28 +31,44 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
-bool phase_timing_env_enabled()
+int phase_timing_env_state()
 {
     const char *raw = std::getenv("FULLMAG_FEM_STEP_PROFILE");
     if (raw == nullptr || *raw == '\0') {
-        return false;
+        return -1;
     }
-    return std::strcmp(raw, "1") == 0 ||
-           std::strcmp(raw, "true") == 0 ||
-           std::strcmp(raw, "TRUE") == 0 ||
-           std::strcmp(raw, "on") == 0 ||
-           std::strcmp(raw, "ON") == 0 ||
-           std::strcmp(raw, "yes") == 0 ||
-           std::strcmp(raw, "YES") == 0;
+    if (std::strcmp(raw, "1") == 0 ||
+        std::strcmp(raw, "true") == 0 ||
+        std::strcmp(raw, "TRUE") == 0 ||
+        std::strcmp(raw, "on") == 0 ||
+        std::strcmp(raw, "ON") == 0 ||
+        std::strcmp(raw, "yes") == 0 ||
+        std::strcmp(raw, "YES") == 0) {
+        return 1;
+    }
+    if (std::strcmp(raw, "0") == 0 ||
+        std::strcmp(raw, "false") == 0 ||
+        std::strcmp(raw, "FALSE") == 0 ||
+        std::strcmp(raw, "off") == 0 ||
+        std::strcmp(raw, "OFF") == 0 ||
+        std::strcmp(raw, "no") == 0 ||
+        std::strcmp(raw, "NO") == 0) {
+        return 0;
+    }
+    return -1;
 }
 
 bool phase_timing_requested(Context &ctx)
 {
+    const int env_state = phase_timing_env_state();
+    if (env_state >= 0) {
+        return env_state != 0;
+    }
     const auto &timings = ctx.gpu_state.rk_phase_timings;
     if (timings.override_configured) {
         return timings.override_enabled;
     }
-    return phase_timing_env_enabled();
+    return false;
 }
 
 void destroy_phase_timing_events(

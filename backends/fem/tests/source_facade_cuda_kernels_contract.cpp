@@ -1124,7 +1124,11 @@ void gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop() {
         "GPU RK phase timing runtime state must default to disabled");
     check(
         step_stats_source.find("FULLMAG_FEM_STEP_PROFILE") != std::string::npos &&
+            step_stats_source.find("int phase_timing_env_state()") !=
+                std::string::npos &&
             step_stats_source.find("bool phase_timing_requested(Context &ctx)") !=
+                std::string::npos &&
+            step_stats_source.find("const int env_state = phase_timing_env_state();\n    if (env_state >= 0) {\n        return env_state != 0;\n    }") !=
                 std::string::npos &&
             step_stats_source.find("if (timings.override_configured) {\n        return timings.override_enabled;\n    }") !=
                 std::string::npos &&

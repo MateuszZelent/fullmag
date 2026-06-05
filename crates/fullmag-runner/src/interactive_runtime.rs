@@ -897,6 +897,20 @@ impl InteractiveFemPreviewRuntime {
             InteractiveFemPreviewRuntimeInner::Gpu(runtime) => runtime.snapshot_step_stats(),
         }
     }
+
+    pub fn set_solver_profile_config(
+        &mut self,
+        config: &crate::SolverProfileConfig,
+    ) -> Result<(), RunError> {
+        let _ = config;
+        match &mut self.inner {
+            InteractiveFemPreviewRuntimeInner::Cpu(_) => Ok(()),
+            #[cfg(feature = "fem-gpu")]
+            InteractiveFemPreviewRuntimeInner::Gpu(runtime) => {
+                runtime.backend.set_step_profile(config.enabled)
+            }
+        }
+    }
 }
 
 impl CpuInteractiveFdmPreviewRuntime {
@@ -4436,6 +4450,13 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
 }
 
 impl InteractiveBackend for InteractiveFemPreviewRuntime {
+    fn set_solver_profile_config(
+        &mut self,
+        config: &crate::SolverProfileConfig,
+    ) -> Result<(), RunError> {
+        self.set_solver_profile_config(config)
+    }
+
     fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
         self.upload_magnetization(magnetization)
     }

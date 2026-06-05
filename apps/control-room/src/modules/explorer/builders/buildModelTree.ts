@@ -408,6 +408,27 @@ function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
   return stage.artifactName ?? stage.kind;
 }
 
+function studyStageTransitionBadge(stage: ModelTreeStudyStageSnapshot): string {
+  return (
+    stage.stateTransition ??
+    stage.stateTransitionKind ??
+    stage.stateTransitionReason ??
+    "transition"
+  );
+}
+
+function studyStageTransitionStatus(
+  stage: ModelTreeStudyStageSnapshot,
+): ExplorerNodeStatus {
+  if (stage.stateTransitionUiPresentation === "error_boundary") {
+    return "failed";
+  }
+  if (stage.stateTransitionUiPresentation === "boundary_bar") {
+    return "warning";
+  }
+  return "ready";
+}
+
 function finiteNumberFromScalar(value: string | number | null | undefined): number | null {
   if (value == null) return null;
   const parsed = typeof value === "number" ? value : Number(value);
@@ -417,8 +438,31 @@ function finiteNumberFromScalar(value: string | number | null | undefined): numb
 function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const displayKind = formatStudyStageKind(stage.kind);
   const nodeStageId = stage.stageId ?? `${stage.index}`;
+  const nodeId = `model:study:stage:${nodeStageId}`;
+  const children: ExplorerNode[] = [];
+  if (
+    stage.stateTransition ||
+    stage.stateTransitionKind ||
+    stage.stateTransitionReason
+  ) {
+    children.push({
+      id: `${nodeId}:state-transition`,
+      kind: "study.stage.action",
+      label: "State Transition",
+      parentId: nodeId,
+      badge: studyStageTransitionBadge(stage),
+      icon:
+        stage.stateTransitionUiPresentation === "smooth_arrow"
+          ? "activity"
+          : "shield",
+      stageId: nodeStageId,
+      stageIndex: stage.index,
+      status: studyStageTransitionStatus(stage),
+      contextCommands: ["workspace.focus-selection"],
+    });
+  }
   return {
-    id: `model:study:stage:${nodeStageId}`,
+    id: nodeId,
     kind: studyStageKind(stage.kind),
     label: `${displayKind} ${stage.index + 1}`,
     parentId: "model:study",
@@ -428,6 +472,7 @@ function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
     stageIndex: stage.index,
     status: stage.status ?? "ready",
     contextCommands: ["study.skip", "workspace.focus-selection"],
+    children,
   };
 }
 

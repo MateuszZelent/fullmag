@@ -4550,7 +4550,11 @@ export interface components {
             stage_id: string;
             /** Format: int64 */
             started_at_unix_ms?: number | null;
+            state_transfer_operator_kind?: string | null;
             state_transition?: string | null;
+            state_transition_kind?: string | null;
+            state_transition_reason?: string | null;
+            state_transition_ui_presentation?: string | null;
             status: string;
             /** Format: double */
             threshold?: number | null;

@@ -56,6 +56,17 @@ pub(crate) trait InteractiveBackend {
     /// The geometry of the backend (grid for FDM, mesh for FEM).
     fn geometry(&self) -> BackendGeometry;
 
+    /// Apply solver-profile settings that need backend-owned runtime state.
+    ///
+    /// The generic profile ring buffer is owned by the caller. Backends only
+    /// need this when native phase timing must be enabled at the solver layer.
+    fn set_solver_profile_config(
+        &mut self,
+        _config: &crate::SolverProfileConfig,
+    ) -> Result<(), RunError> {
+        Ok(())
+    }
+
     /// Execute a simulation segment with live preview streaming.
     ///
     /// The backend consumes an already materialized execution plan so

@@ -209,6 +209,11 @@ export interface ModelTreeStudyStageSnapshot {
   kind: string;
   maxSteps?: string | number | null;
   stageId?: string | null;
+  stateTransition?: string | null;
+  stateTransitionKind?: string | null;
+  stateTransitionReason?: string | null;
+  stateTransferOperatorKind?: string | null;
+  stateTransitionUiPresentation?: string | null;
   status?: ExplorerNodeStatus | null;
   torqueTolerance?: string | number | null;
   untilSeconds?: string | number | null;

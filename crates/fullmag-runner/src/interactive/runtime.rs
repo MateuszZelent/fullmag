@@ -142,6 +142,13 @@ impl InteractiveRuntime {
         self.backend.snapshot_step_stats()
     }
 
+    pub fn set_solver_profile_config(
+        &mut self,
+        config: &crate::SolverProfileConfig,
+    ) -> Result<(), RunError> {
+        self.backend.set_solver_profile_config(config)
+    }
+
     /// Snapshot a single preview field for the given request.
     /// This is the backward-compatible path using `LivePreviewRequest`.
     pub fn snapshot_preview(

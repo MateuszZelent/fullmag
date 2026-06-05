@@ -844,6 +844,7 @@ mod realtime_change_tests {
     }
 }
 
+#[cfg(test)]
 fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
     if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
         if payload.changes.iter().any(|change| {

@@ -364,12 +364,114 @@ pub(crate) enum ResolvedScriptStageAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StageTransitionKind {
+    ContinueInPlace,
+    TransferState,
+    RemeshTransfer,
+    BackendTransfer,
+    LoadState,
+    SaveCheckpoint,
+    ExportOnly,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StageTransitionReason {
+    SameRuntimeContext,
+    ExplicitRemesh,
+    BackendChange,
+    MeshGenerationChanged,
+    ObjectTopologyChanged,
+    MaterialTopologyChanged,
+    CheckpointLoad,
+    UserExport,
+    IncompatibleImplicitState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StateTransferOperatorKind {
+    IdentityCopy,
+    FemToFdmGridResample,
+    FdmToFemMeshResample,
+    MeshToMeshInterpolation,
+    CheckpointLoad,
+    SampledFieldImport,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StageTransitionUiPresentation {
+    SmoothArrow,
+    BoundaryBar,
+    ErrorBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct StageTransitionMetadata {
+    pub kind: StageTransitionKind,
+    pub reason: StageTransitionReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer_operator: Option<StateTransferOperatorKind>,
+    pub ui_presentation: StageTransitionUiPresentation,
+}
+
+impl StageTransitionMetadata {
+    pub(crate) fn continue_in_place() -> Self {
+        Self {
+            kind: StageTransitionKind::ContinueInPlace,
+            reason: StageTransitionReason::SameRuntimeContext,
+            transfer_operator: None,
+            ui_presentation: StageTransitionUiPresentation::SmoothArrow,
+        }
+    }
+
+    pub(crate) fn boundary(
+        kind: StageTransitionKind,
+        reason: StageTransitionReason,
+        transfer_operator: Option<StateTransferOperatorKind>,
+    ) -> Self {
+        Self {
+            kind,
+            reason,
+            transfer_operator,
+            ui_presentation: StageTransitionUiPresentation::BoundaryBar,
+        }
+    }
+
+    pub(crate) fn unsupported(reason: StageTransitionReason) -> Self {
+        Self {
+            kind: StageTransitionKind::Unsupported,
+            reason,
+            transfer_operator: None,
+            ui_presentation: StageTransitionUiPresentation::ErrorBoundary,
+        }
+    }
+
+    pub(crate) fn legacy_state_transition_label(&self) -> &'static str {
+        match self.kind {
+            StageTransitionKind::ContinueInPlace => "continues",
+            StageTransitionKind::SaveCheckpoint => "preserved",
+            StageTransitionKind::LoadState => "restored",
+            StageTransitionKind::ExportOnly => "exported",
+            StageTransitionKind::TransferState
+            | StageTransitionKind::RemeshTransfer
+            | StageTransitionKind::BackendTransfer => "transferred",
+            StageTransitionKind::Unsupported => "unsupported",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedScriptStage {
     pub ir: ProblemIR,
     pub until_seconds: f64,
     pub entrypoint_kind: String,
     pub action: Option<ResolvedScriptStageAction>,
+    pub incoming_transition: Option<StageTransitionMetadata>,
 }
 
 impl ResolvedScriptStage {
@@ -383,6 +485,7 @@ impl ResolvedScriptStage {
             until_seconds,
             entrypoint_kind: entrypoint_kind.into(),
             action: None,
+            incoming_transition: None,
         }
     }
 
@@ -396,6 +499,7 @@ impl ResolvedScriptStage {
             until_seconds: 0.0,
             entrypoint_kind: entrypoint_kind.into(),
             action: Some(action),
+            incoming_transition: None,
         }
     }
 }
@@ -509,6 +613,14 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     pub resume_from_checkpoint_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state_transition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_transition_kind: Option<StageTransitionKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_transition_reason: Option<StageTransitionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_transfer_operator_kind: Option<StateTransferOperatorKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_transition_ui_presentation: Option<StageTransitionUiPresentation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,6 +1,10 @@
 # Architektura płynnej kontynuacji etapów
 
-Status: aktywny plan architektoniczny, bez implementacji w tej zmianie.
+Status: aktywny plan architektoniczny. Faza kontraktu jest czesciowo
+zaimplementowana: mamy typowane metadane przejsc, klasyfikator kompatybilnosci,
+API stage execution i minimalna widocznosc w Explorerze. Prawdziwa stateful
+egzekucja solvera, bez sampled-field injection miedzy kompatybilnymi etapami,
+jest nadal kolejnym krokiem.
 
 Data: 2026-06-05
 
@@ -794,10 +798,14 @@ StagePipelineExecutor
 Kierunek refaktoru:
 
 1. dodac klasyfikator przejsc bez zmiany solvera,
+   status: wykonane jako `StageTransitionMetadata` i klasyfikacja topologii
+   runtime,
 2. dodac testy pokazujace, ze kompatybilne ciagi `minimize -> relax`,
    `relax -> dynamics`, `hysteresis point -> hysteresis point` oraz
    `relax -> eigen -> frequency_domain` na tym samym mesh daja
    `continue_in_place`,
+   status: wykonane dla pipeline i explicit stages, lacznie z
+   `frequency_response`,
 3. zablokowac niejawny transfer tam, gdzie klasyfikator zwraca boundary,
 4. przeniesc aktualne `apply_continuation_initial_state` za jawne operatory
    transferu,
@@ -813,13 +821,23 @@ Prace:
 
 - dodac `StageTransitionKind` i `StageTransitionReason`,
 - dodac klasyfikator kompatybilnosci etapow,
-- dodac test dla multi-magnet `minimize -> relax`, ktory oczekuje
-  `continue_in_place`, a nie sampled-field injection,
+- dodac testy dla kompatybilnych solver/analyze stage'y, ktore oczekuja
+  `continue_in_place`, a nie transferu,
 - dodac testy dla `relax -> dynamics`, histerezy i
   `relax -> eigen -> frequency_domain`, ktore oczekuja zachowania punktu pracy,
 - dodac test, ze brak jawnej granicy nie moze odpalic
   `apply_continuation_initial_state`,
 - dodac test API stage execution z transition metadata.
+
+Stan na 2026-06-05:
+
+- wykonane: typy transition w CLI/API, klasyfikator topologii,
+  `run/relax/eigen/frequency_response` jako `continue_in_place`,
+  histereza branch-point jako `continue_in_place`, minimalne node'y transition w
+  Explorerze,
+- wykonane: materializacja primitive `frequency_response` w Rust CLI fallback,
+- pozostaje: zablokowanie sampled-field injection dla kompatybilnych przejsc i
+  wprowadzenie prawdziwego `StageRuntimeContext`/stateful executor.
 
 Kryterium akceptacji:
 

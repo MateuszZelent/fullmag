@@ -1273,6 +1273,10 @@ fn link_active_stage_checkpoint_preserved(
     link_active_stage_checkpoint(snapshot, |record| {
         let mut changed = set_optional_string(&mut record.checkpoint_ref, checkpoint_id);
         changed |= set_optional_string(&mut record.state_transition, "preserved");
+        changed |= set_optional_string(&mut record.state_transition_kind, "save_checkpoint");
+        changed |= set_optional_string(&mut record.state_transition_reason, "user_export");
+        changed |=
+            set_optional_string(&mut record.state_transition_ui_presentation, "boundary_bar");
         if let Some(artifact_ref) = artifact_ref {
             changed |= push_unique_string(&mut record.artifact_refs, artifact_ref);
         }
@@ -1289,6 +1293,11 @@ fn link_active_stage_checkpoint_restored(
         let mut changed =
             set_optional_string(&mut record.resume_from_checkpoint_ref, checkpoint_id);
         changed |= set_optional_string(&mut record.state_transition, "restored");
+        changed |= set_optional_string(&mut record.state_transition_kind, "load_state");
+        changed |= set_optional_string(&mut record.state_transition_reason, "checkpoint_load");
+        changed |= set_optional_string(&mut record.state_transfer_operator_kind, "checkpoint_load");
+        changed |=
+            set_optional_string(&mut record.state_transition_ui_presentation, "boundary_bar");
         if let Some(loaded_state_ref) = loaded_state_ref {
             changed |= set_optional_string(&mut record.loaded_state_ref, loaded_state_ref);
             changed |= push_unique_string(&mut record.artifact_refs, loaded_state_ref);

@@ -891,6 +891,14 @@ pub(crate) struct StageExecutionRecord {
     #[serde(default)]
     pub state_transition: Option<String>,
     #[serde(default)]
+    pub state_transition_kind: Option<String>,
+    #[serde(default)]
+    pub state_transition_reason: Option<String>,
+    #[serde(default)]
+    pub state_transfer_operator_kind: Option<String>,
+    #[serde(default)]
+    pub state_transition_ui_presentation: Option<String>,
+    #[serde(default)]
     pub metric_name: Option<String>,
     #[serde(default)]
     pub metric_value: Option<f64>,

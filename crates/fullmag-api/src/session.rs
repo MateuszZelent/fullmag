@@ -480,6 +480,19 @@ fn merge_stage_record_linkage(
     if incoming.state_transition.is_none() {
         incoming.state_transition = existing.state_transition.clone();
     }
+    if incoming.state_transition_kind.is_none() {
+        incoming.state_transition_kind = existing.state_transition_kind.clone();
+    }
+    if incoming.state_transition_reason.is_none() {
+        incoming.state_transition_reason = existing.state_transition_reason.clone();
+    }
+    if incoming.state_transfer_operator_kind.is_none() {
+        incoming.state_transfer_operator_kind = existing.state_transfer_operator_kind.clone();
+    }
+    if incoming.state_transition_ui_presentation.is_none() {
+        incoming.state_transition_ui_presentation =
+            existing.state_transition_ui_presentation.clone();
+    }
 }
 
 fn next_revision(current: u64) -> u64 {
@@ -1648,6 +1661,10 @@ mod tests {
                 loaded_state_ref: None,
                 resume_from_checkpoint_ref: None,
                 state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
@@ -2073,6 +2090,10 @@ mod tests {
                 loaded_state_ref: Some("cp-common-state".into()),
                 resume_from_checkpoint_ref: Some("cp-000041".into()),
                 state_transition: Some("restored".into()),
+                state_transition_kind: Some("load_state".into()),
+                state_transition_reason: Some("checkpoint_load".into()),
+                state_transfer_operator_kind: Some("checkpoint_load".into()),
+                state_transition_ui_presentation: Some("boundary_bar".into()),
                 metric_name: None,
                 metric_value: None,
                 threshold: None,
@@ -2107,6 +2128,10 @@ mod tests {
                         loaded_state_ref: None,
                         resume_from_checkpoint_ref: None,
                         state_transition: None,
+                        state_transition_kind: None,
+                        state_transition_reason: None,
+                        state_transfer_operator_kind: None,
+                        state_transition_ui_presentation: None,
                         metric_name: None,
                         metric_value: None,
                         threshold: None,
@@ -2300,6 +2325,10 @@ mod tests {
                 loaded_state_ref: None,
                 resume_from_checkpoint_ref: None,
                 state_transition: None,
+                state_transition_kind: None,
+                state_transition_reason: None,
+                state_transfer_operator_kind: None,
+                state_transition_ui_presentation: None,
                 metric_name: None,
                 metric_value: None,
                 threshold: None,

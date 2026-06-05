@@ -20,9 +20,11 @@ pub(crate) use availability::{
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
 #[allow(unused_imports)]
+#[cfg(feature = "fem-gpu")]
+pub(crate) use plan::resolved_native_fem_demag_solver_policy;
+#[allow(unused_imports)]
 pub(crate) use plan::{
     native_fem_mfem_device_string_requests_gpu, native_fem_plan_requests_gpu_mfem_device,
-    resolved_native_fem_demag_solver_policy,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
@@ -1022,6 +1024,16 @@ impl NativeFemBackend {
             unsafe { ffi::fullmag_fem_backend_set_interrupt_poll(self.handle, poll_fn, user_data) };
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU set_interrupt_signal failed"));
+        }
+        Ok(())
+    }
+
+    pub fn set_step_profile(&mut self, enabled: bool) -> Result<(), RunError> {
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_set_step_profile(self.handle, if enabled { 1 } else { 0 })
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU set_step_profile failed"));
         }
         Ok(())
     }

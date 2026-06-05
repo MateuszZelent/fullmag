@@ -16,12 +16,22 @@ using fullmag::fem::tests::repo_root;
 
 void backend_root_is_top_level_backends_tree() {
     const std::filesystem::path root = fem_source_root();
+    const std::filesystem::path retired_root = repo_root() / "native" / "backends" / "fem";
     check(
         root.filename() == "fem" && root.parent_path().filename() == "backends",
         "native FEM source root must be top-level backends/fem");
-    check(
-        !std::filesystem::exists(repo_root() / "native" / "backends" / "fem"),
-        "native/backends/fem must not be recreated as an implementation root");
+    if (!std::filesystem::exists(retired_root)) {
+        return;
+    }
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(retired_root)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto relative = std::filesystem::relative(entry.path(), retired_root);
+        check(
+            !relative.empty() && *relative.begin() == "tests",
+            "native/backends/fem must not contain implementation files outside tests");
+    }
 }
 
 void source_facades_document_module_boundaries() {

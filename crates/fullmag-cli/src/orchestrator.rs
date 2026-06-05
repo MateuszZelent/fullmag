@@ -1538,6 +1538,7 @@ fn scripted_stage_execution_state(
     completed_at_unix_ms: Option<u128>,
     artifact_ref: Option<String>,
     reason: Option<fullmag_ir::StageStopReason>,
+    incoming_transition: Option<&StageTransitionMetadata>,
 ) -> CurrentLiveStageExecutionState {
     let mut stages = vec![
         CurrentLiveStageExecutionRecord {
@@ -1553,6 +1554,10 @@ fn scripted_stage_execution_state(
             loaded_state_ref: None,
             resume_from_checkpoint_ref: None,
             state_transition: None,
+            state_transition_kind: None,
+            state_transition_reason: None,
+            state_transfer_operator_kind: None,
+            state_transition_ui_presentation: None,
             metric_name: None,
             metric_value: None,
             threshold: None,
@@ -1573,6 +1578,7 @@ fn scripted_stage_execution_state(
         if let Some(artifact_ref) = artifact_ref {
             push_unique_artifact_ref(&mut stage.artifact_refs, artifact_ref);
         }
+        apply_stage_transition_metadata(stage, incoming_transition);
     }
 
     let active_stage_index = matches!(runtime_state, "running" | "paused").then_some(active_index);
@@ -1582,6 +1588,31 @@ fn scripted_stage_execution_state(
         Some(active_stage_kind),
         runtime_state,
     )
+}
+
+fn apply_stage_transition_metadata(
+    record: &mut CurrentLiveStageExecutionRecord,
+    transition: Option<&StageTransitionMetadata>,
+) {
+    let Some(transition) = transition else {
+        return;
+    };
+    record.state_transition = Some(transition.legacy_state_transition_label().to_string());
+    record.state_transition_kind = Some(transition.kind);
+    record.state_transition_reason = Some(transition.reason);
+    record.state_transfer_operator_kind = transition.transfer_operator;
+    record.state_transition_ui_presentation = Some(transition.ui_presentation);
+}
+
+fn stage_continues_in_place(stage: &ResolvedScriptStage) -> bool {
+    stage
+        .incoming_transition
+        .as_ref()
+        .is_some_and(|transition| transition.kind == StageTransitionKind::ContinueInPlace)
+}
+
+fn stage_allows_sampled_continuation_initial_state(stage: &ResolvedScriptStage) -> bool {
+    !stage_continues_in_place(stage)
 }
 
 fn user_cancelled_stage_completion(status: &str) -> fullmag_ir::StageCompletionIR {
@@ -1608,6 +1639,10 @@ fn stage_record(index: usize, kind: Option<&str>) -> CurrentLiveStageExecutionRe
         loaded_state_ref: None,
         resume_from_checkpoint_ref: None,
         state_transition: None,
+        state_transition_kind: None,
+        state_transition_reason: None,
+        state_transfer_operator_kind: None,
+        state_transition_ui_presentation: None,
         metric_name: None,
         metric_value: None,
         threshold: None,
@@ -1680,6 +1715,10 @@ impl ActiveSequenceState {
         let mut record = self.stages[current_index].clone();
         record.checkpoint_ref = Some(checkpoint_id.to_string());
         record.state_transition = Some("preserved".to_string());
+        record.state_transition_kind = Some(StageTransitionKind::SaveCheckpoint);
+        record.state_transition_reason = Some(StageTransitionReason::UserExport);
+        record.state_transfer_operator_kind = None;
+        record.state_transition_ui_presentation = Some(StageTransitionUiPresentation::BoundaryBar);
         if let Some(artifact_ref) = artifact_ref {
             push_unique_artifact_ref(&mut record.artifact_refs, artifact_ref);
         }
@@ -1695,6 +1734,10 @@ impl ActiveSequenceState {
         let mut record = self.stages[current_index].clone();
         record.resume_from_checkpoint_ref = Some(checkpoint_id.to_string());
         record.state_transition = Some("restored".to_string());
+        record.state_transition_kind = Some(StageTransitionKind::LoadState);
+        record.state_transition_reason = Some(StageTransitionReason::CheckpointLoad);
+        record.state_transfer_operator_kind = Some(StateTransferOperatorKind::CheckpointLoad);
+        record.state_transition_ui_presentation = Some(StageTransitionUiPresentation::BoundaryBar);
         self.stages[current_index] = record;
     }
 
@@ -1735,6 +1778,10 @@ impl ActiveSequenceState {
                 loaded_state_ref: previous.loaded_state_ref,
                 resume_from_checkpoint_ref: previous.resume_from_checkpoint_ref,
                 state_transition: previous.state_transition,
+                state_transition_kind: previous.state_transition_kind,
+                state_transition_reason: previous.state_transition_reason,
+                state_transfer_operator_kind: previous.state_transfer_operator_kind,
+                state_transition_ui_presentation: previous.state_transition_ui_presentation,
                 metric_name: completion.and_then(|value| value.metric_name.clone()),
                 metric_value: completion.and_then(|value| value.metric_value),
                 threshold: completion.and_then(|value| value.threshold),
@@ -5352,6 +5399,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 None,
                 Some(current_stage_artifact_dir.display().to_string()),
                 None,
+                stage.incoming_transition.as_ref(),
             ));
             clear_cached_preview_fields(state);
         });
@@ -5876,6 +5924,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     } else {
                         None
                     },
+                    stage.incoming_transition.as_ref(),
                 ));
             });
             live_workspace.push_log(
@@ -5941,6 +5990,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 Some(completed_at_unix_ms),
                 Some(current_stage_artifact_dir.display().to_string()),
                 None,
+                stage.incoming_transition.as_ref(),
             ));
         });
     }
@@ -7381,9 +7431,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         exchange_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.exchange_wall_time_ns),
-        demag_wall_time_ns: aggregated_steps
-            .last()
-            .map(|step| step.demag_wall_time_ns),
+        demag_wall_time_ns: aggregated_steps.last().map(|step| step.demag_wall_time_ns),
         demag_assemble_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.demag_assemble_wall_time_ns),
@@ -7598,7 +7646,8 @@ mod tests {
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, ResolvedScriptStage,
-        ResolvedScriptStageAction, RunManifest, SessionManifest,
+        ResolvedScriptStageAction, RunManifest, SessionManifest, StageTransitionKind,
+        StageTransitionMetadata, StageTransitionReason, StageTransitionUiPresentation,
     };
     use fullmag_ir::{
         BackendPlanIR, BackendPolicyIR, BackendTarget, DiscretizationHintsIR, DynamicsIR,
@@ -7764,6 +7813,17 @@ mod tests {
             source.contains("resolve_planned_runtime_engine(problem, plan)")
                 && source.contains("resolve_planned_runtime_capabilities(problem, plan)"),
             "live metadata must resolve runtime information from the materialized plan"
+        );
+    }
+
+    #[test]
+    fn continue_in_place_stage_does_not_allow_sampled_continuation_initial_state() {
+        let mut stage = ResolvedScriptStage::solver(tiny_problem_with_shared_domain_asset(), 1e-12, "flat_run");
+        stage.incoming_transition = Some(StageTransitionMetadata::continue_in_place());
+
+        assert!(
+            !stage_allows_sampled_continuation_initial_state(&stage),
+            "continue_in_place must preserve runtime state instead of injecting final_magnetization into ProblemIR"
         );
     }
 
@@ -8491,6 +8551,7 @@ mod tests {
             Some(1_700_000_001_000),
             Some("artifacts/stage-000".to_string()),
             Some(fullmag_ir::StageStopReason::UserCancelled),
+            None,
         );
 
         let stage = execution.stages.first().expect("stage should exist");
@@ -8500,6 +8561,39 @@ mod tests {
             Some(fullmag_ir::StageStopReason::UserCancelled)
         );
         assert_eq!(stage.command_id.as_deref(), Some("cmd-stage-0"));
+    }
+
+    #[test]
+    fn scripted_stage_execution_publishes_continue_in_place_transition_metadata() {
+        let transition = StageTransitionMetadata::continue_in_place();
+        let execution = scripted_stage_execution_state(
+            2,
+            1,
+            "relax",
+            "running",
+            Some("cmd-stage-1"),
+            Some(1_700_000_000_000),
+            None,
+            Some("artifacts/stage-001".to_string()),
+            None,
+            Some(&transition),
+        );
+
+        let stage = execution.stages.get(1).expect("stage should exist");
+        assert_eq!(stage.state_transition.as_deref(), Some("continues"));
+        assert_eq!(
+            stage.state_transition_kind,
+            Some(StageTransitionKind::ContinueInPlace)
+        );
+        assert_eq!(
+            stage.state_transition_reason,
+            Some(StageTransitionReason::SameRuntimeContext)
+        );
+        assert_eq!(
+            stage.state_transition_ui_presentation,
+            Some(StageTransitionUiPresentation::SmoothArrow)
+        );
+        assert_eq!(stage.state_transfer_operator_kind, None);
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {

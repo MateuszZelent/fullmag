@@ -14,7 +14,9 @@ use crate::formatting::unix_time_millis;
 use crate::live_workspace::LocalLiveWorkspace;
 use crate::types::{
     LiveStateManifest, LiveStepView, ResolvedScriptStage, ResolvedScriptStageAction, RunManifest,
-    ScriptExecutionConfig, ScriptExecutionStageAction, StudyPipelineDocument, StudyPipelineNode,
+    ScriptExecutionConfig, ScriptExecutionStageAction, StageTransitionKind,
+    StageTransitionMetadata, StageTransitionReason, StateTransferOperatorKind,
+    StudyPipelineDocument, StudyPipelineNode,
 };
 
 pub(crate) fn emit_initial_state_warnings(
@@ -377,7 +379,11 @@ pub(crate) fn materialize_script_stages(
 
     if stages.is_empty() {
         if let Some(document) = study_pipeline {
-            let materialized = materialize_study_pipeline(&document, &ir, default_until_seconds)?;
+            let materialized = annotate_stage_transitions(materialize_study_pipeline(
+                &document,
+                &ir,
+                default_until_seconds,
+            )?);
             if !materialized.is_empty() {
                 return Ok(materialized);
             }
@@ -400,7 +406,7 @@ pub(crate) fn materialize_script_stages(
         )]);
     }
 
-    stages
+    let materialized = stages
         .into_iter()
         .map(|mut stage| {
             if stage.ir.geometry_assets.is_none() {
@@ -422,7 +428,104 @@ pub(crate) fn materialize_script_stages(
                 ))
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(annotate_stage_transitions(materialized))
+}
+
+fn annotate_stage_transitions(mut stages: Vec<ResolvedScriptStage>) -> Vec<ResolvedScriptStage> {
+    let transitions = (0..stages.len())
+        .map(|index| {
+            if index == 0 {
+                None
+            } else {
+                Some(classify_stage_transition(
+                    &stages[index - 1],
+                    &stages[index],
+                ))
+            }
+        })
+        .collect::<Vec<_>>();
+    for (stage, transition) in stages.iter_mut().zip(transitions.into_iter()) {
+        stage.incoming_transition = transition;
+    }
+    stages
+}
+
+fn classify_stage_transition(
+    previous: &ResolvedScriptStage,
+    current: &ResolvedScriptStage,
+) -> StageTransitionMetadata {
+    if let Some(action) = current.action.as_ref() {
+        return classify_action_stage_transition(action);
+    }
+    if previous.ir.backend_policy.requested_backend != current.ir.backend_policy.requested_backend {
+        return StageTransitionMetadata::boundary(
+            StageTransitionKind::BackendTransfer,
+            StageTransitionReason::BackendChange,
+            None,
+        );
+    }
+    if same_runtime_state_topology(&previous.ir, &current.ir) {
+        return StageTransitionMetadata::continue_in_place();
+    }
+    StageTransitionMetadata::unsupported(StageTransitionReason::IncompatibleImplicitState)
+}
+
+fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> StageTransitionMetadata {
+    match action {
+        ResolvedScriptStageAction::SaveState { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::SaveCheckpoint,
+            StageTransitionReason::UserExport,
+            None,
+        ),
+        ResolvedScriptStageAction::LoadState { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::LoadState,
+            StageTransitionReason::CheckpointLoad,
+            Some(StateTransferOperatorKind::CheckpointLoad),
+        ),
+        ResolvedScriptStageAction::Export { .. } => StageTransitionMetadata::boundary(
+            StageTransitionKind::ExportOnly,
+            StageTransitionReason::UserExport,
+            None,
+        ),
+    }
+}
+
+fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> bool {
+    previous.backend_policy.requested_backend == current.backend_policy.requested_backend
+        && previous.backend_policy.execution_precision == current.backend_policy.execution_precision
+        && previous.backend_policy.discretization_hints
+            == current.backend_policy.discretization_hints
+        && previous.geometry == current.geometry
+        && previous.geometry_assets == current.geometry_assets
+        && previous.regions == current.regions
+        && previous.materials == current.materials
+        && same_magnet_topology(&previous.magnets, &current.magnets)
+        && previous.current_modules == current.current_modules
+        && previous.spin_torque_modules == current.spin_torque_modules
+        && previous.elastic_materials == current.elastic_materials
+        && previous.elastic_bodies == current.elastic_bodies
+        && previous.magnetostriction_laws == current.magnetostriction_laws
+        && previous.mechanical_bcs == current.mechanical_bcs
+        && previous.mechanical_loads == current.mechanical_loads
+        && previous.air_box_policy == current.air_box_policy
+        && previous.pbc == current.pbc
+        && previous.mesh_semantics == current.mesh_semantics
+}
+
+fn same_magnet_topology(
+    previous: &[fullmag_ir::MagnetIR],
+    current: &[fullmag_ir::MagnetIR],
+) -> bool {
+    previous.len() == current.len()
+        && previous
+            .iter()
+            .zip(current.iter())
+            .all(|(previous, current)| {
+                previous.name == current.name
+                    && previous.region == current.region
+                    && previous.material == current.material
+            })
 }
 
 fn resolve_explicit_stage_action(
@@ -579,6 +682,9 @@ fn materialize_pipeline_primitive(
         "run" => materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some),
         "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
+        "frequency_response" => {
+            materialize_pipeline_frequency_response(current_ir, payload).map(Some)
+        }
         "set_field" => {
             apply_pipeline_set_field(current_ir, payload)?;
             Ok(None)
@@ -809,6 +915,140 @@ fn materialize_pipeline_eigenmodes(
     };
 
     Ok(ResolvedScriptStage::solver(ir, 0.0, entrypoint_kind))
+}
+
+fn materialize_pipeline_frequency_response(
+    base_ir: &ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let mut ir = base_ir.clone();
+    let mut dynamics = ir.study.dynamics().clone();
+    apply_dynamics_overrides(&mut dynamics, payload)?;
+    let sampling = ir.study.sampling().clone();
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_frequency_response".to_string());
+    let current_frequency = match &base_ir.study {
+        fullmag_ir::StudyIR::FrequencyResponse {
+            operator,
+            equilibrium,
+            k_sampling,
+            normalization,
+            damping_policy,
+            spin_wave_bc,
+            excitation,
+            frequencies_hz,
+            ..
+        } => Some((
+            operator.clone(),
+            equilibrium.clone(),
+            k_sampling.clone(),
+            *normalization,
+            *damping_policy,
+            spin_wave_bc.clone(),
+            excitation.clone(),
+            frequencies_hz.clone(),
+        )),
+        _ => None,
+    };
+    let include_demag = payload_bool(payload, "frequency_include_demag")?.unwrap_or_else(|| {
+        current_frequency
+            .as_ref()
+            .map(|current| current.0.include_demag)
+            .unwrap_or(true)
+    });
+    let default_equilibrium = current_frequency
+        .as_ref()
+        .map(|current| current.1.clone())
+        .unwrap_or(fullmag_ir::EquilibriumSourceIR::Provided);
+    let default_k_sampling = current_frequency
+        .as_ref()
+        .and_then(|current| current.2.clone());
+    let default_normalization = current_frequency
+        .as_ref()
+        .map(|current| current.3)
+        .unwrap_or(fullmag_ir::FrequencyResponseNormalizationIR::UnitL2);
+    let default_damping_policy = current_frequency
+        .as_ref()
+        .map(|current| current.4)
+        .unwrap_or(fullmag_ir::EigenDampingPolicyIR::Ignore);
+    let default_spin_wave_bc = current_frequency
+        .as_ref()
+        .map(|current| current.5.clone())
+        .unwrap_or_default();
+    let default_excitation = current_frequency
+        .as_ref()
+        .map(|current| current.6.field_au_per_m)
+        .unwrap_or([0.0, 0.0, 1.0]);
+    let default_frequencies = current_frequency
+        .as_ref()
+        .map(|current| current.7.values_hz.clone())
+        .unwrap_or_else(|| vec![1.0e9]);
+
+    let frequencies_hz =
+        payload_f64_array(payload, "frequency_values_hz")?.unwrap_or(default_frequencies);
+    if frequencies_hz.is_empty()
+        || frequencies_hz
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        bail!("study pipeline frequency_response stage requires positive frequency_values_hz");
+    }
+
+    let frequency_payload = frequency_payload_as_eigen_payload(payload);
+    ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics,
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag,
+        },
+        equilibrium: payload_equilibrium_source(&frequency_payload, default_equilibrium)?,
+        k_sampling: payload_k_sampling(&frequency_payload, default_k_sampling)?,
+        normalization: payload_frequency_normalization(payload)?.unwrap_or(default_normalization),
+        damping_policy: payload_eigen_damping_policy(&frequency_payload)?
+            .unwrap_or(default_damping_policy),
+        spin_wave_bc: payload_spin_wave_bc(&frequency_payload)?.unwrap_or(default_spin_wave_bc),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: payload_vec3(
+                payload,
+                "frequency_excitation_field_au_per_m",
+                default_excitation,
+            )?,
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: frequencies_hz,
+        },
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: sampling.table_autosave,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: payload_frequency_observable(payload)?,
+            }],
+        },
+    };
+
+    Ok(ResolvedScriptStage::solver(ir, 0.0, entrypoint_kind))
+}
+
+fn frequency_payload_as_eigen_payload(
+    payload: &BTreeMap<String, Value>,
+) -> BTreeMap<String, Value> {
+    let mut mapped = payload.clone();
+    for (frequency_key, eigen_key) in [
+        ("frequency_equilibrium_source", "eigen_equilibrium_source"),
+        (
+            "frequency_equilibrium_artifact",
+            "eigen_equilibrium_artifact",
+        ),
+        ("frequency_damping_policy", "eigen_damping_policy"),
+        ("frequency_k_vector", "eigen_k_vector"),
+        ("frequency_spin_wave_bc", "eigen_spin_wave_bc"),
+        ("frequency_spin_wave_bc_config", "eigen_spin_wave_bc_config"),
+    ] {
+        if let Some(value) = payload.get(frequency_key) {
+            mapped.insert(eigen_key.to_string(), value.clone());
+        }
+    }
+    mapped
 }
 
 fn materialize_pipeline_save_state(
@@ -1505,6 +1745,23 @@ fn payload_f64_array(payload: &BTreeMap<String, Value>, key: &str) -> Result<Opt
     }
 }
 
+fn payload_vec3(
+    payload: &BTreeMap<String, Value>,
+    key: &str,
+    default: [f64; 3],
+) -> Result<[f64; 3]> {
+    let Some(values) = payload_f64_array(payload, key)? else {
+        return Ok(default);
+    };
+    if values.len() != 3 {
+        bail!("payload field '{key}' must contain exactly 3 vector components");
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("payload field '{key}' must contain finite vector components");
+    }
+    Ok([values[0], values[1], values[2]])
+}
+
 fn payload_relaxation_algorithm(
     payload: &BTreeMap<String, Value>,
 ) -> Result<Option<fullmag_ir::RelaxationAlgorithmIR>> {
@@ -1632,6 +1889,26 @@ fn payload_eigen_damping_policy(
             .map(Some),
         None => Ok(None),
     }
+}
+
+fn payload_frequency_normalization(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::FrequencyResponseNormalizationIR>> {
+    match payload_string(payload, "frequency_normalization") {
+        Some(value) => serde_json::from_value(Value::String(value))
+            .context("invalid frequency_normalization in study pipeline payload")
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+fn payload_frequency_observable(
+    payload: &BTreeMap<String, Value>,
+) -> Result<fullmag_ir::FrequencyResponseOutputIR> {
+    let value = payload_string(payload, "frequency_observable")
+        .unwrap_or_else(|| "susceptibility_tensor".to_string());
+    serde_json::from_value(Value::String(value))
+        .context("invalid frequency_observable in study pipeline payload")
 }
 
 fn payload_k_sampling(
@@ -2284,6 +2561,7 @@ pub(crate) fn sequence_stage_to_session_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ScriptExecutionStage;
     use fullmag_ir::ProblemIR;
     use serde_json::json;
 
@@ -2544,6 +2822,271 @@ mod tests {
             }
         ));
         assert!((stages[1].until_seconds - (25.0 * 2e-13)).abs() < 1e-24);
+    }
+
+    #[test]
+    fn materialized_compatible_solver_stages_are_marked_continue_in_place() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "stage_1_run".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "run",
+                            "entrypoint_kind": "pipeline_run",
+                            "integrator": "rk45",
+                            "fixed_timestep": "",
+                            "until_seconds": "5e-12"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_2_relax".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "relax",
+                            "entrypoint_kind": "pipeline_relax",
+                            "integrator": "rk45",
+                            "fixed_timestep": "2e-13",
+                            "relax_algorithm": "llg_overdamped",
+                            "torque_tolerance": "1e-4",
+                            "max_steps": "25"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_3_eigen".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "eigenmodes".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "eigenmodes",
+                            "entrypoint_kind": "pipeline_eigen",
+                            "eigen_count": "4"
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "stage_4_frequency".to_string(),
+                        label: "".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "frequency_response".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "frequency_response",
+                            "entrypoint_kind": "pipeline_frequency_response",
+                            "frequency_values_hz": "1e9,2e9",
+                            "frequency_excitation_field_au_per_m": "0,0,1"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 4);
+        assert!(stages[0].incoming_transition.is_none());
+        for stage in stages.iter().skip(1) {
+            let transition = stage
+                .incoming_transition
+                .as_ref()
+                .expect("compatible stage should have transition metadata");
+            assert_eq!(
+                transition.kind,
+                crate::types::StageTransitionKind::ContinueInPlace
+            );
+            assert_eq!(
+                transition.reason,
+                crate::types::StageTransitionReason::SameRuntimeContext
+            );
+            assert_eq!(
+                transition.ui_presentation,
+                crate::types::StageTransitionUiPresentation::SmoothArrow
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_dynamics_and_linear_analysis_stages_continue_in_place() {
+        let base = sample_problem_ir();
+        let dynamics = base.study.dynamics().clone();
+        let sampling = base.study.sampling().clone();
+        let mut relax_ir = base.clone();
+        relax_ir.problem_meta.entrypoint_kind = "flat_relax".to_string();
+        relax_ir.study = fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            dynamics: dynamics.clone(),
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+            sampling: sampling.clone(),
+        };
+        let mut eigen_ir = base.clone();
+        eigen_ir.problem_meta.entrypoint_kind = "flat_eigenmodes".to_string();
+        eigen_ir.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics: dynamics.clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            count: 4,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
+            k_sampling: None,
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling: sampling.clone(),
+        };
+        let mut frequency_ir = base.clone();
+        frequency_ir.problem_meta.entrypoint_kind = "flat_frequency_response".to_string();
+        frequency_ir.study = fullmag_ir::StudyIR::FrequencyResponse {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![1.0e9, 2.0e9],
+            },
+            sampling: fullmag_ir::SamplingIR {
+                table_autosave: None,
+                outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                    observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+                }],
+            },
+        };
+
+        let stages = materialize_script_stages(ScriptExecutionConfig {
+            ir: base.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-12),
+            study_pipeline: None,
+            stages: vec![
+                ScriptExecutionStage {
+                    ir: base,
+                    default_until_seconds: Some(1e-12),
+                    entrypoint_kind: "flat_run".to_string(),
+                    action: None,
+                },
+                ScriptExecutionStage {
+                    ir: relax_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_relax".to_string(),
+                    action: None,
+                },
+                ScriptExecutionStage {
+                    ir: eigen_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_eigenmodes".to_string(),
+                    action: None,
+                },
+                ScriptExecutionStage {
+                    ir: frequency_ir,
+                    default_until_seconds: None,
+                    entrypoint_kind: "flat_frequency_response".to_string(),
+                    action: None,
+                },
+            ],
+        })
+        .expect("explicit compatible stages should materialize");
+
+        assert_eq!(stages.len(), 4);
+        assert!(stages[0].incoming_transition.is_none());
+        for stage in stages.iter().skip(1) {
+            let transition = stage
+                .incoming_transition
+                .as_ref()
+                .expect("compatible explicit stage should have transition metadata");
+            assert_eq!(
+                transition.kind,
+                crate::types::StageTransitionKind::ContinueInPlace
+            );
+            assert_eq!(
+                transition.reason,
+                crate::types::StageTransitionReason::SameRuntimeContext
+            );
+        }
+    }
+
+    #[test]
+    fn materialized_hysteresis_points_continue_same_branch_state() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(5e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![StudyPipelineNode::Macro {
+                    id: "hysteresis".to_string(),
+                    label: "".to_string(),
+                    enabled: true,
+                    notes: None,
+                    source: Some("script_imported".to_string()),
+                    macro_kind: "hysteresis_loop".to_string(),
+                    config: serde_json::from_value(json!({
+                        "kind": "hysteresis_loop",
+                        "direction": [0.0, 1.0, 0.0],
+                        "field_values_t": [-0.01, 0.0, 0.01],
+                        "settle": {
+                            "max_steps": 12,
+                            "fixed_timestep": "2e-13"
+                        }
+                    }))
+                    .expect("config"),
+                }],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("hysteresis should materialize");
+        assert_eq!(stages.len(), 3);
+        assert!(stages[0].incoming_transition.is_none());
+        for stage in stages.iter().skip(1) {
+            let transition = stage
+                .incoming_transition
+                .as_ref()
+                .expect("hysteresis branch point should continue from previous point");
+            assert_eq!(
+                transition.kind,
+                crate::types::StageTransitionKind::ContinueInPlace
+            );
+            assert_eq!(
+                transition.reason,
+                crate::types::StageTransitionReason::SameRuntimeContext
+            );
+        }
     }
 
     #[test]

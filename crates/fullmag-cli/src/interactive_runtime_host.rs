@@ -645,6 +645,9 @@ impl InteractiveRuntimeHost {
             plan,
             continuation_magnetization,
         )?;
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.set_solver_profile_config(&live_workspace.solver_profile_config())?;
+        }
         self.publish_runtime_engine_metadata(live_workspace);
         Ok(())
     }

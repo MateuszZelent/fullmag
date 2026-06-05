@@ -408,6 +408,51 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("adds visible study stage transition nodes from runtime metadata", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [{ kind: "relax" }, { kind: "run" }],
+        },
+      }),
+      {
+        active_stage_index: 1,
+        active_stage_kind: "run",
+        completed_stage_indexes: [0],
+        revision: 12,
+        runtime_state: "running",
+        stage_statuses: ["completed", "running"],
+        stages: [
+          { index: 0, stage_id: "runtime-relax", status: "completed" },
+          {
+            index: 1,
+            stage_id: "runtime-run",
+            status: "running",
+            state_transition: "continues",
+            state_transition_kind: "continue_in_place",
+            state_transition_reason: "same_runtime_context",
+            state_transition_ui_presentation: "smooth_arrow",
+          },
+        ],
+        total_stages: 2,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:study:stage:runtime-run:state-transition",
+      ),
+    ).toMatchObject({
+      label: "State Transition",
+      badge: "continues",
+      parentId: "model:study:stage:runtime-run",
+      status: "ready",
+    });
+  });
+
   it("exposes study runtime and recovery commands through explorer context menus", () => {
     const flattened = flattenExplorerNodes(
       buildModelTree(

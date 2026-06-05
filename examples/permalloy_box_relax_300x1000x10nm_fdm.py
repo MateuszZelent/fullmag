@@ -26,7 +26,7 @@ layer = study.geometry(
     fm.Box(size=(300e-9, 1000e-9, 10e-9), name="permalloy_box"),
     name="permalloy_box",
 )
-layer.Ms = 752_000.0
+layer.Ms = 752000.0
 layer.Aex = 1.55e-11
 layer.alpha = 0.1
 layer.m = fm.texture.uniform(0.0, 1.0, 0.0)

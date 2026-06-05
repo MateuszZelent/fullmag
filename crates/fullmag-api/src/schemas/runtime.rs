@@ -122,6 +122,14 @@ pub struct StageExecutionRecordResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_transition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transition_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transition_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transfer_operator_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transition_ui_presentation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric_value: Option<f64>,
