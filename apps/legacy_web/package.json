@@ -38,7 +38,7 @@
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.7.0",
     "nanoid": "^5.1.9",
-    "next": "^15.5.14",
+    "next": "^15.5.18",
     "openapi-fetch": "^0.17.0",
 
     "postcss": "^8.5.11",
