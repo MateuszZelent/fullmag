@@ -382,11 +382,7 @@ function refetchDelayMs<TData>(
   entry: ResourceRuntimeEntry<TData>,
   minRefetchIntervalMs: number,
 ): number {
-  if (
-    minRefetchIntervalMs <= 0 ||
-    entry.snapshot.status !== "ready" ||
-    entry.lastSettledAtMs <= 0
-  ) {
+  if (minRefetchIntervalMs <= 0 || entry.lastSettledAtMs <= 0) {
     return 0;
   }
   const elapsedMs = Date.now() - entry.lastSettledAtMs;

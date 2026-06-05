@@ -53,6 +53,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::platform::ws_current_live),
         )
         .route(
+            "/v2/sessions/current/events/communication-policy",
+            get(handlers::platform::get_communication_policy)
+                .patch(handlers::platform::patch_communication_policy),
+        )
+        .route(
             "/v2/sessions/current/model/scene",
             get(handlers::model::get_authoring_scene)
                 .put(handlers::model::replace_authoring_scene)
@@ -507,6 +512,18 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/persistence/exports",
             post(handlers::persistence::export_session),
+        )
+        .route(
+            "/v2/sessions/current/persistence/field-states/exports",
+            post(handlers::persistence::export_field_state),
+        )
+        .route(
+            "/v2/sessions/current/persistence/field-states/imports/inspections",
+            post(handlers::persistence::inspect_field_state),
+        )
+        .route(
+            "/v2/sessions/current/persistence/field-states/imports",
+            post(handlers::persistence::import_field_state),
         )
         .route(
             "/v2/sessions/current/persistence/imports/inspections",

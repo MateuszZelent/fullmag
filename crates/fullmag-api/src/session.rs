@@ -263,6 +263,7 @@ fn solver_profile_command_applied(
     snapshot.solver_profile.revision > 0
         && actual.enabled == requested.enabled
         && actual.sample_every == requested.sample_every
+        && actual.sample_interval_wall_ms == requested.sample_interval_wall_ms
         && actual.max_samples == requested.max_samples
         && actual.emit_engine_log == requested.emit_engine_log
         && actual.persist_artifact == requested.persist_artifact
@@ -634,7 +635,18 @@ fn stage_execution_changed(
     previous: Option<&StageExecutionState>,
     next: Option<&StageExecutionState>,
 ) -> bool {
-    serde_json::to_value(previous).ok() != serde_json::to_value(next).ok()
+    match (previous, next) {
+        (None, None) => false,
+        (None, Some(_)) | (Some(_), None) => true,
+        (Some(prev), Some(next)) => {
+            prev.runtime_state != next.runtime_state
+                || prev.active_stage_index != next.active_stage_index
+                || prev.active_stage_kind != next.active_stage_kind
+                || prev.total_stages != next.total_stages
+                || prev.completed_stage_indexes != next.completed_stage_indexes
+                || prev.stage_statuses != next.stage_statuses
+        }
+    }
 }
 
 fn mesh_statistics_signature(mesh_workspace: &Value) -> Value {
@@ -1843,6 +1855,7 @@ mod tests {
         current.solver_profile.config = crate::schemas::diagnostics::SolverProfileCommandConfig {
             enabled: true,
             sample_every: 2,
+            sample_interval_wall_ms: 0,
             max_samples: 7,
             emit_engine_log: true,
             persist_artifact: false,

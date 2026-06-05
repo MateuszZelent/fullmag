@@ -1266,6 +1266,85 @@ describe("viewport3dRenderModel", () => {
     expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(28);
   });
 
+  it("does not draw airbox vector glyphs on magnetic interface nodes", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array([0, 1, 2, 0, 1, 4]),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 2,
+        elementMarkers: new Uint32Array([1, 0]),
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          0, 1, 2, 4,
+        ]),
+        nodeCount: 5,
+        positions: new Float64Array([
+          0, 0, 0,
+          1, 0, 0,
+          0, 1, 0,
+          0, 0, 1,
+          0, 0, -1,
+        ]),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          label: "Magnetic Part",
+          node_indices: [0, 1, 2, 3],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: [0, 1, 2, 4],
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partFieldVectors: new Map([
+          [
+            "airbox",
+            {
+              dtype: "float64",
+              grid: [4, 1, 1],
+              nComp: 3,
+              pointCount: 4,
+              quantityId: "H_demag",
+              valueCount: 12,
+              values: new Float64Array([
+                0, 1, 0,
+                0, 0, 1,
+                -1, 0, 0,
+                1, 0, 0,
+              ]),
+            },
+          ],
+        ]),
+        partVectorBudgets: new Map([["airbox", 4]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const segments = fieldModel?.partVectorSegments.get("airbox");
+    expect(segments?.length).toBe(7);
+    expect(segments?.[0]).toBeCloseTo(-0.25);
+    expect(segments?.[2]).toBeCloseTo(-1);
+    expect(segments?.[3]).toBeCloseTo(0.25);
+    expect(segments?.[5]).toBeCloseTo(-1);
+  });
+
   it("builds airbox vector glyphs from scoped field data at global topology positions", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {
@@ -1416,6 +1495,78 @@ describe("viewport3dRenderModel", () => {
     expect(segments?.[8]).toBeCloseTo(1);
     expect(segments?.[9]).toBeCloseTo(-0.25);
     expect(segments?.[12]).toBeCloseTo(0.25);
+  });
+
+  it("draws sampled airbox vectors after excluding magnetic nodes", () => {
+    const positions: number[] = [];
+    for (let node = 0; node < 15; node += 1) {
+      positions.push(node, 0, 0);
+    }
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 0,
+        elementMarkers: new Uint32Array(),
+        indices: new Uint32Array(),
+        nodeCount: 15,
+        positions: new Float64Array(positions),
+      },
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          label: "Magnetic Part",
+          node_indices: [0, 1, 2, 3, 4, 5],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: Array.from({ length: 15 }, (_, index) => index),
+          role: "air",
+        },
+      ],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+      partFieldVectors: new Map([
+        [
+          "airbox",
+          {
+            dtype: "float64",
+            grid: [5, 1, 1],
+            nComp: 3,
+            pointCount: 5,
+            quantityId: "H_eff",
+            valueCount: 15,
+            values: new Float64Array([
+              1, 0, 0,
+              1, 0, 0,
+              1, 0, 0,
+              1, 0, 0,
+              1, 0, 0,
+            ]),
+          },
+        ],
+      ]),
+      partVectorBudgets: new Map([["airbox", 5]]),
+      scalarColorsVisible: false,
+    });
+
+    const segments = fieldModel?.partVectorSegments.get("airbox");
+    expect(segments?.length).toBe(21);
+    expect(segments?.[0]).toBeCloseTo(5.5);
+    expect(segments?.[3]).toBeCloseTo(6.5);
+    expect(segments?.[7]).toBeCloseTo(8.5);
+    expect(segments?.[10]).toBeCloseTo(9.5);
+    expect(segments?.[14]).toBeCloseTo(11.5);
+    expect(segments?.[17]).toBeCloseTo(12.5);
   });
 
   it("builds sampled magnetic part vectors at matching global topology positions", () => {

@@ -1,6 +1,6 @@
 // ── GPU CUDA RK adaptive decision readback source contract ─────────────
-// This source owns the transitional device-to-host scalar readback that feeds
-// adaptive RK accept/reject policy. It does not own device error-norm
+// This source owns the transitional device-to-host control-scalar readback that
+// feeds adaptive RK accept/reject policy. It does not own device error-norm
 // reductions, RK step orchestration, RHS assembly, stage kernels, interaction
 // kernels, or C ABI entrypoints.
 
@@ -20,10 +20,10 @@ bool gpu_rk_read_adaptive_error_norm_decision_host(
 {
     decision = {};
     double error_norm = 0.0;
-    if (!gpu_rk_read_scalar_result(
+    if (!gpu_rk_read_control_scalar_result(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU RK adaptive decision scalar device->host",
+            "cudaMemcpyAsync GPU RK adaptive decision control scalar device->host",
             error_norm,
             reason)) {
         return false;

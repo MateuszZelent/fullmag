@@ -178,10 +178,10 @@ Removing a manifest disables the module. Capability gates only hide modules when
 
 ## 11. File Size Limits
 
-- Module root: 150 lines target, 250 lines hard review threshold.
-- Module store: 200 lines hard review threshold.
-- React component: 250 lines hard review threshold.
+- Module root: 150 lines target, 300 lines review trigger.
+- Module store/controller hook: 350 lines review trigger.
+- React component: 350 lines review trigger.
 - Viewport renderer class: 400 lines hard review threshold.
 - Kernel service: 300 lines hard review threshold.
 
-Crossing a threshold requires splitting before merge unless an ADR explains why the file must remain larger. The current migration-only exception set is bounded by `docs/adr/0015-frontend-v2-migration-governance-boundary.md`; no new oversized file is covered by that ADR.
+Crossing a review trigger requires checking whether the file has mixed responsibilities. Split only when a boundary reduces real complexity or lifecycle risk; do not create extra files just to satisfy a line count. The current migration-only exception set is bounded by `docs/adr/0015-frontend-v2-migration-governance-boundary.md`; no new oversized file is covered by that ADR.

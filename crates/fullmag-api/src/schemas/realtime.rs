@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use utoipa::ToSchema;
 
 pub const FULLMAG_LIVE_SUBPROTOCOL: &str = "fullmag.live.v1";
 
@@ -47,6 +48,7 @@ pub enum RealtimeResourceName {
     Commands,
     Stages,
     SceneDocument,
+    Events,
     VisualizationState,
     VisualizationClientAcks,
 }
@@ -71,8 +73,24 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct RealtimeCommunicationPolicy {
+    #[serde(default = "default_enabled")]
+    pub resource_batch_changed_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub scalar_sample_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub field_samples_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub scalar_table_rows_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub lifecycle_events_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub diagnostics_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub heartbeat_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub visualization_client_acks_enabled: bool,
     pub ws_replay_capacity: u32,
     pub ws_heartbeat_ms: u32,
     pub ws_reconnect_ms: u32,
@@ -88,6 +106,14 @@ pub struct RealtimeCommunicationPolicy {
 impl Default for RealtimeCommunicationPolicy {
     fn default() -> Self {
         Self {
+            resource_batch_changed_enabled: true,
+            scalar_sample_enabled: true,
+            field_samples_enabled: true,
+            scalar_table_rows_enabled: true,
+            lifecycle_events_enabled: true,
+            diagnostics_enabled: true,
+            heartbeat_enabled: true,
+            visualization_client_acks_enabled: true,
             ws_replay_capacity: 512,
             ws_heartbeat_ms: 15_000,
             ws_reconnect_ms: 5_000,
@@ -100,6 +126,59 @@ impl Default for RealtimeCommunicationPolicy {
             error_retry_ms: 1_000,
         }
     }
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct RealtimeCommunicationPolicyResource {
+    pub revision: u64,
+    pub defaults: RealtimeCommunicationPolicy,
+    pub effective: RealtimeCommunicationPolicy,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone, ToSchema)]
+pub struct RealtimeCommunicationPolicyPatch {
+    #[serde(default)]
+    pub reset: Option<bool>,
+    #[serde(default)]
+    pub resource_batch_changed_enabled: Option<bool>,
+    #[serde(default)]
+    pub scalar_sample_enabled: Option<bool>,
+    #[serde(default)]
+    pub field_samples_enabled: Option<bool>,
+    #[serde(default)]
+    pub scalar_table_rows_enabled: Option<bool>,
+    #[serde(default)]
+    pub lifecycle_events_enabled: Option<bool>,
+    #[serde(default)]
+    pub diagnostics_enabled: Option<bool>,
+    #[serde(default)]
+    pub heartbeat_enabled: Option<bool>,
+    #[serde(default)]
+    pub visualization_client_acks_enabled: Option<bool>,
+    #[serde(default)]
+    pub ws_replay_capacity: Option<u32>,
+    #[serde(default)]
+    pub ws_heartbeat_ms: Option<u32>,
+    #[serde(default)]
+    pub ws_reconnect_ms: Option<u32>,
+    #[serde(default)]
+    pub lifecycle_coalesce_ms: Option<u32>,
+    #[serde(default)]
+    pub table_rows_min_refetch_ms: Option<u32>,
+    #[serde(default)]
+    pub field_sample_publish_ms: Option<u32>,
+    #[serde(default)]
+    pub scalar_telemetry_publish_ms: Option<u32>,
+    #[serde(default)]
+    pub diagnostics_summary_ms: Option<u32>,
+    #[serde(default)]
+    pub status_refresh_ms: Option<u32>,
+    #[serde(default)]
+    pub error_retry_ms: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

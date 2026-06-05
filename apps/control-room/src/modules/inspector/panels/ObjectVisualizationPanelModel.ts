@@ -1,6 +1,15 @@
-import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import type {
+  FieldCatalogResource,
+  MeshSharedDomainManifestResource,
+} from "@/kernel/api/apiTypes";
+import {
+  isMagneticOnlyQuantityId,
+  resolveCanonicalQuantityId,
+} from "@/kernel/api/quantityIds";
 import {
   renderModePatch,
+  surfaceColorSourceToColorMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationColorMode,
@@ -324,6 +333,170 @@ export interface AirboxVisibilityDiagnostic {
   message: string;
   status: AirboxVisibilityDiagnosticStatus;
   title: string;
+}
+
+type AirboxVectorDiagnosticStatus =
+  | "blocked"
+  | "catalog-missing"
+  | "confirmed"
+  | "render-degraded";
+
+export interface AirboxVectorDiagnostic {
+  details: Array<{ label: string; value: string }>;
+  message: string;
+  status: AirboxVectorDiagnosticStatus;
+  title: string;
+}
+
+function booleanLabel(value: boolean): string {
+  return value ? "on" : "off";
+}
+
+function buildAirboxFieldVectorResourceKey({
+  quantityId,
+  sampleLimit,
+}: {
+  quantityId: string;
+  sampleLimit: number | null;
+}): string {
+  const path = DATA_FIELD_VECTOR_PATH.replace(
+    "{quantity_id}",
+    encodeURIComponent(quantityId),
+  );
+  const params = new URLSearchParams();
+  params.set("component", "full");
+  params.set("scope_kind", "airbox");
+  if (sampleLimit !== null && sampleLimit > 0) {
+    params.set("max_samples", String(sampleLimit));
+  }
+  return `${path}?${params.toString()}`;
+}
+
+export function buildAirboxVectorDiagnostic({
+  airboxPartIds,
+  displaySettings,
+  fieldCatalog,
+  fieldCatalogStatus,
+  renderWarning,
+  settings,
+  vectorDomain,
+}: {
+  airboxPartIds: readonly string[];
+  displaySettings: VisualizationTargetSettings;
+  fieldCatalog: FieldCatalogResource | null | undefined;
+  fieldCatalogStatus: string;
+  renderWarning: string | null;
+  settings: VisualizationTargetSettings;
+  vectorDomain: string;
+}): AirboxVectorDiagnostic {
+  const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+  const quantityCompatible = !isMagneticOnlyQuantityId(quantityId);
+  const blockedVectorDomain =
+    vectorDomain === "magnetic_only" ||
+    vectorDomain === "object" ||
+    vectorDomain === "part";
+  const surfaceColorMode =
+    quantityCompatible && settings.visible && settings.shaderVisible
+      ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
+      : null;
+  const sampleLimit =
+    settings.vectorsVisible && !surfaceColorMode
+      ? Math.max(0, Math.floor(settings.vectorBudget))
+      : null;
+  const quantity = fieldCatalog?.quantities.find(
+    (entry) => resolveCanonicalQuantityId(entry.quantity_id) === quantityId,
+  );
+  const expectedResourceKey = buildAirboxFieldVectorResourceKey({
+    quantityId,
+    sampleLimit,
+  });
+  const details = [
+    { label: "Quantity", value: quantityId },
+    { label: "Expected resource", value: expectedResourceKey },
+    { label: "Airbox parts", value: airboxPartIds.join(", ") || "none" },
+    { label: "Airbox visible", value: booleanLabel(settings.visible) },
+    { label: "Resolved visible", value: booleanLabel(displaySettings.visible) },
+    { label: "Vectors pass", value: booleanLabel(settings.vectorsVisible) },
+    {
+      label: "Resolved vectors",
+      value: booleanLabel(displaySettings.vectorsVisible),
+    },
+    { label: "Vector domain", value: vectorDomain },
+    { label: "Vector budget", value: String(settings.vectorBudget) },
+    { label: "Geometry scope", value: settings.geometryScope },
+    { label: "Quantity compatible", value: quantityCompatible ? "yes" : "no" },
+    {
+      label: "Field catalog",
+      value: fieldCatalog
+        ? `ready (${fieldCatalog.quantities.length} quantities)`
+        : fieldCatalogStatus,
+    },
+    {
+      label: "Catalog quantity",
+      value: quantity
+        ? `${quantity.available ? "available" : "unavailable"} r${quantity.field_revision} ${quantity.location}`
+        : "missing",
+    },
+  ];
+
+  const blockedReason =
+    airboxPartIds.length === 0
+      ? "No airbox mesh part is present in the shared-domain manifest."
+      : !settings.visible
+        ? "Airbox master visibility is off."
+        : !displaySettings.visible
+          ? "Resolved airbox display visibility is off."
+          : !settings.vectorsVisible
+            ? "The airbox Vectors pass is off."
+            : !displaySettings.vectorsVisible
+              ? "Resolved vector visibility is off."
+              : blockedVectorDomain
+                ? `Global vector domain '${vectorDomain}' excludes airbox vectors.`
+                : !quantityCompatible
+                  ? `Quantity '${quantityId}' is magnetic-only and cannot render on the airbox.`
+                  : settings.vectorBudget <= 0
+                    ? "Vector budget is zero."
+                    : quantity && !quantity.available
+                      ? `Quantity '${quantityId}' is present in the field catalog but unavailable.`
+                      : fieldCatalog && !quantity
+                        ? `Quantity '${quantityId}' is missing from the field catalog.`
+                        : null;
+
+  if (blockedReason) {
+    return {
+      details,
+      message: blockedReason,
+      status: "blocked",
+      title: "Airbox vectors are not scheduled",
+    };
+  }
+
+  if (renderWarning) {
+    return {
+      details: [...details, { label: "Render constraint", value: renderWarning }],
+      message: renderWarning,
+      status: "render-degraded",
+      title: "Airbox vector render is constrained",
+    };
+  }
+
+  if (!fieldCatalog) {
+    return {
+      details,
+      message:
+        "The visible-state gates allow airbox vectors, but the inspector has not loaded a field catalog snapshot. Compare the expected resource key with the network log.",
+      status: "catalog-missing",
+      title: "Airbox vector status is partially known",
+    };
+  }
+
+  return {
+    details,
+    message:
+      "The visible-state gates allow airbox vectors and the requested quantity is available. If no arrows are visible, the remaining issue is below resource selection: decoded vector samples, render-model segment generation, or canvas/layer drawing.",
+    status: "confirmed",
+    title: "Airbox vectors should be displayed",
+  };
 }
 
 export function buildAirboxVisibilityDiagnostic({

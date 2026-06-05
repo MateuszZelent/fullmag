@@ -12,6 +12,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -31,6 +32,9 @@ bool initialize_backend_runtime(
 
 void destroy_backend_runtime(Context &ctx)
 {
+#if FULLMAG_HAS_CUDA_RUNTIME
+    gpu_rk_destroy_phase_timing_events(ctx);
+#endif
 #if FULLMAG_HAS_MFEM_STACK
     context_destroy_mfem(ctx);
 #endif

@@ -2,6 +2,7 @@
 
 use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
 use crate::schemas::diagnostics::SolverProfileResource;
+use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
@@ -101,6 +102,12 @@ pub(crate) struct AppState {
     pub current_live_realtime_replay: Arc<Mutex<VecDeque<CurrentLiveRealtimeEvent>>>,
     /// Monotonic sequence number for resource-first realtime events.
     pub current_live_realtime_next_seq: Arc<AtomicU64>,
+    /// Pending backend-side coalesced realtime resource batches, before sequence assignment.
+    pub current_live_realtime_pending_batches:
+        Arc<Mutex<HashMap<String, CurrentLiveRealtimePendingBatch>>>,
+    /// Backend-owned effective realtime communication policy.
+    pub current_live_realtime_policy:
+        Arc<RwLock<crate::realtime_policy::CurrentLiveRealtimePolicyState>>,
     /// Typed display selection for the sessionless root workspace.
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.
@@ -136,7 +143,14 @@ pub(crate) struct AppState {
 pub(crate) struct CurrentLiveRealtimeEvent {
     pub seq: u64,
     pub json: String,
-    pub coalesce_window_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentLiveRealtimePendingBatch {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub changes: Vec<RealtimeResourceChange>,
+    pub window_ms: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -738,6 +752,7 @@ pub(crate) struct ImportSessionAssetRequest {
 pub(crate) struct SessionAssetImportResponse {
     pub asset_id: String,
     pub session_id: String,
+    pub artifact_ref: String,
     pub stored_path: String,
     pub target_realization: String,
     pub summary: ImportedAssetSummary,

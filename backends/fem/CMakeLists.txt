@@ -199,6 +199,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_step_preflight.cu
             gpu/cuda/integrators/rk/rk_step_stats.cu
             gpu/cuda/integrators/rk/rk_thermal_field.cu
+            gpu/cuda/integrators/rk/rk_total_energy_reduction.cu
             gpu/cuda/integrators/rk/rk_zhang_li_torque.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu

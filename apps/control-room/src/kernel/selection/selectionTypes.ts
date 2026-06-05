@@ -68,6 +68,18 @@ export type SelectionRef =
       type: "analysis-chart";
     }
   | {
+      chartId: string;
+      kind: "analysis.chart-point";
+      nodeId: string;
+      quantity: string;
+      rowIndex: number;
+      seriesId: string;
+      tableId: string;
+      type: "analysis-chart-point";
+      x: number;
+      y: number;
+    }
+  | {
       kind:
         | "study.stage.action"
         | "study.stage.eigenmodes"
@@ -185,6 +197,19 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.chartId === right.chartId &&
         left.tableId === right.tableId
+      );
+    case "analysis-chart-point":
+      return (
+        right.type === "analysis-chart-point" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.chartId === right.chartId &&
+        left.tableId === right.tableId &&
+        left.seriesId === right.seriesId &&
+        left.quantity === right.quantity &&
+        left.rowIndex === right.rowIndex &&
+        left.x === right.x &&
+        left.y === right.y
       );
     case "study-stage":
       return (

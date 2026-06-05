@@ -50,6 +50,35 @@ describe("SelectionController", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("compares analysis chart point refs before emitting selection events", () => {
+    const { bus, controller } = setup();
+    const listener = vi.fn();
+    const pointSelection = {
+      kind: "analysis.chart-point",
+      label: "mx 0.2",
+      nodeId: "analysis:charts:default:point:data.table:default:step:mx:1",
+      objectId: null,
+      ref: {
+        chartId: "default",
+        kind: "analysis.chart-point" as const,
+        nodeId: "analysis:charts:default:point:data.table:default:step:mx:1",
+        quantity: "mx",
+        rowIndex: 1,
+        seriesId: "data.table:default:step:mx",
+        tableId: "default",
+        type: "analysis-chart-point" as const,
+        x: 2,
+        y: 0.2,
+      },
+    };
+
+    controller.set(pointSelection, "analysis-plots");
+    bus.on("workspace:selection-changed", listener);
+    controller.set(pointSelection, "analysis-plots");
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("clear() resets to null", () => {
     const { controller } = setup();
     controller.set({ objectId: "body-1", nodeId: "node-1" }, "explorer");

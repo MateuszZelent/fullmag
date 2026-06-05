@@ -1,9 +1,10 @@
 /*
  * GPU CUDA RK adaptive decision readback module header.
  *
- * Declares the transitional host-side adaptive accept/reject decision boundary
+ * Declares the transitional host-side adaptive accept/reject control boundary
  * for embedded RK methods. Device error-norm reductions remain in
- * rk_error_norm_runtime.
+ * rk_error_norm_runtime, and compute residency remains separate from this
+ * small control-scalar readback.
  */
 #pragma once
 

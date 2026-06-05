@@ -19,12 +19,12 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
+#include "gpu/cuda/integrators/rk/rk_total_energy_reduction.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -235,47 +235,22 @@ bool gpu_relax_compute_effective_field_and_energy(
     if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
-
-    std::array<double, kGpuFinalScalarSlots> scalars{};
-    if (!gpu_rk_read_control_scalar_results(
+    double scalar = 0.0;
+    if (!gpu_rk_reduce_total_energy_scalar(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU projected-gradient BB energy scalars device->host",
-            scalars.data(),
-            scalars.size(),
+            gpu.reductions.scalar_result,
+            reason) ||
+        !gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU projected-gradient BB total energy scalar device->host",
+            &scalar,
+            1,
             reason)) {
         return false;
     }
-    auto scalar = [&](GpuFinalScalarSlot slot) {
-        return scalars[static_cast<size_t>(slot)];
-    };
-
-    const double exchange_energy = scalar(GpuFinalScalarSlot::ExchangeEnergy);
-    double demag_energy = 0.0;
-    if (ctx.demag.enabled) {
-        demag_energy = scalar(GpuFinalScalarSlot::DemagEnergy);
-#if FULLMAG_HAS_MFEM_STACK
-        if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
-            ctx.poisson_demag.robin_effective_beta > 0.0) {
-            demag_energy += scalar(GpuFinalScalarSlot::DemagRobinBoundaryEnergy);
-        }
-#endif
-    }
-    const double external_energy =
-        ctx.zeeman.has_external_field ? scalar(GpuFinalScalarSlot::ExternalEnergy) : 0.0;
-    const double anisotropy_energy =
-        ctx.anisotropy.uniaxial_enabled ? scalar(GpuFinalScalarSlot::AnisotropyEnergy) : 0.0;
-    const double cubic_energy =
-        ctx.anisotropy.cubic_enabled ? scalar(GpuFinalScalarSlot::CubicAnisotropyEnergy) : 0.0;
-    const double dmi_energy =
-        ctx.dmi.interfacial_enabled ? scalar(GpuFinalScalarSlot::DmiEnergy) : 0.0;
-    const double bulk_dmi_energy =
-        ctx.dmi.bulk_enabled ? scalar(GpuFinalScalarSlot::BulkDmiEnergy) : 0.0;
-    const double magnetoelastic_energy =
-        ctx.magnetoelastic.enabled ? scalar(GpuFinalScalarSlot::MagnetoelasticEnergy) : 0.0;
-    total_energy =
-        exchange_energy + demag_energy + external_energy + anisotropy_energy +
-        cubic_energy + dmi_energy + bulk_dmi_energy + magnetoelastic_energy;
+    total_energy = scalar;
     if (!std::isfinite(total_energy)) {
         reason = "GPU projected-gradient BB produced non-finite total energy";
         return false;
@@ -283,16 +258,28 @@ bool gpu_relax_compute_effective_field_and_energy(
     return true;
 }
 
-bool gpu_relax_compute_tangent_gradient_norm(
+bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
     Context &ctx,
     cudaStream_t stream,
     int n,
     int blocks,
     FemGpuComponentField &gradient,
+    double &total_energy,
     double &gradient_norm_sq,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
+    if (!gpu_rk_compute_rhs_for_magnetization(
+            ctx,
+            gpu.magnetization.m,
+            gpu.rk.error,
+            stream,
+            n,
+            "launch GPU projected-gradient BB h_eff accumulation",
+            reason) ||
+        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
+        return false;
+    }
     fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
         gpu.magnetization.m.x,
         gpu.magnetization.m.y,
@@ -308,25 +295,37 @@ bool gpu_relax_compute_tangent_gradient_norm(
         gpu.reductions.scalar_workspace,
         n,
         stream);
-    if (!cuda_launch_ok("launch GPU projected-gradient BB tangent-gradient blocks", reason)) {
-        return false;
-    }
-    if (!gpu_relax_reduce_scalar_sum(
+    if (!cuda_launch_ok("launch GPU projected-gradient BB tangent-gradient blocks", reason) ||
+        !gpu_rk_reduce_total_energy_scalar(
+            ctx,
+            stream,
+            gpu.reductions.scalar_result,
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
             ctx,
             stream,
             gpu.reductions.scalar_workspace,
             blocks,
-            gpu.reductions.scalar_result,
+            gpu.reductions.scalar_result + 1,
             "launch GPU projected-gradient BB gradient norm reduction",
             reason)) {
         return false;
     }
-    if (!gpu_rk_read_control_scalar_result(
+
+    double scalars[2] = {0.0, 0.0};
+    if (!gpu_rk_read_control_scalar_results(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU projected-gradient BB gradient norm device->host",
-            gradient_norm_sq,
+            "cudaMemcpyAsync GPU projected-gradient BB total energy/gradient scalars device->host",
+            scalars,
+            2,
             reason)) {
+        return false;
+    }
+    total_energy = scalars[0];
+    gradient_norm_sq = scalars[1];
+    if (!std::isfinite(total_energy)) {
+        reason = "GPU projected-gradient BB produced non-finite total energy";
         return false;
     }
     if (!std::isfinite(gradient_norm_sq) || gradient_norm_sq < 0.0) {
@@ -469,75 +468,11 @@ bool gpu_relax_retry_pgbb_line_search_with_reset(
     return false;
 }
 
-bool gpu_relax_update_bb_step_size(
+bool gpu_relax_apply_bb_step_size_from_curvature(
     Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
+    const double curvature[3],
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state.device;
-    fullmag_cuda_relax_bb_curvature_blocks(
-        gpu.rk.m_backup.x,
-        gpu.rk.m_backup.y,
-        gpu.rk.m_backup.z,
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.rk.k[0].x,
-        gpu.rk.k[0].y,
-        gpu.rk.k[0].z,
-        gpu.rk.k[1].x,
-        gpu.rk.k[1].y,
-        gpu.rk.k[1].z,
-        gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        kBbCurvatureScale,
-        gpu.reductions.scalar_workspace,
-        gpu.rk.error.x,
-        gpu.rk.error.y,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU projected-gradient BB curvature blocks", reason)) {
-        return false;
-    }
-    if (!gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.reductions.scalar_workspace,
-            blocks,
-            gpu.reductions.scalar_result,
-            "launch GPU projected-gradient BB s_dot_s reduction",
-            reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.rk.error.x,
-            blocks,
-            gpu.reductions.scalar_result + 1,
-            "launch GPU projected-gradient BB s_dot_y reduction",
-            reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.rk.error.y,
-            blocks,
-            gpu.reductions.scalar_result + 2,
-            "launch GPU projected-gradient BB y_dot_y reduction",
-            reason)) {
-        return false;
-    }
-
-    double curvature[3] = {0.0, 0.0, 0.0};
-    if (!gpu_rk_read_control_scalar_results(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU projected-gradient BB curvature scalars device->host",
-            curvature,
-            3,
-            reason)) {
-        return false;
-    }
     const double s_dot_s = curvature[0];
     const double s_dot_y = curvature[1];
     const double y_dot_y = curvature[2];
@@ -580,6 +515,95 @@ bool gpu_relax_update_bb_step_size(
     return true;
 }
 
+bool gpu_relax_compute_accepted_bb_curvature(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.fields.h_eff.x,
+        gpu.fields.h_eff.y,
+        gpu.fields.h_eff.z,
+        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.rk.k[1].x,
+        gpu.rk.k[1].y,
+        gpu.rk.k[1].z,
+        gpu.reductions.scalar_workspace,
+        n,
+        stream);
+    if (!cuda_launch_ok("launch GPU projected-gradient BB accepted tangent-gradient blocks", reason)) {
+        return false;
+    }
+
+    fullmag_cuda_relax_bb_curvature_blocks(
+        gpu.rk.m_backup.x,
+        gpu.rk.m_backup.y,
+        gpu.rk.m_backup.z,
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.rk.k[0].x,
+        gpu.rk.k[0].y,
+        gpu.rk.k[0].z,
+        gpu.rk.k[1].x,
+        gpu.rk.k[1].y,
+        gpu.rk.k[1].z,
+        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_regions.magnetic_node_mask,
+        kBbCurvatureScale,
+        gpu.reductions.scalar_workspace,
+        gpu.rk.error.x,
+        gpu.rk.error.y,
+        n,
+        stream);
+    if (!cuda_launch_ok("launch GPU projected-gradient BB curvature blocks", reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.reductions.scalar_workspace,
+            blocks,
+            gpu.reductions.scalar_result,
+            "launch GPU projected-gradient BB s_dot_s reduction",
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.rk.error.x,
+            blocks,
+            gpu.reductions.scalar_result + 1,
+            "launch GPU projected-gradient BB s_dot_y reduction",
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.rk.error.y,
+            blocks,
+            gpu.reductions.scalar_result + 2,
+            "launch GPU projected-gradient BB y_dot_y reduction",
+            reason)) {
+        return false;
+    }
+
+    double scalars[3] = {0.0, 0.0, 0.0};
+    if (!gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU projected-gradient BB accepted curvature scalars device->host",
+            scalars,
+            3,
+            reason)) {
+        return false;
+    }
+    return gpu_relax_apply_bb_step_size_from_curvature(ctx, scalars, reason);
+}
+
 } // namespace
 #endif
 
@@ -613,34 +637,20 @@ int gpu_relax_projected_gradient_bb_step(
     }
 
     double current_energy = 0.0;
-    if (!gpu_relax_compute_effective_field_and_energy(
-            ctx,
-            stream,
-            n,
-            blocks,
-            current_energy,
-            reason)) {
-        return gpu_relax_restore_previous_magnetization_after_failure(
-            ctx,
-            stream,
-            "current effective-field/energy evaluation failure",
-            reason,
-            error);
-    }
-
     double gradient_norm_sq = 0.0;
-    if (!gpu_relax_compute_tangent_gradient_norm(
+    if (!gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
             ctx,
             stream,
             n,
             blocks,
             gpu.rk.k[0],
+            current_energy,
             gradient_norm_sq,
             reason)) {
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,
-            "current tangent-gradient reduction failure",
+            "current effective-field/energy/gradient evaluation failure",
             reason,
             error);
     }
@@ -776,24 +786,19 @@ int gpu_relax_projected_gradient_bb_step(
     // and m_backup still holds the pre-step state for device-level restore.
     const GpuRelaxPgbbRollbackState rollback =
         capture_gpu_relax_pgbb_rollback_state(ctx);
-    double accepted_gradient_norm_sq = 0.0;
-    if (!gpu_relax_compute_tangent_gradient_norm(
+    if (!gpu_relax_compute_accepted_bb_curvature(
             ctx,
             stream,
             n,
             blocks,
-            gpu.rk.k[1],
-            accepted_gradient_norm_sq,
-            reason) ||
-        !gpu_relax_update_bb_step_size(ctx, stream, n, blocks, reason)) {
+            reason)) {
         return gpu_relax_restore_previous_magnetization_after_failure(
             ctx,
             stream,
-            "accepted-step gradient/BB update failure",
+            "accepted-step BB update failure",
             reason,
             error);
     }
-    (void)accepted_gradient_norm_sq;
 
     mark_gpu_relax_pgbb_device_source_of_truth(ctx);
     gpu.rk.fsal_valid = false;

@@ -1,207 +1,192 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { ECharts, EChartsOption } from "echarts";
+import type { ECharts } from "echarts";
 
-import { buildChartSeriesModel, type TableRowsLike } from "../chartTableModel";
+import {
+  chartCursorPointFromEChartsClick,
+  chartRangeFromDataZoomEvent,
+  type ChartCursorPoint,
+  type ChartSeries,
+  type ChartValueRange,
+} from "../chartTableModel";
+import {
+  createChartFrameScheduler,
+  type ChartFrameScheduler,
+} from "./chartFrameScheduler";
+import {
+  recordChartDispatchDataZoom,
+  recordChartDispatchPointClick,
+  recordChartInstanceCreated,
+  recordChartInstanceDisposed,
+  recordChartResize,
+} from "./chartDiagnostics";
+import {
+  cancelRangeCommit,
+  chartStatusOverlay,
+  type ChartRendererStatus,
+  scheduleChartOptionUpdate,
+  scheduleRangeCommit,
+} from "./chartSurfaceModel";
 
 interface EChartsSurfaceProps {
-  table: TableRowsLike | null;
-  xAxisId?: string;
-  yAxisIds?: readonly string[];
+  dataStatus?: string;
+  onPointSelect?: (point: ChartCursorPoint) => void;
+  onRangeChange?: (range: ChartValueRange) => void;
+  series: readonly ChartSeries[];
+  xAxisLabel?: string;
 }
 
-export function EChartsSurface({ table, xAxisId, yAxisIds }: EChartsSurfaceProps) {
+export function EChartsSurface({
+  dataStatus,
+  onPointSelect,
+  onRangeChange,
+  series,
+  xAxisLabel,
+}: EChartsSurfaceProps) {
   const elementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
-  const model = useMemo(() => table, [table]);
+  const onPointSelectRef = useRef(onPointSelect);
+  const onRangeChangeRef = useRef(onRangeChange);
+  const rangeCommitTimerRef = useRef<number | null>(null);
+  const resizeSchedulerRef = useRef<ChartFrameScheduler | null>(null);
+  const setOptionSchedulerRef = useRef<ChartFrameScheduler | null>(null);
+  const model = useMemo(() => series, [series]);
   const modelRef = useRef(model);
-  const axesRef = useRef({ xAxisId, yAxisIds });
-  const hasSamples = Boolean(table && table.rows.length > 0);
+  const xAxisLabelRef = useRef(xAxisLabel);
+  const [rendererStatus, setRendererStatus] =
+    useState<ChartRendererStatus>("loading");
+  const hasSamples = series.some((item) => item.points.length > 0);
+  const overlay = chartStatusOverlay({
+    dataStatus,
+    hasSamples,
+    rendererStatus,
+  });
 
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
 
   useEffect(() => {
-    axesRef.current = { xAxisId, yAxisIds };
-  }, [xAxisId, yAxisIds]);
+    onPointSelectRef.current = onPointSelect;
+  }, [onPointSelect]);
+
+  useEffect(() => {
+    onRangeChangeRef.current = onRangeChange;
+  }, [onRangeChange]);
+
+  useEffect(() => {
+    xAxisLabelRef.current = xAxisLabel;
+  }, [xAxisLabel]);
 
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
     let disposed = false;
     let resizeObserver: ResizeObserver | null = null;
+    const resizeScheduler = createChartFrameScheduler();
+    const setOptionScheduler = createChartFrameScheduler();
+    resizeSchedulerRef.current = resizeScheduler;
+    setOptionSchedulerRef.current = setOptionScheduler;
 
-    void import("echarts").then((echarts) => {
-      if (disposed) return;
-      const chart = echarts.init(element, undefined, { renderer: "canvas" });
-      chartRef.current = chart;
-      if (modelRef.current) {
-        chart.setOption(
-          buildChartOption(
+    void import("echarts")
+      .then((echarts) => {
+        if (disposed) return;
+        let chart: ECharts;
+        try {
+          chart = echarts.init(element, undefined, { renderer: "canvas" });
+        } catch {
+          if (!disposed) setRendererStatus("error");
+          return;
+        }
+        chartRef.current = chart;
+        recordChartInstanceCreated();
+        if (onRangeChangeRef.current) {
+          recordChartDispatchDataZoom(chart);
+        }
+        recordChartDispatchPointClick((seriesIndex, dataIndex) => {
+          const point = chartCursorPointFromEChartsClick(
+            { dataIndex, seriesIndex },
             modelRef.current,
-            axesRef.current,
-            readChartPalette(element),
-          ),
-          true,
-        );
-      }
-      resizeObserver = new ResizeObserver(() => chart.resize());
-      resizeObserver.observe(element);
-    });
+          );
+          if (!point) return;
+          onPointSelectRef.current?.(point);
+        });
+        setRendererStatus("ready");
+        if (modelRef.current.length > 0) {
+          scheduleChartOptionUpdate({
+            chart,
+            element,
+            scheduler: setOptionScheduler,
+            series: modelRef.current,
+            xAxisLabel: xAxisLabelRef.current,
+          });
+        }
+        chart.on("dataZoom", (event: unknown) => {
+          const range = chartRangeFromDataZoomEvent(event);
+          if (!range) return;
+          scheduleRangeCommit(rangeCommitTimerRef, () => {
+            onRangeChangeRef.current?.(range);
+          });
+        });
+        chart.on("click", (event: unknown) => {
+          const point = chartCursorPointFromEChartsClick(
+            event,
+            modelRef.current,
+          );
+          if (!point) return;
+          onPointSelectRef.current?.(point);
+        });
+        resizeObserver = new ResizeObserver(() => {
+          resizeScheduler.schedule(() => {
+            recordChartResize();
+            chart.resize();
+          });
+        });
+        resizeObserver.observe(element);
+      })
+      .catch(() => {
+        if (!disposed) setRendererStatus("error");
+      });
 
     return () => {
       disposed = true;
       resizeObserver?.disconnect();
-      chartRef.current?.dispose();
+      resizeScheduler.cancel();
+      setOptionScheduler.cancel();
+      cancelRangeCommit(rangeCommitTimerRef);
+      resizeSchedulerRef.current = null;
+      setOptionSchedulerRef.current = null;
+      if (chartRef.current) {
+        chartRef.current.dispose();
+        recordChartInstanceDisposed();
+      }
       chartRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     const element = elementRef.current;
-    if (chartRef.current && element && model) {
-      chartRef.current.setOption(
-        buildChartOption(model, { xAxisId, yAxisIds }, readChartPalette(element)),
-        true,
-      );
+    if (chartRef.current && element && model.length > 0) {
+      scheduleChartOptionUpdate({
+        chart: chartRef.current,
+        element,
+        scheduler: setOptionSchedulerRef.current,
+        series: model,
+        xAxisLabel,
+      });
     }
-  }, [model, xAxisId, yAxisIds]);
+  }, [model, xAxisLabel]);
 
   return (
     <div className="fm-analysis-plots__chart-frame">
       <div ref={elementRef} className="fm-analysis-plots__echarts" />
-      {!hasSamples ? (
-        <div className="fm-analysis-plots__chart-empty">No table samples</div>
+      {overlay ? (
+        <div className="fm-analysis-plots__chart-empty" role={overlay.role}>
+          {overlay.label}
+        </div>
       ) : null}
     </div>
   );
-}
-
-function buildChartOption(
-  table: TableRowsLike,
-  { xAxisId, yAxisIds }: { xAxisId?: string; yAxisIds?: readonly string[] },
-  palette: readonly string[],
-): EChartsOption {
-  const model = buildChartSeriesModel(table, { xAxisId, yAxisIds });
-  return {
-    animation: false,
-    color: [...palette],
-    dataset: model.dataset,
-
-    grid: {
-      bottom: 64, // Extra space for x-axis name and dataZoom
-      containLabel: true,
-      left: 16,
-      right: model.yAxis.length > 1 ? 16 : 24,
-      top: 48, // Extra space for legend and axis names
-    },
-    dataZoom: [
-      { filterMode: "none", type: "inside" },
-      {
-        type: "slider",
-        filterMode: "none",
-        bottom: 8,
-        height: 12,
-        showDetail: false,
-        showDataShadow: false,
-        borderColor: "transparent",
-        backgroundColor: "var(--fm-bg-surface)",
-        fillerColor: "rgba(128, 128, 128, 0.15)",
-        handleSize: "100%",
-        handleStyle: {
-          color: "var(--fm-border-strong)",
-          borderWidth: 0,
-        },
-      },
-    ],
-    legend: {
-      icon: "circle",
-      itemGap: 24,
-      textStyle: { color: "var(--fm-text-primary)" },
-      top: 0,
-      type: "scroll",
-    },
-    series: model.series.map((series) => ({
-      ...series,
-      lineStyle: { width: 2 },
-      progressive: 0,
-      showSymbol: false,
-      symbol: "circle",
-      symbolSize: 4,
-    })),
-    tooltip: {
-      axisPointer: {
-        crossStyle: { color: "var(--fm-border-strong)", type: "dashed" },
-        label: {
-          backgroundColor: "var(--fm-bg-surface)",
-          color: "var(--fm-text-primary)",
-        },
-        type: "cross",
-      },
-      backgroundColor: "var(--fm-bg-surface)",
-      borderColor: "var(--fm-border-strong)",
-      textStyle: { color: "var(--fm-text-primary)" },
-      trigger: "axis",
-      valueFormatter: (value) =>
-        typeof value === "number" ? formatChartNumber(value) : String(value),
-    },
-    xAxis: {
-      axisLabel: {
-        color: "var(--fm-text-muted)",
-        formatter: (value: number | string) =>
-          typeof value === "number" ? formatChartNumber(value) : String(value),
-      },
-      axisLine: { lineStyle: { color: "var(--fm-border-strong)" } },
-      axisTick: { show: false },
-      name: model.xAxisId,
-      nameGap: 28,
-      nameLocation: "middle",
-      nameTextStyle: { color: "var(--fm-text-secondary)" },
-      splitLine: { show: false }, // Cleaner without vertical lines
-      type: "value",
-    },
-    yAxis: model.yAxis.map((axis, index) => ({
-      alignTicks: true,
-      axisLabel: {
-        color: "var(--fm-text-muted)",
-        formatter: (value: number | string) =>
-          typeof value === "number" ? formatChartNumber(value) : String(value),
-      },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      name: axis.name ? `[${axis.name}]` : "",
-      nameTextStyle: {
-        align: index === 0 ? "left" : "right",
-        color: "var(--fm-text-secondary)",
-        padding: index === 0 ? [0, 0, 0, -24] : [0, -24, 0, 0],
-      },
-      position: index === 0 ? "left" : "right",
-      splitLine: {
-        lineStyle: { color: "var(--fm-border-subtle)", type: "solid" },
-        show: true, // Show horizontal grid lines for all (alignTicks ensures they overlap)
-      },
-      type: "value",
-    })),
-  };
-}
-
-function readChartPalette(element: HTMLElement): string[] {
-  const style = getComputedStyle(element);
-  return [
-    "--fm-chart-blue",
-    "--fm-chart-green",
-    "--fm-chart-yellow",
-    "--fm-chart-red",
-    "--fm-chart-mauve",
-  ].map((token) => style.getPropertyValue(token).trim());
-}
-
-function formatChartNumber(value: number): string {
-  if (Math.abs(value) >= 1e4 || (value !== 0 && Math.abs(value) < 1e-3)) {
-    return value.toExponential(3);
-  }
-  return value.toPrecision(5);
 }

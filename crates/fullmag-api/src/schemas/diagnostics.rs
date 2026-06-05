@@ -7,6 +7,8 @@ pub struct SolverProfileCommandConfig {
     pub enabled: bool,
     #[serde(default = "default_sample_every")]
     pub sample_every: u64,
+    #[serde(default)]
+    pub sample_interval_wall_ms: u64,
     #[serde(default = "default_max_samples")]
     pub max_samples: usize,
     #[serde(default)]
@@ -20,6 +22,7 @@ impl Default for SolverProfileCommandConfig {
         Self {
             enabled: false,
             sample_every: default_sample_every(),
+            sample_interval_wall_ms: 0,
             max_samples: default_max_samples(),
             emit_engine_log: false,
             persist_artifact: false,

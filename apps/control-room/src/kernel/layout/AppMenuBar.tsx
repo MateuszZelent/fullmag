@@ -58,6 +58,7 @@ import {
   type AppMenuNode,
   type HeaderQuickAction,
 } from "./appMenuModel";
+import { CommunicationPolicyDialog } from "./CommunicationPolicyDialog";
 import { DataPreviewDialog } from "./DataPreviewDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { ThreadManagerDialog } from "./ThreadManagerDialog";
@@ -458,6 +459,7 @@ export function AppMenuBar() {
   );
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const [dataPreviewOpen, setDataPreviewOpen] = useState(false);
+  const [communicationOpen, setCommunicationOpen] = useState(false);
   const [registryOpen, setRegistryOpen] = useState(false);
   const [threadManagerOpen, setThreadManagerOpen] = useState(false);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
@@ -511,6 +513,10 @@ export function AppMenuBar() {
     }
     if (commandId === "tools.data-preview") {
       setDataPreviewOpen(true);
+      return;
+    }
+    if (commandId === "tools.communication") {
+      setCommunicationOpen(true);
       return;
     }
     if (kernel.commands.get(commandId)) {
@@ -646,6 +652,11 @@ export function AppMenuBar() {
       <DataPreviewDialog
         onOpenChange={setDataPreviewOpen}
         open={dataPreviewOpen}
+      />
+
+      <CommunicationPolicyDialog
+        onOpenChange={setCommunicationOpen}
+        open={communicationOpen}
       />
 
       <div className="fm-header__separator" />

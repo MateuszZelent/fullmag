@@ -21,6 +21,8 @@ interface RibbonAction {
   activeCommandId?: string;
   accent?: boolean;
   menu?: RibbonMenuNode[];
+  commandId?: string;
+  commandInput?: unknown;
   /** CSS color applied to the icon only (not label). Ignored when button is active. */
   iconColor?: string;
   /**

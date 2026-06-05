@@ -168,6 +168,11 @@ impl LocalLiveWorkspace {
     }
 
     pub fn set_solver_profile_config(&self, config: fullmag_runner::SolverProfileConfig) {
+        if config.enabled {
+            std::env::set_var("FULLMAG_FEM_STEP_PROFILE", "1");
+        } else {
+            std::env::remove_var("FULLMAG_FEM_STEP_PROFILE");
+        }
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.set_config(config);
             let snapshot = state.solver_profile.snapshot();
@@ -576,6 +581,8 @@ mod tests {
     };
     use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
             config_revision: revision,
@@ -716,6 +723,32 @@ mod tests {
             },
             no_op_publisher(),
         )
+    }
+
+    #[test]
+    fn solver_profile_config_toggles_gpu_phase_timing_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let previous = std::env::var_os("FULLMAG_FEM_STEP_PROFILE");
+        std::env::remove_var("FULLMAG_FEM_STEP_PROFILE");
+        let workspace = workspace_with_domain_mesh();
+
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            max_samples: 8,
+            ..Default::default()
+        });
+
+        assert_eq!(std::env::var("FULLMAG_FEM_STEP_PROFILE").as_deref(), Ok("1"));
+
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: false,
+            ..Default::default()
+        });
+
+        assert!(std::env::var_os("FULLMAG_FEM_STEP_PROFILE").is_none());
+        if let Some(value) = previous {
+            std::env::set_var("FULLMAG_FEM_STEP_PROFILE", value);
+        }
     }
 
     fn payload_with_live_step(

@@ -8,11 +8,12 @@ const panelSource = readFileSync(
 );
 
 describe("ObjectVisualizationPanel performance contracts", () => {
-  it("debounces range-field commits and flushes them at interaction boundaries", () => {
-    expect(panelSource).toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
-    expect(panelSource).toContain("window.setTimeout(");
-    expect(panelSource).toContain("flushDraft,");
+  it("stages range-field commits until interaction boundaries", () => {
+    expect(panelSource).toContain("pendingValueRef");
+    expect(panelSource).toContain("setDraftOverride(nextValue)");
+    expect(panelSource).not.toContain("window.setTimeout(");
     expect(panelSource).toContain("onPointerUp={flushDraft}");
+    expect(panelSource).toContain("onPointerCancel={flushDraft}");
     expect(panelSource).toContain("onKeyUp={flushDraft}");
     expect(panelSource).toContain("onBlur={flushDraft}");
   });

@@ -83,6 +83,21 @@ describe("viewport3dResources", () => {
     ).toEqual(new Map());
   });
 
+  it("builds airbox field vector resource keys for H_eff", () => {
+    expect(
+      resolveViewport3DAirboxFieldVectorResourceKeys("h_eff", [
+        { id: "airbox" },
+      ]),
+    ).toEqual(
+      new Map([
+        [
+          "airbox",
+          `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=full&scope_kind=airbox`,
+        ],
+      ]),
+    );
+  });
+
   it("builds scoped magnetic part field vector resource requests", () => {
     expect(
       resolveViewport3DPartFieldVectorResourceRequests(

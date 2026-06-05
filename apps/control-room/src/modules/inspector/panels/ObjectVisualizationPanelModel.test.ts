@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
+import type {
+  FieldCatalogResource,
+  MeshSharedDomainManifestResource,
+} from "@/kernel/api/apiTypes";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -10,6 +13,7 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  buildAirboxVectorDiagnostic,
   buildAirboxVisibilityDiagnostic,
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
@@ -448,6 +452,91 @@ describe("ObjectVisualizationPanelModel", () => {
       status: "confirmed",
       title: "Airbox visibility confirmed",
     });
+  });
+
+  it("confirms airbox H_eff vectors when gates and catalog are available", () => {
+    const fieldCatalog: FieldCatalogResource = {
+      domain_generation_id: 1,
+      quantities: [
+        {
+          available: true,
+          components: 3,
+          domain_generation_id: 1,
+          field_revision: 3,
+          kind: "vector",
+          label: "Effective field",
+          location: "full_domain",
+          quantity_id: "H_eff",
+          unit: "A/m",
+        },
+      ],
+      revision: 4,
+    };
+    const diagnostic = buildAirboxVectorDiagnostic({
+      airboxPartIds: ["part:__air__"],
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        vectorBudget: 1200,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fieldCatalog,
+      fieldCatalogStatus: "ready",
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        vectorBudget: 1200,
+        vectorsVisible: true,
+        visible: true,
+      },
+      vectorDomain: "auto",
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "confirmed",
+      title: "Airbox vectors should be displayed",
+    });
+    expect(diagnostic.details).toEqual(
+      expect.arrayContaining([
+        { label: "Quantity", value: "H_eff" },
+        {
+          label: "Expected resource",
+          value:
+            "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox&max_samples=1200",
+        },
+        { label: "Catalog quantity", value: "available r3 full_domain" },
+      ]),
+    );
+  });
+
+  it("explains magnetic-only quantities blocking airbox vectors", () => {
+    const diagnostic = buildAirboxVectorDiagnostic({
+      airboxPartIds: ["part:__air__"],
+      displaySettings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "m",
+        vectorsVisible: true,
+        visible: true,
+      },
+      fieldCatalog: null,
+      fieldCatalogStatus: "idle",
+      renderWarning: null,
+      settings: {
+        ...DEFAULT_AIRBOX_VISUALIZATION,
+        activeQuantityId: "m",
+        vectorsVisible: true,
+        visible: true,
+      },
+      vectorDomain: "auto",
+    });
+
+    expect(diagnostic).toMatchObject({
+      status: "blocked",
+      title: "Airbox vectors are not scheduled",
+    });
+    expect(diagnostic.message).toContain("magnetic-only");
   });
 });
 

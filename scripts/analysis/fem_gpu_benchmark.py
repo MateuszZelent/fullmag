@@ -201,6 +201,7 @@ DEFAULT_CPU_GPU_TORQUE_RTOL = 1e-6
 DEFAULT_CPU_GPU_TORQUE_ATOL_APM = 1e-9
 DEFAULT_CPU_GPU_TORQUE_ATOL_T = 1e-15
 DEFAULT_CPU_GPU_MAX_STEP_DELTA = 0
+MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
 MU0 = 4.0 * math.pi * 1e-7
 RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
@@ -599,7 +600,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-best-demag-policy",
         action="store_true",
-        help="Fail if a demag policy sweep produces no converged policy summary",
+        help="Fail if a demag policy sweep does not compare at least two converged policies per logical case",
     )
     parser.add_argument(
         "--accepted-baseline",
@@ -739,7 +740,8 @@ def apply_box500_airbox_exchange_only_preset(args: argparse.Namespace) -> None:
     args.scenarios = BOX500_AIRBOX_SCENARIO
     if args.integrators is None:
         args.integrators = "heun"
-    args.timestep_policies = "fixed"
+    if args.timestep_policies == ",".join(DEFAULT_TIMESTEP_POLICIES):
+        args.timestep_policies = "fixed"
     args.thread_counts = "auto"
     args.require_mfem_stack = True
     args.require_stable_solver_mesh = True
@@ -754,7 +756,8 @@ def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace)
     args.scenarios = ",".join(BOX500_AIRBOX_CONSISTENCY_SCENARIOS)
     if args.integrators is None:
         args.integrators = "heun"
-    args.timestep_policies = "fixed"
+    if args.timestep_policies == ",".join(DEFAULT_TIMESTEP_POLICIES):
+        args.timestep_policies = "fixed"
     args.thread_counts = "auto"
     args.require_mfem_stack = True
     args.require_stable_solver_mesh = True
@@ -769,6 +772,23 @@ def canonical_consistency_scenario(scenario: str) -> str:
 
 def interaction_contract_for_scenario(scenario: str) -> Mapping[str, object] | None:
     return INTERACTION_CONTRACTS.get(canonical_consistency_scenario(scenario))
+
+
+def scenario_has_interaction(scenario: object, interaction: str) -> bool:
+    if not isinstance(scenario, str):
+        return False
+    contract = interaction_contract_for_scenario(scenario)
+    if contract is None:
+        return False
+    interactions = contract.get("interactions")
+    return isinstance(interactions, list) and interaction in interactions
+
+
+def requires_phase2_compute_hot_loop_gate(scenario: object) -> bool:
+    return isinstance(scenario, str) and (
+        canonical_consistency_scenario(scenario) == "exchange_only"
+        or scenario_has_interaction(scenario, "demag")
+    )
 
 
 def scenario_energy_fields(scenario: str) -> list[str]:
@@ -1101,11 +1121,17 @@ def build_preflight_report(
     assert_no_hot_loop_compute_sync = env_flag_enabled(
         env_text(actual_env, "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC")
     )
-    adaptive_hot_loop_scalar_readback_free = (
+    adaptive_hot_loop_compute_readback_free = (
         adaptive_decision_readback_text != ""
         and "gpu_rk_read_scalar_result(" not in adaptive_decision_readback_text
         and "cudaMemcpyAsync GPU RK adaptive decision scalar device->host"
         not in adaptive_decision_readback_text
+    )
+    adaptive_hot_loop_control_readback = (
+        adaptive_decision_readback_text != ""
+        and "gpu_rk_read_control_scalar_result(" in adaptive_decision_readback_text
+        and "cudaMemcpyAsync GPU RK adaptive decision control scalar device->host"
+        in adaptive_decision_readback_text
     )
     report: dict[str, object] = {
         "status": "missing",
@@ -1125,7 +1151,9 @@ def build_preflight_report(
         "gpu_rk_cuda_source_path": str(GPU_RK_CUDA_SOURCE),
         "gpu_rk_cuda_source_present": GPU_RK_CUDA_SOURCE.is_file(),
         "gpu_rk_cmake_wired": GPU_RK_CMAKE_SOURCE in fem_cmake_text,
-        "adaptive_gpu_rk_hot_loop_scalar_readback_free": adaptive_hot_loop_scalar_readback_free,
+        "adaptive_gpu_rk_hot_loop_compute_readback_free": adaptive_hot_loop_compute_readback_free,
+        "adaptive_gpu_rk_hot_loop_scalar_readback_free": adaptive_hot_loop_compute_readback_free,
+        "adaptive_gpu_rk_hot_loop_control_readback": adaptive_hot_loop_control_readback,
         "adaptive_gpu_rk_hot_loop_scalar_readback_path": str(
             GPU_RK_ADAPTIVE_DECISION_READBACK_SOURCE
         ),
@@ -1174,9 +1202,9 @@ def adaptive_gpu_rk_acceptance_blockers(report: Mapping[str, object]) -> list[st
         )
     if not report.get("assert_no_hot_loop_compute_sync"):
         blockers.append("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1")
-    if not report.get("adaptive_gpu_rk_hot_loop_scalar_readback_free"):
+    if not report.get("adaptive_gpu_rk_hot_loop_compute_readback_free"):
         blockers.append(
-            "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"
+            "adaptive GPU RK still performs hot-loop compute readback for accept/reject"
         )
     return blockers
 
@@ -1321,6 +1349,15 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
     }
 
 
+def input_mesh_summary(mesh_stats: Mapping[str, object]) -> str:
+    return (
+        f"input_mesh={mesh_stats['mesh_name']} "
+        f"input_nodes={mesh_stats['node_count']} "
+        f"input_elements={mesh_stats['element_count']} "
+        "(solver mesh is reported per completed row)"
+    )
+
+
 def mesh_signature(mesh: Mapping[str, object]) -> str:
     payload = {
         key: mesh.get(key)
@@ -1384,7 +1421,43 @@ def parse_benchmark_result(output: str) -> dict[str, object] | None:
     for line in reversed(output.splitlines()):
         if line.startswith("BENCHMARK_RESULT="):
             return json.loads(line.split("=", 1)[1])
+    payload = parse_cli_json_summary(output)
+    if payload is not None:
+        return payload
     return parse_cli_workspace_summary(output)
+
+
+def parse_cli_json_summary(output: str) -> dict[str, object] | None:
+    decoder = json.JSONDecoder()
+    for index in range(len(output) - 1, -1, -1):
+        if output[index] != "{":
+            continue
+        candidate = output[index:].strip()
+        try:
+            payload, end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and "status" in payload
+            and ("artifact_dir" in payload or "session_id" in payload)
+        ):
+            normalized = dict(payload)
+            if "executed_steps" not in normalized and "total_steps" in normalized:
+                normalized["executed_steps"] = normalized["total_steps"]
+            for source, target in (
+                ("final_time", "final_time_s"),
+                ("final_e_ex", "final_e_ex_j"),
+                ("final_e_demag", "final_e_demag_j"),
+                ("final_e_ext", "final_e_ext_j"),
+                ("final_e_ani", "final_e_ani_j"),
+                ("final_e_dmi", "final_e_dmi_j"),
+                ("final_e_total", "final_e_total_j"),
+            ):
+                if target not in normalized and source in normalized:
+                    normalized[target] = normalized[source]
+            return normalized
+    return None
 
 
 def parse_float_prefix(value: str) -> float | None:
@@ -1549,11 +1622,11 @@ def run_backend(
     row["requested_relaxation_algorithm"] = relaxation_algorithm
     if (
         backend_label == "fem_gpu"
-        and scenario == "exchange_only"
+        and requires_phase2_compute_hot_loop_gate(scenario)
         and "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC" not in extra_env
     ):
         env["FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC"] = "1"
-    if backend_label == "fem_gpu" and scenario == "exchange_only":
+    if backend_label == "fem_gpu" and requires_phase2_compute_hot_loop_gate(scenario):
         row["phase2_compute_assertion_enabled"] = env_flag_enabled(
             env_text(env, "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC")
         )
@@ -1564,6 +1637,12 @@ def run_backend(
         )
         row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] = preflight.get(
             "adaptive_gpu_rk_hot_loop_scalar_readback_free"
+        )
+        row["adaptive_gpu_rk_hot_loop_compute_readback_free"] = preflight.get(
+            "adaptive_gpu_rk_hot_loop_compute_readback_free"
+        )
+        row["adaptive_gpu_rk_hot_loop_control_readback"] = preflight.get(
+            "adaptive_gpu_rk_hot_loop_control_readback"
         )
         row["adaptive_gpu_rk_hot_loop_scalar_readback_path"] = preflight.get(
             "adaptive_gpu_rk_hot_loop_scalar_readback_path"
@@ -1577,7 +1656,7 @@ def run_backend(
     if not binary.is_file():
         row["status"] = "missing_binary"
         row["error"] = "GPU benchmark binary is missing" if backend_label == "fem_gpu" else "benchmark binary is missing"
-        if backend_label == "fem_gpu" and scenario == "exchange_only":
+        if backend_label == "fem_gpu" and requires_phase2_compute_hot_loop_gate(scenario):
             row["phase2_compute_hot_loop_sync_clean"] = False
             row["phase2_gate_reason"] = "gpu_binary=missing"
         return row
@@ -1604,7 +1683,7 @@ def run_backend(
             run_kwargs["timeout"] = timeout_s
         try:
             completed = subprocess.run(
-                [str(binary), str(BENCH_SCRIPT), "--headless"],
+                [str(binary), str(BENCH_SCRIPT), "--headless", "--json"],
                 **run_kwargs,
             )
         except subprocess.TimeoutExpired as exc:
@@ -1826,6 +1905,11 @@ def run_backend(
                 "fem_exchange_operator_mode": provenance.get(
                     "fem_exchange_operator_mode"
                 ),
+                "fem_demag_operator_mode": provenance.get(
+                    "fem_demag_operator_mode"
+                ),
+                "hypre_execution_policy": provenance.get("hypre_execution_policy"),
+                "demag_residency": provenance.get("demag_residency"),
                 "fem_gpu_rk_block_reason": provenance.get("fem_gpu_rk_block_reason"),
                 "mfem_device": provenance.get("mfem_device"),
                 "requested_fem_omp_threads": provenance.get("requested_fem_omp_threads"),
@@ -1924,7 +2008,9 @@ def gpu_rk_block_reason_suffix(row: dict[str, object]) -> str:
 
 
 def attach_phase2_gate(row: dict[str, object]) -> None:
-    if row.get("backend") != "fem_gpu" or row.get("scenario") != "exchange_only":
+    if row.get("backend") != "fem_gpu" or not requires_phase2_compute_hot_loop_gate(
+        row.get("scenario")
+    ):
         return
 
     if row.get("phase2_compute_assertion_enabled") is not True:
@@ -1972,6 +2058,23 @@ def attach_phase2_gate(row: dict[str, object]) -> None:
             f"exchange_operator_mode={exchange_operator_mode or 'missing'}"
         )
         return
+
+    if scenario_has_interaction(row.get("scenario"), "demag"):
+        demag_operator_mode = row.get("fem_demag_operator_mode")
+        hypre_execution_policy = row.get("hypre_execution_policy")
+        demag_residency = row.get("demag_residency")
+        if (
+            demag_operator_mode != "device_hypre_poisson"
+            or hypre_execution_policy != "device"
+            or demag_residency != "device"
+        ):
+            row["phase2_compute_hot_loop_sync_clean"] = False
+            row["phase2_gate_reason"] = (
+                f"demag_device_residency={demag_operator_mode or 'missing'}/"
+                f"{hypre_execution_policy or 'missing'}/"
+                f"{demag_residency or 'missing'}"
+            )
+            return
 
     row["phase2_compute_hot_loop_sync_clean"] = compute_sync == 0
     row["phase2_gate_reason"] = (
@@ -2943,6 +3046,13 @@ def summary_case_key(case_id: str, relaxation_algorithm: object | None) -> str:
     return f"{case_id}:{relaxation_algorithm}"
 
 
+def report_case_label(case: Mapping[str, object]) -> str:
+    explicit = case.get("label")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    return summary_case_key(str(case.get("case_id", "-")), case.get("relaxation_algorithm"))
+
+
 def _case_pairs_by_scenario(cpu_gpu_summary: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
     pairs_by_scenario: dict[str, Mapping[str, object]] = {}
     for pair in cpu_gpu_summary.get("pairs", []):
@@ -2980,6 +3090,136 @@ def markdown_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def benchmark_report_needs_cpu_gpu_summary(
+    backends: list[str],
+    *,
+    require_cpu_gpu_consistency: bool,
+    cpu_gpu_summary_output: str | None,
+) -> bool:
+    if require_cpu_gpu_consistency or cpu_gpu_summary_output is not None:
+        return True
+    return {"fem_cpu", "fem_gpu"}.issubset(set(backends))
+
+
+def single_backend_case_key(row: Mapping[str, object]) -> tuple[object, ...]:
+    return (
+        row.get("backend"),
+        row.get("scenario"),
+        row_relaxation_algorithm(row),
+        row.get("integrator"),
+        row.get("timestep_policy"),
+        row.get("requested_cpu_thread_spec"),
+        first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver")),
+        first_present(
+            row.get("requested_demag_preconditioner"),
+            row.get("demag_preconditioner"),
+        ),
+    )
+
+
+def single_backend_case_label(row: Mapping[str, object]) -> str:
+    scenario = str(row.get("scenario") or "-")
+    relaxation_algorithm = row_relaxation_algorithm(row)
+    parts = [summary_case_key(scenario, relaxation_algorithm), str(row.get("backend") or "-")]
+    solver = first_present(row.get("requested_demag_solver"), row.get("demag_linear_solver"))
+    preconditioner = first_present(
+        row.get("requested_demag_preconditioner"),
+        row.get("demag_preconditioner"),
+    )
+    if solver or preconditioner:
+        parts.append(f"{solver or '-'}/{preconditioner or '-'}")
+    return " ".join(parts)
+
+
+def single_backend_case_coverage(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[tuple[object, ...], list[dict[str, object]]] = {}
+    for row in results:
+        backend = row.get("backend")
+        if backend not in {"fem_cpu", "fem_gpu"}:
+            continue
+        grouped.setdefault(single_backend_case_key(row), []).append(row)
+
+    coverage: list[dict[str, object]] = []
+    for _, rows in sorted(grouped.items(), key=lambda item: str(item[0])):
+        first = rows[0]
+        backend = str(first.get("backend") or "")
+        scenario = str(first.get("scenario") or "")
+        failures = [
+            f"case={repeated_case_key(row)} backend={row.get('backend')} did not complete{runtime_error_suffix(row)}"
+            for row in rows
+            if row.get("status") != "ok"
+        ]
+        summary = backend_case_summary_fields(rows, scenario)
+        case = {
+            "case_id": scenario,
+            "label": single_backend_case_label(first),
+            "relaxation_algorithm": row_relaxation_algorithm(first),
+            "status": "pass" if not failures else "fail",
+            "row_count": len(rows),
+            "cpu_row_count": len(rows) if backend == "fem_cpu" else 0,
+            "gpu_row_count": len(rows) if backend == "fem_gpu" else 0,
+            "cpu_ok_count": sum(1 for row in rows if backend == "fem_cpu" and row.get("status") == "ok"),
+            "gpu_ok_count": sum(1 for row in rows if backend == "fem_gpu" and row.get("status") == "ok"),
+            "pair_count": 0,
+            "required_backends": [backend],
+            "failures": failures,
+        }
+        if backend == "fem_cpu":
+            case["cpu_average_timing_ms"] = summary["average_timing_ms"]
+            case["cpu_observable_summary"] = summary["observable_summary"]
+            case["gpu_average_timing_ms"] = {}
+            case["gpu_observable_summary"] = {}
+        else:
+            case["cpu_average_timing_ms"] = {}
+            case["cpu_observable_summary"] = {}
+            case["gpu_average_timing_ms"] = summary["average_timing_ms"]
+            case["gpu_observable_summary"] = summary["observable_summary"]
+        coverage.append(case)
+    return coverage
+
+
+def cpu_gpu_not_requested_summary(results: list[dict[str, object]]) -> dict[str, object]:
+    case_coverage = single_backend_case_coverage(results)
+    return {
+        "case_manifests": [],
+        "case_coverage": case_coverage,
+        "completed_pair_case_count": 0,
+        "covered_case_count": sum(1 for case in case_coverage if int(case["row_count"]) > 0),
+        "failed_count": sum(1 for row in results if row.get("status") != "ok"),
+        "failure_count": 0,
+        "failures": [],
+        "ok_count": sum(1 for row in results if row.get("status") == "ok"),
+        "pair_count": 0,
+        "pairs": [],
+        "required_case_count": len(case_coverage),
+        "require_gpu_strict_residency": False,
+        "row_count": len(results),
+        "status": "not_requested",
+    }
+
+
+def benchmark_report_status(
+    cpu_gpu_summary: Mapping[str, object],
+    pass_fail_summary: Mapping[str, object],
+) -> str:
+    pass_fail_status = str(pass_fail_summary.get("status", "-"))
+    if pass_fail_status in {"pass", "fail"}:
+        return pass_fail_status
+    return str(cpu_gpu_summary.get("status", "-"))
+
+
+def benchmark_report_coverage_line(cpu_gpu_summary: Mapping[str, object]) -> str:
+    if cpu_gpu_summary.get("status") == "not_requested":
+        return (
+            f"- cases: {cpu_gpu_summary.get('covered_case_count', 0)}/"
+            f"{cpu_gpu_summary.get('required_case_count', 0)} covered"
+        )
+    return (
+        f"- pairs: {cpu_gpu_summary.get('completed_pair_case_count', cpu_gpu_summary.get('pair_count', 0))}/"
+        f"{cpu_gpu_summary.get('required_case_count', cpu_gpu_summary.get('pair_count', 0))} completed"
+    )
+
+
 def render_cpu_gpu_benchmark_report(
     cpu_gpu_summary: Mapping[str, object],
     pass_fail_summary: Mapping[str, object],
@@ -2994,9 +3234,10 @@ def render_cpu_gpu_benchmark_report(
     lines = [
         "# Fullmag FEM CPU/GPU Benchmark Report",
         "",
-        f"- status: {cpu_gpu_summary.get('status', '-')}",
+        f"- status: {benchmark_report_status(cpu_gpu_summary, pass_fail_summary)}",
+        f"- cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}",
         f"- rows: {cpu_gpu_summary.get('row_count', 0)} total, {cpu_gpu_summary.get('ok_count', 0)} ok, {cpu_gpu_summary.get('failed_count', 0)} failed",
-        f"- pairs: {cpu_gpu_summary.get('completed_pair_case_count', cpu_gpu_summary.get('pair_count', 0))}/{cpu_gpu_summary.get('required_case_count', cpu_gpu_summary.get('pair_count', 0))} completed",
+        benchmark_report_coverage_line(cpu_gpu_summary),
         f"- failures: {cpu_gpu_summary.get('failure_count', 0)} consistency, {pass_fail_summary.get('gate_failure_count', 0)} gate, {pass_fail_summary.get('group_failure_count', 0)} group",
         f"- CPU compute total ms: {report_ms(cpu_total_ms)}",
         f"- GPU compute total ms: {report_ms(gpu_total_ms)}",
@@ -3014,8 +3255,7 @@ def render_cpu_gpu_benchmark_report(
     for case in cpu_gpu_summary.get("case_coverage", []):
         if not isinstance(case, Mapping):
             continue
-        case_id = str(case.get("case_id", "-"))
-        case_label = summary_case_key(case_id, case.get("relaxation_algorithm"))
+        case_label = report_case_label(case)
         pair = pairs_by_scenario.get(case_label, {})
         cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
         gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
@@ -3108,7 +3348,7 @@ def print_cpu_gpu_benchmark_rich_report(
         no_color=False,
         width=180,
     )
-    status = str(cpu_gpu_summary.get("status", "-"))
+    status = benchmark_report_status(cpu_gpu_summary, pass_fail_summary)
     status_style = "bold green" if status == "pass" else "bold red"
     rich_console.print(
         f"[bold]Fullmag FEM CPU/GPU Benchmark Report[/bold] "
@@ -3119,14 +3359,13 @@ def print_cpu_gpu_benchmark_rich_report(
         f"{cpu_gpu_summary.get('row_count', 0)} total, "
         f"{cpu_gpu_summary.get('ok_count', 0)} ok, "
         f"{cpu_gpu_summary.get('failed_count', 0)} failed | "
-        "pairs: "
-        f"{cpu_gpu_summary.get('completed_pair_case_count', cpu_gpu_summary.get('pair_count', 0))}/"
-        f"{cpu_gpu_summary.get('required_case_count', cpu_gpu_summary.get('pair_count', 0))} completed | "
+        f"{benchmark_report_coverage_line(cpu_gpu_summary).removeprefix('- ')} | "
         "failures: "
         f"{cpu_gpu_summary.get('failure_count', 0)} consistency, "
         f"{pass_fail_summary.get('gate_failure_count', 0)} gate, "
         f"{pass_fail_summary.get('group_failure_count', 0)} group"
     )
+    rich_console.print(f"cpu/gpu consistency: {cpu_gpu_summary.get('status', '-')}")
 
     cpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "cpu_average_timing_ms")
     gpu_total_ms = _sum_case_wall_time_ms(cpu_gpu_summary, "gpu_average_timing_ms")
@@ -3177,8 +3416,7 @@ def print_cpu_gpu_benchmark_rich_report(
     for case in cpu_gpu_summary.get("case_coverage", []):
         if not isinstance(case, Mapping):
             continue
-        case_id = str(case.get("case_id", "-"))
-        case_label = summary_case_key(case_id, case.get("relaxation_algorithm"))
+        case_label = report_case_label(case)
         pair = pairs_by_scenario.get(case_label, {})
         cpu_timing = _mapping_value(case.get("cpu_average_timing_ms"))
         gpu_timing = _mapping_value(case.get("gpu_average_timing_ms"))
@@ -3842,7 +4080,6 @@ def demag_policy_selection_case_key(row: Mapping[str, object]) -> tuple[object, 
         row.get("timestep_policy"),
         row.get("dt_s"),
         row.get("steps"),
-        row.get("solver_mesh_signature"),
         row.get("requested_cpu_thread_spec"),
         row.get("requested_demag_relative_tolerance"),
         row.get("requested_demag_absolute_tolerance"),
@@ -3983,7 +4220,12 @@ def main() -> None:
     apply_box500_airbox_exchange_only_preset(args)
     apply_box500_airbox_interaction_consistency_preset(args)
     if not args.skip_preflight:
-        preflight = build_preflight_report()
+        preflight_env: Mapping[str, str] | None = None
+        if args.require_adaptive_gpu_rk_acceptance:
+            required_env = dict(os.environ)
+            required_env.setdefault("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC", "1")
+            preflight_env = required_env
+        preflight = build_preflight_report(preflight_env)
         print(f"FEM_PREFLIGHT={json.dumps(preflight, sort_keys=True)}", flush=True)
         require_mfem_stack = args.require_mfem_stack or bool(
             preflight.get("fullmag_use_mfem_stack_enabled")
@@ -4049,9 +4291,7 @@ def main() -> None:
     )
     for mesh_path in meshes:
         mesh_stats = load_mesh_stats(mesh_path)
-        print(
-            f"  mesh={mesh_stats['mesh_name']} nodes={mesh_stats['node_count']} elements={mesh_stats['element_count']}"
-        )
+        print(f"  {input_mesh_summary(mesh_stats)}")
         for scenario in scenarios:
             scenario_relaxation_algorithms: list[str | None] = (
                 relaxation_algorithms_for_scenario(scenario, relaxation_algorithms)
@@ -4277,17 +4517,24 @@ def main() -> None:
         or args.quiet_json_summary
     ):
         if cpu_gpu_summary_for_report is None:
-            cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
-                results,
-                case_manifests=cpu_gpu_manifests,
-                require_gpu_strict_residency=args.require_gpu_strict_residency,
-                energy_rtol=args.cpu_gpu_energy_rtol,
-                energy_atol=args.cpu_gpu_energy_atol,
-                torque_rtol=args.cpu_gpu_torque_rtol,
-                torque_atol_apm=args.cpu_gpu_torque_atol_apm,
-                torque_atol_t=args.cpu_gpu_torque_atol_t,
-                max_step_delta=args.cpu_gpu_max_step_delta,
-            )
+            if benchmark_report_needs_cpu_gpu_summary(
+                backends,
+                require_cpu_gpu_consistency=args.require_cpu_gpu_consistency,
+                cpu_gpu_summary_output=args.cpu_gpu_summary_output,
+            ):
+                cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
+                    results,
+                    case_manifests=cpu_gpu_manifests,
+                    require_gpu_strict_residency=args.require_gpu_strict_residency,
+                    energy_rtol=args.cpu_gpu_energy_rtol,
+                    energy_atol=args.cpu_gpu_energy_atol,
+                    torque_rtol=args.cpu_gpu_torque_rtol,
+                    torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+                    torque_atol_t=args.cpu_gpu_torque_atol_t,
+                    max_step_delta=args.cpu_gpu_max_step_delta,
+                )
+            else:
+                cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)
         report_text = render_cpu_gpu_benchmark_report(
             cpu_gpu_summary_for_report,
             pass_fail_summary,

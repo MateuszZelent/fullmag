@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
+import { buildVertexScalarColorsOffMainThread } from "../viewport3dColorTransformScheduler";
 import {
-  buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
   type ScalarColorBuffer,
 } from "../viewport3dFieldMapping";
@@ -180,7 +180,7 @@ export function useViewport3DChunkedScalarColors({
       const entries = await Promise.all(
         modes.map(async (mode) => [
           mode,
-          await buildVertexScalarColorsChunked(fieldVector, {
+          await buildVertexScalarColorsOffMainThread(fieldVector, {
             colorMode: mode,
             colorPalette,
             shaderOnly: true,

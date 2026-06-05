@@ -1067,6 +1067,7 @@ mod tests {
                 profile: SolverProfileCommandConfig {
                     enabled: true,
                     sample_every: 2,
+                    sample_interval_wall_ms: 5000,
                     max_samples: 7,
                     emit_engine_log: true,
                     persist_artifact: false,
@@ -1091,6 +1092,13 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.get("sample_every")),
             Some(&serde_json::json!(2))
+        );
+        assert_eq!(
+            command
+                .profile
+                .as_ref()
+                .and_then(|value| value.get("sample_interval_wall_ms")),
+            Some(&serde_json::json!(5000))
         );
         assert_eq!(
             command

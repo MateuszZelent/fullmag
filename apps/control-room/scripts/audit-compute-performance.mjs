@@ -160,9 +160,25 @@ const analysisPlotsModulePath = path.join(
   appRoot,
   "src/modules/analysis-plots/AnalysisPlotsModule.tsx",
 );
-const analysisPlotModelPath = path.join(
+const analysisPlotsControllerPath = path.join(
   appRoot,
-  "src/modules/analysis-plots/analysisPlotModel.ts",
+  "src/modules/analysis-plots/useAnalysisPlotsController.ts",
+);
+const analysisPlotsModelPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/analysisPlotsModel.ts",
+);
+const analysisPlotsViewPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/AnalysisPlotsView.tsx",
+);
+const analysisTableRowsAdapterPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/tableRowsAdapter.ts",
+);
+const chartTableModelPath = path.join(
+  appRoot,
+  "src/modules/analysis-plots/chartTableModel.ts",
 );
 const broadSessionStatusConsumerPaths = [
   "src/modules/explorer/ExplorerModule.tsx",
@@ -266,7 +282,7 @@ checkStudyRuntimeCommandResourceDataSessionStatusSelector();
 checkFieldCatalogResourceSeparation();
 checkObjectVisualizationPanelSessionStatusSelector();
 checkObjectVisualizationPanelVisualizationSelector();
-checkObjectVisualizationPanelNumberFieldDebounce();
+checkObjectVisualizationPanelNumberFieldCommitBoundary();
 checkMeshDetailsPanelSessionStatusSelector();
 checkAirboxMeshPolicyPanelSessionStatusSelector();
 checkStudyInspectorPanelSessionStatusSelector();
@@ -744,7 +760,7 @@ function checkObjectVisualizationPanelVisualizationSelector() {
   ]);
 }
 
-function checkObjectVisualizationPanelNumberFieldDebounce() {
+function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   const source = readFileSync(objectVisualizationPanelPath, "utf8");
   const numberField = blockBetween(
     source,
@@ -767,16 +783,16 @@ function checkObjectVisualizationPanelNumberFieldDebounce() {
     "function VisualizationOverridesSection",
   );
 
-  requireTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
-    "VISUALIZATION_NUMBER_COMMIT_DELAY_MS",
+  requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
     "pendingValueRef",
-    "window.setTimeout(",
-    "flushDraft,",
+    "setDraftOverride(nextValue)",
     "onPointerUp={flushDraft}",
+    "onPointerCancel={flushDraft}",
     "onKeyUp={flushDraft}",
     "onBlur={flushDraft}",
   ]);
-  forbidTokens(numberField, "ObjectVisualizationPanel NumberField debounce", [
+  forbidTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
+    "window.setTimeout(",
     "onChange(event.target.value)",
     "onChange(Number(event.target.value))",
   ]);
@@ -1476,7 +1492,8 @@ function checkFooterTelemetryIsOptIn() {
   const source = readFileSync(footerModulePath, "utf8");
   requireTokens(source, "Footer telemetry opt-in", [
     'useState<FooterTabId>("telemetry")',
-    'activeTab === "telemetry" ? <FooterTelemetry /> : null',
+    'activeTab === "telemetry" ?',
+    '<FooterTelemetry bus={kernel.bus} />',
   ]);
   forbidTokens(source, "Footer telemetry opt-in", [
     'useState<FooterTabId>("logs")',
@@ -1527,43 +1544,89 @@ function checkComputePerformanceMicrobenchCoverage() {
 }
 
 function checkAnalysisPlotsStableResourceInputs() {
-  const source = readFileSync(analysisPlotsModulePath, "utf8");
-  requireTokens(source, "analysis plots stable resource inputs", [
-    'import { useCallback, useEffect, useMemo, useReducer, useState } from "react";',
-    "DEFAULT_TABLE_CHART_COLUMNS",
+  const moduleSource = readFileSync(analysisPlotsModulePath, "utf8");
+  const controllerSource = readFileSync(analysisPlotsControllerPath, "utf8");
+  const modelSource = readFileSync(analysisPlotsModelPath, "utf8");
+  const viewSource = readFileSync(analysisPlotsViewPath, "utf8");
+  const adapterSource = readFileSync(analysisTableRowsAdapterPath, "utf8");
+  const chartTableSource = readFileSync(chartTableModelPath, "utf8");
+  requireTokens(moduleSource, "analysis plots stable resource inputs", [
+    "useAnalysisPlotsController(kernel)",
+    "AnalysisPlotsView",
+    "onRangeChange={controller.setRange}",
+    "visibleTable={controller.visibleTable}",
+    "xAxisId={controller.xAxisId}",
+    "yAxisIds={controller.yAxisIds}",
+  ]);
+  requireTokens(controllerSource, "analysis plots stable resource inputs", [
     "useTableColumnsResource",
     "useTableRowsBinaryResource",
+    "tableRowsResourceFromBinary",
+    "buildAnalysisPlotsTableQuery({ cursor, range, xAxisId })",
+    "shouldFetchAnalysisTableRows({",
+  ]);
+  requireTokens(modelSource, "analysis plots stable resource inputs", [
     "columns: ANALYSIS_SCALAR_COLUMNS",
     "targetPoints: 1_600",
-    "tableRowsResourceFromBinary",
+  ]);
+  requireTokens(viewSource, "analysis plots stable resource inputs", [
     "const table = useMemo<TableRowsLike | null>(",
-    "<EChartsSurface table={table} xAxisId={xAxisId} yAxisIds={yAxisIds} />",
+    "buildScalarChartSeries(table,",
+    "const chartSeries = useMemo(",
+    "onRangeChange={onRangeChange}",
+    "series={chartSeries}",
+    "xAxisLabel={xAxisLabel}",
+  ]);
+  requireTokens(adapterSource, "analysis plots table rows adapter", [
+    "ANALYSIS_SCALAR_COLUMNS",
     "mergeTableRows",
-    "analysisScalarColumns: ANALYSIS_SCALAR_COLUMNS",
+    "MAX_VISIBLE_TABLE_ROWS",
+    "tableRowsResourceFromBinary",
+    "tableRowsResourceFromScalarSample",
   ]);
-  forbidTokens(source, "analysis plots stable resource inputs", [
-    "useTableRowsResource(",
-    'columns: ["step", "e_total", "mx", "my", "mz"]',
-    "buildLineChartModel(points)",
+  requireTokens(chartTableSource, "analysis plots chart table model", [
+    "export interface ChartSeries",
+    "DEFAULT_TABLE_CHART_COLUMNS",
+    "buildScalarChartSeries",
+    "buildTableRowsQuery",
   ]);
+  forbidTokens(
+    [moduleSource, controllerSource, modelSource].join("\n"),
+    "analysis plots stable resource inputs",
+    [
+      "useTableRowsResource(",
+      'columns: ["step", "e_total", "mx", "my", "mz"]',
+      "buildLineChartModel(points)",
+    ],
+  );
 }
 
 function checkAnalysisPlotDecimation() {
-  const source = readFileSync(analysisPlotModelPath, "utf8");
+  const source = readFileSync(chartTableModelPath, "utf8");
+  const testSource = readFileSync(
+    path.join(appRoot, "src/modules/analysis-plots/chartTableModel.test.ts"),
+    "utf8",
+  );
   requireTokens(source, "analysis plot decimation", [
-    "export const MAX_LINE_CHART_POINTS = 320",
-    "function decimateLinePoints",
-    "points.length <= MAX_LINE_CHART_POINTS",
-    "const finitePoints: LinePoint[] = []",
-    "finitePoints.push(point)",
-    "const pathPoints = decimateLinePoints(finitePoints)",
-    "for (const point of points)",
-    "const path = pathPoints",
+    'decimation: "minmax_lttb"',
+    "targetPoints: clampInteger(",
+    "targetPoints ?? 1_600",
+    "MIN_TARGET_POINTS",
+    "MAX_TARGET_POINTS",
+    "DEFAULT_TABLE_ROW_LIMIT",
+    "buildScalarChartSeries",
+    "Number.isFinite(x) && Number.isFinite(y)",
+  ]);
+  requireTokens(testSource, "analysis plot decimation", [
+    "decimation: \"minmax_lttb\"",
+    "targetPoints: 1_600",
+    "targetPoints: 800",
+    "drops non-finite chart points while preserving finite extrema",
   ]);
   forbidTokens(source, "analysis plot decimation", [
-    ".filter(",
-    "const path = finitePoints",
-    "finitePoints.map((point, index)",
+    "buildLineChartModel",
+    "MAX_LINE_CHART_POINTS",
+    "decimateLinePoints",
   ]);
 }
 

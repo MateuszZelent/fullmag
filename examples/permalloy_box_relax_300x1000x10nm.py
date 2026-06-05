@@ -19,7 +19,10 @@ study.universe(
 study.universe.mesh(minimum_element_size=10e-9, maximum_element_size=250e-9)
 study.airbox.visualization(show=True, mode="vectors", active_quantity_id="h_eff", wireframe=False)
 
-body = study.geometry(fm.Box(300e-9, 1000e-9, 10e-9), name="permalloy_box")
+body = study.geometry(
+    fm.Box(300e-9, 1000e-9, 30e-9) - fm.Cylinder(radius=50e-9, height=30e-9),
+    name="permalloy_box"
+)
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.5
@@ -44,4 +47,3 @@ study.relax(
     max_steps=350,
     tol=1e-4,
 )
-study.run(20e-9)

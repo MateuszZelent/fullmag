@@ -699,6 +699,159 @@ class ProblemApiTests(unittest.TestCase):
                 loaded = fm.load_magnetization(path)
                 self.assertEqual(loaded.values, [tuple(row) for row in values])
 
+    def test_field_state_roundtrip_across_h5_and_zarr(self) -> None:
+        values = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            zarr_path = tmp_path / "h_eff.zarr.zip"
+            h5_path = tmp_path / "h_eff.h5"
+
+            fm.save_field_state(
+                zarr_path,
+                values,
+                quantity=fm.H_eff,
+                target_kind="airbox",
+                target_id="airbox",
+                units="A/m",
+            )
+            fm.save_field_state(
+                h5_path,
+                values,
+                quantity=fm.H_eff,
+                target_kind="airbox",
+                target_id="airbox",
+                units="A/m",
+            )
+
+            for path in (zarr_path, h5_path):
+                loaded = fm.load_field_state(path)
+                self.assertEqual(loaded.quantity_id, "H_eff")
+                self.assertEqual(loaded.target_kind, "airbox")
+                self.assertEqual(loaded.target_id, "airbox")
+                self.assertEqual(loaded.units, "A/m")
+                self.assertEqual(loaded.values, [tuple(row) for row in values])
+
+    def test_flat_target_load_and_save_field_state(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            m_path = tmp_path / "m_state.h5"
+            copied_path = tmp_path / "m_state_copy.zarr.zip"
+
+            fm.save_field_state(
+                m_path,
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                quantity=fm.m,
+                target_kind="object",
+                target_id="flower",
+            )
+
+            fm.reset()
+            fm.engine("fdm")
+            fm.cell(5e-9, 5e-9, 5e-9)
+            flower = fm.geometry(fm.Box(size=(10e-9, 10e-9, 5e-9), name="flower"), name="flower")
+            flower.Ms = 800e3
+            flower.Aex = 13e-12
+            loaded = flower.load(m_path, quantity=fm.m)
+
+            problem = flat_world._build_problem()
+            self.assertIsInstance(problem.magnets[0].m0, fm.init.SampledMagnetization)
+            self.assertEqual(problem.magnets[0].m0.values, loaded.values)
+            flower.save(copied_path, quantity=fm.m)
+            copied = fm.load_field_state(copied_path)
+            self.assertEqual(copied.target_kind, "object")
+            self.assertEqual(copied.target_id, "flower")
+            self.assertEqual(copied.quantity_id, "m")
+            self.assertEqual(copied.values, loaded.values)
+
+    def test_study_airbox_load_and_save_attached_field_state(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            source_path = tmp_path / "airbox_h_eff.h5"
+            copy_path = tmp_path / "airbox_h_eff_copy.zarr.zip"
+            values = [[10.0, 0.0, 0.0], [0.0, 20.0, 0.0]]
+
+            fm.save_field_state(
+                source_path,
+                values,
+                quantity=fm.H_eff,
+                target_kind="airbox",
+                target_id="airbox",
+            )
+
+            fm.reset()
+            study = fm.study("airbox_state")
+            loaded = study.airbox.load(source_path, quantity=fm.H_eff, mode="attach")
+            self.assertEqual(loaded.quantity_id, "H_eff")
+            self.assertEqual(loaded.target_kind, "airbox")
+
+            study.airbox.save(copy_path, quantity=fm.H_eff)
+            copied = fm.load_field_state(copy_path)
+            self.assertEqual(copied.quantity_id, "H_eff")
+            self.assertEqual(copied.target_kind, "airbox")
+            self.assertEqual(copied.values, [tuple(row) for row in values])
+
+    def test_field_state_cli_prints_normalized_json(self) -> None:
+        from contextlib import redirect_stdout
+        from io import StringIO
+
+        from fullmag.init import field_state_cli
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "body_m.h5"
+            fm.save_field_state(
+                path,
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                quantity=fm.m,
+                target_kind="object",
+                target_id="body",
+            )
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = field_state_cli.main([str(path)])
+            payload = json.loads(stdout.getvalue())
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["fullmag_kind"], "field_state")
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["quantity_id"], "m")
+            self.assertEqual(payload["target"], {"kind": "object", "id": "body"})
+            self.assertEqual(payload["component_count"], 3)
+            self.assertEqual(payload["values"], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    def test_field_state_cli_writes_h5_from_normalized_json(self) -> None:
+        from fullmag.init import field_state_cli
+
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_path = tmp_path / "field-state.json"
+            output_path = tmp_path / "body_m.h5"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "fullmag_kind": "field_state",
+                        "schema_version": 1,
+                        "quantity_id": "m",
+                        "target": {"kind": "object", "id": "body"},
+                        "component_count": 3,
+                        "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code = field_state_cli.main(
+                ["write", str(output_path), "--input-json", str(input_path), "--format", "h5"]
+            )
+            loaded = fm.load_field_state(output_path)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(loaded.quantity_id, "m")
+            self.assertEqual(loaded.target_kind, "object")
+            self.assertEqual(loaded.target_id, "body")
+            self.assertEqual(loaded.values, [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0)])
+
     def test_zarr3_local_store_is_accepted_without_directory_store(self) -> None:
         from fullmag.init import state_io
 
@@ -1928,7 +2081,7 @@ class ProblemApiTests(unittest.TestCase):
                 outputs=[fm.SaveField("m", every=1e-12)],
             )
 
-    def test_flat_tableautosave_registers_default_scalar_table(self) -> None:
+    def test_flat_tableautosave_registers_default_sampling_table(self) -> None:
         fm.reset()
         fm.engine("fdm")
         fm.cell(2e-9, 2e-9, 2e-9)
@@ -1941,16 +2094,17 @@ class ProblemApiTests(unittest.TestCase):
         fm.tableautosave(5e-12)
         problem = flat_world._build_problem()
         ir = problem.to_ir()
-        outputs = ir["study"]["sampling"]["outputs"]
-        scalar_names = [output["name"] for output in outputs if output["kind"] == "scalar"]
-
         self.assertEqual(
-            scalar_names,
-            ["time", "step", "solver_dt", "mx", "my", "mz", "E_total", "max_dm_dt", "max_h_eff"],
+            ir["study"]["sampling"]["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_s": 5e-12,
+                "quantities": ["step", "t", "mx", "my", "mz", "e_total", "max_torque"],
+            },
         )
-        self.assertTrue(all(output["every_seconds"] == 5e-12 for output in outputs if output["kind"] == "scalar"))
 
-    def test_flat_tableautosave_accepts_custom_scalar_columns(self) -> None:
+    def test_flat_tableautosave_accepts_custom_table_columns(self) -> None:
         fm.reset()
         fm.engine("fdm")
         fm.cell(2e-9, 2e-9, 2e-9)
@@ -1963,11 +2117,15 @@ class ProblemApiTests(unittest.TestCase):
         fm.tableautosave(5e-12, quantities=("time", "mx", "E_total"))
         problem = flat_world._build_problem()
         ir = problem.to_ir()
-        outputs = ir["study"]["sampling"]["outputs"]
-        scalar_names = [output["name"] for output in outputs if output["kind"] == "scalar"]
-
-        self.assertEqual(scalar_names, ["time", "mx", "E_total"])
-        self.assertTrue(all(output["every_seconds"] == 5e-12 for output in outputs if output["kind"] == "scalar"))
+        self.assertEqual(
+            ir["study"]["sampling"]["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_s": 5e-12,
+                "quantities": ["t", "mx", "e_total"],
+            },
+        )
 
     def test_cylinder_serializes_to_ir(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=10e-9, name="pillar")

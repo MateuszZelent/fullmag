@@ -10,6 +10,9 @@ import {
   MODEL_STUDY_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   PERSISTENCE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
@@ -29,6 +32,7 @@ import type {
   MeshActiveBuildResource,
   MeshSharedDomainManifestResource,
   CurrentRunResource,
+  FieldStateTargetRef,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
   SolverProfileResource,
@@ -832,11 +836,139 @@ function maybeDownloadFmsExport(filename: string, fmsBase64: string): void {
   URL.revokeObjectURL(url);
 }
 
+function maybeDownloadBinaryExport(
+  filename: string,
+  data: ArrayBuffer,
+  contentType = "application/octet-stream",
+): void {
+  if (
+    typeof document === "undefined" ||
+    typeof URL === "undefined" ||
+    typeof Blob === "undefined"
+  ) {
+    return;
+  }
+
+  const url = URL.createObjectURL(new Blob([data], { type: contentType }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function artifactFileName(artifactRef: string): string {
+  return artifactRef.split("/").filter(Boolean).pop() ?? "field-state.h5";
+}
+
 interface ImportStateInput {
   fmsBase64?: string;
   fms_base64?: string;
   restoreMode?: string;
   restore_mode?: string;
+}
+
+interface FieldStateInput {
+  artifactRef?: string;
+  artifact_ref?: string;
+  contentBase64?: string;
+  content_base64?: string;
+  fileName?: string;
+  file_name?: string;
+  format?: string;
+  target?: FieldStateTargetRef;
+}
+
+function resolveFieldStateInput(input: unknown): FieldStateInput | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  return input as FieldStateInput;
+}
+
+function resolveFieldStateTarget(context: CommandContext): FieldStateTargetRef | null {
+  const input = resolveFieldStateInput(context.input);
+  if (input?.target?.kind && input.target.id) return input.target;
+
+  const selection = context.selection?.get();
+  if (selection?.ref?.type === "scene-object") {
+    return { kind: "object", id: selection.ref.objectId };
+  }
+  if (selection?.ref?.type === "airbox") {
+    return { kind: "airbox", id: "airbox" };
+  }
+  if (selection?.objectId) {
+    return { kind: "object", id: selection.objectId };
+  }
+  return null;
+}
+
+function fieldStateSaveDisabledReason(context: CommandContext): string | null {
+  const apiReason = disabledWithoutApi(context);
+  if (apiReason) return apiReason;
+
+  const target = resolveFieldStateTarget(context);
+  if (!target) return "Select an object before saving a field state.";
+  if (target.kind !== "object") {
+    return "Field-state save currently supports selected object magnetization.";
+  }
+  return null;
+}
+
+function fieldStateLoadDisabledReason(context: CommandContext): string | null {
+  const apiReason = disabledWithoutApi(context);
+  if (apiReason) return apiReason;
+
+  const target = resolveFieldStateTarget(context);
+  if (!target) return "Select an object or airbox before loading a field state.";
+  if (target.kind !== "object" && target.kind !== "airbox") {
+    return "Field-state load supports selected objects and the airbox.";
+  }
+  return null;
+}
+
+function fieldStateQuantityId(target: FieldStateTargetRef): string {
+  return target.kind === "airbox" ? "H_eff" : "m";
+}
+
+function fieldStateImportMode(target: FieldStateTargetRef): "apply" | "attach" {
+  return target.kind === "airbox" ? "attach" : "apply";
+}
+
+function pickFieldStateFileBase64(): Promise<{
+  contentBase64: string;
+  fileName: string;
+} | null> {
+  if (
+    typeof document === "undefined" ||
+    typeof FileReader === "undefined"
+  ) {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.accept = ".h5,.hdf5,.zarr.zip,.field-state.json,application/json";
+    input.type = "file";
+    input.onchange = () => {
+      const file = input.files?.[0] ?? null;
+      if (!file) {
+        resolve(null);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onerror = () =>
+        reject(reader.error ?? new Error("Failed to read field-state file."));
+      reader.onload = () => {
+        const value = typeof reader.result === "string" ? reader.result : "";
+        resolve({
+          contentBase64: value.includes(",") ? value.split(",").pop() ?? "" : value,
+          fileName: file.name,
+        });
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  });
 }
 
 function resolveImportStateInput(input: unknown): ImportStateInput | null {
@@ -1205,6 +1337,146 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
 
       return {
         message: "Checkpoint restored.",
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.save-field-state",
+    title: "Save Field State",
+    category: "Study",
+    group: "study-recovery",
+    scope: "runtime",
+    isEnabled: (context) => fieldStateSaveDisabledReason(context) === null,
+    disabledReason: fieldStateSaveDisabledReason,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const target = resolveFieldStateTarget(context);
+      if (!target || target.kind !== "object") {
+        return {
+          message: fieldStateSaveDisabledReason(context) ?? "No field-state target selected.",
+          status: "failed",
+        };
+      }
+      const input = resolveFieldStateInput(context.input);
+      const fileName =
+        input?.fileName ?? input?.file_name ?? `${target.id}-m.h5`;
+      const response = await context.api.persistence.fieldStates.export({
+        target,
+        quantity_id: "m",
+        format: input?.format ?? "h5",
+        file_name: fileName,
+      });
+      const artifact = await context.api.data.artifacts.bytes(response.artifact_ref);
+      if (artifact.status !== "ready" || !artifact.data) {
+        return {
+          message: "Field state was exported but the artifact download failed.",
+          status: "failed",
+        };
+      }
+      maybeDownloadBinaryExport(
+        artifactFileName(response.artifact_ref),
+        artifact.data,
+      );
+      context.resources?.invalidate(
+        PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+        response.artifact_ref,
+      );
+
+      return {
+        message: `Field state saved as ${response.artifact_ref}.`,
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.load-field-state",
+    title: "Load Field State",
+    category: "Study",
+    group: "study-recovery",
+    scope: "runtime",
+    isEnabled: (context) => fieldStateLoadDisabledReason(context) === null,
+    disabledReason: fieldStateLoadDisabledReason,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      const target = resolveFieldStateTarget(context);
+      if (!target) {
+        return {
+          message: fieldStateLoadDisabledReason(context) ?? "No field-state target selected.",
+          status: "failed",
+        };
+      }
+      const quantityId = fieldStateQuantityId(target);
+      const mode = fieldStateImportMode(target);
+      const input = resolveFieldStateInput(context.input);
+      let artifactRef = input?.artifactRef ?? input?.artifact_ref;
+      if (!artifactRef) {
+        const uploaded =
+          input?.contentBase64 || input?.content_base64
+            ? {
+                contentBase64: input.contentBase64 ?? input.content_base64 ?? "",
+                fileName:
+                  input.fileName ??
+                  input.file_name ??
+                  `${target.id}-m.field-state.json`,
+              }
+            : await pickFieldStateFileBase64();
+        if (!uploaded) {
+          return {
+            message: "No field-state file selected.",
+            status: "cancelled",
+          };
+        }
+        const asset = await context.api.persistence.assets.import({
+          content_base64: uploaded.contentBase64,
+          file_name: uploaded.fileName,
+          target_realization: "field_state",
+        });
+        artifactRef = asset.artifact_ref;
+      }
+      if (!artifactRef) {
+        return {
+          message: "No field-state artifact selected.",
+          status: "cancelled",
+        };
+      }
+
+      const inspection = await context.api.persistence.fieldStates.inspectImport({
+        artifact_ref: artifactRef,
+        target,
+        quantity_id: quantityId,
+        format: "field_state_json",
+      });
+      if (inspection.compatibility !== "compatible") {
+        return {
+          message:
+            inspection.warnings[0] ??
+            "Selected field-state artifact is not compatible with the current target.",
+          status: "failed",
+        };
+      }
+      const response = await context.api.persistence.fieldStates.import({
+        artifact_ref: artifactRef,
+        target,
+        quantity_id: quantityId,
+        mode,
+      });
+      invalidateRestoredStateResources(context, response.field_revision);
+      context.resources?.invalidate(
+        PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+        response.field_revision,
+      );
+      context.resources?.invalidate(
+        PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
+        response.field_revision,
+      );
+
+      return {
+        message: "Field state loaded.",
         status: "completed",
       };
     },

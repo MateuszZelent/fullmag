@@ -32,11 +32,11 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
+#include "gpu/cuda/integrators/rk/rk_total_energy_reduction.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -251,47 +251,19 @@ bool gpu_relax_compute_effective_field_and_energy(
     if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
-
-    std::array<double, kGpuFinalScalarSlots> scalars{};
-    if (!gpu_rk_read_control_scalar_results(
+    if (!gpu_rk_reduce_total_energy_scalar(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU nonlinear-CG energy scalars device->host",
-            scalars.data(),
-            scalars.size(),
+            gpu.reductions.scalar_result,
+            reason) ||
+        !gpu_rk_read_control_scalar_result(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG total energy scalar device->host",
+            total_energy,
             reason)) {
         return false;
     }
-    auto scalar = [&](GpuFinalScalarSlot slot) {
-        return scalars[static_cast<size_t>(slot)];
-    };
-
-    const double exchange_energy = scalar(GpuFinalScalarSlot::ExchangeEnergy);
-    double demag_energy = 0.0;
-    if (ctx.demag.enabled) {
-        demag_energy = scalar(GpuFinalScalarSlot::DemagEnergy);
-#if FULLMAG_HAS_MFEM_STACK
-        if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
-            ctx.poisson_demag.robin_effective_beta > 0.0) {
-            demag_energy += scalar(GpuFinalScalarSlot::DemagRobinBoundaryEnergy);
-        }
-#endif
-    }
-    const double external_energy =
-        ctx.zeeman.has_external_field ? scalar(GpuFinalScalarSlot::ExternalEnergy) : 0.0;
-    const double anisotropy_energy =
-        ctx.anisotropy.uniaxial_enabled ? scalar(GpuFinalScalarSlot::AnisotropyEnergy) : 0.0;
-    const double cubic_energy =
-        ctx.anisotropy.cubic_enabled ? scalar(GpuFinalScalarSlot::CubicAnisotropyEnergy) : 0.0;
-    const double dmi_energy =
-        ctx.dmi.interfacial_enabled ? scalar(GpuFinalScalarSlot::DmiEnergy) : 0.0;
-    const double bulk_dmi_energy =
-        ctx.dmi.bulk_enabled ? scalar(GpuFinalScalarSlot::BulkDmiEnergy) : 0.0;
-    const double magnetoelastic_energy =
-        ctx.magnetoelastic.enabled ? scalar(GpuFinalScalarSlot::MagnetoelasticEnergy) : 0.0;
-    total_energy =
-        exchange_energy + demag_energy + external_energy + anisotropy_energy +
-        cubic_energy + dmi_energy + bulk_dmi_energy + magnetoelastic_energy;
     if (!std::isfinite(total_energy)) {
         reason = "GPU nonlinear-CG produced non-finite total energy";
         return false;
@@ -352,6 +324,83 @@ bool gpu_relax_compute_tangent_gradient_norm(
     return true;
 }
 
+bool gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    FemGpuComponentField &gradient,
+    double &total_energy,
+    double &gradient_norm_sq,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    if (!gpu_rk_compute_rhs_for_magnetization(
+            ctx,
+            gpu.magnetization.m,
+            gpu.rk.error,
+            stream,
+            n,
+            "launch GPU nonlinear-CG h_eff accumulation",
+            reason) ||
+        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
+        return false;
+    }
+    fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.fields.h_eff.x,
+        gpu.fields.h_eff.y,
+        gpu.fields.h_eff.z,
+        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_regions.magnetic_node_mask,
+        gradient.x,
+        gradient.y,
+        gradient.z,
+        gpu.reductions.scalar_workspace,
+        n,
+        stream);
+    if (!cuda_launch_ok("launch GPU nonlinear-CG tangent-gradient blocks", reason) ||
+        !gpu_rk_reduce_total_energy_scalar(
+            ctx,
+            stream,
+            gpu.reductions.scalar_result,
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.reductions.scalar_workspace,
+            blocks,
+            gpu.reductions.scalar_result + 1,
+            "launch GPU nonlinear-CG gradient norm reduction",
+            reason)) {
+        return false;
+    }
+
+    double scalars[2] = {0.0, 0.0};
+    if (!gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG total energy/gradient scalars device->host",
+            scalars,
+            2,
+            reason)) {
+        return false;
+    }
+    total_energy = scalars[0];
+    gradient_norm_sq = scalars[1];
+    if (!std::isfinite(total_energy)) {
+        reason = "GPU nonlinear-CG produced non-finite total energy";
+        return false;
+    }
+    if (!std::isfinite(gradient_norm_sq) || gradient_norm_sq < 0.0) {
+        reason = "GPU nonlinear-CG produced a non-finite or negative tangent-gradient norm";
+        return false;
+    }
+    return true;
+}
+
 bool gpu_relax_metric_dot(
     Context &ctx,
     cudaStream_t stream,
@@ -390,6 +439,78 @@ bool gpu_relax_metric_dot(
     }
     if (!std::isfinite(value)) {
         reason = std::string(label) + " produced a non-finite metric dot";
+        return false;
+    }
+    return true;
+}
+
+bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    double &gradient_norm_sq,
+    double &pr_plus_numerator,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    fullmag_cuda_relax_ncg_gradient_norm_and_pr_plus_blocks(
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu.fields.h_eff.x,
+        gpu.fields.h_eff.y,
+        gpu.fields.h_eff.z,
+        gpu.rk.k[0].x,
+        gpu.rk.k[0].y,
+        gpu.rk.k[0].z,
+        gpu.mesh_metrics.lumped_mass,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.rk.k[1].x,
+        gpu.rk.k[1].y,
+        gpu.rk.k[1].z,
+        gpu.reductions.scalar_workspace,
+        gpu.rk.error.x,
+        n,
+        stream);
+    if (!cuda_launch_ok("launch GPU nonlinear-CG accepted gradient/PR+ blocks", reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.reductions.scalar_workspace,
+            blocks,
+            gpu.reductions.scalar_result,
+            "launch GPU nonlinear-CG accepted gradient norm reduction",
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.rk.error.x,
+            blocks,
+            gpu.reductions.scalar_result + 1,
+            "launch GPU nonlinear-CG PR+ numerator reduction",
+            reason)) {
+        return false;
+    }
+
+    double scalars[2] = {0.0, 0.0};
+    if (!gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG accepted gradient/PR+ scalars device->host",
+            scalars,
+            2,
+            reason)) {
+        return false;
+    }
+    gradient_norm_sq = scalars[0];
+    pr_plus_numerator = scalars[1];
+    if (!std::isfinite(gradient_norm_sq) || gradient_norm_sq < 0.0) {
+        reason = "GPU nonlinear-CG produced a non-finite or negative accepted tangent-gradient norm";
+        return false;
+    }
+    if (!std::isfinite(pr_plus_numerator)) {
+        reason = "GPU nonlinear-CG produced a non-finite PR+ numerator";
         return false;
     }
     return true;
@@ -483,6 +604,7 @@ bool gpu_relax_prepare_descent_direction(
         direction.y,
         direction.z,
         gpu.reductions.scalar_workspace,
+        gpu.rk.error.x,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU nonlinear-CG direction preparation", reason) ||
@@ -494,14 +616,28 @@ bool gpu_relax_prepare_descent_direction(
             gpu.reductions.scalar_result,
             "launch GPU nonlinear-CG direction-dot-gradient reduction",
             reason) ||
-        !gpu_rk_read_control_scalar_result(
+        !gpu_relax_reduce_scalar_sum(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU nonlinear-CG direction-dot-gradient device->host",
-            p_dot_g,
+            gpu.rk.error.x,
+            blocks,
+            gpu.reductions.scalar_result + 1,
+            "launch GPU nonlinear-CG direction norm reduction",
             reason)) {
         return false;
     }
+    double direction_scalars[2] = {0.0, 0.0};
+    if (!gpu_rk_read_control_scalar_results(
+            ctx,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG direction scalars device->host",
+            direction_scalars,
+            2,
+            reason)) {
+        return false;
+    }
+    p_dot_g = direction_scalars[0];
+    direction_norm_sq = direction_scalars[1];
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
         fullmag_cuda_relax_ncg_prepare_direction_blocks(
             gpu.rk.m_backup.x,
@@ -517,6 +653,7 @@ bool gpu_relax_prepare_descent_direction(
             direction.y,
             direction.z,
             gpu.reductions.scalar_workspace,
+            gpu.rk.error.x,
             n,
             stream);
         if (!cuda_launch_ok("launch GPU nonlinear-CG descent reset", reason) ||
@@ -528,29 +665,30 @@ bool gpu_relax_prepare_descent_direction(
                 gpu.reductions.scalar_result,
                 "launch GPU nonlinear-CG reset direction-dot-gradient reduction",
                 reason) ||
-            !gpu_rk_read_control_scalar_result(
+            !gpu_relax_reduce_scalar_sum(
                 ctx,
                 stream,
-                "cudaMemcpyAsync GPU nonlinear-CG reset direction-dot-gradient device->host",
-                p_dot_g,
+                gpu.rk.error.x,
+                blocks,
+                gpu.reductions.scalar_result + 1,
+                "launch GPU nonlinear-CG reset direction norm reduction",
                 reason)) {
             return false;
         }
+        if (!gpu_rk_read_control_scalar_results(
+                ctx,
+                stream,
+                "cudaMemcpyAsync GPU nonlinear-CG reset direction scalars device->host",
+                direction_scalars,
+                2,
+                reason)) {
+            return false;
+        }
+        p_dot_g = direction_scalars[0];
+        direction_norm_sq = direction_scalars[1];
     }
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
         reason = "GPU nonlinear-CG produced a non-finite or non-descent direction";
-        return false;
-    }
-    if (!gpu_relax_metric_dot(
-            ctx,
-            stream,
-            n,
-            blocks,
-            direction,
-            direction,
-            "launch GPU nonlinear-CG direction norm reduction",
-            direction_norm_sq,
-            reason)) {
         return false;
     }
     if (!std::isfinite(direction_norm_sq) || direction_norm_sq <= 0.0) {
@@ -661,54 +799,15 @@ bool gpu_relax_update_next_direction(
     int blocks,
     double previous_gradient_norm_sq,
     double trial_gradient_norm_sq,
+    double pr_plus_numerator,
     uint64_t accepted_step,
     bool previous_direction_valid,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
-    fullmag_cuda_relax_ncg_pr_plus_numerator_blocks(
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.rk.k[0].x,
-        gpu.rk.k[0].y,
-        gpu.rk.k[0].z,
-        gpu.rk.k[1].x,
-        gpu.rk.k[1].y,
-        gpu.rk.k[1].z,
-        gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.reductions.scalar_workspace,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG PR+ numerator blocks", reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.reductions.scalar_workspace,
-            blocks,
-            gpu.reductions.scalar_result,
-            "launch GPU nonlinear-CG PR+ numerator reduction",
-            reason)) {
-        return false;
-    }
-    double numerator = 0.0;
-    if (!gpu_rk_read_control_scalar_result(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU nonlinear-CG PR+ numerator device->host",
-            numerator,
-            reason)) {
-        return false;
-    }
-    if (!std::isfinite(numerator)) {
-        reason = "GPU nonlinear-CG produced a non-finite PR+ numerator";
-        return false;
-    }
-
     double beta = 0.0;
     if (previous_direction_valid && previous_gradient_norm_sq > kGradientFloor) {
-        beta = std::max(0.0, numerator / previous_gradient_norm_sq);
+        beta = std::max(0.0, pr_plus_numerator / previous_gradient_norm_sq);
     }
     if (accepted_step % kRestartInterval == 0u) {
         beta = 0.0;
@@ -745,35 +844,19 @@ bool gpu_relax_update_next_direction(
             reason)) {
         return false;
     }
-    double next_p_dot_g = 0.0;
-    if (!gpu_rk_read_control_scalar_result(
-            ctx,
-            stream,
-            "cudaMemcpyAsync GPU nonlinear-CG next direction-dot-gradient device->host",
-            next_p_dot_g,
-            reason)) {
+    fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+        gpu.rk.k[1].x,
+        gpu.rk.k[1].y,
+        gpu.rk.k[1].z,
+        gpu.reductions.scalar_result,
+        gpu.mesh_regions.magnetic_node_mask,
+        direction.x,
+        direction.y,
+        direction.z,
+        n,
+        stream);
+    if (!cuda_launch_ok("launch GPU nonlinear-CG next direction device reset", reason)) {
         return false;
-    }
-    if (!std::isfinite(next_p_dot_g) || next_p_dot_g >= 0.0) {
-        fullmag_cuda_relax_ncg_prepare_direction_blocks(
-            gpu.magnetization.m.x,
-            gpu.magnetization.m.y,
-            gpu.magnetization.m.z,
-            gpu.rk.k[1].x,
-            gpu.rk.k[1].y,
-            gpu.rk.k[1].z,
-            gpu.mesh_metrics.lumped_mass,
-            gpu.mesh_regions.magnetic_node_mask,
-            false,
-            direction.x,
-            direction.y,
-            direction.z,
-            gpu.reductions.scalar_workspace,
-            n,
-            stream);
-        if (!cuda_launch_ok("launch GPU nonlinear-CG next direction descent reset", reason)) {
-            return false;
-        }
     }
     gpu.relaxation.nonlinear_cg_direction_valid =
         std::isfinite(trial_gradient_norm_sq) && trial_gradient_norm_sq > kGradientFloor;
@@ -822,36 +905,21 @@ int gpu_relax_nonlinear_cg_step(
     }
 
     double current_energy = 0.0;
-    if (!gpu_relax_compute_effective_field_and_energy(
-            ctx,
-            stream,
-            n,
-            blocks,
-            current_energy,
-            reason)) {
-        return gpu_relax_restore_previous_state_after_failure(
-            ctx,
-            stream,
-            rollback,
-            "current effective-field/energy evaluation failure",
-            reason,
-            error);
-    }
-
     double gradient_norm_sq = 0.0;
-    if (!gpu_relax_compute_tangent_gradient_norm(
+    if (!gpu_relax_compute_effective_field_energy_and_tangent_gradient_norm(
             ctx,
             stream,
             n,
             blocks,
             gpu.rk.k[0],
+            current_energy,
             gradient_norm_sq,
             reason)) {
         return gpu_relax_restore_previous_state_after_failure(
             ctx,
             stream,
             rollback,
-            "current tangent-gradient reduction failure",
+            "current effective-field/energy/gradient evaluation failure",
             reason,
             error);
     }
@@ -1013,14 +1081,15 @@ int gpu_relax_nonlinear_cg_step(
     }
 
     double accepted_gradient_norm_sq = 0.0;
+    double pr_plus_numerator = 0.0;
     const uint64_t accepted_step = ctx.relaxation.accepted_steps + 1u;
-    if (!gpu_relax_compute_tangent_gradient_norm(
+    if (!gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
             ctx,
             stream,
             n,
             blocks,
-            gpu.rk.k[1],
             accepted_gradient_norm_sq,
+            pr_plus_numerator,
             reason) ||
         !gpu_relax_update_next_direction(
             ctx,
@@ -1029,6 +1098,7 @@ int gpu_relax_nonlinear_cg_step(
             blocks,
             gradient_norm_sq,
             accepted_gradient_norm_sq,
+            pr_plus_numerator,
             accepted_step,
             rollback.direction_valid,
             reason)) {

@@ -19,7 +19,7 @@ const PANELS: InspectorPanelContribution[] = [
   {
     id: "chart",
     title: "Charts",
-    selectionKinds: ["analysis.chart"],
+    selectionKinds: ["analysis.chart", "analysis.chart-point"],
     component: ChartInspectorPanel,
   },
   {

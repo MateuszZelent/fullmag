@@ -57,6 +57,7 @@ copy_native_library_group() {
   find "$dest_dir" -maxdepth 1 -name "${stem}.so*" -exec rm -f -- {} +
   for src in "$source_dir"/"${stem}".so*; do
     if [ -e "$src" ] && [ ! -L "$src" ]; then
+      rm -f "$dest_dir/$(basename "$src")"
       cp -a "$src" "$dest_dir"/
     fi
   done

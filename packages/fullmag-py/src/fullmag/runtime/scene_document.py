@@ -271,6 +271,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "mesh_defaults": builder.get("mesh") or {},
             "stages": builder.get("stages") or [],
             "study_pipeline": builder.get("study_pipeline"),
+            "table_autosave": builder.get("table_autosave"),
             "initial_state": builder.get("initial_state"),
         },
         "outputs": {"items": []},
@@ -375,6 +376,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "universe": study.get("universe_mesh") or scene.get("universe"),
         "stages": study.get("stages") or [],
         "study_pipeline": study.get("study_pipeline"),
+        "table_autosave": study.get("table_autosave"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
         "current_modules": current_modules.get("modules") or [],
@@ -491,6 +493,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             for stage in (builder.get("stages") or [])
         ],
         "study_pipeline": builder.get("study_pipeline"),
+        "table_autosave": builder.get("table_autosave"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
         "current_modules": builder.get("current_modules") or [],

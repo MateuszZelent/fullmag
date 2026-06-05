@@ -76,6 +76,26 @@ export interface KernelEventMap {
     step: number;
     time: number;
   };
+  "charts:add-series-requested": {
+    columnId: string;
+    source: ModuleId;
+    tableId: string;
+  };
+  "charts:series-selected": {
+    chartId: string;
+    quantity: string;
+    resourceKey: string;
+    seriesId: string;
+    source: ModuleId;
+    tableId: string;
+  };
+  "charts:range-selected": {
+    chartId: string;
+    range: { fromValue: number; toValue: number } | null;
+    source: ModuleId;
+    tableId: string;
+    xAxisId: string;
+  };
   "viewport:mesh-size-bin-hovered": {
     highlight: MeshSizeHistogramHighlight | null;
     source: ModuleId;

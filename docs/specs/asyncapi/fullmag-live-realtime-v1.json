@@ -186,6 +186,14 @@
       "RealtimeCommunicationPolicy": {
         "type": "object",
         "required": [
+          "resource_batch_changed_enabled",
+          "scalar_sample_enabled",
+          "field_samples_enabled",
+          "scalar_table_rows_enabled",
+          "lifecycle_events_enabled",
+          "diagnostics_enabled",
+          "heartbeat_enabled",
+          "visualization_client_acks_enabled",
           "ws_replay_capacity",
           "ws_heartbeat_ms",
           "ws_reconnect_ms",
@@ -198,6 +206,14 @@
           "error_retry_ms"
         ],
         "properties": {
+          "resource_batch_changed_enabled": { "type": "boolean", "default": true },
+          "scalar_sample_enabled": { "type": "boolean", "default": true },
+          "field_samples_enabled": { "type": "boolean", "default": true },
+          "scalar_table_rows_enabled": { "type": "boolean", "default": true },
+          "lifecycle_events_enabled": { "type": "boolean", "default": true },
+          "diagnostics_enabled": { "type": "boolean", "default": true },
+          "heartbeat_enabled": { "type": "boolean", "default": true },
+          "visualization_client_acks_enabled": { "type": "boolean", "default": true },
           "ws_replay_capacity": { "type": "integer", "minimum": 1 },
           "ws_heartbeat_ms": { "type": "integer", "minimum": 1 },
           "ws_reconnect_ms": { "type": "integer", "minimum": 1, "default": 5000 },

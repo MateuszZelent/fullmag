@@ -2953,6 +2953,25 @@ def test_run_backend_prefers_execution_plan_mesh_stats_from_metadata(monkeypatch
     assert row["solver_mesh_signature"]
 
 
+def test_input_mesh_summary_distinguishes_input_asset_from_solver_mesh():
+    bench = load_analysis_benchmark_module()
+
+    summary = bench.input_mesh_summary(
+        {
+            "mesh_name": "box_40x20x10_coarse",
+            "node_count": 8,
+            "element_count": 6,
+        }
+    )
+
+    assert summary == (
+        "input_mesh=box_40x20x10_coarse "
+        "input_nodes=8 "
+        "input_elements=6 "
+        "(solver mesh is reported per completed row)"
+    )
+
+
 def test_execution_plan_mesh_signature_changes_with_solver_mesh():
     bench = load_analysis_benchmark_module()
     first = {
@@ -5138,6 +5157,55 @@ def test_best_demag_policy_rows_selects_fastest_converged_policy():
     assert summaries[0]["average_demag_timing_ms"] == 4.0
 
 
+def test_best_demag_policy_selection_ignores_policy_specific_mesh_signature():
+    bench = load_analysis_benchmark_module()
+    base_row = {
+        "backend": "fem_gpu",
+        "mesh_path": "coarse",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "timestep_policy": "fixed",
+        "dt_s": 1e-13,
+        "steps": 5,
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_relative_tolerance": "1e-8",
+        "requested_demag_absolute_tolerance": "",
+        "requested_demag_max_iterations": "500",
+        "requested_demag_print_level": "0",
+        "status": "ok",
+    }
+
+    summaries = bench.best_demag_policy_rows(
+        [
+            {
+                **base_row,
+                "solver_mesh_signature": "signature-for-amg-policy",
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "AMG",
+                "demag_solver_apply_wall_time_ms": 44.0,
+                "demag_final_residual_norm": 8e-9,
+                "demag_actual_iterations": 23,
+            },
+            {
+                **base_row,
+                "solver_mesh_signature": "signature-for-jacobi-policy",
+                "requested_demag_solver": "CG",
+                "requested_demag_preconditioner": "JACOBI",
+                "demag_solver_apply_wall_time_ms": 22.0,
+                "demag_final_residual_norm": 9e-9,
+                "demag_actual_iterations": 60,
+            },
+        ],
+        max_residual=1e-8,
+        max_iterations=100,
+    )
+
+    assert len(summaries) == 1
+    assert summaries[0]["demag_solver"] == "CG"
+    assert summaries[0]["demag_preconditioner"] == "JACOBI"
+    assert summaries[0]["average_demag_timing_ms"] == 22.0
+
+
 def test_best_demag_policy_failures_report_missing_converged_candidate():
     bench = load_analysis_benchmark_module()
     row = {
@@ -5378,6 +5446,34 @@ fullmag workspace summary
     assert payload["final_e_dmi_j"] == -3.5e-24
 
 
+def test_parse_cli_json_summary_as_benchmark_payload():
+    bench = load_analysis_benchmark_module()
+    output = """
+fullmag diagnostic line
+{
+  "status": "completed",
+  "session_id": "session-test",
+  "total_steps": 2,
+  "final_time": 2e-13,
+  "final_e_total": -1e-30,
+  "wall_time_ns": 3000000,
+  "exchange_wall_time_ns": 1000000,
+  "rhs_wall_time_ns": 2000000
+}
+warning: stderr line after json
+"""
+
+    payload = bench.parse_benchmark_result(output)
+
+    assert payload["status"] == "completed"
+    assert payload["total_steps"] == 2
+    assert payload["executed_steps"] == 2
+    assert payload["final_time_s"] == 2.0e-13
+    assert payload["final_e_total_j"] == -1.0e-30
+    assert payload["exchange_wall_time_ns"] == 1_000_000
+    assert payload["rhs_wall_time_ns"] == 2_000_000
+
+
 def test_cli_workspace_summary_prints_local_energy_terms():
     source = (REPO_ROOT / "crates" / "fullmag-cli" / "src" / "orchestrator.rs").read_text(
         encoding="utf-8"
@@ -5526,7 +5622,9 @@ def test_run_backend_serializes_adaptive_gpu_rk_acceptance_gate(monkeypatch, tmp
     assert row["adaptive_gpu_rk_acceptance_ready"] is False
     assert isinstance(row["adaptive_gpu_rk_acceptance_blockers"], str)
     assert "nvcc" in row["adaptive_gpu_rk_acceptance_blockers"]
-    assert row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
+    assert row["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is True
+    assert row["adaptive_gpu_rk_hot_loop_compute_readback_free"] is True
+    assert row["adaptive_gpu_rk_hot_loop_control_readback"] is True
     assert row["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
         "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
@@ -5764,6 +5862,135 @@ def test_run_backend_passes_phase2_gate_only_when_stage_exchange_is_device_resid
     )
 
 
+def test_run_backend_passes_phase2_gate_for_strict_device_demag(
+    monkeypatch, tmp_path
+):
+    bench = load_analysis_benchmark_module()
+    binary = tmp_path / "fullmag-fem-gpu"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    mesh_path = tmp_path / "mesh.mesh.json"
+    mesh_path.write_text(
+        json.dumps(
+            {
+                "mesh_name": "tiny",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        run_dir = Path(env["FULLMAG_RUN_DIR"])
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "execution_provenance": {
+                        "hot_loop_compute_host_sync_count": 0,
+                        "fem_gpu_rk_stage_exchange_device_resident": True,
+                        "fem_exchange_operator_mode": "legacy_sparse_gpu",
+                        "fem_demag_operator_mode": "device_hypre_poisson",
+                        "hypre_execution_policy": "device",
+                        "demag_residency": "device",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 2, "final_time_s": 2e-13}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    row = bench.run_backend(
+        backend_label="fem_gpu",
+        binary=binary,
+        mesh_path=mesh_path,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        steps=2,
+        dt=1e-13,
+        extra_env={},
+    )
+
+    assert row["fem_demag_operator_mode"] == "device_hypre_poisson"
+    assert row["hypre_execution_policy"] == "device"
+    assert row["demag_residency"] == "device"
+    assert row["phase2_compute_hot_loop_sync_clean"] is True
+    assert (
+        row["phase2_gate_reason"]
+        == "compute_hot_loop_host_sync_count=0;stage_exchange_device_resident=true"
+    )
+
+
+def test_run_backend_rejects_phase2_gate_for_host_device_demag(
+    monkeypatch, tmp_path
+):
+    bench = load_analysis_benchmark_module()
+    binary = tmp_path / "fullmag-fem-gpu"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    mesh_path = tmp_path / "mesh.mesh.json"
+    mesh_path.write_text(
+        json.dumps(
+            {
+                "mesh_name": "tiny",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        run_dir = Path(env["FULLMAG_RUN_DIR"])
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "execution_provenance": {
+                        "hot_loop_compute_host_sync_count": 0,
+                        "fem_gpu_rk_stage_exchange_device_resident": True,
+                        "fem_exchange_operator_mode": "legacy_sparse_gpu",
+                        "fem_demag_operator_mode": "hybrid_cpu_poisson",
+                        "hypre_execution_policy": "host",
+                        "demag_residency": "host_device_roundtrip",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 2, "final_time_s": 2e-13}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    row = bench.run_backend(
+        backend_label="fem_gpu",
+        binary=binary,
+        mesh_path=mesh_path,
+        scenario="box500_airbox_exchange_demag",
+        integrator="heun",
+        steps=2,
+        dt=1e-13,
+        extra_env={},
+    )
+
+    assert row["phase2_compute_hot_loop_sync_clean"] is False
+    assert (
+        row["phase2_gate_reason"]
+        == "demag_device_residency=hybrid_cpu_poisson/host/host_device_roundtrip"
+    )
+
+
 def test_run_backend_rejects_phase2_gate_when_exchange_operator_mode_is_unsupported(
     monkeypatch, tmp_path
 ):
@@ -5975,6 +6202,52 @@ def test_run_backend_enables_phase2_compute_sync_assertion_for_gpu_exchange_only
         binary=binary,
         mesh_path=mesh_path,
         scenario="exchange_only",
+        integrator="heun",
+        steps=1,
+        dt=1e-13,
+        extra_env={},
+    )
+
+    assert captured_env["FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC"] == "1"
+    assert row["phase2_compute_assertion_enabled"] is True
+
+
+def test_run_backend_enables_phase2_compute_sync_assertion_for_gpu_demag(
+    monkeypatch, tmp_path
+):
+    bench = load_analysis_benchmark_module()
+    binary = tmp_path / "fullmag-fem-gpu"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    mesh_path = tmp_path / "mesh.mesh.json"
+    mesh_path.write_text(
+        json.dumps(
+            {
+                "mesh_name": "tiny",
+                "nodes": [[0, 0, 0]],
+                "elements": [],
+                "boundary_faces": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured_env = {}
+
+    def fake_run(cmd, cwd, env, capture_output, text, check):
+        captured_env.update(env)
+        return bench.subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout='BENCHMARK_RESULT={"executed_steps": 1, "final_time_s": 1e-13}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    row = bench.run_backend(
+        backend_label="fem_gpu",
+        binary=binary,
+        mesh_path=mesh_path,
+        scenario="box500_airbox_exchange_demag",
         integrator="heun",
         steps=1,
         dt=1e-13,
@@ -8010,9 +8283,10 @@ def test_gpu_rk_adaptive_runtime_helpers_are_owned_by_rk_module():
     )
     assert '#include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"' in decision_source
     assert '#include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"' in decision_source
-    assert "gpu_rk_read_scalar_result(" in decision_source
+    assert "gpu_rk_read_scalar_result(" not in decision_source
+    assert "gpu_rk_read_control_scalar_result(" in decision_source
     assert "gpu_rk_adaptive_pi_step(ctx, error_norm)" in decision_source
-    assert "cudaMemcpyAsync GPU RK adaptive decision scalar device->host" in decision_source
+    assert "cudaMemcpyAsync GPU RK adaptive decision control scalar device->host" in decision_source
     assert "gpu_rk_copy_component_device(" not in error_norm_source
     assert "gpu_rk_adaptive_pi_step(" not in error_norm_source
     assert "GpuAdaptiveResult gpu_adaptive_pi_step(" not in rk_step_source
@@ -9105,7 +9379,8 @@ def test_gpu_rk_has_device_adaptive_error_norm_reduction_helper():
     assert "ctx.adaptive_dt.rtol" in helper_source
     assert "GPU RK adaptive error norm" in helper_source
     assert "gpu_rk_read_scalar_result(" not in helper_source
-    assert "gpu_rk_read_scalar_result(" in decision_source
+    assert "gpu_rk_read_scalar_result(" not in decision_source
+    assert "gpu_rk_read_control_scalar_result(" in decision_source
     assert "gpu_rk_adaptive_pi_step(ctx, error_norm)" in decision_source
 
 
@@ -10118,16 +10393,14 @@ def test_preflight_requires_cuda_mfem_and_compute_gate_for_adaptive_gpu_rk(tmp_p
             "FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC": "1",
         }
     )
-    assert gated["adaptive_gpu_rk_acceptance_ready"] is False
-    assert (
-        "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"
-        in gated["adaptive_gpu_rk_acceptance_blockers"]
-    )
     if not gated["cuda_compiler_available"]:
+        assert gated["adaptive_gpu_rk_acceptance_ready"] is False
         assert any(
             "nvcc" in blocker
             for blocker in gated["adaptive_gpu_rk_acceptance_blockers"]
         )
+    else:
+        assert gated["adaptive_gpu_rk_acceptance_ready"] is True
 
     monkeypatch.setattr(
         bench.shutil,
@@ -10142,14 +10415,14 @@ def test_preflight_requires_cuda_mfem_and_compute_gate_for_adaptive_gpu_rk(tmp_p
     )
 
     assert gated_with_cuda["cuda_compiler_available"] is True
-    assert gated_with_cuda["adaptive_gpu_rk_acceptance_ready"] is False
-    assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is False
+    assert gated_with_cuda["adaptive_gpu_rk_acceptance_ready"] is True
+    assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_free"] is True
+    assert gated_with_cuda["adaptive_gpu_rk_hot_loop_compute_readback_free"] is True
+    assert gated_with_cuda["adaptive_gpu_rk_hot_loop_control_readback"] is True
     assert gated_with_cuda["adaptive_gpu_rk_hot_loop_scalar_readback_path"].endswith(
         "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu"
     )
-    assert gated_with_cuda["adaptive_gpu_rk_acceptance_blockers"] == [
-        "adaptive GPU RK still performs hot-loop scalar readback for accept/reject"
-    ]
+    assert gated_with_cuda["adaptive_gpu_rk_acceptance_blockers"] == []
 
 
 def test_preflight_resolves_cuda_compiler_from_container_env_paths(tmp_path, monkeypatch):
@@ -10258,6 +10531,25 @@ def test_benchmark_cli_applies_box500_airbox_exchange_only_preset(monkeypatch):
     assert args.require_cpu_gpu_consistency is True
 
 
+def test_box500_airbox_exchange_only_preset_preserves_explicit_timestep_policy(monkeypatch):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setattr(
+        bench.sys,
+        "argv",
+        [
+            "fem_gpu_benchmark.py",
+            "--box500-airbox-exchange-only-preset",
+            "--timestep-policies",
+            "adaptive",
+        ],
+    )
+
+    args = bench.parse_args()
+    bench.apply_box500_airbox_exchange_only_preset(args)
+
+    assert args.timestep_policies == "adaptive"
+
+
 def test_benchmark_cli_applies_box500_airbox_interaction_consistency_preset(monkeypatch):
     bench = load_analysis_benchmark_module()
     monkeypatch.setattr(
@@ -10280,6 +10572,25 @@ def test_benchmark_cli_applies_box500_airbox_interaction_consistency_preset(monk
     assert args.require_cpu_gpu_consistency is True
     assert args.require_demag_converged is True
     assert args.require_gpu_strict_residency is True
+
+
+def test_box500_airbox_interaction_preset_preserves_explicit_timestep_policy(monkeypatch):
+    bench = load_analysis_benchmark_module()
+    monkeypatch.setattr(
+        bench.sys,
+        "argv",
+        [
+            "fem_gpu_benchmark.py",
+            "--box500-airbox-interaction-consistency-preset",
+            "--timestep-policies",
+            "adaptive",
+        ],
+    )
+
+    args = bench.parse_args()
+    bench.apply_box500_airbox_interaction_consistency_preset(args)
+
+    assert args.timestep_policies == "adaptive"
 
 
 def test_cpu_gpu_consistency_gate_defaults_to_single_threaded_gmsh(monkeypatch):
@@ -10479,6 +10790,100 @@ def test_cpu_gpu_human_report_summarizes_case_matrix():
     assert "GPU steps/min" in report
     assert "12000.000" in report
     assert "/tmp/results.csv" in report
+
+
+def test_cpu_gpu_report_status_uses_pass_fail_gate_status():
+    bench = load_analysis_benchmark_module()
+
+    report = bench.render_cpu_gpu_benchmark_report(
+        {
+            "status": "fail",
+            "row_count": 1,
+            "ok_count": 1,
+            "failed_count": 0,
+            "failure_count": 1,
+            "failures": ["no completed FEM CPU/GPU rows with solver_mesh_signature were produced"],
+            "case_coverage": [],
+            "pairs": [],
+        },
+        {
+            "status": "pass",
+            "gate_failure_count": 0,
+            "group_failure_count": 0,
+            "solver_mesh_groups": [],
+        },
+    )
+
+    assert "- status: pass" in report
+    assert "- cpu/gpu consistency: fail" in report
+
+
+def test_gpu_only_report_can_skip_unrequested_cpu_gpu_summary():
+    bench = load_analysis_benchmark_module()
+    rows = [
+        {
+            "backend": "fem_gpu",
+            "status": "ok",
+            "scenario": "box500_airbox_exchange_demag",
+            "integrator": "heun",
+            "relaxation_algorithm": "llg_overdamped",
+            "timestep_policy": "fixed",
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "JACOBI",
+            "wall_time_ms": 20.0,
+            "demag_solver_apply_wall_time_ms": 7.0,
+            "executed_steps": 3,
+            "final_e_demag_j": 1.0e-19,
+            "final_torque_t": 0.01,
+        }
+    ]
+
+    assert (
+        bench.benchmark_report_needs_cpu_gpu_summary(
+            ["fem_gpu"],
+            require_cpu_gpu_consistency=False,
+            cpu_gpu_summary_output=None,
+        )
+        is False
+    )
+    assert (
+        bench.benchmark_report_needs_cpu_gpu_summary(
+            ["fem_cpu", "fem_gpu"],
+            require_cpu_gpu_consistency=False,
+            cpu_gpu_summary_output=None,
+        )
+        is True
+    )
+
+    summary = bench.cpu_gpu_not_requested_summary(rows)
+
+    assert summary["status"] == "not_requested"
+    assert summary["failure_count"] == 0
+    assert summary["row_count"] == 1
+    assert summary["ok_count"] == 1
+    assert summary["required_case_count"] == 1
+    assert summary["covered_case_count"] == 1
+    assert summary["case_coverage"][0]["label"] == (
+        "box500_airbox_exchange_demag:llg_overdamped fem_gpu CG/JACOBI"
+    )
+    assert summary["case_coverage"][0]["gpu_average_timing_ms"]["wall_time_ms"] == 20.0
+
+    report = bench.render_cpu_gpu_benchmark_report(
+        summary,
+        {
+            "status": "pass",
+            "gate_failure_count": 0,
+            "group_failure_count": 0,
+            "solver_mesh_groups": [],
+        },
+    )
+
+    assert "box500_airbox_exchange_demag:llg_overdamped fem_gpu CG/JACOBI" in report
+    assert "- cases: 1/1 covered" in report
+    assert "- pairs:" not in report
+    assert "20.00" in report
+    assert "7.000" in report
+    assert "3" in report
 
 
 def test_cpu_gpu_rich_report_prints_bordered_color_table():

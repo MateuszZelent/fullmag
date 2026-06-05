@@ -105,7 +105,9 @@ function FooterModuleContent({ kernel }: ModuleProps) {
       </TabsContent>
 
       <TabsContent value="telemetry" className="fm-footer__content">
-        {activeTab === "telemetry" ? <FooterTelemetry /> : null}
+        {activeTab === "telemetry" ? (
+          <FooterTelemetry bus={kernel.bus} />
+        ) : null}
       </TabsContent>
 
       <TabsContent value="engine" className="fm-footer__content">

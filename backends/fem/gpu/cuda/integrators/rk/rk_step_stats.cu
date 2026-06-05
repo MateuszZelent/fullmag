@@ -18,7 +18,12 @@
 #include <cuda_runtime.h>
 
 #include <array>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #include <string>
+#include <vector>
 
 namespace fullmag::fem {
 
@@ -26,11 +31,215 @@ namespace {
 
 constexpr int kBlockSize = 256;
 
+bool phase_timing_env_enabled()
+{
+    const char *raw = std::getenv("FULLMAG_FEM_STEP_PROFILE");
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "1") == 0 ||
+           std::strcmp(raw, "true") == 0 ||
+           std::strcmp(raw, "TRUE") == 0 ||
+           std::strcmp(raw, "on") == 0 ||
+           std::strcmp(raw, "ON") == 0 ||
+           std::strcmp(raw, "yes") == 0 ||
+           std::strcmp(raw, "YES") == 0;
+}
+
+void destroy_phase_timing_events(
+    std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events)
+{
+    for (auto &event : events) {
+        if (event.start_event != nullptr) {
+            cudaEventDestroy(static_cast<cudaEvent_t>(event.start_event));
+            event.start_event = nullptr;
+        }
+        if (event.stop_event != nullptr) {
+            cudaEventDestroy(static_cast<cudaEvent_t>(event.stop_event));
+            event.stop_event = nullptr;
+        }
+    }
+    events.clear();
+}
+
+bool ensure_phase_timing_events(
+    std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events,
+    size_t required_count,
+    const char *label,
+    std::string &reason)
+{
+    const size_t old_count = events.size();
+    if (old_count < required_count) {
+        try {
+            events.resize(required_count);
+        } catch (const std::bad_alloc &) {
+            reason = std::string(label) + " allocation failed";
+            return false;
+        }
+    }
+    for (size_t i = old_count; i < required_count; ++i) {
+        auto &event = events[i];
+        if (event.start_event == nullptr) {
+            cudaEvent_t cuda_event = nullptr;
+            const auto rc = cudaEventCreate(&cuda_event);
+            if (rc != cudaSuccess) {
+                reason = std::string(label) + " start event creation failed: " +
+                    cudaGetErrorString(rc);
+                return false;
+            }
+            event.start_event = static_cast<void *>(cuda_event);
+        }
+        if (event.stop_event == nullptr) {
+            cudaEvent_t cuda_event = nullptr;
+            const auto rc = cudaEventCreate(&cuda_event);
+            if (rc != cudaSuccess) {
+                reason = std::string(label) + " stop event creation failed: " +
+                    cudaGetErrorString(rc);
+                return false;
+            }
+            event.stop_event = static_cast<void *>(cuda_event);
+        }
+    }
+    return true;
+}
+
+bool collect_phase_timing_events(
+    std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events,
+    size_t used_count,
+    uint64_t &accumulator_ns,
+    const char *label,
+    std::string &reason)
+{
+    const size_t bounded_used_count = std::min(used_count, events.size());
+    for (size_t i = 0; i < bounded_used_count; ++i) {
+        auto &event = events[i];
+        float elapsed_ms = 0.0f;
+        const auto rc = cudaEventElapsedTime(
+            &elapsed_ms,
+            static_cast<cudaEvent_t>(event.start_event),
+            static_cast<cudaEvent_t>(event.stop_event));
+        if (rc != cudaSuccess) {
+            reason = std::string(label) + " failed: " + cudaGetErrorString(rc);
+            return false;
+        }
+        if (elapsed_ms > 0.0f) {
+            accumulator_ns += static_cast<uint64_t>(elapsed_ms * 1000000.0f);
+        }
+    }
+    return true;
+}
+
+bool collect_gpu_rk_phase_timing_events(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    std::string &reason)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.exchange_wall_time_ns = 0;
+    timings.rhs_wall_time_ns = 0;
+    if (!timings.enabled) {
+        stats.exchange_wall_time_ns = 0;
+        stats.rhs_wall_time_ns = 0;
+        return true;
+    }
+    if (!collect_phase_timing_events(
+            timings.exchange_events,
+            timings.exchange_used,
+            timings.exchange_wall_time_ns,
+            "GPU RK exchange phase timing readback",
+            reason)) {
+        return false;
+    }
+    if (!collect_phase_timing_events(
+            timings.rhs_events,
+            timings.rhs_used,
+            timings.rhs_wall_time_ns,
+            "GPU RK RHS phase timing readback",
+            reason)) {
+        return false;
+    }
+    stats.exchange_wall_time_ns = timings.exchange_wall_time_ns;
+    stats.rhs_wall_time_ns = timings.rhs_wall_time_ns;
+    return true;
+}
+
 } // namespace
 
 double *gpu_rk_final_scalar_result(FemGpuState &gpu, GpuFinalScalarSlot slot)
 {
     return gpu.reductions.scalar_result + static_cast<int>(slot);
+}
+
+bool gpu_rk_prepare_phase_timing_events(
+    Context &ctx,
+    const ExplicitTableau &tableau,
+    std::string &reason)
+{
+    const bool adaptive = tableau.order_est > 0 && ctx.adaptive_dt.enabled;
+    const uint64_t attempts = adaptive
+        ? static_cast<uint64_t>(ctx.adaptive_dt.max_reject) + 1ull
+        : 1ull;
+    const uint64_t stages_per_attempt =
+        static_cast<uint64_t>(std::max(1, tableau.stages));
+    const size_t required_count =
+        static_cast<size_t>(attempts * stages_per_attempt + 1ull);
+
+    return gpu_rk_prepare_phase_timing_event_count(ctx, required_count, reason);
+}
+
+bool gpu_rk_prepare_phase_timing_event_count(
+    Context &ctx,
+    size_t required_count,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.enabled = phase_timing_env_enabled();
+    if (!gpu.lifecycle.allocated) {
+        return true;
+    }
+    if (!timings.enabled) {
+        return true;
+    }
+
+    if (!ensure_phase_timing_events(
+            timings.exchange_events,
+            required_count,
+            "GPU RK exchange phase timing pool",
+            reason)) {
+        return false;
+    }
+    return ensure_phase_timing_events(
+        timings.rhs_events,
+        required_count,
+        "GPU RK RHS phase timing pool",
+        reason);
+}
+
+void gpu_rk_reset_phase_timing_events(Context &ctx)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.enabled = phase_timing_env_enabled();
+    timings.exchange_wall_time_ns = 0;
+    timings.rhs_wall_time_ns = 0;
+    timings.exchange_used = 0;
+    timings.rhs_used = 0;
+    timings.exchange_overflow_count = 0;
+    timings.rhs_overflow_count = 0;
+}
+
+void gpu_rk_destroy_phase_timing_events(Context &ctx)
+{
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    timings.enabled = false;
+    destroy_phase_timing_events(timings.exchange_events);
+    destroy_phase_timing_events(timings.rhs_events);
+    timings.exchange_wall_time_ns = 0;
+    timings.rhs_wall_time_ns = 0;
+    timings.exchange_used = 0;
+    timings.rhs_used = 0;
+    timings.exchange_overflow_count = 0;
+    timings.rhs_overflow_count = 0;
 }
 
 bool finalize_step_stats_impl(
@@ -79,6 +288,10 @@ bool finalize_step_stats_impl(
               scalars.size(),
               reason);
     if (!read_ok) {
+        return false;
+    }
+
+    if (!collect_gpu_rk_phase_timing_events(ctx, stats, reason)) {
         return false;
     }
 

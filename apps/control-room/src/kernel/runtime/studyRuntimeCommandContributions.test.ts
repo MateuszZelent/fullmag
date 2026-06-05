@@ -11,6 +11,9 @@ import {
   MODEL_GEOMETRY_VALIDATION_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   PERSISTENCE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
@@ -39,6 +42,42 @@ function registryWithStudyRuntimeCommands(): CommandRegistry {
     registry.register(command);
   }
   return registry;
+}
+
+function objectSelection(objectId = "body") {
+  return {
+    get: () => ({
+      kind: "object.root",
+      label: objectId,
+      moduleSource: "explorer",
+      nodeId: `object:${objectId}`,
+      objectId,
+      ref: {
+        kind: "object.root",
+        nodeId: `object:${objectId}`,
+        objectId,
+        type: "scene-object",
+        visualizationTargetId: `object:${objectId}`,
+      },
+    }),
+  };
+}
+
+function airboxSelection() {
+  return {
+    get: () => ({
+      kind: "airbox.root",
+      label: "Airbox",
+      moduleSource: "explorer",
+      nodeId: "airbox",
+      objectId: null,
+      ref: {
+        kind: "airbox.root",
+        nodeId: "airbox",
+        type: "airbox",
+      },
+    }),
+  };
 }
 
 function runtimeResourceData({
@@ -665,6 +704,272 @@ describe("study runtime command contributions", () => {
       },
     });
     expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
+  });
+
+  it("exports selected object field state through the persistence facade", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const exportFieldState = vi.fn(async () => ({
+      artifact_ref: "field-states/body-m.h5",
+      component_count: 3,
+      field_revision: 7,
+      format: "h5",
+      point_count: 2,
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    }));
+    const artifactBytes = vi.fn(async () => ({
+      data: new ArrayBuffer(4),
+      error: null,
+      etag: null,
+      status: "ready",
+    }));
+
+    const result = await registry.execute("study.save-field-state", {
+      api: {
+        data: {
+          artifacts: { bytes: artifactBytes },
+        },
+        persistence: {
+          fieldStates: { export: exportFieldState },
+        },
+      } as never,
+      input: { fileName: "body-m.h5" },
+      resources,
+      selection: objectSelection("body") as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Field state saved as field-states/body-m.h5.",
+      status: "completed",
+    });
+    expect(exportFieldState).toHaveBeenCalledWith({
+      file_name: "body-m.h5",
+      format: "h5",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(artifactBytes).toHaveBeenCalledWith("field-states/body-m.h5");
+    expect(resources.getRevision(PERSISTENCE_FIELD_STATE_EXPORTS_PATH)).toBe(
+      "field-states/body-m.h5",
+    );
+  });
+
+  it("loads selected object field state and invalidates live field resources", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const inspectImport = vi.fn(async () => ({
+      artifact_ref: "field-states/body-m.field-state.json",
+      compatibility: "compatible",
+      component_count: 3,
+      default_mode: "apply",
+      format: "field_state_json",
+      point_count: 2,
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 2,
+      artifact_ref: "field-states/body-m.field-state.json",
+      field_revision: 9,
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute("study.load-field-state", {
+      api: {
+        persistence: {
+          fieldStates: {
+            import: importFieldState,
+            inspectImport,
+          },
+        },
+      } as never,
+      input: { artifactRef: "field-states/body-m.field-state.json" },
+      resources,
+      selection: objectSelection("body") as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Field state loaded.",
+      status: "completed",
+    });
+    expect(inspectImport).toHaveBeenCalledWith({
+      artifact_ref: "field-states/body-m.field-state.json",
+      format: "field_state_json",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "field-states/body-m.field-state.json",
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(9);
+    expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(9);
+    expect(
+      resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH),
+    ).toBe(9);
+  });
+
+  it("uploads a selected field-state file before loading it", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const importAsset = vi.fn(async () => ({
+      asset_id: "body-m-h5",
+      artifact_ref: "imports/body-m.h5",
+      byte_length: 1024,
+      summary: {
+        kind: "field_state",
+        label: "body-m.h5",
+        notes: ["field-state import candidate"],
+      },
+    }));
+    const inspectImport = vi.fn(async () => ({
+      artifact_ref: "imports/body-m.h5",
+      compatibility: "compatible",
+      component_count: 3,
+      default_mode: "apply",
+      format: "field_state_json",
+      point_count: 2,
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 2,
+      artifact_ref: "imports/body-m.h5",
+      field_revision: 10,
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute("study.load-field-state", {
+      api: {
+        persistence: {
+          assets: { import: importAsset },
+          fieldStates: {
+            import: importFieldState,
+            inspectImport,
+          },
+        },
+      } as never,
+      input: {
+        contentBase64: "aDVm",
+        fileName: "body-m.h5",
+      },
+      resources,
+      selection: objectSelection("body") as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Field state loaded.",
+      status: "completed",
+    });
+    expect(importAsset).toHaveBeenCalledWith({
+      content_base64: "aDVm",
+      file_name: "body-m.h5",
+      target_realization: "field_state",
+    });
+    expect(inspectImport).toHaveBeenCalledWith({
+      artifact_ref: "imports/body-m.h5",
+      format: "field_state_json",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "imports/body-m.h5",
+      mode: "apply",
+      quantity_id: "m",
+      target: { id: "body", kind: "object" },
+    });
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(10);
+    expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(10);
+  });
+
+  it("loads selected airbox field state as an attached artifact", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const importAsset = vi.fn(async () => ({
+      asset_id: "airbox-h-eff-h5",
+      artifact_ref: "imports/airbox-h-eff.h5",
+      byte_length: 1024,
+      summary: {
+        kind: "field_state",
+        label: "airbox-h-eff.h5",
+        notes: ["field-state import candidate"],
+      },
+    }));
+    const inspectImport = vi.fn(async () => ({
+      artifact_ref: "imports/airbox-h-eff.h5",
+      compatibility: "compatible",
+      component_count: 3,
+      default_mode: "attach",
+      format: "field_state_json",
+      point_count: 4,
+      quantity_id: "H_eff",
+      target: { id: "airbox", kind: "airbox" },
+      warnings: [],
+    }));
+    const importFieldState = vi.fn(async () => ({
+      applied_point_count: 0,
+      artifact_ref: "imports/airbox-h-eff.h5",
+      field_revision: 7,
+      mode: "attach",
+      quantity_id: "H_eff",
+      target: { id: "airbox", kind: "airbox" },
+      warnings: [],
+    }));
+
+    const result = await registry.execute("study.load-field-state", {
+      api: {
+        persistence: {
+          assets: { import: importAsset },
+          fieldStates: {
+            import: importFieldState,
+            inspectImport,
+          },
+        },
+      } as never,
+      input: {
+        contentBase64: "aDVm",
+        fileName: "airbox-h-eff.h5",
+      },
+      resources,
+      selection: airboxSelection() as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Field state loaded.",
+      status: "completed",
+    });
+    expect(inspectImport).toHaveBeenCalledWith({
+      artifact_ref: "imports/airbox-h-eff.h5",
+      format: "field_state_json",
+      quantity_id: "H_eff",
+      target: { id: "airbox", kind: "airbox" },
+    });
+    expect(importFieldState).toHaveBeenCalledWith({
+      artifact_ref: "imports/airbox-h-eff.h5",
+      mode: "attach",
+      quantity_id: "H_eff",
+      target: { id: "airbox", kind: "airbox" },
+    });
+    expect(resources.getRevision(PERSISTENCE_FIELD_STATE_IMPORTS_PATH)).toBe(7);
   });
 
   it("imports state through the persistence facade and invalidates restored session resources", async () => {

@@ -45,6 +45,36 @@ DEFAULT_TABLE_AUTOSAVE_QUANTITIES = (
     "e_total",
     "max_torque",
 )
+SUPPORTED_TABLE_AUTOSAVE_QUANTITIES = frozenset(
+    (
+        "step",
+        "t",
+        "time",
+        "dt",
+        "solver_dt",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_ani",
+        "e_dmi",
+        "e_total",
+        "max_dm_dt",
+        "max_h_eff",
+        "max_h_demag",
+        "max_torque",
+        "max_torque_Apm",
+        "max_torque_T",
+    )
+)
+TABLE_AUTOSAVE_QUANTITY_ALIASES = {
+    "time": "t",
+    "solver_dt": "dt",
+    "E_total": "e_total",
+    "max_torque_Apm": "max_torque",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,12 +90,12 @@ class TableAutosave:
         base_quantities = (
             DEFAULT_TABLE_AUTOSAVE_QUANTITIES
             if self.quantities is None
-            else tuple(require_non_empty(quantity, "quantity") for quantity in self.quantities)
+            else tuple(_require_supported_table_quantity(quantity) for quantity in self.quantities)
         )
         if not base_quantities:
             raise ValueError("quantities must not be empty")
         normalized_extra = tuple(
-            require_non_empty(quantity, "quantity") for quantity in self.extra_quantities
+            _require_supported_table_quantity(quantity) for quantity in self.extra_quantities
         )
         normalized_quantities = tuple(dict.fromkeys((*base_quantities, *normalized_extra)))
         object.__setattr__(self, "table_id", table_id)
@@ -79,6 +109,14 @@ class TableAutosave:
             "sample_period_s": self.t_sampl,
             "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
         }
+
+
+def _require_supported_table_quantity(quantity: str) -> str:
+    normalized = require_non_empty(quantity, "quantity")
+    normalized = TABLE_AUTOSAVE_QUANTITY_ALIASES.get(normalized, normalized)
+    if normalized not in SUPPORTED_TABLE_AUTOSAVE_QUANTITIES:
+        raise ValueError(f"unsupported table_autosave quantity '{normalized}'")
+    return normalized
 
 
 def _require_supported_eigen_options(

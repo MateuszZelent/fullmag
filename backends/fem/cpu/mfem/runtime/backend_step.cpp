@@ -21,12 +21,15 @@
 #include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
+#include <cstddef>
+
 namespace fullmag::fem {
 
 namespace {
 
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
+constexpr size_t kGpuRelaxPhaseTimingEventCount = 128;
 
 } // namespace
 
@@ -42,6 +45,15 @@ int run_backend_step(
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
     const auto &tab = tableau_for_integrator(ctx.base_plan.integrator);
+    if (!gpu_rk_prepare_phase_timing_events(ctx, tab, error)) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
     {
         TransferAuditScope hot_loop(
             ctx.transfer_audit.audit,
@@ -119,6 +131,21 @@ int run_backend_relaxation_step(
     if (ctx.gpu_state.device.lifecycle.allocated &&
         (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB ||
          algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG)) {
+        if (!gpu_rk_prepare_phase_timing_event_count(
+                ctx,
+                kGpuRelaxPhaseTimingEventCount,
+                error)) {
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        gpu_rk_reset_phase_timing_events(ctx);
+        ctx.poisson_demag.solves_current_step = 0;
+        ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
         int gpu_status = FULLMAG_FEM_OK;
         {
             TransferAuditScope hot_loop(

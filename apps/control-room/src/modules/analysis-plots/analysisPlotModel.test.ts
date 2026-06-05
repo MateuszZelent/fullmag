@@ -1,51 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { __analysisPlotsTestUtils } from "./AnalysisPlotsModule";
-import { buildLineChartModel, MAX_LINE_CHART_POINTS } from "./analysisPlotModel";
-
-describe("analysisPlotModel", () => {
-  it("builds a normalized SVG path from finite points", () => {
-    expect(
-      buildLineChartModel([
-        { x: 0, y: 1 },
-        { x: 1, y: 2 },
-        { x: 2, y: 1 },
-      ]),
-    ).toMatchObject({
-      path: "M12.00 128.00 L160.00 12.00 L308.00 128.00",
-      xMax: 2,
-      xMin: 0,
-      yMax: 2,
-      yMin: 1,
-    });
-  });
-
-  it("returns null without finite samples", () => {
-    expect(buildLineChartModel([{ x: Number.NaN, y: 1 }])).toBeNull();
-  });
-
-  it("decimates large histories while preserving the full value range", () => {
-    const points = Array.from({ length: 1_000 }, (_, index) => ({
-      x: index,
-      y: index === 511 ? 100 : Math.sin(index / 10),
-    }));
-
-    const model = buildLineChartModel(points);
-
-    expect(model?.path.match(/[ML]/g)?.length).toBeLessThanOrEqual(
-      MAX_LINE_CHART_POINTS,
-    );
-    expect(model).toMatchObject({
-      xMax: 999,
-      xMin: 0,
-      yMax: 100,
-    });
-  });
-});
+import { __analysisTableRowsAdapterTestUtils } from "./tableRowsAdapter";
 
 describe("analysis plot scalar selection", () => {
   it("uses one stable scalar column query for resource subscriptions", () => {
-    expect(__analysisPlotsTestUtils.analysisScalarColumns).toEqual([
+    expect(__analysisTableRowsAdapterTestUtils.analysisScalarColumns).toEqual([
       "step",
       "t",
       "mx",
@@ -54,14 +13,14 @@ describe("analysis plot scalar selection", () => {
       "e_total",
       "max_torque",
     ]);
-    expect(Object.isFrozen(__analysisPlotsTestUtils.analysisScalarColumns)).toBe(
+    expect(Object.isFrozen(__analysisTableRowsAdapterTestUtils.analysisScalarColumns)).toBe(
       true,
     );
   });
 
   it("merges cursor deltas into the bounded table window", () => {
     expect(
-      __analysisPlotsTestUtils.mergeTableRows(
+      __analysisTableRowsAdapterTestUtils.mergeTableRows(
         {
           columns: [
             {
@@ -138,7 +97,7 @@ describe("analysis plot scalar selection", () => {
     };
 
     expect(
-      __analysisPlotsTestUtils.mergeTableRows(table, {
+      __analysisTableRowsAdapterTestUtils.mergeTableRows(table, {
         ...table,
         cursor_start: 2,
         returned_rows: 1,
@@ -149,7 +108,7 @@ describe("analysis plot scalar selection", () => {
 
   it("adapts live scalar sample websocket payloads into one-row table resources", () => {
     const resource =
-      __analysisPlotsTestUtils.tableRowsResourceFromScalarSample({
+      __analysisTableRowsAdapterTestUtils.tableRowsResourceFromScalarSample({
         columns: [
           {
             column_id: "step",
@@ -196,7 +155,7 @@ describe("analysis plot scalar selection", () => {
 
   it("adapts decoded binary table rows into the chart table resource shape", () => {
     const resource =
-      __analysisPlotsTestUtils.tableRowsResourceFromBinary({
+      __analysisTableRowsAdapterTestUtils.tableRowsResourceFromBinary({
         columns: [
           {
             column_id: "step",
@@ -244,5 +203,199 @@ describe("analysis plot scalar selection", () => {
         [2, 0.2],
       ],
     });
+  });
+
+  it("keeps the binary fetch cursor stable when appending websocket samples", () => {
+    const current = {
+      cursor: 10,
+      visibleTable: {
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+        ],
+        cursor_end: 10,
+        cursor_start: 1,
+        resync_required: false,
+        returned_rows: 10,
+        revision: 10,
+        rows: [[10]],
+        schema_revision: 1,
+        table_id: "default",
+        total_rows: 10,
+      },
+    };
+
+    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
+      current,
+      {
+        advanceCursor: false,
+        resource: {
+          ...current.visibleTable,
+          cursor_end: 11,
+          cursor_start: 11,
+          returned_rows: 1,
+          revision: 11,
+          rows: [[11]],
+          total_rows: 11,
+        },
+        type: "append",
+      },
+    );
+
+    expect(next.cursor).toBe(10);
+    expect(next.visibleTable?.cursor_end).toBe(11);
+    expect(next.visibleTable?.rows).toEqual([[10], [11]]);
+  });
+
+  it("replaces the visible table window for range fetches", () => {
+    const current = {
+      cursor: 1_000,
+      visibleTable: {
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+        ],
+        cursor_end: 1_000,
+        cursor_start: 996,
+        resync_required: false,
+        returned_rows: 5,
+        revision: 1_000,
+        rows: [[996], [997], [998], [999], [1_000]],
+        schema_revision: 1,
+        table_id: "default",
+        total_rows: 1_000,
+      },
+    };
+
+    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
+      current,
+      {
+        advanceCursor: false,
+        mode: "replace",
+        resource: {
+          ...current.visibleTable,
+          cursor_end: 250,
+          cursor_start: 200,
+          returned_rows: 2,
+          revision: 1_000,
+          rows: [[200], [250]],
+        },
+        type: "append",
+      },
+    );
+
+    expect(next.cursor).toBe(1_000);
+    expect(next.visibleTable?.rows).toEqual([[200], [250]]);
+  });
+
+  it("keeps the visible table when a stale tail cursor returns an empty resync", () => {
+    const current = {
+      cursor: 473,
+      visibleTable: {
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+        ],
+        cursor_end: 473,
+        cursor_start: 469,
+        resync_required: false,
+        returned_rows: 5,
+        revision: 473,
+        rows: [[469], [470], [471], [472], [473]],
+        schema_revision: 1,
+        table_id: "default",
+        total_rows: 473,
+      },
+    };
+
+    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
+      current,
+      {
+        resource: {
+          ...current.visibleTable,
+          cursor_end: 473,
+          cursor_start: 474,
+          resync_required: true,
+          returned_rows: 0,
+          rows: [],
+        },
+        type: "append",
+      },
+    );
+
+    expect(next.cursor).toBe(473);
+    expect(next.visibleTable).toBe(current.visibleTable);
+  });
+
+  it("keeps the visible table when a visible-range fetch returns no rows", () => {
+    const current = {
+      cursor: 473,
+      visibleTable: {
+        columns: [
+          {
+            column_id: "step",
+            component: null,
+            dimension: "count",
+            label: "step",
+            quantity_id: "step",
+            reduction: null,
+            unit: "1",
+            value_type: "integer",
+          },
+        ],
+        cursor_end: 473,
+        cursor_start: 469,
+        resync_required: false,
+        returned_rows: 5,
+        revision: 473,
+        rows: [[469], [470], [471], [472], [473]],
+        schema_revision: 1,
+        table_id: "default",
+        total_rows: 473,
+      },
+    };
+
+    const next = __analysisTableRowsAdapterTestUtils.tableResourceReducer(
+      current,
+      {
+        advanceCursor: false,
+        mode: "replace",
+        resource: {
+          ...current.visibleTable,
+          cursor_end: 473,
+          cursor_start: 0,
+          returned_rows: 0,
+          rows: [],
+        },
+        type: "append",
+      },
+    );
+
+    expect(next.cursor).toBe(473);
+    expect(next.visibleTable).toBe(current.visibleTable);
   });
 });

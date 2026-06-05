@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace fullmag::fem {
 
@@ -48,6 +49,23 @@ struct CudaRuntimeState {
     int active_snapshot_buffer = 0;
 };
 
+struct GpuRkPhaseTimingRuntimeState {
+    struct EventPair {
+        void *start_event = nullptr;
+        void *stop_event = nullptr;
+    };
+
+    bool enabled = false;
+    uint64_t exchange_wall_time_ns = 0;
+    uint64_t rhs_wall_time_ns = 0;
+    size_t exchange_used = 0;
+    size_t rhs_used = 0;
+    uint64_t exchange_overflow_count = 0;
+    uint64_t rhs_overflow_count = 0;
+    std::vector<EventPair> exchange_events{};
+    std::vector<EventPair> rhs_events{};
+};
+
 /*
  * Runtime owner for the native FEM GPU-state object.
  *
@@ -62,6 +80,7 @@ struct GpuStateRuntimeState {
     FemGpuState device{};
     LegacyGpuExchangeRuntimeState legacy_exchange{};
     CudaRuntimeState cuda{};
+    GpuRkPhaseTimingRuntimeState rk_phase_timings{};
 };
 
 /*

@@ -92,6 +92,7 @@ void fullmag_cuda_relax_ncg_prepare_direction_blocks(
     double *py,
     double *pz,
     double *block_p_dot_g,
+    double *block_direction_norm_sq,
     int n,
     cudaStream_t stream = nullptr);
 
@@ -107,6 +108,26 @@ void fullmag_cuda_relax_ncg_pr_plus_numerator_blocks(
     const double *trial_gz,
     const double *lumped_mass,
     const uint8_t *magnetic_node_mask,
+    double *block_numerator,
+    int n,
+    cudaStream_t stream = nullptr);
+
+void fullmag_cuda_relax_ncg_gradient_norm_and_pr_plus_blocks(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const double *hx,
+    const double *hy,
+    const double *hz,
+    const double *previous_gx,
+    const double *previous_gy,
+    const double *previous_gz,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double *trial_gx,
+    double *trial_gy,
+    double *trial_gz,
+    double *block_norm_sq,
     double *block_numerator,
     int n,
     cudaStream_t stream = nullptr);
@@ -128,6 +149,18 @@ void fullmag_cuda_relax_ncg_update_direction_blocks(
     double *next_py,
     double *next_pz,
     double *block_p_dot_g,
+    int n,
+    cudaStream_t stream = nullptr);
+
+void fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+    const double *gx,
+    const double *gy,
+    const double *gz,
+    const double *p_dot_g_scalar,
+    const uint8_t *magnetic_node_mask,
+    double *px,
+    double *py,
+    double *pz,
     int n,
     cudaStream_t stream = nullptr);
 

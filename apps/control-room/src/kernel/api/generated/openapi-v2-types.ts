@@ -756,6 +756,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/events/communication-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["platform_get_sessions_current_events_communication_policy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["platform_patch_sessions_current_events_communication_policy"];
+        trace?: never;
+    };
     "/v2/sessions/current/events/ws": {
         parameters: {
             query?: never;
@@ -1678,6 +1694,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["persistence_post_sessions_current_persistence_exports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/field-states/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_field_states_exports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/field-states/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_field_states_imports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/field-states/imports/inspections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_field_states_imports_inspections"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2894,6 +2958,64 @@ export interface components {
              */
             y_pixels: number;
         };
+        FieldStateExportRequest: {
+            file_name?: string | null;
+            format?: string;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+        };
+        FieldStateExportResponse: {
+            artifact_ref: string;
+            /** Format: int64 */
+            component_count: number;
+            /** Format: int64 */
+            field_revision: number;
+            format: string;
+            /** Format: int64 */
+            point_count: number;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+        };
+        FieldStateImportRequest: {
+            artifact_ref: string;
+            mode?: string | null;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+        };
+        FieldStateImportResponse: {
+            /** Format: int64 */
+            applied_point_count: number;
+            artifact_ref: string;
+            /** Format: int64 */
+            field_revision: number;
+            mode: string;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+            warnings: string[];
+        };
+        FieldStateInspectRequest: {
+            artifact_ref: string;
+            format?: string | null;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+        };
+        FieldStateInspectResponse: {
+            artifact_ref: string;
+            compatibility: string;
+            /** Format: int64 */
+            component_count: number;
+            default_mode: string;
+            format: string;
+            /** Format: int64 */
+            point_count: number;
+            quantity_id: string;
+            target: components["schemas"]["FieldStateTargetRef"];
+            warnings: string[];
+        };
+        FieldStateTargetRef: {
+            id: string;
+            kind: string;
+        };
         FieldStats: {
             /** Format: double */
             max: number;
@@ -3741,6 +3863,73 @@ export interface components {
             status: string;
             visible: boolean;
         };
+        RealtimeCommunicationPolicy: {
+            diagnostics_enabled?: boolean;
+            /** Format: int32 */
+            diagnostics_summary_ms: number;
+            /** Format: int32 */
+            error_retry_ms: number;
+            /** Format: int32 */
+            field_sample_publish_ms: number;
+            field_samples_enabled?: boolean;
+            heartbeat_enabled?: boolean;
+            /** Format: int32 */
+            lifecycle_coalesce_ms: number;
+            lifecycle_events_enabled?: boolean;
+            resource_batch_changed_enabled?: boolean;
+            scalar_sample_enabled?: boolean;
+            scalar_table_rows_enabled?: boolean;
+            /** Format: int32 */
+            scalar_telemetry_publish_ms: number;
+            /** Format: int32 */
+            status_refresh_ms: number;
+            /** Format: int32 */
+            table_rows_min_refetch_ms: number;
+            visualization_client_acks_enabled?: boolean;
+            /** Format: int32 */
+            ws_heartbeat_ms: number;
+            /** Format: int32 */
+            ws_reconnect_ms: number;
+            /** Format: int32 */
+            ws_replay_capacity: number;
+        };
+        RealtimeCommunicationPolicyPatch: {
+            diagnostics_enabled?: boolean | null;
+            /** Format: int32 */
+            diagnostics_summary_ms?: number | null;
+            /** Format: int32 */
+            error_retry_ms?: number | null;
+            /** Format: int32 */
+            field_sample_publish_ms?: number | null;
+            field_samples_enabled?: boolean | null;
+            heartbeat_enabled?: boolean | null;
+            /** Format: int32 */
+            lifecycle_coalesce_ms?: number | null;
+            lifecycle_events_enabled?: boolean | null;
+            reset?: boolean | null;
+            resource_batch_changed_enabled?: boolean | null;
+            scalar_sample_enabled?: boolean | null;
+            scalar_table_rows_enabled?: boolean | null;
+            /** Format: int32 */
+            scalar_telemetry_publish_ms?: number | null;
+            /** Format: int32 */
+            status_refresh_ms?: number | null;
+            /** Format: int32 */
+            table_rows_min_refetch_ms?: number | null;
+            visualization_client_acks_enabled?: boolean | null;
+            /** Format: int32 */
+            ws_heartbeat_ms?: number | null;
+            /** Format: int32 */
+            ws_reconnect_ms?: number | null;
+            /** Format: int32 */
+            ws_replay_capacity?: number | null;
+        };
+        RealtimeCommunicationPolicyResource: {
+            defaults: components["schemas"]["RealtimeCommunicationPolicy"];
+            effective: components["schemas"]["RealtimeCommunicationPolicy"];
+            /** Format: int64 */
+            revision: number;
+        };
         RecoveryClearResponse: {
             cleared: number;
         };
@@ -4025,6 +4214,7 @@ export interface components {
             written: boolean;
         };
         SessionAssetImportResponse: {
+            artifact_ref: string;
             asset_id: string;
             session_id: string;
             stored_path: string;
@@ -4235,6 +4425,8 @@ export interface components {
             persist_artifact?: boolean;
             /** Format: int64 */
             sample_every?: number;
+            /** Format: int64 */
+            sample_interval_wall_ms?: number;
         };
         SolverProfilePhaseResource: {
             id: string;
@@ -6869,6 +7061,57 @@ export interface operations {
             };
         };
     };
+    platform_get_sessions_current_events_communication_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current backend-owned realtime communication policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeCommunicationPolicyResource"];
+                };
+            };
+        };
+    };
+    platform_patch_sessions_current_events_communication_policy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RealtimeCommunicationPolicyPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated backend-owned realtime communication policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeCommunicationPolicyResource"];
+                };
+            };
+            /** @description Invalid communication policy patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     platform_get_sessions_current_events_ws: {
         parameters: {
             query?: {
@@ -9387,6 +9630,120 @@ export interface operations {
                 };
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_field_states_exports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldStateExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Field state exported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldStateExportResponse"];
+                };
+            };
+            /** @description Unsupported field state target or format */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_field_states_imports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldStateImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Field state imported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldStateImportResponse"];
+                };
+            };
+            /** @description Invalid or incompatible field state */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or artifact not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_field_states_imports_inspections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldStateInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description Field state import inspection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldStateInspectResponse"];
+                };
+            };
+            /** @description Invalid field state artifact */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or artifact not found */
             404: {
                 headers: {
                     [name: string]: unknown;

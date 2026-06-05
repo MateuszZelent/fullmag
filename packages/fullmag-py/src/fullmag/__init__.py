@@ -2,14 +2,18 @@
 
 from . import init
 from .init import (
+    FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
     EvaluatedTexture,
+    FieldState,
     PresetTexture,
     TextureMapping,
     TextureTransform3D,
     evaluate_preset_texture,
     infer_magnetization_state_format,
+    load_field_state,
     load_magnetization,
+    save_field_state,
     save_magnetization,
     texture,
 )
@@ -258,6 +262,8 @@ __all__ = [
     "Magnetoelastic",
     "MagnetostrictionLaw",
     "Material",
+    "FIELD_STATE_FORMATS",
+    "FieldState",
     "MAGNETIZATION_STATE_FORMATS",
     "MechanicalBoundaryCondition",
     "MechanicalLoad",
@@ -308,8 +314,10 @@ __all__ = [
     "resolve_mesh_size_controls",
     "infer_magnetization_state_format",
     "init",
+    "load_field_state",
     "load_magnetization",
     "load_problem_from_script",
+    "save_field_state",
     "save_magnetization",
     "texture",
     "EvaluatedTexture",

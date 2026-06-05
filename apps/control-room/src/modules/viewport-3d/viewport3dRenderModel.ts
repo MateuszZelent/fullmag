@@ -374,6 +374,11 @@ export function buildViewport3DFieldRenderModel(
   >();
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
   const magneticPartSet = new Set(topology.magneticParts);
+  const airboxPartSet = new Set(topology.airboxParts);
+  const magneticVectorNodeIndices =
+    topology.airboxParts.length > 0
+      ? buildMagneticPartNodeIndexSet(topology)
+      : null;
 
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
     const partId = partModel.part.id;
@@ -401,6 +406,24 @@ export function buildViewport3DFieldRenderModel(
     const partFieldVector =
       explicitPartFieldVector ??
       (partUsesMagneticOnlyField ? fieldVector : fullFieldVector);
+    const sampledVectorSelection =
+      partFieldVector &&
+      partFieldVector !== fieldVector &&
+      partFieldVector.pointCount < topology.nodeCount
+        ? buildScopedPartFieldSampleSelection(
+            vectorSelection,
+            topology,
+            partFieldVector.pointCount,
+          )
+        : vectorSelection;
+    const renderVectorSelection =
+      airboxPartSet.has(partModel) && magneticVectorNodeIndices
+        ? filterNodeSelectionExcludingIndices(
+            sampledVectorSelection,
+            topology,
+            magneticVectorNodeIndices,
+          )
+        : sampledVectorSelection;
     if (partFieldVector && partFieldVector !== fieldVector) {
       scalarColorsByPartAndMode.set(
         partId,
@@ -440,7 +463,7 @@ export function buildViewport3DFieldRenderModel(
         partModel,
         topology,
         partFieldVector,
-        vectorSelection,
+        renderVectorSelection,
         vectorScope,
         scale * partScale,
         partBudget,
@@ -560,6 +583,57 @@ function buildMagneticFieldNodeIndices(
   return Uint32Array.from(
     [...nodeIndices].toSorted((left, right) => left - right),
   );
+}
+
+function buildMagneticPartNodeIndexSet(
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+): ReadonlySet<number> | null {
+  const nodeIndices = new Set<number>();
+  for (const partModel of topology.magneticParts) {
+    const partNodeIndices = buildNodeSelectionIndices(partModel.part, topology);
+    if (!partNodeIndices) continue;
+    for (let index = 0; index < partNodeIndices.length; index += 1) {
+      const nodeIndex = partNodeIndices[index] ?? -1;
+      if (nodeIndex >= 0 && nodeIndex < topology.nodeCount) {
+        nodeIndices.add(nodeIndex);
+      }
+    }
+  }
+  return nodeIndices.size > 0 ? nodeIndices : null;
+}
+
+function filterNodeSelectionExcludingIndices(
+  selection: Viewport3DNodeSelection,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
+  excludedNodeIndices: ReadonlySet<number>,
+): Viewport3DNodeSelection {
+  if (excludedNodeIndices.size === 0) return selection;
+  const selectedNodeCount = resolveNodeSelectionCount(selection, topology);
+  if (selectedNodeCount <= 0) return selection;
+
+  const nodeIndices: number[] = [];
+  let removed = false;
+  for (let offset = 0; offset < selectedNodeCount; offset += 1) {
+    const nodeIndex = resolveNodeSelectionIndex(selection, offset);
+    if (
+      nodeIndex === null ||
+      !Number.isInteger(nodeIndex) ||
+      nodeIndex < 0 ||
+      nodeIndex >= topology.nodeCount
+    ) {
+      continue;
+    }
+    if (excludedNodeIndices.has(nodeIndex)) {
+      removed = true;
+      continue;
+    }
+    nodeIndices.push(nodeIndex);
+  }
+
+  if (!removed) return selection;
+  return nodeIndices.length > 0
+    ? { nodeIndices }
+    : { nodeCount: 0, nodeStart: 0 };
 }
 
 function buildNodeIndexFieldValueResolver(
@@ -1894,11 +1968,30 @@ function buildScopedPartFieldValueResolver(
   const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
   if (fieldPointCount > 0 && fieldPointCount < selectedNodeCount) {
     const stride = Math.max(1, Math.floor(selectedNodeCount / fieldPointCount));
-    return (_globalNodeIndex, selectedOffset) => {
-      if (selectedOffset % stride !== 0) return null;
+    const sampleIndexByGlobalNode = new Map<number, number>();
+    for (
+      let selectedOffset = 0;
+      selectedOffset < selectedNodeCount;
+      selectedOffset += 1
+    ) {
+      if (selectedOffset % stride !== 0) continue;
       const sampleIndex = Math.floor(selectedOffset / stride);
-      return sampleIndex < fieldPointCount ? sampleIndex : null;
-    };
+      if (sampleIndex >= fieldPointCount) continue;
+      const globalNodeIndex = resolveNodeSelectionIndex(
+        partSelection,
+        selectedOffset,
+      );
+      if (
+        globalNodeIndex === null ||
+        globalNodeIndex < 0 ||
+        globalNodeIndex >= topology.nodeCount
+      ) {
+        continue;
+      }
+      sampleIndexByGlobalNode.set(globalNodeIndex, sampleIndex);
+    }
+    return (globalNodeIndex) =>
+      sampleIndexByGlobalNode.get(globalNodeIndex) ?? null;
   }
 
   const localIndexByGlobalNode = new Map<number, number>();
@@ -1915,6 +2008,43 @@ function buildScopedPartFieldValueResolver(
   }
 
   return (globalNodeIndex) => localIndexByGlobalNode.get(globalNodeIndex) ?? null;
+}
+
+function buildScopedPartFieldSampleSelection(
+  partSelection: Viewport3DNodeSelection,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
+  fieldPointCount: number,
+): Viewport3DNodeSelection {
+  const selectedNodeCount = resolveNodeSelectionCount(partSelection, topology);
+  if (fieldPointCount <= 0 || fieldPointCount >= selectedNodeCount) {
+    return partSelection;
+  }
+
+  const stride = Math.max(1, Math.floor(selectedNodeCount / fieldPointCount));
+  const nodeIndices: number[] = [];
+  for (
+    let selectedOffset = 0;
+    selectedOffset < selectedNodeCount;
+    selectedOffset += 1
+  ) {
+    if (selectedOffset % stride !== 0) continue;
+    const sampleIndex = Math.floor(selectedOffset / stride);
+    if (sampleIndex >= fieldPointCount) continue;
+    const globalNodeIndex = resolveNodeSelectionIndex(
+      partSelection,
+      selectedOffset,
+    );
+    if (
+      globalNodeIndex === null ||
+      globalNodeIndex < 0 ||
+      globalNodeIndex >= topology.nodeCount
+    ) {
+      continue;
+    }
+    nodeIndices.push(globalNodeIndex);
+  }
+
+  return nodeIndices.length > 0 ? { nodeIndices } : { nodeCount: 0, nodeStart: 0 };
 }
 
 export function resolveNodeSelectionCount(

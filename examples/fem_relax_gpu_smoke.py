@@ -11,8 +11,8 @@ import os
 import fullmag as fm
 
 
-ALGORITHM = os.environ.get("FULLMAG_RELAX_ALGORITHM", "projected_gradient_bb")
-DEVICE = os.environ.get("FULLMAG_RELAX_DEVICE", "gpu")
+ALGORITHM = os.environ.get("FULLMAG_RELAX_ALGORITHM") or "projected_gradient_bb"
+DEVICE = os.environ.get("FULLMAG_RELAX_DEVICE") or "gpu"
 MAX_STEPS = int(os.environ.get("FULLMAG_RELAX_MAX_STEPS", "4"))
 
 study = fm.study(f"fem_relax_gpu_smoke_{ALGORITHM}")

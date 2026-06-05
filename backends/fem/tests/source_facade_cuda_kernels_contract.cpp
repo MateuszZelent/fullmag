@@ -707,7 +707,7 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             decision_header.find("gpu_rk_read_adaptive_error_norm_decision_host(") !=
                 std::string::npos,
-        "GPU CUDA RK adaptive decision readback header must document and declare the transitional host boundary");
+        "GPU CUDA RK adaptive decision readback header must document and declare the transitional host control boundary");
     check(
         decision_source.find("#include \"gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp\"") !=
                 std::string::npos &&
@@ -719,13 +719,15 @@ void gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK adaptive decision readback source must document and include its module dependencies");
     check(
-        decision_source.find("gpu_rk_read_scalar_result(") !=
+        decision_source.find("gpu_rk_read_scalar_result(") ==
+                std::string::npos &&
+            decision_source.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&
             decision_source.find("gpu_rk_adaptive_pi_step(ctx, error_norm)") !=
                 std::string::npos &&
-            decision_source.find("cudaMemcpyAsync GPU RK adaptive decision scalar device->host") !=
+            decision_source.find("cudaMemcpyAsync GPU RK adaptive decision control scalar device->host") !=
                 std::string::npos,
-        "GPU CUDA RK adaptive decision readback source must own the transitional scalar readback and host PI handoff");
+        "GPU CUDA RK adaptive decision readback source must own the transitional control-scalar readback and host PI handoff without compute-readback accounting");
     check(
         decision_source.find("fullmag_cuda_adaptive_error_norm_blocks(") ==
                 std::string::npos &&
@@ -1094,6 +1096,48 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
             rk_step.find("bool compute_hybrid_cpu_demag_for_device_stage(") ==
                 std::string::npos,
         "GPU CUDA RK step source must not own RHS runtime helper implementations");
+}
+
+
+void gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string step_stats_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
+    const std::string rhs_source =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_rhs_runtime.cu");
+    const std::string runtime_header =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
+
+    check(
+        runtime_header.find("bool enabled = false;") != std::string::npos,
+        "GPU RK phase timing runtime state must default to disabled");
+    check(
+        step_stats_source.find("FULLMAG_FEM_STEP_PROFILE") != std::string::npos &&
+            step_stats_source.find("static const bool enabled") ==
+                std::string::npos,
+        "GPU RK phase timing env gate must be explicit and runtime-toggleable");
+    check(
+        step_stats_source.find("timings.enabled = phase_timing_env_enabled();") !=
+                std::string::npos &&
+            step_stats_source.find("if (!timings.enabled) {\n        return true;\n    }") !=
+                std::string::npos &&
+            step_stats_source.find("ensure_phase_timing_events(") !=
+                std::string::npos,
+        "GPU RK phase timing event pools must not be allocated when timing is disabled");
+    check(
+        step_stats_source.find("if (!timings.enabled) {\n        stats.exchange_wall_time_ns = 0;\n        stats.rhs_wall_time_ns = 0;\n        return true;\n    }") !=
+            std::string::npos,
+        "GPU RK phase timing collection must be a zero-cost stats path when timing is disabled");
+    check(
+        rhs_source.find("bool start(\n        bool enabled,") !=
+                std::string::npos &&
+            rhs_source.find("if (!enabled) {\n            return true;\n        }") !=
+                std::string::npos &&
+            rhs_source.find("exchange_timer.start(\n            timings.enabled,") !=
+                std::string::npos &&
+            rhs_source.find("rhs_timer.start(\n            timings.enabled,") !=
+                std::string::npos,
+        "GPU RK RHS hot loop must skip CUDA event recording unless phase timing is enabled");
 }
 
 
@@ -1910,6 +1954,7 @@ int main() {
     gpu_rk_adaptive_runtime_is_owned_by_cuda_rk_module();
     gpu_rk_attempt_loop_is_owned_by_cuda_rk_module();
     gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module();
+    gpu_rk_phase_timing_is_opt_in_for_cuda_hot_loop();
     gpu_rk_local_fields_are_owned_by_cuda_rk_module();
     gpu_rk_effective_field_is_owned_by_cuda_rk_module();
     gpu_rk_direct_torques_are_owned_by_cuda_rk_module();

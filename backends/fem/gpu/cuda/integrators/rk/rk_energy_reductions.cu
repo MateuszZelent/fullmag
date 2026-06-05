@@ -15,9 +15,6 @@
 #include "gpu/cuda/integrators/rk/rk_exchange_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.hpp"
-
-#include <cuda_runtime.h>
-
 #include <string>
 
 namespace fullmag::fem {

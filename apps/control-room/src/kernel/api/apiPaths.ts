@@ -35,6 +35,10 @@ export const SESSION_EVENTS_WS_PATH = openApiV2Path(
   "/v2/sessions/current/events/ws",
 );
 
+export const SESSION_EVENTS_COMMUNICATION_POLICY_PATH = openApiV2Path(
+  "/v2/sessions/current/events/communication-policy",
+);
+
 export const SESSION_CURRENT_PATH = openApiV2Path(
   "/v2/sessions/current",
 );
@@ -485,6 +489,18 @@ export const PERSISTENCE_CHECKPOINT_RESTORE_PATH = openApiV2Path(
 
 export const PERSISTENCE_EXPORTS_PATH = openApiV2Path(
   "/v2/sessions/current/persistence/exports",
+);
+
+export const PERSISTENCE_FIELD_STATE_EXPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/field-states/exports",
+);
+
+export const PERSISTENCE_FIELD_STATE_IMPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/field-states/imports",
+);
+
+export const PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/field-states/imports/inspections",
 );
 
 export const PERSISTENCE_IMPORTS_PATH = openApiV2Path(

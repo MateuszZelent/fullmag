@@ -2,6 +2,7 @@ import {
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
+  DATA_ARTIFACT_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -62,12 +63,17 @@ import {
   MODEL_TRANSACTIONS_PATH,
   MODEL_SYNCS_PATH,
   MODEL_UNIVERSE_PATH,
+  PERSISTENCE_ASSET_IMPORT_PATH,
   PERSISTENCE_CHECKPOINT_PATH,
   PERSISTENCE_CHECKPOINT_RESTORE_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   PERSISTENCE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+  PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
+  SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
@@ -104,6 +110,12 @@ import type {
   DomainMetaResource,
   EngineLogResource,
   FieldCatalogResource,
+  FieldStateExportRequest,
+  FieldStateExportResponse,
+  FieldStateImportRequest,
+  FieldStateImportResponse,
+  FieldStateInspectRequest,
+  FieldStateInspectResponse,
   FieldVectorQuery,
   GeometryCapabilitiesResource,
   GeometryDiagnosticsResource,
@@ -111,6 +123,7 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  ImportSessionAssetRequest,
   LiveStatusResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
@@ -148,6 +161,8 @@ import type {
   ObjectInteractionPatchRequest,
   ObjectInteractionResource,
   ObjectPatchRequest,
+  RealtimeCommunicationPolicyPatch,
+  RealtimeCommunicationPolicyResource,
   RegionListResource,
   RegionPatchRequest,
   RequestOptions,
@@ -161,6 +176,7 @@ import type {
   SceneResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
+  SessionAssetImportResponse,
   SessionExportRequest,
   SessionExportResponse,
   SessionImportCommitRequest,
@@ -270,6 +286,22 @@ export class ControlRoomApi {
     },
   };
 
+  readonly events = {
+    communicationPolicy: (options?: RequestOptions) =>
+      this.requestJson<RealtimeCommunicationPolicyResource>(
+        SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
+        options,
+      ),
+    patchCommunicationPolicy: (
+      patch: RealtimeCommunicationPolicyPatch,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<
+        RealtimeCommunicationPolicyResource,
+        RealtimeCommunicationPolicyPatch
+      >(SESSION_EVENTS_COMMUNICATION_POLICY_PATH, patch, options),
+  };
+
   readonly commands = {
     detail: (commandId: string, options?: RequestOptions) =>
       this.requestJson<CommandDetailResource>(
@@ -301,6 +333,14 @@ export class ControlRoomApi {
   };
 
   readonly data = {
+    artifacts: {
+      bytes: (artifactRef: string, options?: BinaryRequestOptions) =>
+        this.requestBinaryBytes(
+          DATA_ARTIFACT_PATH,
+          options,
+          { artifact_id: artifactRef },
+        ),
+    },
     domain: {
       meta: (options?: RequestOptions) =>
         this.requestJson<DomainMetaResource>(DATA_DOMAIN_META_PATH, options),
@@ -776,6 +816,17 @@ export class ControlRoomApi {
   };
 
   readonly persistence = {
+    assets: {
+      import: (
+        request: ImportSessionAssetRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<SessionAssetImportResponse, ImportSessionAssetRequest>(
+          PERSISTENCE_ASSET_IMPORT_PATH,
+          request,
+          options,
+        ),
+    },
     checkpoints: {
       create: (request: CheckpointCreateRequest, options?: RequestOptions) =>
         this.postJson<CheckpointCreateResponse, CheckpointCreateRequest>(
@@ -810,6 +861,35 @@ export class ControlRoomApi {
       create: (request: SessionExportRequest, options?: RequestOptions) =>
         this.postJson<SessionExportResponse, SessionExportRequest>(
           PERSISTENCE_EXPORTS_PATH,
+          request,
+          options,
+        ),
+    },
+    fieldStates: {
+      export: (
+        request: FieldStateExportRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<FieldStateExportResponse, FieldStateExportRequest>(
+          PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+          request,
+          options,
+        ),
+      inspectImport: (
+        request: FieldStateInspectRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<FieldStateInspectResponse, FieldStateInspectRequest>(
+          PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+          request,
+          options,
+        ),
+      import: (
+        request: FieldStateImportRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<FieldStateImportResponse, FieldStateImportRequest>(
+          PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
           request,
           options,
         ),

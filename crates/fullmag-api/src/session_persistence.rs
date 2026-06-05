@@ -259,6 +259,87 @@ pub(crate) struct RecoveryClearResponse {
     pub cleared: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub(crate) struct FieldStateTargetRef {
+    pub kind: String,
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct FieldStateExportRequest {
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    #[serde(default = "default_field_state_format")]
+    pub format: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct FieldStateExportResponse {
+    pub artifact_ref: String,
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    pub format: String,
+    pub point_count: u64,
+    pub component_count: u64,
+    pub field_revision: u64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct FieldStateInspectRequest {
+    pub artifact_ref: String,
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct FieldStateInspectResponse {
+    pub artifact_ref: String,
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    pub format: String,
+    pub compatibility: String,
+    pub default_mode: String,
+    pub point_count: u64,
+    pub component_count: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct FieldStateImportRequest {
+    pub artifact_ref: String,
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct FieldStateImportResponse {
+    pub artifact_ref: String,
+    pub target: FieldStateTargetRef,
+    pub quantity_id: String,
+    pub mode: String,
+    pub applied_point_count: u64,
+    pub field_revision: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FieldStateJsonArtifact {
+    fullmag_kind: String,
+    schema_version: u32,
+    quantity_id: String,
+    target: FieldStateTargetRef,
+    component_count: u64,
+    values: Vec<[f64; 3]>,
+    source_step: Option<u64>,
+    source_time_s: Option<f64>,
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn session_store_root(state: &AppState) -> std::path::PathBuf {
@@ -271,6 +352,10 @@ fn session_store_root(state: &AppState) -> std::path::PathBuf {
 
 fn default_checkpoint_profile() -> SaveProfile {
     SaveProfile::Resume
+}
+
+fn default_field_state_format() -> String {
+    "field_state_json".to_string()
 }
 
 fn open_store(state: &AppState) -> Result<SessionStore, ApiError> {
@@ -707,6 +792,263 @@ pub(crate) async fn restore_checkpoint(
     }))
 }
 
+/// `POST /v2/sessions/current/persistence/field-states/exports`
+pub(crate) async fn export_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateExportRequest>,
+) -> Result<Json<FieldStateExportResponse>, ApiError> {
+    let export_format = normalize_field_state_export_format(&req.format)?;
+    validate_supported_field_state_export(&req)?;
+    let file_name = sanitize_field_state_file_name(req.file_name.as_deref(), &req)?;
+    let repo_root = state.repo_root.clone();
+
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let latest = snapshot
+        .live_state
+        .as_ref()
+        .map(|state| &state.latest_step)
+        .ok_or_else(|| ApiError::bad_request("field-state export requires live state"))?;
+    let values = latest
+        .magnetization
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("field-state export requires live magnetization"))?;
+    if values.len() % 3 != 0 {
+        return Err(ApiError::bad_request(
+            "live magnetization length must be divisible by 3",
+        ));
+    }
+    let vectors = values
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect::<Vec<_>>();
+    if vectors.is_empty() {
+        return Err(ApiError::bad_request(
+            "field-state export requires at least one magnetization vector",
+        ));
+    }
+    let artifact_dir = std::path::PathBuf::from(&snapshot.session.artifact_dir);
+    let field_revision = field_revision(snapshot);
+    let artifact = FieldStateJsonArtifact {
+        fullmag_kind: "field_state".to_string(),
+        schema_version: 1,
+        quantity_id: req.quantity_id.clone(),
+        target: req.target.clone(),
+        component_count: 3,
+        values: vectors,
+        source_step: Some(latest.step),
+        source_time_s: Some(latest.time),
+    };
+    drop(guard);
+
+    let artifact_ref = format!("field-states/{file_name}");
+    let artifact_path = artifact_dir.join(&artifact_ref);
+    if let Some(parent) = artifact_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            ApiError::internal(format!("creating field-state directory: {error}"))
+        })?;
+    }
+    if export_format == "field_state_json" {
+        let raw = serde_json::to_vec_pretty(&artifact).map_err(|error| {
+            ApiError::internal(format!("serializing field-state artifact: {error}"))
+        })?;
+        std::fs::write(&artifact_path, raw).map_err(|error| {
+            ApiError::internal(format!("writing field-state artifact: {error}"))
+        })?;
+    } else {
+        write_field_state_with_python(&repo_root, &artifact_path, &export_format, &artifact)?;
+    }
+
+    let mut guard = state.current_live_state.write().await;
+    if let Some(snapshot) = guard.as_mut() {
+        if !snapshot
+            .artifacts
+            .iter()
+            .any(|entry| entry.path == artifact_ref)
+        {
+            snapshot.artifacts.push(crate::types::ArtifactEntry {
+                path: artifact_ref.clone(),
+                kind: "field_state".to_string(),
+            });
+            snapshot.state_version = snapshot.state_version.saturating_add(1);
+        }
+    }
+
+    Ok(Json(FieldStateExportResponse {
+        artifact_ref,
+        target: req.target,
+        quantity_id: req.quantity_id,
+        format: export_format,
+        point_count: artifact.values.len() as u64,
+        component_count: artifact.component_count,
+        field_revision,
+    }))
+}
+
+/// `POST /v2/sessions/current/persistence/field-states/imports/inspections`
+pub(crate) async fn inspect_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateInspectRequest>,
+) -> Result<Json<FieldStateInspectResponse>, ApiError> {
+    if let Some(format) = req.format.as_deref() {
+        validate_field_state_json_format(format)?;
+    }
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+    let mut warnings = Vec::new();
+    let mut compatible = true;
+    if artifact.quantity_id != req.quantity_id {
+        compatible = false;
+        warnings.push(format!(
+            "artifact quantity '{}' does not match requested quantity '{}'",
+            artifact.quantity_id, req.quantity_id
+        ));
+    }
+    if artifact.target.kind != req.target.kind || artifact.target.id != req.target.id {
+        compatible = false;
+        warnings.push("artifact target does not match requested target".to_string());
+    }
+    let default_mode = default_field_state_mode(&req.target, &req.quantity_id);
+    if default_mode == "apply" {
+        if let Err(error) = validate_checkpoint_restore_shape(snapshot, artifact.values.len()) {
+            compatible = false;
+            warnings.push(error.message);
+        }
+    }
+    let compatibility = if compatible {
+        "compatible"
+    } else {
+        "incompatible"
+    }
+    .to_string();
+
+    Ok(Json(FieldStateInspectResponse {
+        artifact_ref: req.artifact_ref,
+        target: req.target,
+        quantity_id: req.quantity_id,
+        format: "field_state_json".to_string(),
+        compatibility,
+        default_mode,
+        point_count: artifact.values.len() as u64,
+        component_count: artifact.component_count,
+        warnings,
+    }))
+}
+
+/// `POST /v2/sessions/current/persistence/field-states/imports`
+pub(crate) async fn import_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateImportRequest>,
+) -> Result<Json<FieldStateImportResponse>, ApiError> {
+    let mode = req
+        .mode
+        .clone()
+        .unwrap_or_else(|| default_field_state_mode(&req.target, &req.quantity_id));
+    if mode == "attach" {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+        let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+        validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
+        if !snapshot
+            .artifacts
+            .iter()
+            .any(|entry| entry.path == req.artifact_ref)
+        {
+            snapshot.artifacts.push(crate::types::ArtifactEntry {
+                path: req.artifact_ref.clone(),
+                kind: "field_state".to_string(),
+            });
+            snapshot.state_version = snapshot.state_version.saturating_add(1);
+        }
+        let field_revision = field_revision(snapshot);
+        let restored_snapshot = snapshot.clone();
+        drop(guard);
+
+        let realtime_state = current_live_realtime_state_from_snapshot(
+            &state,
+            &restored_snapshot,
+            restored_snapshot.display_selection.revision,
+        )
+        .await;
+        publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+
+        return Ok(Json(FieldStateImportResponse {
+            artifact_ref: req.artifact_ref,
+            target: req.target,
+            quantity_id: req.quantity_id,
+            mode,
+            applied_point_count: 0,
+            field_revision,
+            warnings: Vec::new(),
+        }));
+    }
+    if mode != "apply" {
+        return Err(ApiError::bad_request(
+            "field-state import mode must be 'apply' or 'attach'",
+        ));
+    }
+    if req.quantity_id != "m" || req.target.kind != "object" {
+        return Err(ApiError::bad_request(
+            "field-state apply currently supports object quantity 'm'",
+        ));
+    }
+
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let artifact = read_field_state_artifact(&state.repo_root, snapshot, &req.artifact_ref)?;
+    validate_field_state_request_match(&artifact, &req.target, &req.quantity_id)?;
+    validate_checkpoint_restore_shape(snapshot, artifact.values.len())?;
+    let live_state = snapshot
+        .live_state
+        .as_mut()
+        .ok_or_else(|| ApiError::bad_request("field-state apply requires live state"))?;
+    live_state.latest_step.magnetization = Some(flatten_magnetization(&artifact.values));
+    live_state.status = "paused".to_string();
+    live_state.updated_at_unix_ms = now_unix_ms();
+    snapshot.state_version = snapshot.state_version.saturating_add(1);
+    bump_live_field_revisions(snapshot, &req.quantity_id);
+    if !snapshot
+        .artifacts
+        .iter()
+        .any(|entry| entry.path == req.artifact_ref)
+    {
+        snapshot.artifacts.push(crate::types::ArtifactEntry {
+            path: req.artifact_ref.clone(),
+            kind: "field_state".to_string(),
+        });
+    }
+    let field_revision = field_revision(snapshot);
+    let restored_snapshot = snapshot.clone();
+    drop(guard);
+
+    let realtime_state = current_live_realtime_state_from_snapshot(
+        &state,
+        &restored_snapshot,
+        restored_snapshot.display_selection.revision,
+    )
+    .await;
+    publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+
+    Ok(Json(FieldStateImportResponse {
+        artifact_ref: req.artifact_ref,
+        target: req.target,
+        quantity_id: req.quantity_id,
+        mode,
+        applied_point_count: artifact.values.len() as u64,
+        field_revision,
+        warnings: Vec::new(),
+    }))
+}
+
 /// `GET /v2/sessions/current/persistence/recovery`
 pub(crate) async fn list_recovery(
     State(state): State<Arc<AppState>>,
@@ -1133,6 +1475,292 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         )),
         field_layout_signature: Some(format!("magnetization:{}x3", vector_count)),
     }
+}
+
+fn validate_supported_field_state_export(req: &FieldStateExportRequest) -> Result<(), ApiError> {
+    normalize_field_state_export_format(&req.format)?;
+    if req.quantity_id != "m" || req.target.kind != "object" {
+        return Err(ApiError::bad_request(
+            "field-state export currently supports object quantity 'm'",
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_field_state_export_format(format: &str) -> Result<String, ApiError> {
+    match format {
+        "field_state_json" | "json" => Ok("field_state_json".to_string()),
+        "h5" | "hdf5" => Ok("h5".to_string()),
+        "zarr" => Ok("zarr".to_string()),
+        _ => Err(ApiError::bad_request(
+            "field-state export format must be 'field_state_json', 'h5', or 'zarr'",
+        )),
+    }
+}
+
+fn validate_field_state_json_format(format: &str) -> Result<(), ApiError> {
+    if format == "field_state_json" {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "backend field-state operations currently support format 'field_state_json'",
+    ))
+}
+
+fn sanitize_field_state_file_name(
+    file_name: Option<&str>,
+    req: &FieldStateExportRequest,
+) -> Result<String, ApiError> {
+    let format = normalize_field_state_export_format(&req.format)?;
+    let extension = match format.as_str() {
+        "h5" => ".h5",
+        "zarr" => ".zarr.zip",
+        _ => ".field-state.json",
+    };
+    let fallback = format!(
+        "{}-{}-{}{}",
+        req.target.kind, req.target.id, req.quantity_id, extension
+    );
+    let candidate = file_name.unwrap_or(&fallback);
+    if candidate.is_empty()
+        || candidate == "."
+        || candidate == ".."
+        || candidate.contains('/')
+        || candidate.contains('\\')
+    {
+        return Err(ApiError::bad_request(
+            "field-state file_name must be a single file name",
+        ));
+    }
+    let name = candidate.to_ascii_lowercase();
+    let valid_extension = match format.as_str() {
+        "h5" => name.ends_with(".h5") || name.ends_with(".hdf5"),
+        "zarr" => name.ends_with(".zarr") || name.ends_with(".zarr.zip"),
+        _ => name.ends_with(".json"),
+    };
+    if !valid_extension {
+        return Err(ApiError::bad_request(
+            "field-state file_name extension must match the requested format",
+        ));
+    }
+    Ok(candidate.to_string())
+}
+
+fn default_field_state_mode(target: &FieldStateTargetRef, quantity_id: &str) -> String {
+    if target.kind == "object" && quantity_id == "m" {
+        "apply".to_string()
+    } else {
+        "attach".to_string()
+    }
+}
+
+fn validate_field_state_request_match(
+    artifact: &FieldStateJsonArtifact,
+    target: &FieldStateTargetRef,
+    quantity_id: &str,
+) -> Result<(), ApiError> {
+    if artifact.quantity_id != quantity_id {
+        return Err(ApiError::bad_request(format!(
+            "field-state quantity '{}' does not match requested quantity '{}'",
+            artifact.quantity_id, quantity_id
+        )));
+    }
+    if artifact.target.kind != target.kind || artifact.target.id != target.id {
+        return Err(ApiError::bad_request(
+            "field-state target does not match requested target",
+        ));
+    }
+    if artifact.component_count != 3 {
+        return Err(ApiError::bad_request(
+            "field-state apply requires 3-component vector data",
+        ));
+    }
+    Ok(())
+}
+
+fn read_field_state_artifact(
+    repo_root: &std::path::Path,
+    snapshot: &SessionStateResponse,
+    artifact_ref: &str,
+) -> Result<FieldStateJsonArtifact, ApiError> {
+    let artifact_path = resolve_session_artifact_ref(snapshot, artifact_ref)?;
+    let raw = std::fs::read(&artifact_path)
+        .map_err(|error| ApiError::not_found(format!("field-state artifact not found: {error}")))?;
+    let artifact: FieldStateJsonArtifact = match serde_json::from_slice(&raw) {
+        Ok(artifact) => artifact,
+        Err(json_error) if field_state_path_needs_python_loader(&artifact_path) => {
+            convert_field_state_with_python(repo_root, &artifact_path).map_err(|error| {
+                ApiError::bad_request(format!("{error}; JSON parse error was: {json_error}"))
+            })?
+        }
+        Err(error) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid field-state artifact: {error}"
+            )));
+        }
+    };
+    if artifact.fullmag_kind != "field_state" || artifact.schema_version != 1 {
+        return Err(ApiError::bad_request(
+            "unsupported field-state artifact schema",
+        ));
+    }
+    Ok(artifact)
+}
+
+fn field_state_path_needs_python_loader(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.ends_with(".h5")
+        || name.ends_with(".hdf5")
+        || name.ends_with(".zarr")
+        || name.ends_with(".zarr.zip")
+}
+
+fn convert_field_state_with_python(
+    repo_root: &std::path::Path,
+    artifact_path: &std::path::Path,
+) -> Result<FieldStateJsonArtifact, String> {
+    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let existing_python_path = std::env::var_os("PYTHONPATH");
+    let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
+    if let Some(existing) = existing_python_path {
+        python_path_value.push(":");
+        python_path_value.push(existing);
+    }
+
+    let output = std::process::Command::new("python3")
+        .arg("-m")
+        .arg("fullmag.init.field_state_cli")
+        .arg(artifact_path)
+        .env("PYTHONPATH", python_path_value)
+        .current_dir(&workspace_root)
+        .output()
+        .map_err(|error| format!("running Python field-state loader failed: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Python field-state loader failed with status {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Python field-state loader returned invalid JSON: {error}"))
+}
+
+fn write_field_state_with_python(
+    repo_root: &std::path::Path,
+    artifact_path: &std::path::Path,
+    format: &str,
+    artifact: &FieldStateJsonArtifact,
+) -> Result<(), ApiError> {
+    let json_path = artifact_path.with_extension("field-state-export.json");
+    let raw = serde_json::to_vec(artifact).map_err(|error| {
+        ApiError::internal(format!("serializing field-state export input: {error}"))
+    })?;
+    std::fs::write(&json_path, raw).map_err(|error| {
+        ApiError::internal(format!(
+            "writing temporary field-state export input: {error}"
+        ))
+    })?;
+
+    let workspace_root = fullmag_python_workspace_root(repo_root);
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let existing_python_path = std::env::var_os("PYTHONPATH");
+    let mut python_path_value = std::ffi::OsString::from(python_path.as_os_str());
+    if let Some(existing) = existing_python_path {
+        python_path_value.push(":");
+        python_path_value.push(existing);
+    }
+
+    let output = std::process::Command::new("python3")
+        .arg("-m")
+        .arg("fullmag.init.field_state_cli")
+        .arg("write")
+        .arg(artifact_path)
+        .arg("--input-json")
+        .arg(&json_path)
+        .arg("--format")
+        .arg(format)
+        .env("PYTHONPATH", python_path_value)
+        .current_dir(&workspace_root)
+        .output()
+        .map_err(|error| ApiError::internal(format!("running Python field-state writer: {error}")));
+
+    let _ = std::fs::remove_file(&json_path);
+
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "Python field-state writer failed with status {}: {}",
+            output.status,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+fn fullmag_python_workspace_root(repo_root: &std::path::Path) -> std::path::PathBuf {
+    if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
+        return repo_root.to_path_buf();
+    }
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf())
+}
+
+fn resolve_session_artifact_ref(
+    snapshot: &SessionStateResponse,
+    artifact_ref: &str,
+) -> Result<std::path::PathBuf, ApiError> {
+    let relative = std::path::Path::new(artifact_ref);
+    if relative.is_absolute() || artifact_ref.is_empty() {
+        return Err(ApiError::bad_request(
+            "artifact_ref must be a relative session artifact path",
+        ));
+    }
+    if !relative.components().all(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
+        return Err(ApiError::bad_request(
+            "artifact_ref must not contain parent-directory components",
+        ));
+    }
+    Ok(std::path::PathBuf::from(&snapshot.session.artifact_dir).join(relative))
+}
+
+fn bump_live_field_revisions(snapshot: &mut SessionStateResponse, quantity_id: &str) {
+    snapshot.field_catalog_revision = if snapshot.field_catalog_revision == 0 {
+        1
+    } else {
+        snapshot.field_catalog_revision.saturating_add(1)
+    };
+    let next_quantity_revision = snapshot
+        .field_quantity_revisions
+        .get(quantity_id)
+        .copied()
+        .map(|revision| revision.saturating_add(1))
+        .unwrap_or(2);
+    snapshot
+        .field_quantity_revisions
+        .insert(quantity_id.to_string(), next_quantity_revision);
+    snapshot.field_samples_revision = if snapshot.field_samples_revision == 0 {
+        next_quantity_revision
+    } else {
+        snapshot
+            .field_samples_revision
+            .max(next_quantity_revision)
+            .saturating_add(1)
+    };
 }
 
 // ── Base64 helpers ─────────────────────────────────────────────────────

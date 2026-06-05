@@ -7377,6 +7377,40 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_ani: aggregated_steps.last().map(|step| step.e_ani),
         final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
+        wall_time_ns: aggregated_steps.last().map(|step| step.wall_time_ns),
+        exchange_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.exchange_wall_time_ns),
+        demag_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_wall_time_ns),
+        demag_assemble_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_assemble_wall_time_ns),
+        demag_solve_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_solve_wall_time_ns),
+        demag_solver_setup_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_solver_setup_wall_time_ns),
+        demag_solver_apply_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_solver_apply_wall_time_ns),
+        demag_recover_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_recover_wall_time_ns),
+        demag_energy_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.demag_energy_wall_time_ns),
+        rhs_wall_time_ns: aggregated_steps.last().map(|step| step.rhs_wall_time_ns),
+        extra_energy_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.extra_energy_wall_time_ns),
+        snapshot_wall_time_ns: aggregated_steps
+            .last()
+            .map(|step| step.snapshot_wall_time_ns),
+        rhs_evals: aggregated_steps.last().map(|step| step.rhs_evals),
+        demag_solves: aggregated_steps.last().map(|step| step.demag_solves),
         eigen_mode_count,
         eigen_lowest_frequency_hz,
         artifact_dir: artifact_dir.display().to_string(),

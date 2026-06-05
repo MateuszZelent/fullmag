@@ -10,7 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   LiveStatusResource,
@@ -18,6 +18,8 @@ import type {
   SceneResource,
   SolverStatusResource,
 } from "@/kernel/api/apiTypes";
+import type { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import {
@@ -35,15 +37,24 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 
-const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const INTEGER_FORMAT = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
 const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 6,
 });
 
-export function FooterTelemetry() {
+type FooterLiveScalarSample = KernelEventMap["telemetry:scalar-sample"];
+
+export function FooterTelemetry({
+  bus,
+}: {
+  bus: EventBus<KernelEventMap>;
+}) {
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
     isEqual: footerTelemetryStatusEquals,
   });
+  const liveSample = useFooterLiveScalarSample(bus);
   const scene = useSceneResource();
   const selectedObjectId = useSelectionSelector(
     (selection) => selection.objectId,
@@ -58,6 +69,7 @@ export function FooterTelemetry() {
     status,
     objectMetrics.data,
     solverStatus.data,
+    liveSample,
   );
 
   return (
@@ -111,6 +123,19 @@ export function FooterTelemetry() {
   );
 }
 
+function useFooterLiveScalarSample(
+  bus: EventBus<KernelEventMap>,
+): FooterLiveScalarSample | null {
+  const [sample, setSample] = useState<FooterLiveScalarSample | null>(null);
+
+  useEffect(
+    () => bus.on("telemetry:scalar-sample", (next) => setSample(next)),
+    [bus],
+  );
+
+  return sample;
+}
+
 type FooterTelemetryMetric = {
   detail: string;
   icon: ReactNode;
@@ -126,8 +151,14 @@ type FooterTelemetryStatus = {
     LiveStatusResource["energies"],
     "anisotropy" | "demag" | "dmi" | "exchange" | "total" | "zeeman"
   > | null;
-  metrics: Pick<LiveStatusResource["metrics"], "steps_per_second" | "total_steps">;
-  run: Pick<NonNullable<LiveStatusResource["run"]>, "solver_steps" | "solver_time"> | null;
+  metrics: Pick<
+    LiveStatusResource["metrics"],
+    "steps_per_second" | "total_steps"
+  >;
+  run: Pick<
+    NonNullable<LiveStatusResource["run"]>,
+    "solver_steps" | "solver_time"
+  > | null;
   solver: Pick<
     LiveStatusResource["solver"],
     "converged" | "dt" | "max_torque_T" | "state"
@@ -180,18 +211,39 @@ export function footerTelemetryStatusEquals(
   return (
     Object.is(previous.metrics.steps_per_second, next.metrics.steps_per_second) &&
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
-    Object.is(previous.run?.solver_steps ?? null, next.run?.solver_steps ?? null) &&
-    Object.is(previous.run?.solver_time ?? null, next.run?.solver_time ?? null) &&
+    Object.is(
+      previous.run?.solver_steps ?? null,
+      next.run?.solver_steps ?? null,
+    ) &&
+    Object.is(
+      previous.run?.solver_time ?? null,
+      next.run?.solver_time ?? null,
+    ) &&
     Object.is(previous.solver.converged, next.solver.converged) &&
     Object.is(previous.solver.dt, next.solver.dt) &&
     Object.is(previous.solver.max_torque_T, next.solver.max_torque_T) &&
     Object.is(previous.solver.state, next.solver.state) &&
-    Object.is(previous.energies?.anisotropy ?? null, next.energies?.anisotropy ?? null) &&
-    Object.is(previous.energies?.demag ?? null, next.energies?.demag ?? null) &&
+    Object.is(
+      previous.energies?.anisotropy ?? null,
+      next.energies?.anisotropy ?? null,
+    ) &&
+    Object.is(
+      previous.energies?.demag ?? null,
+      next.energies?.demag ?? null,
+    ) &&
     Object.is(previous.energies?.dmi ?? null, next.energies?.dmi ?? null) &&
-    Object.is(previous.energies?.exchange ?? null, next.energies?.exchange ?? null) &&
-    Object.is(previous.energies?.total ?? null, next.energies?.total ?? null) &&
-    Object.is(previous.energies?.zeeman ?? null, next.energies?.zeeman ?? null)
+    Object.is(
+      previous.energies?.exchange ?? null,
+      next.energies?.exchange ?? null,
+    ) &&
+    Object.is(
+      previous.energies?.total ?? null,
+      next.energies?.total ?? null,
+    ) &&
+    Object.is(
+      previous.energies?.zeeman ?? null,
+      next.energies?.zeeman ?? null,
+    )
   );
 }
 
@@ -199,34 +251,63 @@ export function buildFooterTelemetryModel(
   status: FooterTelemetryStatus | null | undefined,
   objectMetrics: ObjectMetricsResource | null | undefined,
   solverStatus?: SolverStatusResource | null,
+  liveSample?: FooterLiveScalarSample | null,
 ) {
+  const liveRow = liveSample?.row ?? null;
   const runtimeState =
     resolveEffectiveRuntimeState({
       detailedRuntimeState: solverStatus?.runtime_state,
       sessionSolverState: status?.solver?.state,
     }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
-  const runTimeSeconds = solverStatus?.sim_time_seconds ?? status?.run?.solver_time ?? 0;
+  const runTimeSeconds =
+    scalarSampleNumber(liveRow, "time") ??
+    solverStatus?.sim_time_seconds ??
+    status?.run?.solver_time ??
+    0;
   const totalSteps =
+    scalarSampleNumber(liveRow, "step") ??
     solverStatus?.step_index ??
     status?.run?.solver_steps ??
     status?.metrics?.total_steps ??
     0;
   const stepsPerSecond = status?.metrics?.steps_per_second;
-  const maxTorqueT = solverStatus?.max_torque_T ?? status?.solver?.max_torque_T;
-  const dt = solverStatus?.dt_seconds ?? status?.solver?.dt;
+  const maxTorqueT =
+    scalarSampleNumber(liveRow, "max_torque_T") ??
+    solverStatus?.max_torque_T ??
+    status?.solver?.max_torque_T;
+  const dt =
+    scalarSampleNumber(liveRow, "solver_dt") ??
+    scalarSampleNumber(liveRow, "dt") ??
+    solverStatus?.dt_seconds ??
+    status?.solver?.dt;
   const converged = solverStatus?.converged ?? status?.solver?.converged;
-  const totalEnergy = objectMetrics?.energies.total ?? status?.energies?.total;
-  const magnetization = objectMetrics?.magnetization_average;
+  const scalarEnergy = {
+    anisotropy: scalarSampleNumber(liveRow, "e_ani"),
+    demag: scalarSampleNumber(liveRow, "e_demag"),
+    dmi: scalarSampleNumber(liveRow, "e_dmi"),
+    exchange: scalarSampleNumber(liveRow, "e_ex"),
+    total: scalarSampleNumber(liveRow, "e_total"),
+    zeeman: scalarSampleNumber(liveRow, "e_ext"),
+  };
+  const totalEnergy =
+    scalarEnergy.total ?? objectMetrics?.energies.total ?? status?.energies?.total;
+  const scalarMagnetization = scalarSampleMagnetization(liveRow);
+  const magnetization = scalarMagnetization ?? objectMetrics?.magnetization_average;
   const magnetizationMagnitude = magnetization
     ? Math.hypot(magnetization.mx, magnetization.my, magnetization.mz)
     : null;
   const statusTitle = `System Status: ${runtimeStateLabel}`;
   const active = isRuntimeStateActive(runtimeState);
   const waitingForCompute = isRuntimeStateWaitingForCompute(runtimeState);
-  const energySource = objectMetrics
-    ? `Object: ${objectMetrics.object_id}`
-    : "Session summary";
+  const liveSampleSource = liveRow ? "Live scalar sample" : null;
+  const magnetizationSource =
+    liveSampleSource ?? objectMetrics?.source ?? "No object sample";
+  const energySource = liveSampleSource
+    ? liveSampleSource
+    : objectMetrics
+      ? `Object: ${objectMetrics.object_id}`
+      : "Session summary";
 
   return {
     metrics: [
@@ -235,7 +316,11 @@ export function buildFooterTelemetryModel(
         icon: <Clock3 size={13} aria-hidden="true" />,
         id: "time",
         label: "Time",
-        subdetail: status ? "Last sync: now" : "Last sync: pending",
+        subdetail: liveRow
+          ? `Scalar rev ${String(liveSample?.revision ?? "")}`
+          : status
+            ? "Last sync: status"
+            : "Last sync: pending",
         value: formatDuration(runTimeSeconds),
       },
       {
@@ -251,8 +336,15 @@ export function buildFooterTelemetryModel(
         icon: <Hash size={13} aria-hidden="true" />,
         id: "step",
         label: "Step",
-        subdetail: `t=${formatScientific(objectMetrics?.time_seconds ?? runTimeSeconds, "0.000000e+0")} s`,
-        value: formatInteger(objectMetrics?.step ?? totalSteps),
+        subdetail: `t=${formatScientific(
+          liveRow
+            ? runTimeSeconds
+            : objectMetrics?.time_seconds ?? runTimeSeconds,
+          "0.000000e+0",
+        )} s`,
+        value: formatInteger(
+          liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
+        ),
       },
       {
         detail: "Solver timestep",
@@ -276,7 +368,7 @@ export function buildFooterTelemetryModel(
         icon: <Magnet size={13} aria-hidden="true" />,
         id: "avg-mx",
         label: "avg mx",
-        subdetail: objectMetrics?.source ?? "No object sample",
+        subdetail: magnetizationSource,
         value: formatFixed(magnetization?.mx, 6, "0.000000"),
       },
       {
@@ -284,7 +376,7 @@ export function buildFooterTelemetryModel(
         icon: <Magnet size={13} aria-hidden="true" />,
         id: "avg-my",
         label: "avg my",
-        subdetail: objectMetrics?.source ?? "No object sample",
+        subdetail: magnetizationSource,
         value: formatFixed(magnetization?.my, 6, "0.000000"),
       },
       {
@@ -292,7 +384,7 @@ export function buildFooterTelemetryModel(
         icon: <Magnet size={13} aria-hidden="true" />,
         id: "avg-mz",
         label: "avg mz",
-        subdetail: objectMetrics?.source ?? "No object sample",
+        subdetail: magnetizationSource,
         value: formatFixed(magnetization?.mz, 6, "0.000000"),
       },
       {
@@ -300,7 +392,11 @@ export function buildFooterTelemetryModel(
         icon: <Magnet size={13} aria-hidden="true" />,
         id: "avg-m",
         label: "|avg m|",
-        subdetail: objectMetrics?.has_solver_sample ? "Solver sample" : "Initial state",
+        subdetail: liveRow
+          ? "Live scalar sample"
+          : objectMetrics?.has_solver_sample
+            ? "Solver sample"
+            : "Initial state",
         value: formatFixed(magnetizationMagnitude, 6, "0.000000"),
       },
       {
@@ -319,7 +415,12 @@ export function buildFooterTelemetryModel(
         label: "Exchange",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.exchange ?? status?.energies?.exchange, "0.000000e+0"),
+        value: formatScientific(
+          scalarEnergy.exchange ??
+            objectMetrics?.energies.exchange ??
+            status?.energies?.exchange,
+          "0.000000e+0",
+        ),
       },
       {
         detail: "Demag",
@@ -328,7 +429,12 @@ export function buildFooterTelemetryModel(
         label: "Demag",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.demag ?? status?.energies?.demag, "0.000000e+0"),
+        value: formatScientific(
+          scalarEnergy.demag ??
+            objectMetrics?.energies.demag ??
+            status?.energies?.demag,
+          "0.000000e+0",
+        ),
       },
       {
         detail: "Zeeman",
@@ -337,7 +443,12 @@ export function buildFooterTelemetryModel(
         label: "Zeeman",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.zeeman ?? status?.energies?.zeeman, "0.000000e+0"),
+        value: formatScientific(
+          scalarEnergy.zeeman ??
+            objectMetrics?.energies.zeeman ??
+            status?.energies?.zeeman,
+          "0.000000e+0",
+        ),
       },
       {
         detail: "Anisotropy",
@@ -346,7 +457,12 @@ export function buildFooterTelemetryModel(
         label: "Anisotropy",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.anisotropy ?? status?.energies?.anisotropy, "0.000000e+0"),
+        value: formatScientific(
+          scalarEnergy.anisotropy ??
+            objectMetrics?.energies.anisotropy ??
+            status?.energies?.anisotropy,
+          "0.000000e+0",
+        ),
       },
       {
         detail: "DMI",
@@ -355,7 +471,12 @@ export function buildFooterTelemetryModel(
         label: "DMI",
         subdetail: energySource,
         unit: "J",
-        value: formatScientific(objectMetrics?.energies.dmi ?? status?.energies?.dmi, "0.000000e+0"),
+        value: formatScientific(
+          scalarEnergy.dmi ??
+            objectMetrics?.energies.dmi ??
+            status?.energies?.dmi,
+          "0.000000e+0",
+        ),
       },
     ] satisfies FooterTelemetryMetric[],
     onlineDetail: status ? "Live session channel" : "Awaiting session",
@@ -449,10 +570,30 @@ function TelemetryMetric({
   );
 }
 
+function scalarSampleNumber(
+  row: Record<string, number> | null,
+  key: string,
+): number | null {
+  const value = row?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function scalarSampleMagnetization(
+  row: Record<string, number> | null,
+): { mx: number; my: number; mz: number } | null {
+  const mx = scalarSampleNumber(row, "mx");
+  const my = scalarSampleNumber(row, "my");
+  const mz = scalarSampleNumber(row, "mz");
+  if (mx === null || my === null || mz === null) return null;
+  return { mx, my, mz };
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   const totalSeconds = Math.max(
     0,
-    Math.floor(typeof seconds === "number" && Number.isFinite(seconds) ? seconds : 0),
+    Math.floor(
+      typeof seconds === "number" && Number.isFinite(seconds) ? seconds : 0,
+    ),
   );
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor((totalSeconds % 3_600) / 60);

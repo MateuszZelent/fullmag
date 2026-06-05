@@ -8,7 +8,9 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::session_persistence::{
     CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse,
-    CheckpointRestoreRequest, CheckpointRestoreResponse, RecoveryClearResponse,
+    CheckpointRestoreRequest, CheckpointRestoreResponse, FieldStateExportRequest,
+    FieldStateExportResponse, FieldStateImportRequest, FieldStateImportResponse,
+    FieldStateInspectRequest, FieldStateInspectResponse, RecoveryClearResponse,
     RecoveryListResponse, SessionExportRequest, SessionExportResponse, SessionImportCommitRequest,
     SessionImportCommitResponse, SessionImportInspectRequest, SessionImportInspectResponse,
 };
@@ -136,6 +138,60 @@ pub async fn restore_checkpoint(
     Json(req): Json<CheckpointRestoreRequest>,
 ) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
     crate::session_persistence::restore_checkpoint(State(state), checkpoint_id, Json(req)).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/field-states/exports",
+    request_body = FieldStateExportRequest,
+    responses(
+        (status = 200, description = "Field state exported", body = FieldStateExportResponse),
+        (status = 400, description = "Unsupported field state target or format"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "persistence"
+)]
+pub async fn export_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateExportRequest>,
+) -> Result<Json<FieldStateExportResponse>, ApiError> {
+    crate::session_persistence::export_field_state(State(state), Json(req)).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/field-states/imports/inspections",
+    request_body = FieldStateInspectRequest,
+    responses(
+        (status = 200, description = "Field state import inspection", body = FieldStateInspectResponse),
+        (status = 400, description = "Invalid field state artifact"),
+        (status = 404, description = "No active workspace or artifact not found"),
+    ),
+    tag = "persistence"
+)]
+pub async fn inspect_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateInspectRequest>,
+) -> Result<Json<FieldStateInspectResponse>, ApiError> {
+    crate::session_persistence::inspect_field_state(State(state), Json(req)).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/field-states/imports",
+    request_body = FieldStateImportRequest,
+    responses(
+        (status = 200, description = "Field state imported", body = FieldStateImportResponse),
+        (status = 400, description = "Invalid or incompatible field state"),
+        (status = 404, description = "No active workspace or artifact not found"),
+    ),
+    tag = "persistence"
+)]
+pub async fn import_field_state(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldStateImportRequest>,
+) -> Result<Json<FieldStateImportResponse>, ApiError> {
+    crate::session_persistence::import_field_state(State(state), Json(req)).await
 }
 
 #[utoipa::path(

@@ -54,7 +54,15 @@ from fullmag.model.outputs import (
     Snapshot,
 )
 from fullmag.model.problem import Problem
-from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
+from fullmag.model.study import (
+    DEFAULT_TABLE_AUTOSAVE_QUANTITIES,
+    Eigenmodes,
+    FrequencyResponse,
+    RelaxStop,
+    Relaxation,
+    TableAutosave,
+    TimeEvolution,
+)
 from fullmag.runtime.loader import LoadedProblem, LoadedStage
 
 
@@ -110,6 +118,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [_export_stage_draft(stage) for stage in _builder_stage_sequence(loaded)],
         "study_pipeline": export_study_pipeline_document(loaded),
+        "table_autosave": _export_table_autosave(base_problem),
         "initial_state": _export_initial_state(base_problem),
         "geometries": [
             _export_geometry_entry(magnet, base_problem, source_root=source_root)
@@ -252,6 +261,15 @@ def render_loaded_problem_as_script(
     if output_lines:
         lines.append("")
         lines.extend(output_lines)
+
+    table_autosave_lines = _render_table_autosave(
+        base_problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    if table_autosave_lines:
+        lines.append("")
+        lines.extend(table_autosave_lines)
 
     excitation_lines = _render_excitation_analysis(
         base_problem,
@@ -1952,6 +1970,46 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     return lines
 
 
+def _render_table_autosave(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+    surface: str,
+) -> list[str]:
+    if problem.study is None:
+        return []
+    table_autosave = _table_autosave_from_override(
+        overrides.get("table_autosave"),
+    ) or _study_table_autosave(problem.study)
+    if table_autosave is None:
+        return []
+
+    kwargs = [f"{_py_number(table_autosave.t_sampl)}"]
+    quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
+    if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
+        kwargs.append(f"quantities={_py_literal(list(quantities))}")
+    return [
+        "# Table autosave",
+        f"{_surface_call(surface, 'tableautosave')}({', '.join(kwargs)})",
+    ]
+
+
+def _table_autosave_from_override(value: object) -> TableAutosave | None:
+    if not isinstance(value, dict):
+        return None
+    if value.get("kind") not in {None, "table_autosave"}:
+        return None
+    sample_period = value.get("sample_period_s")
+    if not isinstance(sample_period, (int, float)):
+        return None
+    quantities = value.get("quantities")
+    return TableAutosave(
+        t_sampl=float(sample_period),
+        quantities=quantities if isinstance(quantities, list) else None,
+        table_id=str(value.get("table_id") or "default"),
+    )
+
+
 def _render_stages(
     stages: Sequence[LoadedStage],
     *,
@@ -3368,6 +3426,20 @@ def _study_outputs(
     return tuple(study.outputs)
 
 
+def _study_table_autosave(
+    study: TimeEvolution | Relaxation | Eigenmodes | FrequencyResponse,
+) -> TableAutosave | None:
+    table_autosave = getattr(study, "_table_autosave", None)
+    return table_autosave if isinstance(table_autosave, TableAutosave) else None
+
+
+def _export_table_autosave(problem: Problem) -> dict[str, object] | None:
+    if problem.study is None:
+        return None
+    table_autosave = _study_table_autosave(problem.study)
+    return table_autosave.to_ir() if table_autosave is not None else None
+
+
 def _magnet_dmi(problem: Problem, magnet_name: str) -> float | None:
     del magnet_name
     for term in problem.energy:
@@ -3994,6 +4066,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         else None,
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
         "outputs": [output.to_ir() for output in _study_outputs(problem.study)],
+        "table_autosave": _export_table_autosave(problem),
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
         "interactive": runtime_metadata.get("interactive_session_requested"),
         "wait_for_solve": runtime_metadata.get("wait_for_solve"),

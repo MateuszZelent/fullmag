@@ -128,9 +128,9 @@ pub async fn get_stage_execution(
     State(state): State<Arc<AppState>>,
 ) -> Result<axum::response::Response, ApiError> {
     let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let Some(snapshot) = guard.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
     let Some(stage) = snapshot.stage_execution.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };

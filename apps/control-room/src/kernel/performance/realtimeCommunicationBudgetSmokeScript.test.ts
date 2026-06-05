@@ -29,11 +29,16 @@ describe("realtime communication budget smoke script", () => {
     expect(smokeScript).toContain("parsed.origin !== apiBase");
     expect(smokeScript).toContain("pathnameFromUrl(websocket.url()) !== FULLMAG_WS_PATH");
     expect(smokeScript).toContain("scalar.sample websocket telemetry");
+    expect(smokeScript).toContain("fields:samples websocket invalidations");
+    expect(smokeScript).toContain("fieldSampleWsPerMinute");
     expect(smokeScript).toContain("fieldVectorHttpTxPerMinute");
     expect(smokeScript).toContain("topologyHttpTxPerMinute");
     expect(smokeScript).toContain("CONTROL_ROOM_COMMUNICATION_MAX_SESSION_HTTP_PER_MIN");
     expect(smokeScript).toContain(
       "CONTROL_ROOM_COMMUNICATION_MAX_SCALAR_SAMPLE_WS_PER_MIN",
+    );
+    expect(smokeScript).toContain(
+      "CONTROL_ROOM_COMMUNICATION_MAX_FIELD_SAMPLE_WS_PER_MIN",
     );
     expect(smokeScript).toContain(
       "CONTROL_ROOM_COMMUNICATION_REQUIRE_FULLMAG_WS",

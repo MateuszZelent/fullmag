@@ -11,7 +11,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::schemas::realtime::FULLMAG_LIVE_SUBPROTOCOL;
+use crate::realtime_policy::{
+    current_live_realtime_policy_resource, patch_current_live_realtime_policy,
+};
+use crate::schemas::realtime::{
+    RealtimeCommunicationPolicyPatch, RealtimeCommunicationPolicyResource, RealtimeResourceChange,
+    RealtimeResourceName, FULLMAG_LIVE_SUBPROTOCOL,
+};
 use crate::types::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +54,72 @@ pub async fn ws_current_live(
         .on_upgrade(move |socket| {
             crate::handle_current_live_realtime_ws(socket, state, query.after_seq)
         }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/events/communication-policy",
+    responses(
+        (status = 200, description = "Current backend-owned realtime communication policy", body = RealtimeCommunicationPolicyResource),
+    ),
+    tag = "platform"
+)]
+pub async fn get_communication_policy(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RealtimeCommunicationPolicyResource>, ApiError> {
+    let policy = state.current_live_realtime_policy.read().await;
+    Ok(Json(current_live_realtime_policy_resource(&policy)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/events/communication-policy",
+    request_body = RealtimeCommunicationPolicyPatch,
+    responses(
+        (status = 200, description = "Updated backend-owned realtime communication policy", body = RealtimeCommunicationPolicyResource),
+        (status = 400, description = "Invalid communication policy patch"),
+    ),
+    tag = "platform"
+)]
+pub async fn patch_communication_policy(
+    State(state): State<Arc<AppState>>,
+    Json(patch): Json<RealtimeCommunicationPolicyPatch>,
+) -> Result<Json<RealtimeCommunicationPolicyResource>, ApiError> {
+    let resource = {
+        let mut policy = state.current_live_realtime_policy.write().await;
+        patch_current_live_realtime_policy(&mut policy, patch)?
+    };
+    publish_communication_policy_change(&state, resource.revision).await?;
+    Ok(Json(resource))
+}
+
+async fn publish_communication_policy_change(
+    state: &Arc<AppState>,
+    revision: u64,
+) -> Result<(), ApiError> {
+    let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() else {
+        return Ok(());
+    };
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state =
+        crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision).await;
+    crate::publish_current_live_realtime_resource_changes(
+        state,
+        realtime_state.session_id,
+        realtime_state.run_id,
+        vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::Events,
+            revision,
+            resource_id: Some("communication-policy".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/events/communication-policy".to_string()),
+        }],
+        false,
+        0,
+    )
+    .await
 }
 
 #[utoipa::path(

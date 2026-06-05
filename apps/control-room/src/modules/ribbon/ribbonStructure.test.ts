@@ -1505,6 +1505,63 @@ describe("ribbon structure", () => {
     );
   });
 
+  it("patches canonical visualization state from Results quantity shortcuts", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        quantity: { active_quantity_id: "m" },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("results", context);
+    const quantityGroup = content?.groups.find((group) => group.id === "quantity");
+    const hEffAction = quantityGroup?.actions.find(
+      (action) => action.id === "res-heff",
+    );
+    const mAction = quantityGroup?.actions.find((action) => action.id === "res-m");
+    const sourceNode = mAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "results-quantity:radio",
+    );
+
+    expect(hEffAction).toMatchObject({
+      active: false,
+      commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+    });
+    expect(sourceNode).toMatchObject({
+      commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+      value: "m",
+    });
+    if (!hEffAction?.commandId || sourceNode?.type !== "radio-group") {
+      throw new Error("Expected Results quantity controls");
+    }
+
+    await createRibbonCommandRegistry().execute(hEffAction.commandId, {
+      ...context,
+      input:
+        typeof hEffAction.commandInput === "function"
+          ? hEffAction.commandInput(undefined)
+          : hEffAction.commandInput,
+      source: "ribbon",
+    } as unknown as CommandContext);
+    await runRibbonNode(sourceNode, "H_demag", context);
+
+    expect(patches).toEqual([
+      {
+        active_quantity_id: "H_eff",
+        quantity: { active_quantity_id: "H_eff" },
+      },
+      {
+        active_quantity_id: "H_demag",
+        quantity: { active_quantity_id: "H_demag" },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([
+        [VISUALIZATION_STATE_PATH, 41],
+        [VISUALIZATION_STATE_PATH, 42],
+      ]),
+    );
+  });
+
   it("flushes global Quantity changes immediately through visualization sync", async () => {
     const { context, patches } = createVisualizationRibbonContext({
       active_quantity_id: "m",
@@ -2702,6 +2759,7 @@ function createVisualizationRibbonContext(
         objectId: null,
         ref: null,
       },
+      source: "test" as const,
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
       visualizationState: visualizationState as VisualizationStateResource,

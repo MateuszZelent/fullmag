@@ -16,6 +16,7 @@ import {
   isMagneticOnlyQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
@@ -182,6 +183,10 @@ export function resolveViewport3DAirboxFieldVectorQuery(
   };
   delete query.scope_id;
   return query;
+}
+
+function airboxFieldVectorUnavailable(error: unknown): boolean {
+  return error instanceof ControlRoomApiError && error.status === 404;
 }
 
 export function resolveViewport3DAirboxFieldVectorResourceKeys(
@@ -419,7 +424,12 @@ export function useViewport3DAirboxFieldVectors(
                   resources.getRevision(key),
                 ),
               },
-            );
+            ).catch((error: unknown) => {
+              if (airboxFieldVectorUnavailable(error)) {
+                return null;
+              }
+              throw error;
+            });
             return [key, data] as const;
           }),
         ),

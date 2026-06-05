@@ -34,6 +34,20 @@ export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
+export type FieldStateExportRequest =
+  components["schemas"]["FieldStateExportRequest"];
+export type FieldStateExportResponse =
+  components["schemas"]["FieldStateExportResponse"];
+export type FieldStateImportRequest =
+  components["schemas"]["FieldStateImportRequest"];
+export type FieldStateImportResponse =
+  components["schemas"]["FieldStateImportResponse"];
+export type FieldStateInspectRequest =
+  components["schemas"]["FieldStateInspectRequest"];
+export type FieldStateInspectResponse =
+  components["schemas"]["FieldStateInspectResponse"];
+export type FieldStateTargetRef =
+  components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =
@@ -76,6 +90,10 @@ export type GeometryRealizationResource =
   components["schemas"]["GeometryRealizationSnapshot"];
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
+export type ImportSessionAssetRequest =
+  components["schemas"]["ImportSessionAssetRequest"];
+export type SessionAssetImportResponse =
+  components["schemas"]["SessionAssetImportResponse"];
 export type CpuTelemetryResource =
   components["schemas"]["CpuTelemetryResponse"];
 export type GpuTelemetryResource =
@@ -84,6 +102,12 @@ export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };
+export type RealtimeCommunicationPolicy =
+  components["schemas"]["RealtimeCommunicationPolicy"];
+export type RealtimeCommunicationPolicyPatch =
+  components["schemas"]["RealtimeCommunicationPolicyPatch"];
+export type RealtimeCommunicationPolicyResource =
+  components["schemas"]["RealtimeCommunicationPolicyResource"];
 export type SolverProfileResource =
   components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =

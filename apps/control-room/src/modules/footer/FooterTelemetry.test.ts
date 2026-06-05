@@ -188,6 +188,49 @@ describe("FooterTelemetry", () => {
     expect(dt?.subdetail).toBe("State: Waiting for compute");
   });
 
+  it("uses live scalar samples for fast footer telemetry values", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, objectMetrics, null, {
+      revision: 24,
+      row: {
+        e_ani: 0.9,
+        e_demag: 0.7,
+        e_dmi: 1.1,
+        e_ex: 0.6,
+        e_ext: 0.8,
+        e_total: 3.1,
+        max_torque_T: 0.004,
+        mx: 0.1,
+        my: 0.2,
+        mz: 0.3,
+        solver_dt: 2e-12,
+        step: 123,
+        time: 2.5,
+      },
+      runId: "run-1",
+      sessionId: "session-1",
+      step: 123,
+      time: 2.5,
+    });
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId.step?.value).toBe("123");
+    expect(byId.step?.subdetail).toBe("t=2.5 s");
+    expect(byId["avg-mx"]?.value).toBe("0.100000");
+    expect(byId["avg-my"]?.value).toBe("0.200000");
+    expect(byId["avg-mz"]?.value).toBe("0.300000");
+    expect(byId["avg-mx"]?.subdetail).toBe("Live scalar sample");
+    expect(byId["energy-total"]?.value).toBe("3.1");
+    expect(byId["energy-total"]?.subdetail).toBe("Live scalar sample");
+    expect(byId["max-torque"]?.value).toBe("4.000000e-3 T");
+  });
+
   it("selects only telemetry-relevant status fields", () => {
     const selected = selectFooterTelemetryStatus({
       data: status,

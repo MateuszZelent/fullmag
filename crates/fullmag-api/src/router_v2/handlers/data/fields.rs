@@ -413,17 +413,13 @@ fn resolve_field_scope(
             resolve_part_scope(mesh, part_id, "part")?
         }
         "airbox" => {
-            let part_id = match query.scope_id.as_deref().filter(|value| !value.is_empty()) {
-                Some(part_id) => Cow::Borrowed(part_id),
-                None => Cow::Owned(
-                    mesh.mesh_parts
-                        .iter()
-                        .find(|part| part.role == "air")
-                        .map(|part| part.id.clone())
-                        .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?,
-                ),
-            };
-            resolve_part_scope(mesh, part_id.as_ref(), "airbox")?
+            let part_id = mesh
+                .mesh_parts
+                .iter()
+                .find(|part| part.role == "air")
+                .map(|part| part.id.clone())
+                .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?;
+            resolve_part_scope(mesh, &part_id, "airbox")?
         }
         "selection" => {
             let selection = workspace_selection.ok_or_else(|| {
@@ -756,9 +752,9 @@ pub async fn get_field_vector(
         None
     };
     let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let Some(snapshot) = guard.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
 
     let spec = quantity_spec(quantity_id);
     let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);

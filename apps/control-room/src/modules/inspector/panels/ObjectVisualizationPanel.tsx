@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
+import { Info, RotateCcw } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { FieldCatalogResource, LiveStatusResource } from "@/kernel/api/apiTypes";
@@ -60,6 +60,7 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
+  buildAirboxVectorDiagnostic,
   buildAirboxVisibilityDiagnostic,
   buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
@@ -94,8 +95,6 @@ const GEOMETRY_SCOPES: Array<{
   { label: "Surface", value: "surface" },
   { label: "Full", value: "full" },
 ];
-
-const VISUALIZATION_NUMBER_COMMIT_DELAY_MS = 120;
 
 type ObjectVisualizationManifestStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
@@ -244,21 +243,29 @@ function remoteVisualizationTargetPatch(
 }
 
 function VisualizationDisplayPassesSection({
+  airboxPartIds,
   displaySettings,
+  fieldCatalog,
+  onFieldCatalogRequest,
   passControlsDisabled,
   patch,
   pending,
   renderWarning,
   settings,
   targetKind,
+  vectorDomain,
 }: {
+  airboxPartIds: readonly string[];
   displaySettings: VisualizationTargetSettings;
+  fieldCatalog: ReturnType<typeof useFieldCatalogResource>;
+  onFieldCatalogRequest: () => void;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
   targetKind: VisualizationTargetKind;
+  vectorDomain: string;
 }) {
   const [airboxDiagnosticOpen, setAirboxDiagnosticOpen] = useState(false);
   const airboxDiagnostic =
@@ -267,6 +274,18 @@ function VisualizationDisplayPassesSection({
           displaySettings,
           renderWarning,
           settings,
+        })
+      : null;
+  const airboxVectorDiagnostic =
+    targetKind === "airbox"
+      ? buildAirboxVectorDiagnostic({
+          airboxPartIds,
+          displaySettings,
+          fieldCatalog: fieldCatalog.data,
+          fieldCatalogStatus: fieldCatalog.status,
+          renderWarning,
+          settings,
+          vectorDomain,
         })
       : null;
 
@@ -280,12 +299,30 @@ function VisualizationDisplayPassesSection({
     }
   }
 
+  function handleDiagnosticClick(): void {
+    onFieldCatalogRequest();
+    setAirboxDiagnosticOpen(true);
+  }
+
   return (
     <InspectorSection title="Display Passes">
       {renderWarning ? (
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
       <div className="fm-visualization-toggle-grid">
+        {targetKind === "airbox" ? (
+          <Button
+            aria-label="Airbox visualization diagnostics"
+            className="fm-visualization-toggle"
+            size="sm"
+            title="Airbox visualization diagnostics"
+            type="button"
+            variant="secondary"
+            onClick={handleDiagnosticClick}
+          >
+            <Info size={14} />
+          </Button>
+        ) : null}
         <ToggleButton
           active={displaySettings.visible}
           disabled={pending}
@@ -309,23 +346,42 @@ function VisualizationDisplayPassesSection({
         ) : null}
       </div>
       <Dialog
-        open={airboxDiagnosticOpen && airboxDiagnostic !== null}
+        open={
+          airboxDiagnosticOpen &&
+          (airboxDiagnostic !== null || airboxVectorDiagnostic !== null)
+        }
         onOpenChange={setAirboxDiagnosticOpen}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {airboxDiagnostic?.title ?? "Airbox visibility diagnostic"}
+              Airbox visualization diagnostic
             </DialogTitle>
             <DialogDescription>
-              {airboxDiagnostic?.message ??
+              {airboxVectorDiagnostic?.message ??
+                airboxDiagnostic?.message ??
                 "Airbox visibility state is not available."}
             </DialogDescription>
           </DialogHeader>
           <div>
+            {airboxVectorDiagnostic ? (
+              <>
+                <FieldRow label="Vector status" value={airboxVectorDiagnostic.title} />
+                {airboxVectorDiagnostic.details.map((detail) => (
+                  <FieldRow
+                    key={`vector:${detail.label}`}
+                    label={detail.label}
+                    value={detail.value}
+                  />
+                ))}
+              </>
+            ) : null}
+            {airboxDiagnostic ? (
+              <FieldRow label="Visibility status" value={airboxDiagnostic.title} />
+            ) : null}
             {airboxDiagnostic?.details.map((detail) => (
               <FieldRow
-                key={detail.label}
+                key={`visibility:${detail.label}`}
                 label={detail.label}
                 value={detail.value}
               />
@@ -781,6 +837,11 @@ function useObjectVisualizationPanelState(
       targetActive: Boolean(target),
     }),
   });
+  const airboxPartIds =
+    manifest.data?.mesh_parts
+      ?.filter((part) => part.role === "air" || part.role === "airbox")
+      .map((part) => part.id) ?? [];
+  const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
   const topologyFreshness =
     scene.data && manifest.data
       ? resolveVisualizationTopologyFreshness(scene.data, manifest.data)
@@ -985,6 +1046,7 @@ function useObjectVisualizationPanelState(
   return {
     displaySettings,
     effectiveSettings,
+    airboxPartIds,
     feedback,
     fieldCatalog,
     onFieldCatalogRequest: () => setFieldCatalogRequestedTargetKey(targetKey),
@@ -1001,6 +1063,7 @@ function useObjectVisualizationPanelState(
     sectionDisabled,
     settings,
     target,
+    vectorDomain,
     vectorBudgetRange,
     vectorMeshParts,
   } as const;
@@ -1046,6 +1109,7 @@ function ObjectVisualizationPanelView({
 }) {
   const {
     displaySettings,
+    airboxPartIds,
     feedback,
     fieldCatalog,
     onFieldCatalogRequest,
@@ -1062,6 +1126,7 @@ function ObjectVisualizationPanelView({
     sectionDisabled,
     settings,
     target,
+    vectorDomain,
     vectorBudgetRange,
     vectorMeshParts,
   } = panel;
@@ -1083,13 +1148,17 @@ function ObjectVisualizationPanelView({
         />
       </InspectorSection>
       <VisualizationDisplayPassesSection
+        airboxPartIds={airboxPartIds}
         displaySettings={displaySettings}
+        fieldCatalog={fieldCatalog}
+        onFieldCatalogRequest={onFieldCatalogRequest}
         passControlsDisabled={passControlsDisabled}
         patch={patch}
         pending={pending}
         renderWarning={renderWarning}
         settings={settings}
         targetKind={target.kind}
+        vectorDomain={vectorDomain}
       />
 
       <VisualizationRenderModeSection
@@ -1207,48 +1276,29 @@ function NumberField({
   value: number;
 }) {
   const [draftOverride, setDraftOverride] = useState<number | null>(null);
-  const editingRef = useRef(false);
   const latestOnChangeRef = useRef(onChange);
   const pendingValueRef = useRef<number | null>(null);
-  const timerRef = useRef<number | null>(null);
   const displayValue = draftOverride ?? value;
 
   useEffect(() => {
     latestOnChangeRef.current = onChange;
   }, [onChange]);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
   const flushDraft = useCallback(() => {
     const pendingValue = pendingValueRef.current;
-    editingRef.current = false;
     pendingValueRef.current = null;
     setDraftOverride(null);
-    clearTimer();
     if (pendingValue !== null) {
       latestOnChangeRef.current(pendingValue);
     }
-  }, [clearTimer]);
-
-  useEffect(() => () => clearTimer(), [clearTimer]);
+  }, []);
 
   const scheduleDraft = useCallback(
     (nextValue: number) => {
-      editingRef.current = true;
       pendingValueRef.current = nextValue;
       setDraftOverride(nextValue);
-      clearTimer();
-      timerRef.current = window.setTimeout(
-        flushDraft,
-        VISUALIZATION_NUMBER_COMMIT_DELAY_MS,
-      );
     },
-    [clearTimer, flushDraft],
+    [],
   );
 
   const valueRange = max - min;
@@ -1273,6 +1323,7 @@ function NumberField({
         onBlur={flushDraft}
         onChange={(event) => scheduleDraft(Number(event.target.value))}
         onKeyUp={flushDraft}
+        onPointerCancel={flushDraft}
         onPointerUp={flushDraft}
       />
     </label>

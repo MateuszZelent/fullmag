@@ -26,6 +26,26 @@ pub(crate) fn summarize_uploaded_asset(
     if lower.ends_with(".msh") {
         return summarize_msh_asset(file_name, bytes);
     }
+    if lower.ends_with(".h5")
+        || lower.ends_with(".hdf5")
+        || lower.ends_with(".zarr")
+        || lower.ends_with(".zarr.zip")
+        || lower.ends_with(".field-state.json")
+    {
+        return Ok(ImportedAssetSummary {
+            file_name: file_name.to_string(),
+            file_bytes: bytes.len(),
+            kind: "field_state".to_string(),
+            bounds: None,
+            triangle_count: None,
+            node_count: None,
+            element_count: None,
+            boundary_face_count: None,
+            note: Some(
+                "Field-state payload stored for target-scoped save/load inspection.".to_string(),
+            ),
+        });
+    }
     if lower.ends_with(".vtk") || lower.ends_with(".vtu") || lower.ends_with(".xdmf") {
         return Ok(ImportedAssetSummary {
             file_name: file_name.to_string(),

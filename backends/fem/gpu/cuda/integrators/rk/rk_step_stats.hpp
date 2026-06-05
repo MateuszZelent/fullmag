@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "cpu/mfem/integrators/rk_tableau.hpp"
 #include "fullmag_fem.h"
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -44,6 +45,20 @@ static_assert(
     "FemGpuState scalar result allocation must cover GPU RK final stats slots");
 
 double *gpu_rk_final_scalar_result(FemGpuState &gpu, GpuFinalScalarSlot slot);
+
+bool gpu_rk_prepare_phase_timing_events(
+    Context &ctx,
+    const ExplicitTableau &tableau,
+    std::string &reason);
+
+bool gpu_rk_prepare_phase_timing_event_count(
+    Context &ctx,
+    size_t required_count,
+    std::string &reason);
+
+void gpu_rk_reset_phase_timing_events(Context &ctx);
+
+void gpu_rk_destroy_phase_timing_events(Context &ctx);
 
 bool gpu_rk_finalize_step_stats(
     Context &ctx,

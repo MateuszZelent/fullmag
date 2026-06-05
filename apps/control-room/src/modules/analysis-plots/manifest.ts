@@ -6,6 +6,12 @@ export const analysisPlotsManifest: ModuleManifest = {
   version: "0.1.0",
   slots: ["viewport-main"],
   component: () => import("./AnalysisPlotsModule"),
+  emits: [
+    "workspace:selection-changed",
+    "charts:range-selected",
+    "charts:series-selected",
+  ],
+  listens: ["charts:add-series-requested"],
   contributes: {
     commands: [
       {

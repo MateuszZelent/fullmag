@@ -56,7 +56,7 @@ from fullmag.model.dynamics import (
     LLG,
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
-from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
+from fullmag.model.study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TableAutosave, TimeEvolution
 from fullmag.model.structure import Ferromagnet, Material, Region
 from fullmag.model.problem import (
     BackendTarget,
@@ -247,6 +247,7 @@ class MagnetHandle:
         self.anisU: tuple[float, float, float] | None = None
         self._m_value: Any = None
         self._m_proxy = MagnetizationHandle(self)
+        self._field_states: dict[str, object] = {}
         self._mesh_spec = _MeshSpecState()
         self._last_mesh_quality: object | None = None
         self.mesh = GeometryMeshHandle(self)
@@ -460,6 +461,70 @@ class MagnetHandle:
         self._visualization = hint
         _state._register_geometry_visualization_hint(self._name, hint)
         return self
+
+    def load(
+        self,
+        path: str | Path,
+        *,
+        quantity: object = None,
+        format: str = "auto",
+        dataset: str | None = None,
+        sample: int = -1,
+        mode: str = "auto",
+    ):
+        from fullmag.init import load_field_state
+
+        quantity_id = _normalize_quantity_name(getattr(quantity, "name", quantity or "m"))
+        if mode not in {"auto", "apply", "attach"}:
+            raise ValueError("mode must be one of 'auto', 'apply', or 'attach'")
+        state = load_field_state(path, format=format, dataset=dataset, sample=sample)
+        if state.quantity_id != quantity_id:
+            raise ValueError(
+                f"field state contains quantity '{state.quantity_id}', expected '{quantity_id}'"
+            )
+        if mode in {"auto", "apply"} and quantity_id == "m":
+            self._m_value = state.as_sampled_magnetization()
+        elif mode == "apply":
+            raise ValueError(f"quantity '{quantity_id}' cannot be applied to object state")
+        self._field_states[quantity_id] = state
+        return state
+
+    def save(
+        self,
+        path: str | Path,
+        *,
+        quantity: object = None,
+        format: str = "auto",
+        dataset: str | None = None,
+        units: str | None = None,
+    ) -> Path:
+        from fullmag.init import FieldState, SampledMagnetization, save_field_state
+
+        quantity_id = _normalize_quantity_name(getattr(quantity, "name", quantity or "m"))
+        value: object | None = self._field_states.get(quantity_id)
+        if value is None and quantity_id == "m":
+            value = self._m_value
+        if value is None:
+            raise ValueError(f"no field state is loaded for object '{self._name}' quantity '{quantity_id}'")
+        if isinstance(value, FieldState):
+            values = value
+            units = units if units is not None else value.units
+        elif isinstance(value, SampledMagnetization):
+            values = value
+        else:
+            raise ValueError(
+                f"object '{self._name}' quantity '{quantity_id}' is not an explicit sampled field state"
+            )
+        return save_field_state(
+            path,
+            values,
+            quantity=quantity_id,
+            target_kind="object",
+            target_id=self._name,
+            units=units,
+            format=format,
+            dataset=dataset,
+        )
 
 
 class MagnetizationHandle:
@@ -1461,6 +1526,7 @@ class _WorldState:
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
+    _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
     # External field
     _b_ext: tuple[float, float, float] | None = None
@@ -1483,6 +1549,7 @@ class _WorldState:
 
     # Outputs
     _outputs: list = field(default_factory=list)
+    _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
@@ -2781,12 +2848,64 @@ class StudyAirboxHandle:
     """
 
     def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
         self.visualization = StudyAirboxVisualizationHandle(owner)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         raise ValueError(
             "study.airbox(...) is no longer part of the canonical API. "
             "Use study.universe(...) or study.universe.mesh(...) instead."
+        )
+
+    def load(
+        self,
+        path: str | Path,
+        *,
+        quantity: object,
+        format: str = "auto",
+        dataset: str | None = None,
+        sample: int = -1,
+        mode: str = "attach",
+    ):
+        from fullmag.init import load_field_state
+
+        if mode not in {"auto", "attach"}:
+            raise ValueError("airbox field states can only be loaded with mode='attach' or mode='auto'")
+        quantity_id = _normalize_quantity_name(getattr(quantity, "name", quantity))
+        state = load_field_state(path, format=format, dataset=dataset, sample=sample)
+        if state.quantity_id != quantity_id:
+            raise ValueError(
+                f"field state contains quantity '{state.quantity_id}', expected '{quantity_id}'"
+            )
+        _state._loaded_field_states[("airbox", "airbox", quantity_id)] = state
+        return state
+
+    def save(
+        self,
+        path: str | Path,
+        *,
+        quantity: object,
+        format: str = "auto",
+        dataset: str | None = None,
+        units: str | None = None,
+    ) -> Path:
+        from fullmag.init import FieldState, save_field_state
+
+        quantity_id = _normalize_quantity_name(getattr(quantity, "name", quantity))
+        value = _state._loaded_field_states.get(("airbox", "airbox", quantity_id))
+        if value is None:
+            raise ValueError(f"no field state is loaded for airbox quantity '{quantity_id}'")
+        if not isinstance(value, FieldState):
+            raise ValueError(f"airbox quantity '{quantity_id}' is not an explicit field state")
+        return save_field_state(
+            path,
+            value,
+            quantity=quantity_id,
+            target_kind="airbox",
+            target_id="airbox",
+            units=units if units is not None else value.units,
+            format=format,
+            dataset=dataset,
         )
 
 
@@ -2895,6 +3014,28 @@ class StudyBuilder:
     def name(self, problem_name: str) -> "StudyBuilder":
         name(problem_name)
         return self
+
+    def load(
+        self,
+        target: object,
+        path: str | Path,
+        **kwargs: object,
+    ):
+        loader = getattr(target, "load", None)
+        if not callable(loader):
+            raise TypeError("study.load() target must provide a load() method")
+        return loader(path, **kwargs)
+
+    def save(
+        self,
+        target: object,
+        path: str | Path,
+        **kwargs: object,
+    ) -> Path:
+        saver = getattr(target, "save", None)
+        if not callable(saver):
+            raise TypeError("study.save() target must provide a save() method")
+        return saver(path, **kwargs)
 
     def engine(self, backend: str) -> "StudyBuilder":
         engine(backend)
@@ -4818,19 +4959,6 @@ _SCALAR_QUANTITIES = {
     "max_dm_dt",
     "max_h_demag",
 }
-_TABLE_DEFAULT_SCALARS = (
-    "time",
-    "step",
-    "solver_dt",
-    "mx",
-    "my",
-    "mz",
-    "E_total",
-    "max_dm_dt",
-    "max_h_eff",
-)
-
-
 _EIGEN_QUANTITIES = {"spectrum", "mode", "dispersion"}
 
 
@@ -4935,22 +5063,14 @@ def snapshot(
 def tableautosave(every: float, quantities: Sequence[str] | None = None) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
-    Registers the default time-series table columns:
-    ``time``, ``step``, ``solver_dt``, averaged ``mx/my/mz``,
-    ``E_total``, ``max_dm_dt``, and ``max_h_eff``.
-    Pass ``quantities`` to seed a custom scalar table instead. Existing scalar
-    outputs for the selected names are replaced so the cadence is always
-    unambiguous.
+    Registers the canonical ``sampling.table_autosave`` observable table.
+    ``quantities`` may use compatibility names such as ``time``, ``solver_dt``,
+    and ``E_total``; the public table contract stores canonical quantity ids.
     """
-    selected_scalars = tuple(quantities) if quantities is not None else _TABLE_DEFAULT_SCALARS
-    retained_outputs = []
-    for output in _state._outputs:
-        if isinstance(output, SaveScalar) and output.scalar in selected_scalars:
-            continue
-        retained_outputs.append(output)
-    _state._outputs = retained_outputs
-    for scalar in selected_scalars:
-        _state._outputs.append(SaveScalar(scalar=scalar, every=every))
+    _state._table_autosave = TableAutosave(
+        t_sampl=every,
+        quantities=quantities,
+    )
 
 
 def name(problem_name: str) -> None:
@@ -5225,6 +5345,7 @@ def _build_problem(
             max_pseudotime_s=relax_max_pseudotime_s,
             max_physical_time_s=relax_max_physical_time_s,
             dynamics=relax_dynamics or dynamics,
+            table_autosave=s._table_autosave,
         )
     elif study_kind == "eigenmodes":
         if not eigen_outputs:
@@ -5263,7 +5384,11 @@ def _build_problem(
             dynamics=dynamics,
         )
     else:
-        study = TimeEvolution(dynamics=dynamics, outputs=td_outputs or outputs)
+        study = TimeEvolution(
+            dynamics=dynamics,
+            outputs=td_outputs or outputs,
+            table_autosave=s._table_autosave,
+        )
 
     return Problem(
         name=s._name,

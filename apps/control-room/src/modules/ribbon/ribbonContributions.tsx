@@ -1412,6 +1412,8 @@ const studyTab: RibbonTabContent = {
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
         { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
+        { id: "study.save-field-state", icon: icon(Save), label: "Save Field", iconColor: C.blue },
+        { id: "study.load-field-state", icon: icon(Upload), label: "Load Field", iconColor: C.lavender },
         { id: "study.import-state", icon: icon(Upload), label: "Import State", iconColor: C.lavender },
         { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
         { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
@@ -1533,6 +1535,56 @@ export interface RibbonBuildContext {
   visualizationState?: VisualizationStateResource | null;
 }
 
+function resultsQuantityCommandInput(quantityId: string) {
+  return globalQuantityCommandInput(quantityId);
+}
+
+function buildResultsQuantityGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  const activeQuantityId = normalizeQuantityIdOrDefault(
+    context.visualizationState?.quantity?.active_quantity_id ??
+      context.visualizationState?.active_quantity_id,
+  );
+  const resultQuantityIds = new Map([
+    ["res-m", "m"],
+    ["res-heff", "H_eff"],
+    ["res-demag", "H_demag"],
+    ["res-exchange", "H_ex"],
+    ["res-anis", "H_ani"],
+  ]);
+
+  return {
+    ...group,
+    actions: group.actions.map((action) => {
+      const quantityId = resultQuantityIds.get(action.id);
+      if (!quantityId) return action;
+      return {
+        ...action,
+        active: sameQuantityId(activeQuantityId, quantityId),
+        commandId: action.menu
+          ? action.commandId
+          : RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+        commandInput: action.menu
+          ? action.commandInput
+          : resultsQuantityCommandInput(quantityId),
+        menu: action.menu?.map((node) =>
+          node.type === "radio-group" && node.id === "results-quantity:radio"
+            ? {
+                ...node,
+                value: activeQuantityId,
+                commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
+                commandInput: (value: string) =>
+                  resultsQuantityCommandInput(value),
+              }
+            : node,
+        ),
+      };
+    }),
+  };
+}
+
 /** All tab content, indexed by tabId for O(1) lookup. */
 export const ALL_TAB_CONTENT: Record<string, RibbonTabContent> = {
   home: homeTab,
@@ -1581,6 +1633,15 @@ export function buildRibbonTabContent(
           : group.id === "view-selected-display"
             ? buildSelectedVisualizationGroup(context)
             : group,
+      ),
+    };
+  }
+
+  if (tabId === "results" && context) {
+    resolvedContent = {
+      ...content,
+      groups: content.groups.map((group) =>
+        group.id === "quantity" ? buildResultsQuantityGroup(group, context) : group,
       ),
     };
   }
@@ -1879,9 +1940,10 @@ function applyCommandState(
     groups: content.groups.map((group) => ({
       ...group,
       actions: group.actions.map((action) => {
-        const command = context.commands?.get(action.id);
+        const cmdId = action.commandId ?? action.id;
+        const command = context.commands?.get(cmdId);
         const disabledByCommand = command
-          ? !context.commands?.isEnabled(action.id, commandContext)
+          ? !context.commands?.isEnabled(cmdId, commandContext)
           : false;
         const disabledReason = disabledByCommand
           ? command?.disabledReason?.(commandContext) ?? `Command unavailable: ${action.label}`
@@ -1892,7 +1954,7 @@ function applyCommandState(
           ...action,
           active:
             action.active ??
-            (command ? context.commands?.isActive(action.id, commandContext) : false),
+            (command ? context.commands?.isActive(cmdId, commandContext) : false),
           activeCommandId:
             activeResource?.kind === "command"
               ? activeResource.commandId

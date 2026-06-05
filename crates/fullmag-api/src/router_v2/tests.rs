@@ -21,7 +21,9 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
-use crate::schemas::realtime::{RealtimeResourceName, RealtimeResourceRevisionMap};
+use crate::schemas::realtime::{
+    RealtimeResourceChange, RealtimeResourceName, RealtimeResourceRevisionMap,
+};
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
     CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
@@ -494,6 +496,10 @@ fn test_app_state() -> Arc<AppState> {
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
+        current_live_realtime_pending_batches: Arc::new(Mutex::new(HashMap::new())),
+        current_live_realtime_policy: Arc::new(RwLock::new(
+            crate::realtime_policy::CurrentLiveRealtimePolicyState::default(),
+        )),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
@@ -1113,6 +1119,10 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
+        current_live_realtime_pending_batches: Arc::new(Mutex::new(HashMap::new())),
+        current_live_realtime_policy: Arc::new(RwLock::new(
+            crate::realtime_policy::CurrentLiveRealtimePolicyState::default(),
+        )),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
         current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
@@ -9811,6 +9821,488 @@ async fn session_checkpoint_create_captures_live_magnetization() {
 }
 
 #[tokio::test]
+async fn field_state_export_inspect_and_apply_round_trips_live_magnetization() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "format": "h5",
+                        "file_name": "body-final.h5"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let exported = body_json(export_response).await;
+    assert_eq!(exported["quantity_id"], "m");
+    assert_eq!(exported["target"]["kind"], "object");
+    assert_eq!(exported["target"]["id"], "body");
+    assert_eq!(exported["format"], "h5");
+    assert_eq!(exported["point_count"], 2);
+    assert!(exported["artifact_ref"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("body-final.h5")));
+    let artifact_ref = exported["artifact_ref"]
+        .as_str()
+        .expect("field-state export should include artifact_ref")
+        .to_string();
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+    let inspected = body_json(inspect_response).await;
+    assert_eq!(inspected["quantity_id"], "m");
+    assert_eq!(inspected["target"]["kind"], "object");
+    assert_eq!(inspected["target"]["id"], "body");
+    assert_eq!(inspected["compatibility"], "compatible");
+    assert_eq!(inspected["default_mode"], "apply");
+    assert_eq!(inspected["point_count"], 2);
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": inspected["artifact_ref"].as_str().unwrap(),
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "mode": "apply"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["quantity_id"], "m");
+    assert_eq!(imported["target"]["kind"], "object");
+    assert_eq!(imported["target"]["id"], "body");
+    assert_eq!(imported["mode"], "apply");
+    assert_eq!(imported["applied_point_count"], 2);
+    assert_eq!(imported["field_revision"], 2);
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["field_revision"], 2);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn uploaded_h5_field_state_can_be_inspected_and_applied() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let h5_path = repo_root.join("body_m.h5");
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve");
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let python = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(format!(
+            "import fullmag as fm; fm.save_field_state({path:?}, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], quantity=fm.m, target_kind='object', target_id='body')",
+            path = h5_path.display().to_string(),
+        ))
+        .env("PYTHONPATH", python_path)
+        .current_dir(&workspace_root)
+        .output()
+        .expect("failed to run Python field-state writer");
+    assert!(
+        python.status.success(),
+        "Python field-state writer failed: {}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let h5_bytes = fs::read(&h5_path).expect("test H5 field state should exist");
+    let content_base64 = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(h5_bytes)
+    };
+
+    let asset_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/assets/import")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "file_name": "body_m.h5",
+                        "content_base64": content_base64,
+                        "target_realization": "field_state"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(asset_response.status(), StatusCode::OK);
+    let asset = body_json(asset_response).await;
+    assert_eq!(asset["summary"]["kind"], "field_state");
+    let artifact_ref = asset["artifact_ref"]
+        .as_str()
+        .expect("asset import should return artifact_ref");
+    assert!(artifact_ref.starts_with("imports/"));
+    assert!(artifact_ref.ends_with("body_m.h5"));
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "format": "field_state_json"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let inspect_status = inspect_response.status();
+    let inspected = body_json(inspect_response).await;
+    assert_eq!(
+        inspect_status,
+        StatusCode::OK,
+        "inspection body: {inspected}"
+    );
+    assert_eq!(inspected["compatibility"], "compatible");
+    assert_eq!(inspected["point_count"], 2);
+
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "mode": "apply"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["applied_point_count"], 2);
+    assert_eq!(imported["field_revision"], 2);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn uploaded_zarr_zip_field_state_can_be_inspected_and_applied() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let zarr_path = repo_root.join("body_m.zarr.zip");
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve");
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let python = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(format!(
+            "import fullmag as fm; fm.save_field_state({path:?}, [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], quantity=fm.m, target_kind='object', target_id='body')",
+            path = zarr_path.display().to_string(),
+        ))
+        .env("PYTHONPATH", python_path)
+        .current_dir(&workspace_root)
+        .output()
+        .expect("failed to run Python field-state writer");
+    assert!(
+        python.status.success(),
+        "Python field-state writer failed: {}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let zarr_bytes = fs::read(&zarr_path).expect("test Zarr field state should exist");
+    let content_base64 = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(zarr_bytes)
+    };
+
+    let asset_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/assets/import")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "file_name": "body_m.zarr.zip",
+                        "content_base64": content_base64,
+                        "target_realization": "field_state"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(asset_response.status(), StatusCode::OK);
+    let asset = body_json(asset_response).await;
+    assert_eq!(asset["summary"]["kind"], "field_state");
+    let artifact_ref = asset["artifact_ref"]
+        .as_str()
+        .expect("asset import should return artifact_ref");
+    assert!(artifact_ref.ends_with("body_m.zarr.zip"));
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+    let inspected = body_json(inspect_response).await;
+    assert_eq!(inspected["compatibility"], "compatible");
+    assert_eq!(inspected["point_count"], 2);
+
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "object",
+                            "id": "body"
+                        },
+                        "quantity_id": "m",
+                        "mode": "apply"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["applied_point_count"], 2);
+    assert_eq!(imported["field_revision"], 2);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn uploaded_airbox_h5_field_state_can_be_attached_without_apply_shape_check() {
+    let (app, _state, repo_root) = test_router_with_session_store_state().await;
+    let h5_path = repo_root.join("airbox_h_eff.h5");
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve");
+    let python_path = workspace_root.join("packages/fullmag-py/src");
+    let python = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(format!(
+            "import fullmag as fm; fm.save_field_state({path:?}, [[10.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 30.0]], quantity=fm.H_eff, target_kind='airbox', target_id='airbox')",
+            path = h5_path.display().to_string(),
+        ))
+        .env("PYTHONPATH", python_path)
+        .current_dir(&workspace_root)
+        .output()
+        .expect("failed to run Python field-state writer");
+    assert!(
+        python.status.success(),
+        "Python field-state writer failed: {}",
+        String::from_utf8_lossy(&python.stderr)
+    );
+    let h5_bytes = fs::read(&h5_path).expect("test H5 field state should exist");
+    let content_base64 = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(h5_bytes)
+    };
+
+    let asset_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/assets/import")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "file_name": "airbox_h_eff.h5",
+                        "content_base64": content_base64,
+                        "target_realization": "field_state"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(asset_response.status(), StatusCode::OK);
+    let asset = body_json(asset_response).await;
+    let artifact_ref = asset["artifact_ref"]
+        .as_str()
+        .expect("asset import should return artifact_ref");
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "airbox",
+                            "id": "airbox"
+                        },
+                        "quantity_id": "H_eff"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+    let inspected = body_json(inspect_response).await;
+    assert_eq!(inspected["compatibility"], "compatible");
+    assert_eq!(inspected["default_mode"], "attach");
+    assert_eq!(inspected["point_count"], 3);
+
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/field-states/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "artifact_ref": artifact_ref,
+                        "target": {
+                            "kind": "airbox",
+                            "id": "airbox"
+                        },
+                        "quantity_id": "H_eff",
+                        "mode": "attach"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["applied_point_count"], 0);
+    assert_eq!(imported["mode"], "attach");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_recovery_returns_200() {
     let (app, repo_root) = test_router_with_session_store().await;
     let response = app
@@ -10159,6 +10651,31 @@ async fn artifacts_list_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn artifact_download_accepts_encoded_relative_paths() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let field_state_dir = artifact_dir.join("field-states");
+    fs::create_dir_all(&field_state_dir).expect("failed to create field-state dir");
+    fs::write(field_state_dir.join("body-final.h5"), b"h5-bytes")
+        .expect("failed to write field-state artifact");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/artifacts/field-states%2Fbody-final.h5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..], b"h5-bytes");
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn asyncapi_document_returns_200() {
     let app = test_router();
     let response = app
@@ -10294,6 +10811,149 @@ async fn asyncapi_docs_page_links_to_v2_document() {
     let body = String::from_utf8(body_bytes(response).await).expect("HTML body should be UTF-8");
     assert!(body.contains("/v2/platform/asyncapi.json"));
     assert!(!body.contains("/v1/asyncapi.json"));
+}
+
+#[tokio::test]
+async fn communication_policy_can_be_read_and_patched() {
+    let app = test_router();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/events/communication-policy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 0);
+    assert_eq!(json["effective"]["scalar_sample_enabled"], true);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/events/communication-policy")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "scalar_sample_enabled": false,
+                        "field_sample_publish_ms": 3000
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["effective"]["scalar_sample_enabled"], false);
+    assert_eq!(json["effective"]["field_sample_publish_ms"], 3000);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/events/communication-policy")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "field_sample_publish_ms": 10 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn coalesced_field_sample_batches_are_delayed_before_sequence_assignment() {
+    let state = test_app_state();
+    state
+        .current_live_realtime_policy
+        .write()
+        .await
+        .effective
+        .field_sample_publish_ms = 500;
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    crate::publish_current_live_realtime_resource_changes(
+        &state,
+        "session-1".to_string(),
+        Some("run-1".to_string()),
+        vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::Fields,
+            revision: 10,
+            resource_id: Some("samples".to_string()),
+            quantity_ids: vec!["m".to_string()],
+            broad: false,
+            domain_generation_id: Some(1),
+            recommended_fetch: None,
+        }],
+        true,
+        250,
+    )
+    .await
+    .expect("field sample batch should be queued");
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+            .await
+            .is_err(),
+        "field sample batch must not be broadcast before its coalesce window"
+    );
+
+    crate::publish_current_live_realtime_resource_changes(
+        &state,
+        "session-1".to_string(),
+        Some("run-1".to_string()),
+        vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::Stages,
+            revision: 11,
+            resource_id: None,
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/simulation/stages/execution".to_string()),
+        }],
+        true,
+        250,
+    )
+    .await
+    .expect("stage batch should be published");
+
+    let immediate = tokio::time::timeout(std::time::Duration::from_millis(150), events.recv())
+        .await
+        .expect("immediate event should arrive")
+        .expect("realtime channel should stay open");
+    let immediate_json: serde_json::Value =
+        serde_json::from_str(&immediate.json).expect("event json should parse");
+    assert_eq!(immediate.seq, 1);
+    assert_eq!(immediate_json["type"], "resource.batch_changed");
+    assert_eq!(
+        immediate_json["payload"]["changes"][0]["resource"],
+        "stages"
+    );
+
+    let delayed = tokio::time::timeout(std::time::Duration::from_millis(750), events.recv())
+        .await
+        .expect("delayed field event should arrive")
+        .expect("realtime channel should stay open");
+    let delayed_json: serde_json::Value =
+        serde_json::from_str(&delayed.json).expect("event json should parse");
+    assert_eq!(delayed.seq, 2);
+    assert_eq!(delayed_json["type"], "resource.batch_changed");
+    assert_eq!(delayed_json["payload"]["window_ms"], 500);
+    assert_eq!(delayed_json["payload"]["changes"][0]["resource"], "fields");
+    assert_eq!(
+        delayed_json["payload"]["changes"][0]["resource_id"],
+        "samples"
+    );
 }
 
 #[tokio::test]

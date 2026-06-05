@@ -79,6 +79,8 @@ function RibbonActionButton({
   accent,
   tooltip,
   iconColor,
+  commandId,
+  commandInput,
   splitButton,
   onAction,
   onCommandDetail,
@@ -93,6 +95,8 @@ function RibbonActionButton({
   accent?: boolean;
   tooltip?: string;
   iconColor?: string;
+  commandId?: string;
+  commandInput?: unknown;
   splitButton?: boolean;
   onAction?: (actionId: string, input?: unknown) => void;
   onCommandDetail?: (commandId: string) => void;
@@ -106,7 +110,7 @@ function RibbonActionButton({
   const tooltipText = tooltip ?? label;
   const runAction = () => {
     if (!isTriggerDisabled) {
-      onAction?.(id);
+      onAction?.(commandId ?? id, commandInput);
     }
   };
   // Split-button handlers: only used when splitButton=true (body runs command,
@@ -224,6 +228,8 @@ function RibbonGroup({
             disabled={action.disabled}
             icon={action.icon}
             id={action.id}
+            commandId={action.commandId}
+            commandInput={action.commandInput}
             iconColor={action.iconColor}
             label={action.label}
             splitButton={action.splitButton}

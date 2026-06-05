@@ -2,12 +2,42 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 from .magnetization import SampledMagnetization
 
 MAGNETIZATION_STATE_FORMATS = ("json", "zarr", "h5")
+FIELD_STATE_FORMATS = ("zarr", "h5")
+
+
+@dataclass(frozen=True, slots=True)
+class FieldState:
+    values: list[tuple[float, ...]]
+    quantity_id: str
+    target_kind: str
+    target_id: str
+    units: str | None
+    source_path: str | None
+    source_format: str | None
+    dataset: str | None
+    sample_index: int | None
+
+    @property
+    def component_count(self) -> int:
+        return len(self.values[0]) if self.values else 0
+
+    def as_sampled_magnetization(self) -> SampledMagnetization:
+        if self.quantity_id != "m":
+            raise ValueError("only quantity 'm' can be used as sampled magnetization")
+        return SampledMagnetization(
+            self.values,
+            source_path=self.source_path,
+            source_format=self.source_format,
+            dataset=self.dataset,
+            sample_index=self.sample_index,
+        )
 
 
 def load_magnetization(
@@ -79,6 +109,97 @@ def save_magnetization(
         return output_path
 
     raise ValueError(f"unsupported magnetization state format '{normalized_format}'")
+
+
+def load_field_state(
+    path: str | Path,
+    *,
+    format: str = "auto",
+    dataset: str | None = None,
+    sample: int = -1,
+) -> FieldState:
+    resolved = _resolve_state_path(path)
+    normalized_format = _normalize_field_state_format(resolved, format)
+
+    if normalized_format == "zarr":
+        values, resolved_dataset, metadata = _load_zarr_field_values(
+            resolved,
+            dataset=dataset,
+            sample=sample,
+        )
+    elif normalized_format == "h5":
+        values, resolved_dataset, metadata = _load_h5_field_values(
+            resolved,
+            dataset=dataset,
+            sample=sample,
+        )
+    else:
+        raise ValueError(f"unsupported field state format '{normalized_format}'")
+
+    resolved_sample_index = None if sample < 0 else sample
+    return FieldState(
+        _field_array_to_rows(values),
+        quantity_id=str(metadata.get("quantity_id") or _quantity_id_from_dataset(resolved_dataset)),
+        target_kind=str(metadata.get("target_kind") or "unknown"),
+        target_id=str(metadata.get("target_id") or metadata.get("target_kind") or "unknown"),
+        units=metadata.get("units"),
+        source_path=str(resolved),
+        source_format=normalized_format,
+        dataset=resolved_dataset,
+        sample_index=resolved_sample_index,
+    )
+
+
+def save_field_state(
+    path: str | Path,
+    values: Sequence[Sequence[float]] | Sequence[float] | FieldState | SampledMagnetization,
+    *,
+    quantity: object | None = None,
+    target_kind: str | None = None,
+    target_id: str | None = None,
+    units: str | None = None,
+    format: str = "auto",
+    dataset: str | None = None,
+) -> Path:
+    output_path = Path(path)
+    normalized_format = _normalize_field_state_format(output_path, format)
+    if isinstance(values, FieldState):
+        quantity_id = _quantity_id(quantity if quantity is not None else values.quantity_id)
+        target_kind = _normalize_non_empty(
+            target_kind if target_kind is not None else values.target_kind,
+            "target_kind",
+        )
+        target_id = _normalize_non_empty(
+            target_id if target_id is not None else values.target_id,
+            "target_id",
+        )
+        units = units if units is not None else values.units
+    else:
+        quantity_id = _quantity_id(quantity if quantity is not None else "m")
+        target_kind = _normalize_non_empty(target_kind if target_kind is not None else "object", "target_kind")
+        target_id = _normalize_non_empty(target_id if target_id is not None else "body", "target_id")
+    dataset_path = dataset or f"fields/{quantity_id}"
+    array = _normalize_field_array(values)
+    metadata = {
+        "fullmag_kind": "field_state",
+        "schema_version": 1,
+        "quantity_id": quantity_id,
+        "target_kind": target_kind,
+        "target_id": target_id,
+        "format": normalized_format,
+        "component_count": int(array.shape[1]),
+    }
+    if units is not None:
+        metadata["units"] = str(units)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if normalized_format == "zarr":
+        _write_zarr_field_state(output_path, array, dataset=dataset_path, metadata=metadata)
+        return output_path
+    if normalized_format == "h5":
+        _write_h5_field_state(output_path, array, dataset=dataset_path, metadata=metadata)
+        return output_path
+    raise ValueError(f"unsupported field state format '{normalized_format}'")
 
 
 def convert_magnetization_state(
@@ -183,6 +304,43 @@ def _normalize_state_format(path: Path, format: str) -> str:
     return "json"
 
 
+def _normalize_field_state_format(path: Path, format: str) -> str:
+    normalized = format.strip().lower()
+    if normalized and normalized != "auto":
+        if normalized == "hdf5":
+            return "h5"
+        if normalized not in FIELD_STATE_FORMATS:
+            raise ValueError(
+                f"format must be one of {FIELD_STATE_FORMATS} or 'auto', got '{format}'"
+            )
+        return normalized
+
+    suffixes = [suffix.lower() for suffix in path.suffixes]
+    if suffixes[-2:] == [".zarr", ".zip"] or path.name.lower().endswith(".zarr.zip"):
+        return "zarr"
+    if path.suffix.lower() == ".zarr":
+        return "zarr"
+    if path.suffix.lower() in {".h5", ".hdf5"}:
+        return "h5"
+    raise ValueError("field state path must end with .zarr, .zarr.zip, .h5, or .hdf5")
+
+
+def _normalize_non_empty(value: str, label: str) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        raise ValueError(f"{label} must not be empty")
+    return normalized
+
+
+def _quantity_id(quantity: object) -> str:
+    if isinstance(quantity, str):
+        return _normalize_non_empty(quantity, "quantity")
+    name = getattr(quantity, "name", None)
+    if isinstance(name, str):
+        return _normalize_non_empty(name, "quantity")
+    return _normalize_non_empty(str(quantity), "quantity")
+
+
 def _normalize_vectors(values: Sequence[Sequence[float]] | SampledMagnetization) -> np.ndarray:
     np = _require_numpy()
     source: Sequence[Sequence[float]]
@@ -195,6 +353,49 @@ def _normalize_vectors(values: Sequence[Sequence[float]] | SampledMagnetization)
     if normalized.shape[0] == 0:
         raise ValueError("magnetization state must contain at least one vector")
     return normalized
+
+
+def _normalize_field_array(
+    values: Sequence[Sequence[float]] | Sequence[float] | FieldState | SampledMagnetization,
+) -> np.ndarray:
+    np = _require_numpy()
+    if isinstance(values, FieldState):
+        source = values.values
+    elif isinstance(values, SampledMagnetization):
+        source = values.values
+    else:
+        source = values
+    array = np.asarray(source, dtype=np.float64)
+    normalized = _select_field_sample(array, sample=-1)
+    if normalized.shape[0] == 0:
+        raise ValueError("field state must contain at least one sample point")
+    return normalized
+
+
+def _select_field_sample(values: np.ndarray, *, sample: int) -> np.ndarray:
+    if values.ndim == 1:
+        return values.reshape((-1, 1))
+    if values.ndim == 2:
+        if values.shape[1] <= 0:
+            raise ValueError("field state component axis must not be empty")
+        return values
+    if values.ndim == 3:
+        if values.shape[0] == 0:
+            raise ValueError("field state array does not contain any samples")
+        if values.shape[2] <= 0:
+            raise ValueError("field state component axis must not be empty")
+        index = sample if sample >= 0 else values.shape[0] - 1
+        if index < 0 or index >= values.shape[0]:
+            raise IndexError(f"sample index {sample} is out of range for {values.shape[0]} samples")
+        return values[index]
+    raise ValueError(
+        f"expected field state with shape [N], [N,C], or [T,N,C], got {tuple(values.shape)}"
+    )
+
+
+def _field_array_to_rows(values: np.ndarray) -> list[tuple[float, ...]]:
+    normalized = _select_field_sample(values, sample=-1)
+    return [tuple(float(component) for component in row) for row in normalized.tolist()]
 
 
 def _normalize_vector_rows(values: Any, *, sample: int = -1) -> list[tuple[float, float, float]]:
@@ -265,6 +466,25 @@ def _load_h5_values(
     return _select_state_sample(values, sample=sample), dataset_path
 
 
+def _load_h5_field_values(
+    path: Path,
+    *,
+    dataset: str | None,
+    sample: int,
+) -> tuple[np.ndarray, str, dict[str, Any]]:
+    np = _require_numpy()
+    h5py = _require_h5py()
+    with h5py.File(path, "r") as handle:
+        dataset_path = dataset or _find_h5_field_dataset(handle)
+        if dataset_path is None:
+            raise ValueError(f"{path} does not contain a suitable field state dataset")
+        target = handle[dataset_path]
+        values = np.asarray(target, dtype=np.float64)
+        metadata = _attrs_to_metadata(handle.attrs)
+        metadata.update(_attrs_to_metadata(target.attrs))
+    return _select_field_sample(values, sample=sample), dataset_path, metadata
+
+
 def _load_zarr_values(
     path: Path,
     *,
@@ -286,6 +506,29 @@ def _load_zarr_values(
     return _select_state_sample(values, sample=sample), dataset_path
 
 
+def _load_zarr_field_values(
+    path: Path,
+    *,
+    dataset: str | None,
+    sample: int,
+) -> tuple[np.ndarray, str, dict[str, Any]]:
+    np = _require_numpy()
+    zarr, _, _ = _require_zarr()
+    store = _open_zarr_store(path, mode="r")
+    try:
+        root = zarr.open(store=store, mode="r")
+        dataset_path = dataset or _find_zarr_field_dataset(root)
+        if dataset_path is None:
+            raise ValueError(f"{path} does not contain a suitable field state dataset")
+        target = root[dataset_path] if dataset_path and hasattr(root, "__getitem__") else root
+        values = np.asarray(target, dtype=np.float64)
+        metadata = _attrs_to_metadata(getattr(root, "attrs", {}))
+        metadata.update(_attrs_to_metadata(getattr(target, "attrs", {})))
+    finally:
+        store.close()
+    return _select_field_sample(values, sample=sample), dataset_path, metadata
+
+
 def _write_h5_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
     h5py = _require_h5py()
     with h5py.File(path, "w") as handle:
@@ -295,6 +538,22 @@ def _write_h5_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
         handle.attrs["format"] = "h5"
         target.attrs["observable"] = "m"
         target.attrs["vector_count"] = int(values.shape[0])
+
+
+def _write_h5_field_state(
+    path: Path,
+    values: np.ndarray,
+    *,
+    dataset: str,
+    metadata: dict[str, object],
+) -> None:
+    h5py = _require_h5py()
+    with h5py.File(path, "w") as handle:
+        target = _ensure_h5_dataset(handle, dataset, values)
+        for key, value in metadata.items():
+            handle.attrs[key] = value
+            target.attrs[key] = value
+        target.attrs["point_count"] = int(values.shape[0])
 
 
 def _write_zarr_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
@@ -321,6 +580,48 @@ def _write_zarr_state(path: Path, values: np.ndarray, *, dataset: str) -> None:
         chunks = (min(max(values.shape[0], 1), 4096), 3)
         if hasattr(parent, "create_array"):
             target = parent.create_array(
+                leaf,
+                data=values,
+                chunks=chunks,
+                attributes=target_attrs,
+                overwrite=True,
+            )
+        else:
+            target = parent.create_dataset(
+                leaf,
+                data=values,
+                shape=values.shape,
+                dtype="f8",
+                chunks=chunks,
+                overwrite=True,
+            )
+            target.attrs.update(target_attrs)
+    finally:
+        store.close()
+
+
+def _write_zarr_field_state(
+    path: Path,
+    values: np.ndarray,
+    *,
+    dataset: str,
+    metadata: dict[str, object],
+) -> None:
+    zarr, _, _ = _require_zarr()
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path)
+    store = _open_zarr_store(path, mode="w")
+    target_attrs = {**metadata, "point_count": int(values.shape[0])}
+    try:
+        try:
+            root = zarr.group(store=store, overwrite=True, attributes=metadata)
+        except TypeError:
+            root = zarr.group(store=store, overwrite=True)
+            root.attrs.update(metadata)
+        parent, leaf = _ensure_zarr_group(root, dataset)
+        chunks = (min(max(values.shape[0], 1), 4096), min(max(values.shape[1], 1), values.shape[1]))
+        if hasattr(parent, "create_array"):
+            parent.create_array(
                 leaf,
                 data=values,
                 chunks=chunks,
@@ -380,6 +681,27 @@ def _find_h5_dataset(handle: Any) -> str | None:
     return matches[0] if matches else None
 
 
+def _find_h5_field_dataset(handle: Any) -> str | None:
+    h5py = _require_h5py()
+    preferred = ["fields/m", "fields/H_eff", "values", "m", "magnetization"]
+    for candidate in preferred:
+        if candidate in handle and isinstance(handle[candidate], h5py.Dataset):
+            return candidate
+
+    matches: list[str] = []
+
+    def visitor(name: str, obj: Any) -> None:
+        if isinstance(obj, h5py.Dataset):
+            try:
+                _select_field_sample(_require_numpy().asarray(obj), sample=-1)
+            except ValueError:
+                return
+            matches.append(name)
+
+    handle.visititems(visitor)
+    return matches[0] if matches else None
+
+
 def _find_zarr_dataset(root: Any) -> str | None:
     np = _require_numpy()
     if hasattr(root, "shape") and _dataset_looks_like_state(np.asarray(root)):
@@ -402,6 +724,51 @@ def _find_zarr_dataset(root: Any) -> str | None:
     if hasattr(root, "visititems"):
         root.visititems(visitor)
     return matches[0] if matches else None
+
+
+def _find_zarr_field_dataset(root: Any) -> str | None:
+    if hasattr(root, "shape"):
+        return ""
+
+    for candidate in ("fields/m", "fields/H_eff", "values", "m", "magnetization"):
+        try:
+            target = root[candidate]
+        except Exception:
+            continue
+        if hasattr(target, "shape"):
+            return candidate
+
+    matches: list[str] = []
+
+    def visitor(name: str, obj: Any) -> None:
+        if hasattr(obj, "shape"):
+            matches.append(name)
+
+    if hasattr(root, "visititems"):
+        root.visititems(visitor)
+    return matches[0] if matches else None
+
+
+def _attrs_to_metadata(attrs: Any) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in attrs:
+        value = attrs[key]
+        if hasattr(value, "item"):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        metadata[str(key)] = value
+    return metadata
+
+
+def _quantity_id_from_dataset(dataset: str) -> str:
+    normalized = dataset.strip("/")
+    if not normalized:
+        return "unknown"
+    return normalized.split("/")[-1]
 
 
 def _dataset_looks_like_state(values: np.ndarray) -> bool:

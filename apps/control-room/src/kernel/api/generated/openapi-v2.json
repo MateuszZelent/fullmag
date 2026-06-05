@@ -3491,6 +3491,228 @@
         ],
         "type": "object"
       },
+      "FieldStateExportRequest": {
+        "properties": {
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          }
+        },
+        "required": [
+          "target",
+          "quantity_id"
+        ],
+        "type": "object"
+      },
+      "FieldStateExportResponse": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "component_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "format": {
+            "type": "string"
+          },
+          "point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "target",
+          "quantity_id",
+          "format",
+          "point_count",
+          "component_count",
+          "field_revision"
+        ],
+        "type": "object"
+      },
+      "FieldStateImportRequest": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "target",
+          "quantity_id"
+        ],
+        "type": "object"
+      },
+      "FieldStateImportResponse": {
+        "properties": {
+          "applied_point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifact_ref": {
+            "type": "string"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "target",
+          "quantity_id",
+          "mode",
+          "applied_point_count",
+          "field_revision",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "FieldStateInspectRequest": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "target",
+          "quantity_id"
+        ],
+        "type": "object"
+      },
+      "FieldStateInspectResponse": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "compatibility": {
+            "type": "string"
+          },
+          "component_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default_mode": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldStateTargetRef"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifact_ref",
+          "target",
+          "quantity_id",
+          "format",
+          "compatibility",
+          "default_mode",
+          "point_count",
+          "component_count",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "FieldStateTargetRef": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
+      },
       "FieldStats": {
         "properties": {
           "max": {
@@ -6756,6 +6978,257 @@
         ],
         "type": "object"
       },
+      "RealtimeCommunicationPolicy": {
+        "properties": {
+          "diagnostics_enabled": {
+            "type": "boolean"
+          },
+          "diagnostics_summary_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_retry_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "field_sample_publish_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "field_samples_enabled": {
+            "type": "boolean"
+          },
+          "heartbeat_enabled": {
+            "type": "boolean"
+          },
+          "lifecycle_coalesce_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lifecycle_events_enabled": {
+            "type": "boolean"
+          },
+          "resource_batch_changed_enabled": {
+            "type": "boolean"
+          },
+          "scalar_sample_enabled": {
+            "type": "boolean"
+          },
+          "scalar_table_rows_enabled": {
+            "type": "boolean"
+          },
+          "scalar_telemetry_publish_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status_refresh_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "table_rows_min_refetch_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "visualization_client_acks_enabled": {
+            "type": "boolean"
+          },
+          "ws_heartbeat_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ws_reconnect_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ws_replay_capacity": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ws_replay_capacity",
+          "ws_heartbeat_ms",
+          "ws_reconnect_ms",
+          "lifecycle_coalesce_ms",
+          "table_rows_min_refetch_ms",
+          "field_sample_publish_ms",
+          "scalar_telemetry_publish_ms",
+          "diagnostics_summary_ms",
+          "status_refresh_ms",
+          "error_retry_ms"
+        ],
+        "type": "object"
+      },
+      "RealtimeCommunicationPolicyPatch": {
+        "properties": {
+          "diagnostics_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "diagnostics_summary_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error_retry_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_sample_publish_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_samples_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "heartbeat_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "lifecycle_coalesce_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lifecycle_events_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reset": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resource_batch_changed_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "scalar_sample_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "scalar_table_rows_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "scalar_telemetry_publish_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status_refresh_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "table_rows_min_refetch_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "visualization_client_acks_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "ws_heartbeat_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ws_reconnect_ms": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ws_replay_capacity": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RealtimeCommunicationPolicyResource": {
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/RealtimeCommunicationPolicy"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/RealtimeCommunicationPolicy"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "defaults",
+          "effective"
+        ],
+        "type": "object"
+      },
       "RecoveryClearResponse": {
         "properties": {
           "cleared": {
@@ -7833,6 +8306,9 @@
       },
       "SessionAssetImportResponse": {
         "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
           "asset_id": {
             "type": "string"
           },
@@ -7852,6 +8328,7 @@
         "required": [
           "asset_id",
           "session_id",
+          "artifact_ref",
           "stored_path",
           "target_realization",
           "summary"
@@ -8636,6 +9113,11 @@
             "type": "boolean"
           },
           "sample_every": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_interval_wall_ms": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -14996,6 +15478,57 @@
         ]
       }
     },
+    "/v2/sessions/current/events/communication-policy": {
+      "get": {
+        "operationId": "platform_get_sessions_current_events_communication_policy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeCommunicationPolicyResource"
+                }
+              }
+            },
+            "description": "Current backend-owned realtime communication policy"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      },
+      "patch": {
+        "operationId": "platform_patch_sessions_current_events_communication_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealtimeCommunicationPolicyPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeCommunicationPolicyResource"
+                }
+              }
+            },
+            "description": "Updated backend-owned realtime communication policy"
+          },
+          "400": {
+            "description": "Invalid communication policy patch"
+          }
+        },
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/v2/sessions/current/events/ws": {
       "get": {
         "operationId": "platform_get_sessions_current_events_ws",
@@ -17543,6 +18076,114 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/field-states/exports": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_field_states_exports",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldStateExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldStateExportResponse"
+                }
+              }
+            },
+            "description": "Field state exported"
+          },
+          "400": {
+            "description": "Unsupported field state target or format"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/field-states/imports": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_field_states_imports",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldStateImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldStateImportResponse"
+                }
+              }
+            },
+            "description": "Field state imported"
+          },
+          "400": {
+            "description": "Invalid or incompatible field state"
+          },
+          "404": {
+            "description": "No active workspace or artifact not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/field-states/imports/inspections": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_field_states_imports_inspections",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldStateInspectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldStateInspectResponse"
+                }
+              }
+            },
+            "description": "Field state import inspection"
+          },
+          "400": {
+            "description": "Invalid field state artifact"
+          },
+          "404": {
+            "description": "No active workspace or artifact not found"
           }
         },
         "tags": [

@@ -21,8 +21,83 @@
 #include "gpu/cuda/integrators/rk/rk_local_fields.hpp"
 
 #include <string>
+#include <vector>
 
 namespace fullmag::fem {
+
+namespace {
+
+bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
+{
+    if (rc == cudaSuccess) {
+        return true;
+    }
+    reason = std::string(operation) + " failed: " + cudaGetErrorString(rc);
+    return false;
+}
+
+struct GpuRkPhaseTimer {
+    GpuRkPhaseTimingRuntimeState::EventPair *event = nullptr;
+    cudaStream_t stream = nullptr;
+    const char *label = nullptr;
+    bool active = false;
+
+    bool start(
+        bool enabled,
+        std::vector<GpuRkPhaseTimingRuntimeState::EventPair> &events,
+        size_t &used_count,
+        uint64_t &overflow_count,
+        cudaStream_t phase_stream,
+        const char *phase_label,
+        std::string &reason)
+    {
+        if (!enabled) {
+            return true;
+        }
+        stream = phase_stream;
+        label = phase_label;
+        if (used_count >= events.size()) {
+            overflow_count += 1;
+            return true;
+        }
+        event = &events[used_count];
+        used_count += 1;
+        if (event->start_event == nullptr || event->stop_event == nullptr) {
+            reason = std::string(label) + " was not prepared before GPU RK hot loop";
+            event = nullptr;
+            return false;
+        }
+        if (!cuda_ok(
+                cudaEventRecord(static_cast<cudaEvent_t>(event->start_event), stream),
+                label,
+                reason)) {
+            event = nullptr;
+            return false;
+        }
+        active = true;
+        return true;
+    }
+
+    bool finish(std::string &reason)
+    {
+        if (!active) {
+            return true;
+        }
+        if (!cuda_ok(
+                cudaEventRecord(static_cast<cudaEvent_t>(event->stop_event), stream),
+                label,
+                reason)) {
+            active = false;
+            event = nullptr;
+            return false;
+        }
+        active = false;
+        event = nullptr;
+        return true;
+    }
+};
+
+} // namespace
 
 bool gpu_rk_compute_rhs_for_magnetization(
     Context &ctx,
@@ -33,7 +108,22 @@ bool gpu_rk_compute_rhs_for_magnetization(
     const char *label,
     std::string &reason)
 {
+    auto &timings = ctx.gpu_state.rk_phase_timings;
+    GpuRkPhaseTimer exchange_timer;
+    if (!exchange_timer.start(
+            timings.enabled,
+            timings.exchange_events,
+            timings.exchange_used,
+            timings.exchange_overflow_count,
+            stream,
+            "GPU RK exchange phase timing",
+            reason)) {
+        return false;
+    }
     if (!gpu_rk_compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)) {
+        return false;
+    }
+    if (!exchange_timer.finish(reason)) {
         return false;
     }
     if (!gpu_rk_compute_dmi_field_contributions(ctx, m, stream, n, reason)) {
@@ -49,10 +139,24 @@ bool gpu_rk_compute_rhs_for_magnetization(
         return false;
     }
 
+    GpuRkPhaseTimer rhs_timer;
+    if (!rhs_timer.start(
+            timings.enabled,
+            timings.rhs_events,
+            timings.rhs_used,
+            timings.rhs_overflow_count,
+            stream,
+            "GPU RK RHS phase timing",
+            reason)) {
+        return false;
+    }
     if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)) {
         return false;
     }
     if (!gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, reason)) {
+        return false;
+    }
+    if (!rhs_timer.finish(reason)) {
         return false;
     }
     return true;

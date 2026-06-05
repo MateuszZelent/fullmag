@@ -150,6 +150,7 @@ const MAIN_MENU_DEFINITIONS: AppMenuNode[] = [
     children: [
       { id: "tools.thread-manager", label: "Thread Manager", icon: <Cpu size={14} /> },
       { id: "tools.data-preview", label: "Data Preview", icon: <Database size={14} /> },
+      { id: "tools.communication", label: "Communication", icon: <Settings size={14} /> },
       { id: "diagnostics.toggle-solver-profiler", label: "Solver Profiler", icon: <Timer size={14} />, checkable: true },
       { id: "workspace.diagnostics", label: "Diagnostics", icon: <Gauge size={14} /> },
       { id: "workspace.api-console", label: "API Console", icon: <TerminalSquare size={14} /> },

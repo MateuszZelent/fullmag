@@ -10,6 +10,7 @@
 
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
+#include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_loop.hpp"
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_preflight.hpp"
@@ -26,6 +27,7 @@ bool gpu_rk_device_resident_step(
     std::string &reason)
 {
     stats = {};
+    gpu_rk_reset_phase_timing_events(ctx);
     GpuRkStepPreflight preflight{};
     if (!gpu_rk_prepare_step_preflight(ctx, tableau, dt_seconds, preflight, reason)) {
         return false;

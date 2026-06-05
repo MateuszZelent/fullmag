@@ -117,4 +117,15 @@ describe("app menu command model", () => {
       label: "Data Preview",
     });
   });
+
+  it("exposes communication controls from the Tools menu", () => {
+    const toolsMenu = MAIN_MENUS.find((menu) => menu.id === "tools");
+    const communicationItem = toolsMenu?.children?.find(
+      (item) => item.id === "tools.communication",
+    );
+
+    expect(communicationItem).toMatchObject({
+      label: "Communication",
+    });
+  });
 });

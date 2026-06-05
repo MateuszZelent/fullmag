@@ -865,11 +865,11 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU direct minimizers must have explicit control-scalar readback APIs separate from RK compute readbacks");
     check(
-        pgbb_source.find("gpu_rk_read_control_scalar_result(") !=
-                std::string::npos &&
-            pgbb_source.find("gpu_rk_read_control_scalar_results(") !=
+        pgbb_source.find("gpu_rk_read_control_scalar_results(") !=
                 std::string::npos &&
             pgbb_source.find("gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)") !=
+                std::string::npos &&
+            pgbb_source.find("gpu_rk_read_control_scalar_result(") ==
                 std::string::npos &&
             pgbb_source.find("gpu_rk_read_scalar_result(") ==
                 std::string::npos &&
@@ -907,9 +907,13 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must sanitize invalid runtime step sizes before retraction");
     check(
-        pgbb_source.find("gpu_relax_update_bb_step_size(") !=
+        pgbb_source.find("gpu_relax_compute_accepted_bb_curvature(") !=
                 std::string::npos &&
             pgbb_source.find("fullmag_cuda_relax_bb_curvature_blocks(") !=
+                std::string::npos &&
+            pgbb_source.find("accepted curvature scalars device->host") !=
+                std::string::npos &&
+            pgbb_source.find("gpu_relax_apply_bb_step_size_from_curvature(") !=
                 std::string::npos &&
             pgbb_source.find("ctx.relaxation.use_bb1") !=
                 std::string::npos,
@@ -1361,11 +1365,15 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             kernels_header.find("fullmag_cuda_relax_ncg_update_direction_blocks(") !=
                 std::string::npos &&
+            kernels_header.find("fullmag_cuda_relax_ncg_reset_direction_if_not_descent(") !=
+                std::string::npos &&
             kernels_source.find("ncg_prepare_direction_kernel") !=
                 std::string::npos &&
             kernels_source.find("ncg_pr_plus_numerator_kernel") !=
                 std::string::npos &&
             kernels_source.find("ncg_update_direction_kernel") !=
+                std::string::npos &&
+            kernels_source.find("ncg_reset_direction_if_not_descent_kernel") !=
                 std::string::npos,
         "native FEM GPU nonlinear-CG must expose device kernels for descent preparation, PR+ numerator reduction, and next-direction update");
     check(

@@ -18,6 +18,10 @@ const maxFieldVectorHttpPerMinute = numericEnv(
   "CONTROL_ROOM_COMMUNICATION_MAX_FIELD_VECTOR_HTTP_PER_MIN",
   45,
 );
+const maxFieldSampleWsPerMinute = numericEnv(
+  "CONTROL_ROOM_COMMUNICATION_MAX_FIELD_SAMPLE_WS_PER_MIN",
+  45,
+);
 const maxScalarSampleWsPerMinute = numericEnv(
   "CONTROL_ROOM_COMMUNICATION_MAX_SCALAR_SAMPLE_WS_PER_MIN",
   360,
@@ -85,10 +89,12 @@ async function main() {
     }
     sawFullmagWebsocket = true;
     websocket.on("framereceived", (frame) => {
+      const parsedFrame = websocketFrameFromPayload(frame.payload);
       wsFrames.push({
         bytes: String(frame.payload).length,
+        fieldSamples: parsedFrame.fieldSamples,
         timestamp: Date.now(),
-        type: messageTypeFromPayload(frame.payload),
+        type: parsedFrame.type,
       });
     });
   });
@@ -136,11 +142,14 @@ function summarize({ durationMs, httpEvents, sawFullmagWebsocket, wsFrames }) {
     TOPOLOGY_PATHS.has(pathWithoutQuery(event.path)),
   );
   const scalarSamples = wsFrames.filter((frame) => frame.type === "scalar.sample");
+  const fieldSampleWs = wsFrames.filter((frame) => frame.fieldSamples);
 
   return {
     durationMs,
     fieldVectorHttpTxCount: fieldVectorHttpTx.length,
     fieldVectorHttpTxPerMinute: rate(fieldVectorHttpTx.length, durationMinutes),
+    fieldSampleWsCount: fieldSampleWs.length,
+    fieldSampleWsPerMinute: rate(fieldSampleWs.length, durationMinutes),
     fullmagWsRxCount: wsFrames.length,
     fullmagWsRxPerMinute: rate(wsFrames.length, durationMinutes),
     httpRxByStatus: countBy(httpRx, (event) => String(event.status ?? "unknown")),
@@ -178,6 +187,11 @@ function validateSummary(summary) {
       `field-vector HTTP traffic ${summary.fieldVectorHttpTxPerMinute}/min exceeds ${maxFieldVectorHttpPerMinute}/min.`,
     );
   }
+  if (summary.fieldSampleWsPerMinute > maxFieldSampleWsPerMinute) {
+    failures.push(
+      `fields:samples websocket invalidations ${summary.fieldSampleWsPerMinute}/min exceeds ${maxFieldSampleWsPerMinute}/min.`,
+    );
+  }
   if (summary.topologyHttpTxPerMinute > maxTopologyHttpPerMinute) {
     failures.push(
       `topology HTTP traffic ${summary.topologyHttpTxPerMinute}/min exceeds ${maxTopologyHttpPerMinute}/min.`,
@@ -209,12 +223,21 @@ function pathWithoutQuery(path) {
   return path.split("?")[0] ?? path;
 }
 
-function messageTypeFromPayload(payload) {
+function websocketFrameFromPayload(payload) {
   try {
     const parsed = JSON.parse(String(payload));
-    return typeof parsed?.type === "string" ? parsed.type : "unknown";
+    const type = typeof parsed?.type === "string" ? parsed.type : "unknown";
+    const changes = Array.isArray(parsed?.payload?.changes)
+      ? parsed.payload.changes
+      : [];
+    const fieldSamples = changes.some(
+      (change) =>
+        change?.resource === "fields" &&
+        change?.resource_id === "samples",
+    );
+    return { fieldSamples, type };
   } catch {
-    return "unknown";
+    return { fieldSamples: false, type: "unknown" };
   }
 }
 
