@@ -1521,10 +1521,10 @@ export function RestoreCheckpointDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-study-command-dialog">
+      <DialogContent className="fm-study-command-dialog" aria-describedby="fm-restore-checkpoint-description">
         <DialogHeader>
           <DialogTitle>Restore checkpoint</DialogTitle>
-          <DialogDescription>
+          <DialogDescription id="fm-restore-checkpoint-description">
             {checkpoint
               ? `${checkpoint.resume_class} resume from ${checkpoint.checkpoint_id}`
               : "No checkpoint selected."}
@@ -1672,10 +1672,10 @@ export function ImportStateDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-study-command-dialog">
+      <DialogContent className="fm-study-command-dialog" aria-describedby="fm-import-state-description">
         <DialogHeader>
           <DialogTitle>Import state</DialogTitle>
-          <DialogDescription>
+          <DialogDescription id="fm-import-state-description">
             {fileName ?? "Choose a .fms file before committing import."}
           </DialogDescription>
         </DialogHeader>

@@ -1985,10 +1985,15 @@ fn current_scene_document(snapshot: &SessionStateResponse) -> Result<&SceneDocum
 }
 
 fn current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<&Value, ApiError> {
-    snapshot
+    // When no mesh build has occurred yet the workspace is None.
+    // Return a static empty object so handlers can safely call .get()
+    // and produce empty/default responses rather than HTTP 404.
+    static EMPTY_MESH_WORKSPACE: std::sync::LazyLock<Value> =
+        std::sync::LazyLock::new(|| Value::Object(serde_json::Map::new()));
+    Ok(snapshot
         .mesh_workspace
         .as_ref()
-        .ok_or_else(|| ApiError::not_found("no mesh workspace available for current workspace"))
+        .unwrap_or(&EMPTY_MESH_WORKSPACE))
 }
 
 fn workspace_value_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {

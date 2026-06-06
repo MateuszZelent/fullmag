@@ -26,7 +26,6 @@ import {
 } from "../viewport3dGeometryColors";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
-  isViewport3DTopologyCurrent,
   isViewport3DTopologyRenderable,
   resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,

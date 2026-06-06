@@ -218,10 +218,10 @@ function TransportLogDetailsDialog({
   return (
     <Dialog open={entry !== null} onOpenChange={onOpenChange}>
       {entry && correlation ? (
-        <DialogContent className="fm-footer-log-dialog">
+        <DialogContent className="fm-footer-log-dialog" aria-describedby="fm-transport-log-dialog-description">
           <DialogHeader>
             <DialogTitle>{buildTransportMessagePreview(entry)}</DialogTitle>
-            <DialogDescription>
+            <DialogDescription id="fm-transport-log-dialog-description">
               {formatTransportTimestampSignature(entry.timestampMs)}
             </DialogDescription>
           </DialogHeader>

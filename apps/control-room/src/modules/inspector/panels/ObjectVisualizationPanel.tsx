@@ -352,12 +352,12 @@ function VisualizationDisplayPassesSection({
         }
         onOpenChange={setAirboxDiagnosticOpen}
       >
-        <DialogContent>
+        <DialogContent aria-describedby="fm-airbox-diagnostic-description">
           <DialogHeader>
             <DialogTitle>
               Airbox visualization diagnostic
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription id="fm-airbox-diagnostic-description">
               {airboxVectorDiagnostic?.message ??
                 airboxDiagnostic?.message ??
                 "Airbox visibility state is not available."}

@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
@@ -164,9 +165,12 @@ export function RegistryInspectorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-registry-inspector">
+      <DialogContent className="fm-registry-inspector" aria-describedby="fm-registry-inspector-description">
         <DialogHeader>
           <DialogTitle>Visualization Registry</DialogTitle>
+          <DialogDescription id="fm-registry-inspector-description" className="fm-visually-hidden">
+            Inspect local and backend visualization state.
+          </DialogDescription>
           <DialogClose asChild>
             <button
               aria-label="Close registry inspector"

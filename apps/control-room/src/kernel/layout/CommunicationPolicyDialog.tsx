@@ -182,10 +182,10 @@ export function CommunicationPolicyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-communication-policy">
+      <DialogContent className="fm-communication-policy" aria-describedby="fm-communication-policy-description">
         <DialogHeader>
           <DialogTitle>Communication</DialogTitle>
-          <DialogDescription>
+          <DialogDescription id="fm-communication-policy-description">
             Backend realtime channels and refresh timings.
           </DialogDescription>
         </DialogHeader>

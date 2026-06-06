@@ -27,6 +27,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
@@ -113,9 +114,12 @@ export function ThreadManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fm-thread-manager">
+      <DialogContent className="fm-thread-manager" aria-describedby="fm-thread-manager-description">
         <DialogHeader>
           <DialogTitle>Thread Manager</DialogTitle>
+          <DialogDescription id="fm-thread-manager-description" className="fm-visually-hidden">
+            Browser performance diagnostics and measured thread areas.
+          </DialogDescription>
           <DialogClose asChild>
             <button
               aria-label="Close thread manager"

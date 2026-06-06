@@ -384,10 +384,10 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           if (!open) setPendingGlobalQuantity(null);
         }}
       >
-        <DialogContent>
+        <DialogContent aria-describedby="fm-global-quantity-description">
           <DialogHeader>
             <DialogTitle>Apply Global Quantity</DialogTitle>
-            <DialogDescription>
+            <DialogDescription id="fm-global-quantity-description">
               This will replace per-target quantity choices with{" "}
               {pendingGlobalQuantity?.activeQuantityId ?? "the selected quantity"}.
             </DialogDescription>
